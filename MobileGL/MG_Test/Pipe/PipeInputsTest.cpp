@@ -146,7 +146,8 @@ namespace {
 // Negative control B, layer 1 (P1 brief D6 / G5): the omitted (verb, field) pair is the
 // ONLY thing that goes stale - every other bit of the verb class's mask is fresh, every
 // field outside it is not, and the verb after it neither heals the field (not in kDraw's
-// mask) nor loses one of its own. The omission is the test's own (FillWithholdingTheStamp).
+// mask) nor loses one of its own. The omission is the test's own (FillWithholdingTheStamp); a
+// verify build also checks the scope of the library's (MGPipeSetPoisonOmission).
 TEST_F(PipeInputsTest, OmittingOneFieldForOneVerbLeavesExactlyThatFieldStale) {
 #if !MOBILEGL_PIPE_POISON
     GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
@@ -182,6 +183,24 @@ TEST_F(PipeInputsTest, OmittingOneFieldForOneVerbLeavesExactlyThatFieldStale) {
     // And the omission is scoped to its fill: the next verb of the same class stamps it again.
     MGPipeValidateForVerb(MGPipeVerb::BindImageTexture);
     EXPECT_TRUE(Fresh(MGPipeInputField::GetActiveTextureUnit));
+
+#if MOBILEGL_PIPE_VERIFY && MGTEST_HAVE_FORK
+    // The library's own omission, the one the PoisonOmitted entries arm, stays armed across fills
+    // and is scoped to its VERB: a different verb of the same class keeps the stamp. In a child,
+    // because nothing disarms it.
+    const ChildResult r = RunInChild([] {
+        if (!MGPipeSetPoisonOmission("GenerateMipmap", "GetActiveTextureUnit")) ::_exit(3);
+        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
+        if (Fresh(MGPipeInputField::GetActiveTextureUnit)) ::_exit(4);
+        MGPipeValidateForVerb(MGPipeVerb::BindImageTexture);
+        if (!Fresh(MGPipeInputField::GetActiveTextureUnit)) ::_exit(5);
+    });
+    EXPECT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r)
+                                  << " (3: the setter refused the names; 4: GenerateMipmap stamped the omitted "
+                                     "field; 5: BindImageTexture did not stamp it, so the omission matched the "
+                                     "class rather than the verb)\n"
+                                  << r.Log;
+#endif
 #endif
 }
 
@@ -335,6 +354,34 @@ TEST_F(PipeInputsTest, EveryCorruptedFieldIsNamedByTheComparator) {
         EXPECT_EQ(named, field) << "a corrupted " << name(field) << " was reported as " << name(named);
     }
     EXPECT_EQ(corruptedFields, kMGPipeInputFieldCount - kMGPipeForwardedFieldCount);
+
+#if MGTEST_HAVE_FORK
+    // And the capability field through the knob and each verb's own mask, at the verbs a clear,
+    // draw and readback frame crosses: every one whose class fills the field must report it at
+    // entry, and at least one must fill it.
+    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
+    static constexpr MGPipeVerb kFrameVerbs[] = {MGPipeVerb::Clear, MGPipeVerb::DrawArrays, MGPipeVerb::ReadPixels};
+    const ChildResult r = RunInChild([] {
+        MG_Config::Features.PipeVerify = true;
+        MG_Config::Features.PipeVerifyFatal = false;
+        ::setenv("MOBILEGL_PIPE_VERIFY_CORRUPT", "IsCapabilityEnabled", 1);
+        for (const MGPipeVerb verb : kFrameVerbs)
+            MGPipeValidateForVerb(verb);
+    });
+    ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
+    SizeT filling = 0;
+    for (const MGPipeVerb verb : kFrameVerbs) {
+        const auto cls = static_cast<SizeT>(kMGPipeVerbClass[static_cast<SizeT>(verb)]);
+        const Bool fills = MGPipeFieldMaskHas(kMGPipeClassFieldMask[cls], MGPipeInputField::IsCapabilityEnabled);
+        filling += fills ? 1 : 0;
+        const std::string report = std::string("Fatal{PipeVerifyDiffer, \"IsCapabilityEnabled@") +
+                                   kMGPipeVerbNames[static_cast<SizeT>(verb)] + "\"";
+        EXPECT_EQ(r.Log.find(report) != std::string::npos, fills)
+            << report << (fills ? " missing" : " unexpected") << " in\n"
+            << r.Log;
+    }
+    EXPECT_GT(filling, 0u) << "no verb of a clear, draw and readback frame fills IsCapabilityEnabled";
+#endif
 #endif
 }
 

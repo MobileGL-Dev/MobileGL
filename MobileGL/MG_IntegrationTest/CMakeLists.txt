@@ -1260,16 +1260,21 @@ if (MOBILEGL_PIPE_VERIFY)
     # boundary and again at every accessor read, which the design budgets at 5-10x.
     set(MGL_ITEST_VERIFY_TIMEOUT 900)
 
-    mgl_itest_join_environment(MGL_ITEST_GLES_VERIFY_ENVIRONMENT
-        "MOBILEGL_TRANSPORT=monolith"
-        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_VERIFY=1"
-        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-DirectGLES.log"
+    # What "the monolith verify lane" means, per backend, in one place: the ambient Verify. entries
+    # and every control entry below are this list plus their own log path and markers. So the
+    # controls run the configuration the ambient entries run, and an edit that leaves that lane
+    # unarmed or non-fatal turns PipeVerifyArmingScenario.Armed red, which asserts both.
+    set(MGL_ITEST_GLES_VERIFY_BASE_ENV
+        "MOBILEGL_TRANSPORT=monolith" "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_VERIFY=1"
         ${MGL_ITEST_COMMON_ENV})
-    mgl_itest_join_environment(MGL_ITEST_VULKAN_VERIFY_ENVIRONMENT
-        "MOBILEGL_TRANSPORT=monolith"
-        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_PIPE_VERIFY=1"
-        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-DirectVulkan.log"
+    set(MGL_ITEST_VULKAN_VERIFY_BASE_ENV
+        "MOBILEGL_TRANSPORT=monolith" "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_PIPE_VERIFY=1"
         ${MGL_ITEST_VULKAN_ENV})
+
+    mgl_itest_join_environment(MGL_ITEST_GLES_VERIFY_ENVIRONMENT ${MGL_ITEST_GLES_VERIFY_BASE_ENV}
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-DirectGLES.log")
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_VERIFY_ENVIRONMENT ${MGL_ITEST_VULKAN_VERIFY_BASE_ENV}
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-DirectVulkan.log")
 
     # The arming assertion's own lane, one case per backend, with a log path nothing else writes to.
     #
@@ -1280,33 +1285,23 @@ if (MOBILEGL_PIPE_VERIFY)
     # the primgen reroute, the point-size demotion) is registered exactly like this for the same
     # reason. MGITEST_PIPE_ARMING_LANE is a harness marker - the library never reads it - and it is
     # what makes the case skip in the ambient lane instead of racing there.
-    mgl_itest_join_environment(MGL_ITEST_GLES_VERIFY_ARMING_ENVIRONMENT
-        "MOBILEGL_TRANSPORT=monolith"
-        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_VERIFY=1" "MGITEST_PIPE_ARMING_LANE=1"
-        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-arming-DirectGLES.log"
-        ${MGL_ITEST_COMMON_ENV})
-    mgl_itest_join_environment(MGL_ITEST_VULKAN_VERIFY_ARMING_ENVIRONMENT
-        "MOBILEGL_TRANSPORT=monolith"
-        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_PIPE_VERIFY=1" "MGITEST_PIPE_ARMING_LANE=1"
-        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-arming-DirectVulkan.log"
-        ${MGL_ITEST_VULKAN_ENV})
+    mgl_itest_join_environment(MGL_ITEST_GLES_VERIFY_ARMING_ENVIRONMENT ${MGL_ITEST_GLES_VERIFY_BASE_ENV}
+        "MGITEST_PIPE_ARMING_LANE=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-arming-DirectGLES.log")
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_VERIFY_ARMING_ENVIRONMENT ${MGL_ITEST_VULKAN_VERIFY_BASE_ENV}
+        "MGITEST_PIPE_ARMING_LANE=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-arming-DirectVulkan.log")
 
     # Negative control A (G4). MOBILEGL_PIPE_VERIFY_FATAL=0 so the process SURVIVES its own
     # divergence and the case can read the report back out of the log; the other half, that with
     # FATAL at its default of 1 a divergence aborts, is PipeInputsTest's
     # VerifyCorruptKnobNamesTheFieldAtEntry.
-    mgl_itest_join_environment(MGL_ITEST_GLES_VERIFY_CORRUPT_ENVIRONMENT
-        "MOBILEGL_TRANSPORT=monolith"
-        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_VERIFY=1"
+    mgl_itest_join_environment(MGL_ITEST_GLES_VERIFY_CORRUPT_ENVIRONMENT ${MGL_ITEST_GLES_VERIFY_BASE_ENV}
         "MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters" "MOBILEGL_PIPE_VERIFY_FATAL=0"
-        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-corrupt-DirectGLES.log"
-        ${MGL_ITEST_COMMON_ENV})
-    mgl_itest_join_environment(MGL_ITEST_VULKAN_VERIFY_CORRUPT_ENVIRONMENT
-        "MOBILEGL_TRANSPORT=monolith"
-        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_PIPE_VERIFY=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-corrupt-DirectGLES.log")
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_VERIFY_CORRUPT_ENVIRONMENT ${MGL_ITEST_VULKAN_VERIFY_BASE_ENV}
         "MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters" "MOBILEGL_PIPE_VERIFY_FATAL=0"
-        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-corrupt-DirectVulkan.log"
-        ${MGL_ITEST_VULKAN_ENV})
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-corrupt-DirectVulkan.log")
 
     # Negative control B (G5). The omission skips the STAMP of one field for one verb while still
     # copying its value, which is indistinguishable from a fill row nobody wrote; the scenario
@@ -1317,18 +1312,12 @@ if (MOBILEGL_PIPE_VERIFY)
     # the fill (around its neutral-pack readback). GetActiveTextureUnit at GenerateMipmap was the
     # frontend arm's read; the record arm resolves the texture from the verb's own handle and never
     # reads it, so that pair could no longer go red for its own reason.
-    mgl_itest_join_environment(MGL_ITEST_GLES_POISON_OMIT_ENVIRONMENT
-        "MOBILEGL_TRANSPORT=monolith"
-        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_VERIFY=1"
+    mgl_itest_join_environment(MGL_ITEST_GLES_POISON_OMIT_ENVIRONMENT ${MGL_ITEST_GLES_VERIFY_BASE_ENV}
         "MGITEST_POISON_OMIT=ReadPixels:GetPixelStoreParameters"
-        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-DirectGLES.log"
-        ${MGL_ITEST_COMMON_ENV})
-    mgl_itest_join_environment(MGL_ITEST_VULKAN_POISON_OMIT_ENVIRONMENT
-        "MOBILEGL_TRANSPORT=monolith"
-        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_PIPE_VERIFY=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-DirectGLES.log")
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_POISON_OMIT_ENVIRONMENT ${MGL_ITEST_VULKAN_VERIFY_BASE_ENV}
         "MGITEST_POISON_OMIT=ReadPixels:GetPixelStoreParameters"
-        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-DirectVulkan.log"
-        ${MGL_ITEST_VULKAN_ENV})
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-DirectVulkan.log")
 
     # The whole suite again, per backend, with the comparator armed. Same scenarios, same
     # assertions, but every backend read of frontend state is now checked against a snapshot taken
@@ -1350,9 +1339,9 @@ if (MOBILEGL_PIPE_VERIFY)
     )
 
     # The arming assertion, one entry per backend. This is the entry that fails a lane whose library
-    # never armed: it runs the same library and the same MOBILEGL_PIPE_VERIFY=1 as the ambient
-    # entries above, but unlike them it cannot be green against a library with no comparator
-    # compiled in. Its log is its own, so `-j 4` cannot make it flake.
+    # never armed: it runs the same library and the same base list as the ambient entries above,
+    # but unlike them it cannot be green against a library with no comparator compiled in, or with
+    # one that only logs a divergence. Its log is its own, so `-j 4` cannot make it flake.
     mgl_itest_lane("DirectGLES.VerifyArming." "PipeVerifyArmingScenario.Armed"
         LABELS "integration-gpu\;integration-verify\;integration-monolith-control" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} ENV "${MGL_ITEST_GLES_VERIFY_ARMING_ENVIRONMENT}")
     mgl_itest_lane("DirectVulkan.VerifyArming." "PipeVerifyArmingScenario.Armed"

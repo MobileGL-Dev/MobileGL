@@ -16,10 +16,11 @@
 // clean pass. That is the failure mode this scenario exists to make impossible:
 //
 //   Armed                    - the environment says the comparator is on for this process, so the
-//                              library must SAY it armed. It asserts a library observable against
-//                              the environment, the same shape UnlocatedIoBlockScenario's arming
-//                              case and AsyncCompileScenario::ExtensionStringMatchesTheConfiguration
-//                              use. A lane whose library never armed FAILS here; it never passes.
+//                              library must SAY it armed, with fatal=1. It asserts a library
+//                              observable against the environment, the same shape
+//                              UnlocatedIoBlockScenario's arming case and
+//                              AsyncCompileScenario::ExtensionStringMatchesTheConfiguration use. A
+//                              lane whose library never armed FAILS here; it never passes.
 //   CorruptedFieldIsReported - the negative control for the comparator itself (gate G4). With
 //                              MOBILEGL_PIPE_VERIFY_CORRUPT naming a field, the snapshot arm is
 //                              perturbed before the entry compare, so a comparator that works must
@@ -230,12 +231,27 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             // of the process, which may already have happened during the harness bring-up. The file
             // is truncated at this process's first log write, so it still carries nothing else.
             const std::string whole = LibraryLog();
-            EXPECT_NE(whole.find(kArmedLine), std::string::npos)
+            const std::size_t armedAt = whole.find(kArmedLine);
+            EXPECT_NE(armedAt, std::string::npos)
                 << "MOBILEGL_PIPE_VERIFY=1 is set for this process and a frame was cleared, drawn and "
                    "read back, and the library never reported arming the comparator. Either this "
                    "library was not built with -DMOBILEGL_PIPE_VERIFY=ON (in which case the whole lane "
                    "is verifying nothing), or the arming MGLOG_I is gone. Log:\n"
                 << whole;
+
+            // Fatal as well as armed: an ambient entry fails on a divergence only through the abort,
+            // so a lane armed non-fatal logs every divergence and stays green. This entry is the
+            // ambient entries' environment plus its marker and log (CMakeLists.txt builds both from
+            // one list), so its arming line answers for theirs.
+            if (armedAt != std::string::npos) {
+                const std::size_t eol = whole.find('\n', armedAt);
+                const std::string line =
+                    whole.substr(armedAt, eol == std::string::npos ? std::string::npos : eol - armedAt);
+                EXPECT_NE(line.find("fatal=1"), std::string::npos)
+                    << "the comparator armed, but not fatal, so a divergence in any entry of this lane "
+                       "is logged and the entry stays green. Arming line:\n"
+                    << line;
+            }
 
             const std::string appended = LibraryLogSince(before);
             EXPECT_EQ(appended.find(kDifferPrefix), std::string::npos)

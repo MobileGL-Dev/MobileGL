@@ -905,8 +905,10 @@ jobs:
 
       # The lane's own control entries, by name: each must have run and passed, and a skip is a
       # failure here although ctest reports it green. VerifyArming asserts in-test that the
-      # comparator printed its armed line, VerifyCorrupted that a corrupted field is reported by
-      # name, and PoisonOmitted that an omitted stamp kills a forked child with its own Fatal.
+      # comparator printed its armed line with fatal=1, under the ambient entries' own environment
+      # (MG_IntegrationTest/CMakeLists.txt builds both from one list), VerifyCorrupted that a
+      # corrupted field is reported by name, and PoisonOmitted that an omitted stamp kills a
+      # forked child with its own Fatal.
       - name: Verify lane control entries
         run: |
           python3 scripts/ci/junit_tally.py "${RUNNER_TEMP}/verify.xml" \
@@ -916,7 +918,6 @@ jobs:
             --require-entry-passed DirectVulkan.VerifyCorrupted.PipeVerifyArmingScenario.CorruptedFieldIsReported \
             --require-entry-passed DirectGLES.PoisonOmitted.PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb \
             --require-entry-passed DirectVulkan.PoisonOmitted.PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb
-
 
       - name: Upload verify lane logs
         if: ${{ always() }}
