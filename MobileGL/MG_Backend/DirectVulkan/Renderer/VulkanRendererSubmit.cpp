@@ -255,23 +255,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     break;
                 }
             }
-            {
-                static const Bool probe = [] {
-                    const char* value = std::getenv("MOBILEGL_MAGMA_WIREBUF_PROBE");
-                    return value && value[0] == '1';
-                }();
-                if (probe) {
-                    Uint64 minRemaining = ~Uint64{0};
-                    for (const auto& r : m_inFlightSubmits)
-                        minRemaining = std::min(minRemaining, r.frameSerial);
-                    MGLOG_I("FLOOR retire upTo=%llu advanceTo=%llu remaining=%zu minRemainingSerial=%lld "
-                            "frameSerial=%llu",
-                            static_cast<unsigned long long>(submitIndex), static_cast<unsigned long long>(advanceTo),
-                            m_inFlightSubmits.size(),
-                            m_inFlightSubmits.empty() ? -1LL : static_cast<long long>(minRemaining),
-                            static_cast<unsigned long long>(m_bufferManager.GetFrameSerial()));
-                }
-            }
             m_bufferManager.NotifyFrameSerialComplete(advanceTo);
         }
         // Mid-frame-flushed command buffers whose submission just completed can
@@ -338,23 +321,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // loops still rewind the arena and age their caches every 8 iterations -
         // bounded by 8 iterations' transient usage.
         ++m_drainsSinceLastPresent;
-        // B3 probe: a drain that reaches here found the GPU caught up and nothing recording.
-        // Every 8th one is treated as a FRAME BOUNDARY - mid-frame. This probe is what REFUTED
-        // that as the OpenRA mechanism (one successful drain, zero boundary works across the
-        // replay; magma-b3.md §2.4): the cause was the floor in OnSubmitsCompletedUpTo.
-        {
-            static const Bool probe = [] {
-                const char* value = std::getenv("MOBILEGL_MAGMA_WIREBUF_PROBE");
-                return value && value[0] == '1';
-            }();
-            if (probe) {
-                MGLOG_I("WBUF drain#%llu%s submit=%llu completed=%llu",
-                        static_cast<unsigned long long>(m_drainsSinceLastPresent),
-                        (m_drainsSinceLastPresent % 8) == 0 ? " ***FRAME-BOUNDARY-WORK***" : "",
-                        static_cast<unsigned long long>(m_submitCounter),
-                        static_cast<unsigned long long>(m_completedSubmitCounter));
-            }
-        }
         if ((m_drainsSinceLastPresent % 8) != 0) {
             return true;
         }

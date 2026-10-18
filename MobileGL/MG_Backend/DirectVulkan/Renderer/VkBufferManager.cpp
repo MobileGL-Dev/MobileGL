@@ -27,19 +27,6 @@
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
-        // P7 wave 2 package B3, INVESTIGATION PROBE (split-only, read once, not in
-        // ConfigLoader's accepted-env table - package B's MGITEST_MAGMA_FORCE_SHADER_MIPMAP
-        // shape). MOBILEGL_MAGMA_WIREBUF_PROBE=1 prints one line per streamed-buffer event so
-        // the `glBufferSubData -> draw` ordering of a trace can be read off a log instead of
-        // inferred. Costs a branch on a cached bool when unset.
-        Bool WireBufProbeEnabled() {
-            static const Bool enabled = [] {
-                const char* value = std::getenv("MOBILEGL_MAGMA_WIREBUF_PROBE");
-                return value && value[0] == '1';
-            }();
-            return enabled;
-        }
-
         // P7 wave 2 package B3, FORCING KNOB (split-only, read once, not in ConfigLoader's
         // accepted-env table - package B's MGITEST_MAGMA_FORCE_SHADER_MIPMAP shape).
         //
@@ -424,8 +411,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource->contentSerial = ++m_wireContentSerial;
         if (!resource->shadow.empty()) Memcpy(resource->shadow.data() + offset, bytes, static_cast<SizeT>(size));
         Bool uploaded = false;
-        const Uint64 probeLastUse = resource->lastUseSerial;
-        const Uint64 probeCompleted = GetCompletedSerial();
 
         // ---- P7 wave 2 package B3: WHAT EACH TERM OF THIS PREDICATE IS FOR -----------------
         //
@@ -451,10 +436,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // submission - BindProgramUniformBuffers -> SyncWireTextureShape's preserve path ->
         // FlushWirePendingCommandsForTextureUpdate submits the stamped index without the draw -
         // so the stamp can name S1 while the draw rides S2. What it does do: with the floor
-        // sound it should never be the term that says "busy" (the WBUF probe reports bySubmit
-        // separately, so a device that shows one has found a floor hole), and it is the only
-        // thing the MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL knob leaves standing, which is what
-        // the StaleSerial. entries pin.
+        // sound it should never be the term that says "busy" (a write it alone orders points to a
+        // floor hole), and it is the only thing the MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL knob
+        // leaves standing, which is what the StaleSerial. entries pin.
         Bool busyBySerial = resource->lastUseSerial > GetCompletedSerial();
         if (busyBySerial && ForceStaleSerialSelector() != 0) {
             const Uint64 index = ++g_orderedWireWriteCounter;
@@ -493,16 +477,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (LatchedOnDeviceLoss("buffer-upload")) return;
             MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-upload\"}");
             std::abort();
-        }
-        if (WireBufProbeEnabled()) {
-            MGLOG_I("WBUF write slot=%u gen=%u off=%llu size=%llu branch=%s bySerial=%d bySubmit=%d "
-                    "lastUse=%llu completed=%llu frameSerial=%llu floor=%llu lastUseSubmit=%llu",
-                    res.Slot, res.Gen, static_cast<unsigned long long>(offset), static_cast<unsigned long long>(size),
-                    (busyBySerial || busyBySubmission) ? "STAGED-or-WAIT" : "HOST-IMMEDIATE", busyBySerial ? 1 : 0,
-                    busyBySubmission ? 1 : 0, static_cast<unsigned long long>(probeLastUse),
-                    static_cast<unsigned long long>(probeCompleted), static_cast<unsigned long long>(m_frameSerial),
-                    static_cast<unsigned long long>(m_completedSerialFloor),
-                    static_cast<unsigned long long>(resource->lastUseSubmitIndex));
         }
         MG_Record::StagedShadowStore::CoverageAdd(resource->stagedCoverage, static_cast<SizeT>(offset),
                                                   static_cast<SizeT>(offset + size));
@@ -624,10 +598,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource->lastUseSubmitIndex = pVulkanRenderer->GetWireNextSubmitIndex();
         outSlice = resource->buffer.GetSlice(0, resource->size);
         outSlice.mapped = nullptr;
-        if (WireBufProbeEnabled()) {
-            MGLOG_I("WBUF bind  slot=%u gen=%u frameSerial=%llu", res.Slot, res.Gen,
-                    static_cast<unsigned long long>(m_frameSerial));
-        }
         return true;
     }
 
@@ -1422,11 +1392,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         "VkBufferManager::BeginFrame frame index out of range");
         m_currentFrameIndex = frameIndex;
         ++m_frameSerial;
-        if (WireBufProbeEnabled()) {
-            MGLOG_I("WBUF BEGINFRAME idx=%u newSerial=%llu floor=%llu (arena slot rewound)", frameIndex,
-                    static_cast<unsigned long long>(m_frameSerial),
-                    static_cast<unsigned long long>(m_completedSerialFloor));
-        }
         CollectDeferredReleases(frameIndex);
         m_transientUploadArena.BeginFrame(frameIndex);
     }
