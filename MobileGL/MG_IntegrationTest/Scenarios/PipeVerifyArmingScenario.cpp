@@ -221,11 +221,6 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                                 "set, so the library has nowhere to record that it armed; the Verify. "
                                 "ctest entries set both";
             }
-            if (StringKnobIsSet("MOBILEGL_PIPE_VERIFY_CORRUPT")) {
-                GTEST_SKIP() << "MOBILEGL_PIPE_VERIFY_CORRUPT is armed in this process, so a divergence "
-                                "is the EXPECTED outcome and asserting on its absence here would be "
-                                "backwards; the VerifyCorrupted. lane owns that half";
-            }
 
             const MGITest::PipeStatsWindow::LogMark before = LibraryLogMark();
             ASSERT_NO_FATAL_FAILURE(DrawOneFrame());
@@ -257,9 +252,8 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
         //
         // It runs in its own lane (VerifyCorrupted.) because the knob is process-wide, and with
         // MOBILEGL_PIPE_VERIFY_FATAL=0 so the process survives its own divergence and this case can
-        // read the report back out of the log. The CI step that runs the SAME knob against the
-        // ambient lane - where FATAL keeps its default - asserts the other half: there, the
-        // divergence must abort and ctest must go red.
+        // read the report back out of the log. With FATAL at its default the divergence aborts
+        // instead, which PipeInputsTest.VerifyCorruptKnobNamesTheFieldAtEntry asserts.
         TEST_F(PipeVerifyArmingScenario, CorruptedFieldIsReported) {
             if (!Ready()) return;
 

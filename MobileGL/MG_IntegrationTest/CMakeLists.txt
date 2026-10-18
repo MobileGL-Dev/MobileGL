@@ -1001,9 +1001,7 @@ mgl_itest_lane("DirectVulkan.PointSizeDemotion." "PointSizeDemotionScenario.*"
 
 # --- MOBILEGL_PIPE_VERIFY lanes (ARCHITECTURE.md §13.2), under `if (MOBILEGL_PIPE_VERIFY)` below
 # They exist only in a -DMOBILEGL_PIPE_VERIFY=ON build, so `ctest -L integration-verify
-# --no-tests=error` fails when the option is lost. The ambient Verify. entries must not set
-# MOBILEGL_PIPE_VERIFY_CORRUPT or MOBILEGL_PIPE_POISON_OMIT: CI's negative controls export them
-# in the job environment, and a property of the same name would override them.
+# --no-tests=error` fails when the option is lost.
 # --- handle ABA: one always-on monolith HandleRecycle.Handles lane per backend -------------
 # MGITEST_HANDLE_ARM selects the arm (the scenario skips in the ambient entries). The lanes run
 # the default subsystem mask, so they measure the {slot, gen} key that ships.
@@ -1293,9 +1291,9 @@ if (MOBILEGL_PIPE_VERIFY)
         ${MGL_ITEST_VULKAN_ENV})
 
     # Negative control A (G4). MOBILEGL_PIPE_VERIFY_FATAL=0 so the process SURVIVES its own
-    # divergence and the case can read the report back out of the log; the CI step that exports
-    # the same corruption against the ambient lane, where FATAL keeps its default of 1, asserts
-    # the other half - that a divergence aborts and reds the entry.
+    # divergence and the case can read the report back out of the log; the other half, that with
+    # FATAL at its default of 1 a divergence aborts, is PipeInputsTest's
+    # VerifyCorruptKnobNamesTheFieldAtEntry.
     mgl_itest_join_environment(MGL_ITEST_GLES_VERIFY_CORRUPT_ENVIRONMENT
         "MOBILEGL_TRANSPORT=monolith"
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_VERIFY=1"
@@ -3641,8 +3639,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
         # four entries with the split environment underneath and nothing else changed: each is
         # green when its control REPORTS, so each goes red the day the comparator or the poison
         # stops reaching the split arm. test.yml's integration-verify-split job requires each of
-        # them to pass by name, and control A's CI half - the same knob exported against the
-        # ambient VerifySplit. entries, where ctest has to FAIL - runs there too.
+        # them to pass by name.
         #
         # A (G4): the corruption perturbs the snapshot arm at the CLIENT's entry compare, so the
         # report lands in the client role's log, which is the half LibraryLog() reads.

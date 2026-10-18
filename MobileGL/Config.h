@@ -463,18 +463,12 @@ namespace MobileGL::MG_Config {
         // the semantic gate that replaces byte identity, and it catches the dangerous
         // direction - a dirty bit that fires too RARELY - which no purity gate can see.
         Bool PipeVerify = false;
-        // The three knobs of the MOBILEGL_PIPE_VERIFY build (P1 brief D2). Compiled only
-        // under MOBILEGL_PIPE_PUSH so the pull build's FeaturesTable does not change size.
         // MOBILEGL_PIPE_VERIFY_FATAL: the first divergence aborts (default). 0 logs and
         // counts instead, for triage and for the lane that must survive to read its own
-        // log. Tri-state parse like PipeLegacyMemos: only an explicit falsy value turns it
-        // off.
+        // log. Tri-state parse: only an explicit falsy value turns it off. The comparator's
+        // negative control, MOBILEGL_PIPE_VERIFY_CORRUPT, has no field here: only a verify
+        // build reads it, when the comparator arms (MG_Impl/Pipe/PipeFill.cpp, ArmVerify).
         Bool PipeVerifyFatal = true;
-        // MOBILEGL_PIPE_VERIFY_CORRUPT: a field name from kMGPipeInputFieldNames[]; the
-        // comparator perturbs that field in the SNAPSHOT arm before the entry compare, so a
-        // green verify run goes red naming it (negative control A). Unknown name is
-        // Fatal{PipeVerifyBadKnob}.
-        String PipeVerifyCorrupt;
         // MOBILEGL_PIPE_POISON_OMIT: <Verb>:<FieldName>; the filler skips the STAMP (not
         // the value) of that field for that verb, an omission indistinguishable from a
         // forgotten FillPoints.def row, so that verb's read of it is
@@ -513,8 +507,7 @@ namespace MobileGL::MG_Config {
     // in MG_Backend/Init.cpp compiles away entirely rather than becoming a branch nobody can
     // take. A FeaturesTable member is a runtime field in every build, which is the opposite
     // of that; it would also resize MG_Config::Features and break G1 (the pull build's
-    // symbol set must not move) for the same reason the MOBILEGL_PIPE_VERIFY knobs above sit
-    // behind their own #if.
+    // symbol set must not move).
     //
     // ONE CONSEQUENCE, STATED SO IT IS NOT REDISCOVERED: in a build without the option,
     // MOBILEGL_TRANSPORT=inproc is ACCEPTED BY THE ENVIRONMENT AND SILENTLY IGNORED - the

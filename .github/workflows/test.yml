@@ -799,9 +799,9 @@ jobs:
           if-no-files-found: error
 
   # The verify lane itself, plus the controls that keep it falsifiable: its own control entries,
-  # checked by name, and the two corrupted-snapshot steps. They are always on, not a manual
-  # exercise: a gate that can only be shown to work by someone remembering to break it on purpose
-  # is a gate that has already stopped working.
+  # checked by name, and the comparator's unit cases on its library. They are always on, not a
+  # manual exercise: a gate that can only be shown to work by someone remembering to break it on
+  # purpose is a gate that has already stopped working.
   integration-verify:
     runs-on: ubuntu-26.04
     timeout-minutes: 180
@@ -879,7 +879,8 @@ jobs:
       # skip in the `test` job's build and assert only here, as do poison-gated cases on branches
       # where that build is a monolith. The packaging step above ships MG_Test whole, so the cost
       # is the run itself. --no-tests=error, so a packaging change that dropped the unit binaries
-      # fails here instead of passing with nothing run.
+      # fails here instead of passing with nothing run. Among them is the comparator's per-field
+      # control, PipeInputsTest.EveryCorruptedFieldIsNamedByTheComparator.
       - name: Unit tests on the verify runtime (G6, G10)
         working-directory: build-verify
         run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/unit-verify.xml"
@@ -916,58 +917,6 @@ jobs:
             --require-entry-passed DirectGLES.PoisonOmitted.PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb \
             --require-entry-passed DirectVulkan.PoisonOmitted.PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb
 
-      # NEGATIVE CONTROL A (gate G4). The knob perturbs one field in the snapshot arm before the
-      # entry compare, so a working comparator must abort the run. This step passes when ctest
-      # FAILS - `if ctest ...; then error` - which is the only shape that can catch a comparator
-      # that silently compares nothing.
-      #
-      # The knob reaches the test process through the JOB environment: no ctest ENVIRONMENT
-      # property on the ambient Verify. entries names it (MG_IntegrationTest/CMakeLists.txt says
-      # so out loud), and a property entry would otherwise override this and the control would
-      # prove nothing. Same precedent as MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH in `integration`.
-      - name: Negative control A (corrupted snapshot)
-        working-directory: build-verify
-        env:
-          MOBILEGL_ITEST_REQUIRE_GPU: "1"
-          MOBILEGL_PIPE_VERIFY_CORRUPT: GetRenderStateParameters
-        run: |
-          FILTER='DirectGLES\.Verify\..*ClearThenReadPixels'
-          # An empty selection would ALSO make ctest exit non-zero (--no-tests=error), and this
-          # step reads non-zero as "the control worked" - so the selection is counted first. A
-          # control that passes because it ran nothing is worse than no control.
-          matched=$(ctest -N -L integration-verify -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
-          if [ "${matched}" -lt 1 ]; then
-            echo "::error::negative control A selected ${matched} tests; its filter no longer matches anything"
-            exit 1
-          fi
-          if ctest --output-on-failure -L integration-verify -R "${FILTER}" --no-tests=error; then
-            echo "::error::MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters left ${matched} verify entries GREEN. The comparator is not comparing, so every green entry above is green for no reason."
-            exit 1
-          fi
-          echo "the corrupted field turned ${matched} selected entries red, as it must"
-
-      # NEGATIVE CONTROL A2 (P13 W3c): THE CAPABILITY CROSS-CHECK MOVED HERE. ResidualValueBlock
-      # carried the 35 capability bits redundantly so the applier could trip on a capability no
-      # record carried; P13 deleted it, and the intent is the comparator's now. So a corrupted
-      # capability field must turn the same selection red, or the block's deletion lost its
-      # check rather than moving it.
-      - name: Negative control A2 (corrupted capability)
-        working-directory: build-verify
-        env:
-          MOBILEGL_ITEST_REQUIRE_GPU: "1"
-          MOBILEGL_PIPE_VERIFY_CORRUPT: IsCapabilityEnabled
-        run: |
-          FILTER='DirectGLES\.Verify\..*ClearThenReadPixels'
-          matched=$(ctest -N -L integration-verify -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
-          if [ "${matched}" -lt 1 ]; then
-            echo "::error::negative control A2 selected ${matched} tests; its filter no longer matches anything"
-            exit 1
-          fi
-          if ctest --output-on-failure -L integration-verify -R "${FILTER}" --no-tests=error; then
-            echo "::error::MOBILEGL_PIPE_VERIFY_CORRUPT=IsCapabilityEnabled left ${matched} verify entries GREEN. The comparator does not compare the capability field, so deleting the residual block (P13 W3c) lost the check it carried."
-            exit 1
-          fi
-          echo "the corrupted capability field turned ${matched} selected entries red, as it must"
 
       - name: Upload verify lane logs
         if: ${{ always() }}
@@ -995,7 +944,7 @@ jobs:
           if-no-files-found: ignore
 
   # The comparator on the split (inproc) arm, both backends, with its control entries checked by
-  # name and the corrupted-snapshot control red on that arm.
+  # name.
   #
   # ITS OWN BUILD, because neither existing one can carry it: build-linux-verify configures
   # without MOBILEGL_BUILD_DISAGGREGATED (so MG_Remote and the transport parser do not exist and
@@ -1115,49 +1064,6 @@ jobs:
           done
           python3 scripts/ci/junit_tally.py "${RUNNER_TEMP}/verify-split.xml" "${args[@]}"
 
-      # THE GREEN LANE'S LOGS, KEPT BEFORE THE CONTROLS OVERWRITE THEM. The control step below
-      # re-runs ambient VerifySplit. entries with a knob exported, and an ambient entry writes to
-      # ITS OWN per-entry path under verify-split-logs/ - which the library opens "w". So by the
-      # time the upload step at the end of this job runs, the selected files are the CONTROL
-      # runs' logs sitting under the LANE's names: an artifact showing deliberate divergences,
-      # with the green run they were meant to be evidence of already gone. `if: always()` on the
-      # upload made that worse rather than better, because a failure investigation is exactly
-      # when the overwritten half is the half somebody needs.
-      - name: Keep lane logs before controls
-        if: ${{ always() }}
-        working-directory: build-verify-split/MobileGL/MG_IntegrationTest
-        run: |
-          rm -rf verify-split-logs-lane
-          cp -a verify-split-logs verify-split-logs-lane
-          cp -p "${RUNNER_TEMP}/verify-split.xml" verify-split-logs-lane/ || true
-          echo "kept $(ls verify-split-logs-lane | wc -l) file(s) from the green lane run"
-
-      # NEGATIVE CONTROL A ON THE SPLIT ARM - integration-verify's step A, same knob, same shape
-      # (this step passes when ctest FAILS), aimed at the ambient VerifySplit. entries of BOTH
-      # backends. Measured at landing: 10 of 10 red, each with
-      # Fatal{PipeVerifyDiffer, "GetRenderStateParameters@Clear"|"@DrawArrays", ..., where=entry}.
-      - name: Negative control A (corrupted snapshot)
-        working-directory: build-verify-split
-        env:
-          MOBILEGL_ITEST_REQUIRE_GPU: "1"
-          MOBILEGL_PIPE_VERIFY_CORRUPT: GetRenderStateParameters
-        run: |
-          FILTER='(DirectGLES|DirectVulkan)\.VerifySplit\..*ClearThenReadPixels'
-          matched=$(ctest -N -L '^integration-verify-split$' -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
-          if [ "${matched}" -lt 2 ]; then
-            echo "::error::split negative control A selected ${matched} tests; its filter no longer matches both backends"
-            exit 1
-          fi
-          if ctest --output-on-failure -L '^integration-verify-split$' -R "${FILTER}" --no-tests=error; then
-            echo "::error::MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters left ${matched} verify-split entries GREEN. The comparator is not comparing on the split arm."
-            exit 1
-          fi
-          echo "the corrupted field turned ${matched} selected split entries red, as it must"
-
-      # BOTH SETS, AND THEY ARE DIFFERENT EVIDENCE. verify-split-logs-lane/ is the green run the
-      # arm proof read; verify-split-logs/ is whatever the control step left behind, which for
-      # its entries is a deliberately red re-run under the same name. Uploading only the
-      # second - which is what this step did before the copy above existed - loses the first.
       # The run log needs a signed-in reader; annotations do not. Name every failed ctest entry,
       # with the lines of its output that say why, where anyone reading the run can see them.
       - name: Annotate failed entries
@@ -1170,7 +1076,6 @@ jobs:
         with:
           name: integration-verify-split-logs
           path: |
-            build-verify-split/MobileGL/MG_IntegrationTest/verify-split-logs-lane/**
             build-verify-split/MobileGL/MG_IntegrationTest/verify-split-logs/**
             build-verify-split/MobileGL/MG_IntegrationTest/pipe-*split*.log*
           if-no-files-found: warn

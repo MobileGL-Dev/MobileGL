@@ -452,7 +452,6 @@ namespace MobileGL::MG_ConfigLoader {
         // Defaults ON: read as a tri-state so only an explicitly falsy value turns it off.
         features.PipeVerifyFatal =
             QueryEnvQuirkOverride("MOBILEGL_PIPE_VERIFY_FATAL") != MG_Config::QuirkOverride::ForceOff;
-        QueryEnvVariable("MOBILEGL_PIPE_VERIFY_CORRUPT", features.PipeVerifyCorrupt, "");
         QueryEnvVariable("MOBILEGL_PIPE_POISON_OMIT", features.PipePoisonOmit, "");
         features.PipeStats = QueryEnvFlag("MOBILEGL_PIPE_STATS");
         features.PipeIndexMirrorMb = QueryEnvUint32("MOBILEGL_PIPE_INDEX_MIRROR_MB", 64, 0, 4096);

@@ -336,6 +336,50 @@ TEST_F(PipeInputsTest, CorruptedSnapshotFieldIsNamedWithItsSerial) {
 #endif
 }
 
+// The same control for EVERY field, which is where P13 W3c moved the capability cross-check the
+// residual block used to carry: two snapshots of one live context compare equal over all fields,
+// and corrupting any one field that has storage makes the compare name exactly that field. The
+// seven forwarded fields have no storage, so there is nothing to corrupt and nothing to compare.
+TEST_F(PipeInputsTest, EveryCorruptedFieldIsNamedByTheComparator) {
+#if !MOBILEGL_PIPE_VERIFY
+    GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
+#else
+    constexpr MGPipeFieldMask kEveryField{{~Uint64{0}, ~Uint64{0}}};
+    const auto name = [](MGPipeInputField field) {
+        return field == MGPipeInputField::kFieldCount ? "<none>" : kMGPipeInputFieldNames[static_cast<SizeT>(field)];
+    };
+    // A fresh block per snapshot: the snapshot copies only what the context holds (the binding
+    // points past the touched count keep their storage), so a reused block would carry one
+    // field's corruption into the next field's compare.
+    const auto snapshot = [&] {
+        auto block = MakeUnique<PipeInputs>();
+        SnapshotFromGLContext(*block, kEveryField);
+        return block;
+    };
+    const auto reference = snapshot();
+    MGPipeInputField named = MGPipeInputField::kFieldCount;
+    ASSERT_TRUE(MGPipeVerifyInputs(*reference, *snapshot(), kEveryField, &named))
+        << "two snapshots of one context differ at " << name(named);
+
+    SizeT corruptedFields = 0;
+    for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
+        const auto field = static_cast<MGPipeInputField>(f);
+        const auto corrupted = snapshot();
+        if (kMGPipeInputFieldSticky[f]) {
+            EXPECT_FALSE(MGPipeApplyVerifyCorruption(*corrupted, field)) << name(field) << " is forwarded";
+            continue;
+        }
+        ASSERT_TRUE(MGPipeApplyVerifyCorruption(*corrupted, field)) << name(field) << " has no storage to corrupt";
+        ++corruptedFields;
+        named = MGPipeInputField::kFieldCount;
+        EXPECT_FALSE(MGPipeVerifyInputs(*reference, *corrupted, kEveryField, &named))
+            << "the comparator does not see a corrupted " << name(field);
+        EXPECT_EQ(named, field) << "a corrupted " << name(field) << " was reported as " << name(named);
+    }
+    EXPECT_EQ(corruptedFields, kMGPipeInputFieldCount - kMGPipeForwardedFieldCount);
+#endif
+}
+
 // The compare-at-read arm (P1 brief D8, the arm that is real in P1): a value that changes in
 // the live context between the verb boundary and the read is Fatal{PipeVerifyDiffer,
 // "Field@Verb", verb=<serial>, where=read}; the same read before the mutation completes.
@@ -370,9 +414,9 @@ TEST_F(PipeInputsTest, MutatedFieldIsNamedAtRead) {
 #endif
 }
 
-// The MOBILEGL_PIPE_VERIFY_CORRUPT parser through Features: the fill after the child arms it
-// logs both arming lines and the entry compare names the corrupted field at that fill's
-// serial, where=entry.
+// The MOBILEGL_PIPE_VERIFY_CORRUPT knob through the environment, where the lanes set it: the
+// fill after the child sets it logs both arming lines and the entry compare names the
+// corrupted field at that fill's serial, where=entry.
 TEST_F(PipeInputsTest, VerifyCorruptKnobNamesTheFieldAtEntry) {
 #if !MOBILEGL_PIPE_VERIFY
     GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
@@ -384,7 +428,7 @@ TEST_F(PipeInputsTest, VerifyCorruptKnobNamesTheFieldAtEntry) {
     const Uint64 serial = gPipeInputs->FilledState().CurrentVerbSerial + 1;
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipeVerify = true;
-        MG_Config::Features.PipeVerifyCorrupt = "GetRenderStateParameters";
+        ::setenv("MOBILEGL_PIPE_VERIFY_CORRUPT", "GetRenderStateParameters", 1);
         MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
         ::_exit(3);
     });
@@ -409,7 +453,7 @@ TEST_F(PipeInputsTest, BadVerifyCorruptKnobIsFatalNamingTheKnob) {
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipeVerify = true;
-        MG_Config::Features.PipeVerifyCorrupt = "NoSuchField";
+        ::setenv("MOBILEGL_PIPE_VERIFY_CORRUPT", "NoSuchField", 1);
         MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
         ::_exit(3);
     });
@@ -439,7 +483,7 @@ TEST_F(PipeInputsTest, VerifyFatalOffLogsTheDivergenceAndContinues) {
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipeVerify = true;
         MG_Config::Features.PipeVerifyFatal = false;
-        MG_Config::Features.PipeVerifyCorrupt = "GetRenderStateParameters";
+        ::setenv("MOBILEGL_PIPE_VERIFY_CORRUPT", "GetRenderStateParameters", 1);
         MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
         MGPipeValidateForVerb(MGPipeVerb::DrawElements);
         std::exit(0);

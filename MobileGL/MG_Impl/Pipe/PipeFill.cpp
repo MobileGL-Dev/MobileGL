@@ -10,8 +10,7 @@
 // the push arm that reads MG_State::pGLContext. Holds the per-verb filler, the F-class
 // forwarders, IsLive, the MOBILEGL_PIPE_POISON_OMIT knob and - in a verify build - the
 // second arm (SnapshotFromGLContext), the entry compare, the compare-at-read hook and the
-// MOBILEGL_PIPE_VERIFY_CORRUPT / _FATAL knobs. Compiled only under MOBILEGL_PIPE_PUSH
-// (CMakeLists.txt appends it to SOURCE_FILES there).
+// MOBILEGL_PIPE_VERIFY_CORRUPT knob, which only this build reads.
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/BufferState/BufferState.h>
 // C-1: the vertex-elements CSO's death path raises the backend notice from here, between the
@@ -44,6 +43,8 @@
 #if MOBILEGL_PIPE_VERIFY
 #include <MG_Impl/Pipe/Verb/VerbPort.h>
 #include <MG_Impl/Pipe/Verb/GpuWriteSet.h>
+// MG_ConfigLoader::LookupSetting: ArmVerify reads MOBILEGL_PIPE_VERIFY_CORRUPT itself.
+#include <Init.h>
 #endif
 
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -543,7 +544,6 @@ namespace MobileGL::MG_Pipe {
             Bool Fatal = true;
             Bool InHook = false; // a re-read that re-enters an accessor is not re-verified
             Optional<MGPipeInputField> Corrupt;
-            String CorruptKnob; // the MOBILEGL_PIPE_VERIFY_CORRUPT value the last arm saw
             std::atomic<Uint64> Divergences{0};
             Uint64 Summarised = 0; // how many of them the summary line has reported so far
             // THE SUMMARY IS WRITTEN FROM MobileGL::Destroy, NOT FROM HERE (V1 fix round 2). This
@@ -568,24 +568,25 @@ namespace MobileGL::MG_Pipe {
         };
         VerifyState g_verify;
 
-        // Armed on the first fill and re-armed when any of the three verify knobs'
-        // Features value (PipeVerify, PipeVerifyFatal, PipeVerifyCorrupt) differs from what
-        // the last arm latched (the same reason as ParsePoisonOmissionKnob: one arm per lane
-        // process, a fresh arm for a forked test child that turns a knob after its parent
-        // filled). Cost: two Bool compares and one String compare per fill, verify builds only.
+        // Armed on the first fill and re-armed when PipeVerify or PipeVerifyFatal differs from
+        // what the last arm latched: one arm per lane process, a fresh arm for a forked test
+        // child that turns a knob after its parent filled. Each arm that enables the comparator
+        // reads MOBILEGL_PIPE_VERIFY_CORRUPT the way the loader resolves every knob (the
+        // environment, then the system configuration), so the knob exists in this build only.
+        // Cost: two Bool compares per fill, verify builds only.
         void ArmVerify() {
             const auto& features = MG_Config::Features;
             if (g_verify.Parsed && g_verify.Enabled == features.PipeVerify &&
-                g_verify.Fatal == features.PipeVerifyFatal && g_verify.CorruptKnob == features.PipeVerifyCorrupt) {
+                g_verify.Fatal == features.PipeVerifyFatal) {
                 return;
             }
             g_verify.Parsed = true;
             g_verify.Enabled = features.PipeVerify;
             g_verify.Fatal = features.PipeVerifyFatal;
-            g_verify.CorruptKnob = features.PipeVerifyCorrupt;
             g_verify.Corrupt = Optional<MGPipeInputField>{};
             if (!g_verify.Enabled) return;
-            const String& corrupt = g_verify.CorruptKnob;
+            String corrupt;
+            (void)MG_ConfigLoader::LookupSetting("MOBILEGL_PIPE_VERIFY_CORRUPT", corrupt);
             if (!corrupt.empty()) {
                 const auto field = MGPipeFindInputField(corrupt.c_str());
                 if (!field) {
