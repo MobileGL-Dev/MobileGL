@@ -248,8 +248,8 @@ namespace {
                                             kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
             m_previousContext = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
-            MGPipeFramebufferEmitterInstance().ResetForTest();
-            MGPipeTextureEmitterInstance().ResetForTest();
+            MGPipeFramebufferEmitterInstance().ForgetSession();
+            MGPipeTextureEmitterInstance().ForgetSession();
             MGPipeSetHashSuppressorInstance().InvalidateAll();
             // The applier is a process singleton and its object records outlive a case; with both
             // families' wired constants set the emissions actually land, so a case must start
@@ -259,8 +259,8 @@ namespace {
             MGPipeApplierReleaseObjectRecords();
         }
         ~FramebufferScope() {
-            MGPipeFramebufferEmitterInstance().ResetForTest();
-            MGPipeTextureEmitterInstance().ResetForTest();
+            MGPipeFramebufferEmitterInstance().ForgetSession();
+            MGPipeTextureEmitterInstance().ForgetSession();
             MGPipeSetHashSuppressorInstance().InvalidateAll();
             MGPipeApplierReset();
             MGPipeApplierReleaseObjectRecords();
@@ -1345,7 +1345,7 @@ TEST(FramebufferEmit, TheBuildMemoReNotesBindBitsAfterTheTextureTableIsDropped) 
         << "the attachment's RENDER_TARGET bit was never noted";
 
     // A dropped table (a replaced session) forgets the sticky bits; the next build must note them again.
-    MGPipeTextureEmitterInstance().ResetForTest();
+    MGPipeTextureEmitterInstance().ForgetSession();
     MGPipeSetHashSuppressorInstance().InvalidateAll();
     Framebuffers().EmitFramebufferState(Ctx());
     EXPECT_NE(MGPipeTextureEmitterInstance().TextureBindMask(handle) & kMGPipeBindRenderTarget, 0)

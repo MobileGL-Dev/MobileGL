@@ -543,7 +543,7 @@ namespace {
         static void Clear() {
             MGPipeSamplerEmitterInstance().Reset();
             MGPipeSamplerEmitterInstance().ResetCounters();
-            MGPipeSamplerCsoCacheInstance().ResetForTest();
+            MGPipeSamplerCsoCacheInstance().ForgetSession();
             MGPipeSamplerCsoCacheInstance().ResetCounters();
             MGPipeSetHashSuppressorInstance().InvalidateAll();
         }
@@ -729,7 +729,7 @@ namespace {
 
         // The ordinary path, for completeness: two states that differ in ONE field never share
         // a handle and never reach the confirm at all.
-        Cache().ResetForTest();
+        Cache().ForgetSession();
         Cache().ResetCounters();
         const MGPipeHandle plainFirst = Cache().Acquire(first, payload);
         const MGPipeHandle plainSecond = Cache().Acquire(second, payload);
@@ -1193,7 +1193,7 @@ namespace {
     // Nothing produced the bit before the fix round.
     TEST(SamplerEmit, AResolvedSamplerViewMarksItsTextureAsSamplerBound) {
         EmitterScope scope;
-        MGPipeTextureEmitterInstance().ResetForTest();
+        MGPipeTextureEmitterInstance().ForgetSession();
         namespace GL = MobileGL::MG_Impl::GLImpl;
         const Uint program = MakeSamplerProgram();
         GLint linked = 0;

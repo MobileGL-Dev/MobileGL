@@ -151,7 +151,7 @@ namespace MobileGL::MG_Pipe {
             // never shrinks back.
             Uint64 OverCapacityMints = 0;
             // A RELEASE THIS CACHE COULD NOT ACCOUNT FOR. UnknownReleases: the handle names no
-            // entry here (a stale handle from before a ResetForTest, a handle of another kind
+            // entry here (a stale handle from before a ForgetSession, a handle of another kind
             // passed by mistake, a handle whose entry was already evicted). UnderflowedReleases:
             // the entry was found with a count already 0. Both are contract violations by a
             // HOLDER and are counted rather than absorbed, because the pin they steal is
@@ -189,11 +189,12 @@ namespace MobileGL::MG_Pipe {
         // named for it proves something else. It hashes nothing and simply uses the hash it is
         // given; production code has no reason to call it.
         //
-        // THE THREE MEMBERS A CONSUMER MUST NOT CALL are this one, ResetForTest() (which frees
-        // every slot the cache holds and drops their publication latches) and ResetCounters().
-        // Package B's seam is Acquire / Release / RefCountOf / RecordIsPublished / Size /
-        // GetCounters and nothing else - the class is public because it is header-only, not
-        // because all nine members are for callers.
+        // The members a consumer must not call are this one and ResetCounters(); ForgetSession()
+        // (which frees every slot the cache holds and drops their publication latches) belongs to
+        // the end of a session (MGPipeForgetEndedSession) and to unit fixtures. Package B's seam
+        // is Acquire / Release / RefCountOf / RecordIsPublished / Size / GetCounters and nothing
+        // else - the class is public because it is header-only, not because all nine members are
+        // for callers.
         MGPipeHandle AcquireWithForcedHashForTest(const SamplerParameters& params, Uint64 forcedHash,
                                                   Uint64& payloadBytes) {
             SamplerParameters canon;
@@ -255,8 +256,8 @@ namespace MobileGL::MG_Pipe {
             return false;
         }
 
-        // A unit test's fixture, and a session that replaced an ended one (MGPipeForgetEndedSession:
-        // the fresh server holds none of these records). NOT called from the validate point's
+        // A session that replaced an ended one (MGPipeForgetEndedSession: the fresh server holds
+        // none of these records), and a unit test's fixture. NOT called from the validate point's
         // FreshlyPrimed arm: MGPipeApplierReset is a make-current and does NOT drop object
         // records, so a sampler CSO the applier holds outlives a context switch. Dropping the
         // cache there would leak the applier's record and re-mint a value it already has.
@@ -265,7 +266,7 @@ namespace MobileGL::MG_Pipe {
         // delete_sampler_state behind them, so a latch left standing would make a future death
         // helper - on the recycled slot at the same generation - emit a delete for a record
         // that never existed, which is the refusal the applier counts.
-        void ResetForTest() {
+        void ForgetSession() {
             for (const Entry& entry : m_entries) {
                 MGPipeNoteHandleUnpublished(MGPipeKind::SamplerCso, entry.Cso);
                 MGPipeSlots().Free(MGPipeKind::SamplerCso, entry.Cso);

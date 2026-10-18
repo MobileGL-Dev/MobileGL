@@ -581,7 +581,7 @@ void main() { imageStore(img, ivec2(0), vec4(1.0)); }
     // Nothing produced the bit before the fix round.
     TEST(ImageEmit, AnImageBoundTextureIsMarkedShaderImageBoundAtTheBind) {
         EmitterScope scope;
-        MGPipeTextureEmitterInstance().ResetForTest();
+        MGPipeTextureEmitterInstance().ForgetSession();
         const GLuint name = MakeImageTexture();
         const auto& texture = Ctx().GetTextureObject(name);
         ASSERT_TRUE(texture);

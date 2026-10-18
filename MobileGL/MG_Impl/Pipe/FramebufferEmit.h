@@ -400,7 +400,9 @@ namespace MobileGL::MG_Pipe {
 
         void ResetCounters() { m_emissions = m_refusals = 0; }
 
-        void ResetForTest() {
+        // A session that replaced an ended one (MGPipeForgetEndedSession), and a unit fixture:
+        // the latches and the counters, and the build memo and last states beside them.
+        void ForgetSession() {
             Reset();
             ResetCounters();
             for (auto& memo : m_buildMemo)

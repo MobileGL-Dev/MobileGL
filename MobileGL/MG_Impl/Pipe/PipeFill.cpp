@@ -3415,13 +3415,13 @@ namespace MobileGL::MG_Pipe {
         MGPipeTrackerInstance().Reset();
         // The texture emitter's records and its owed uploads belong to the ended server; its
         // sampler references go back to the cache before the cache is emptied.
-        MGPipeTextureEmitterInstance().ResetForTest();
+        MGPipeTextureEmitterInstance().ForgetSession();
         MGPipeSamplerEmitterInstance().Reset();
-        MGPipeSamplerCsoCacheInstance().ResetForTest();
+        MGPipeSamplerCsoCacheInstance().ForgetSession();
         MGPipeCsoCacheInstance().Reset();
         MGPipeSetHashSuppressorInstance().InvalidateAll();
         MGPipeVertexInputEmitterInstance().Reset();
-        MGPipeFramebufferEmitterInstance().ResetForTest();
+        MGPipeFramebufferEmitterInstance().ForgetSession();
         MGPipeImageEmitterInstance().Reset();
         MGPipeProgramEmitterInstance().Reset();
         MGPipeShaderBufferEmitterInstance().Reset();

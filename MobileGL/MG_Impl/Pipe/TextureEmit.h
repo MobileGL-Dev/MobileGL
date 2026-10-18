@@ -1154,16 +1154,16 @@ namespace MobileGL::MG_Pipe {
             m_deadResolves = 0;
         }
 
-        // A unit fixture's per-case reset, and the reset of a session that replaced an ended one
-        // (MGPipeForgetEndedSession: the fresh server holds none of these records). See
-        // MGPipeResourceTracker::ResetForTest for the rule this restates: a texture handle and
-        // the applier record it names are SHARE-GROUP OBJECT STATE, so nothing here is
-        // per-context and no re-publication path exists or may exist.
-        // Moves whenever the handle table below is dropped (ResetForTest), so a memo that skipped
+        // ForgetSession is the reset of a session that replaced an ended one
+        // (MGPipeForgetEndedSession: the fresh server holds none of these records), and a unit
+        // fixture's per-case reset. See MGPipeResourceTracker::ResetForTest for the rule this
+        // restates: a texture handle and the applier record it names are SHARE-GROUP OBJECT
+        // STATE, so nothing here is per-context and no re-publication path exists or may exist.
+        // Moves whenever the handle table below is dropped (ForgetSession), so a memo that skipped
         // NoteTextureBoundAs / AcquireTexture for handles it already noted knows to note again.
         Uint64 TableEpoch() const { return m_tableEpoch; }
 
-        void ResetForTest() {
+        void ForgetSession() {
             ++m_tableEpoch;
             // EVERY REFERENCE THIS EMITTER OWES IS GIVEN BACK FIRST. A case that dropped the
             // table without releasing would pin cache entries for the rest of the process and

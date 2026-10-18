@@ -233,7 +233,7 @@ namespace {
                 kMGPipeSubsystemResources | kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
             m_previousContext = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
-            MGPipeTextureEmitterInstance().ResetForTest();
+            MGPipeTextureEmitterInstance().ForgetSession();
             // AND THE APPLIER IS A PROCESS SINGLETON, so its object records outlive a case. With
             // kMGPipeWiredTextureSubsystem flipped the emitter's calls actually LAND, and a case
             // that inherited the previous one's records would assert against state it did not
@@ -245,7 +245,7 @@ namespace {
             MGPipeApplierReleaseObjectRecords();
         }
         ~TextureScope() {
-            MGPipeTextureEmitterInstance().ResetForTest();
+            MGPipeTextureEmitterInstance().ForgetSession();
             MGPipeApplierReset();
             MGPipeApplierReleaseObjectRecords();
             MG_State::pGLContext.reset();
