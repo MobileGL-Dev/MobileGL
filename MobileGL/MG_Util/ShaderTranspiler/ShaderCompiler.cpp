@@ -52,6 +52,7 @@
 #include "SpirvPasses/StripUniformLocationsPass.h"
 #include "SpirvPasses/StripIoBlockLocationsPass.h"
 #include "SpirvPasses/DeferGeometryEmitsPass.h"
+#include "SpirvPasses/RetainGeometryOutputsPass.h"
 #include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
 #include "SpirvPasses/StripNoPerspectivePass.h"
 #include "SpirvPasses/EmulateNoPerspectivePass.h"
@@ -1375,6 +1376,12 @@ namespace MobileGL {
                     RenameBuiltinShadowingFunctionsPass::CreateRenameBuiltinShadowingFunctionsPass());
                 optimizer.RegisterPass(EliminateFloatEqualsZeroPass::CreateEliminateFloatEqualsZeroPass());
                 optimizer.RegisterPass(DecomposeWorkgroupVec3Pass::CreateDecomposeWorkgroupVec3Pass());
+                // Geometry outputs keep their last written value across EmitVertex(), as every
+                // desktop driver keeps them; here rather than in a backend so both backends, and
+                // every pass after this chain that works at emit time, see the retained values.
+                // A non-geometry module, or one that writes every output before every emit, is
+                // returned unchanged.
+                optimizer.RegisterPass(RetainGeometryOutputsPass::CreateRetainGeometryOutputsPass());
                 // The fp64 tail, and the ONE part of this chain that is not the same on every
                 // backend. Both passes are skipped when the backend can consume Float64 itself
                 // (`nativeFloat64`, i.e. VkPhysicalDeviceFeatures::shaderFloat64 on DirectVulkan):

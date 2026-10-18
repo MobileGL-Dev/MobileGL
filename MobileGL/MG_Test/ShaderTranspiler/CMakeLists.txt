@@ -23,6 +23,7 @@ add_executable(
         StripCompatPerVertexMembersTest.cpp
         LowerViewportIndexTest.cpp
         DeferGeometryEmitsTest.cpp
+        RetainGeometryOutputsTest.cpp
         ClampMultisampleFetchTest.cpp
         LegalizeResourceArrayIndexTest.cpp
         FlattenAtomicCounterBlockTest.cpp
@@ -46,6 +47,7 @@ target_include_directories(SpirvPassTest PRIVATE
 target_link_libraries(
         SpirvPassTest PRIVATE
         MobileGLTestMain
+        glslang-default-resource-limits
         ${LINK_LIBRARIES}
 )
 
