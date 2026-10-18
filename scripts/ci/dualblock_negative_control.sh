@@ -10,8 +10,7 @@
 # P5f (f1)'s NEGATIVE CONTROL (P5F-WIRE-COMPLETENESS.md §6): the dual-block rehearsal must be
 # the thing the dual-block lane measures.
 #
-# The contract is split_negative_controls.sh's, shrunk to one control because there is one
-# knob:
+# Its contract has two rules:
 #
 #   1. THE BASELINE MUST BE GREEN. DirectGLES.Split.DualBlock.* runs with
 #      MOBILEGL_IPC_ROLE_SPLIT_STATE=1 exported (the entry deliberately does NOT pin the knob in

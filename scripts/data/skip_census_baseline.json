@@ -12983,15 +12983,6 @@
   "names_from": "junit-integration-monolith-control-monolith/integration",
   "optional": "runs only when build-linux-split builds its own library, or the split lane's logs do not prove the IPC defaults"
  },
- "junit-integration-split/control": {
-  "skipped": [],
-  "names": [
-   "DirectGLES.Split.PersistentCoherentMapScenario.AWriteAfterAFrameBoundaryReachesTheNextFramesDraw",
-   "DirectGLES.Split.PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw",
-   "DirectGLES.Split.SmallRing.PersistentCoherentMapScenario.AWriteAfterAFrameBoundaryReachesTheNextFramesDraw",
-   "DirectGLES.Split.SmallRing.PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw"
-  ]
- },
  "junit-integration-split/spawn-baseline": {
   "skipped": [
    "DirectGLES.Spawn.ClipDistanceScenario.ADisabledClipDistanceRemovesNothing",

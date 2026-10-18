@@ -2410,7 +2410,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # running it here captured only the calls made ABOVE this line and silently dropped the F1
     # and Ct blocks below it. SplitLogPaths.PrivateAndDistinct is what caught that, naming
     # F1WireScenario.ClearBufferfiPixels; the generated file now sees every call.
-    # Python is mandatory for this split integration gate (also used by the CI controls).
+    # Python is mandatory for this split integration gate.
     # Do not silently omit the ownership check when the interpreter is unavailable.
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME SplitLogPaths.PrivateAndDistinct

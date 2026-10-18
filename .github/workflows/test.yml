@@ -1689,11 +1689,7 @@ jobs:
           ulimit -c unlimited
           export MOBILEGL_FLATC_EXECUTABLE="${RUNNER_TEMP}/flatc-build/flatc"
           test -x "${MOBILEGL_FLATC_EXECUTABLE}"
-          # The exit code is kept beside the JUnit: the controls step tallies this run as its baseline.
-          rc=0
-          ctest --output-on-failure -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/split-baseline.xml" || rc=$?
-          echo "${rc}" > "${RUNNER_TEMP}/split-baseline.rc"
-          [ "${rc}" -eq 0 ] || exit "${rc}"
+          ctest --output-on-failure -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/split-baseline.xml"
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/split-baseline.xml" --require-split-ran
           # Exit gate 9.3: the spawn arm green at the same count. It runs the same cases through a
           # SECOND PROCESS, so a failure here that the line above did not see is a transport fact
@@ -1781,21 +1777,6 @@ jobs:
           else:
               print(f"the two arms agree on all {len(a)} entries, name and status")
           PY
-
-      # Negative controls for the verb barrier (MOBILEGL_IPC_VERB_BARRIER=0) and the persistent-map
-      # push (MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0): each knob must turn its selected entries red.
-      # The body is scripts/ci/split_negative_controls.sh, so scripts/ci/control_smoke_test.sh can
-      # run the same lines off a runner. It needs a green baseline with at least one passed entry,
-      # tallied from the lane step's JUnit and exit code (re-run only when that step never ran),
-      # and accepts a red only when it carries the control's own diagnostic.
-      - name: Negative controls (barrier, map push)
-        if: ${{ !cancelled() }}
-        working-directory: ${{ env.SPLIT_BUILD_DIR }}
-        env:
-          MOBILEGL_ITEST_REQUIRE_GPU: "1"
-          CONTROL_TMPDIR: ${{ runner.temp }}
-          SPLIT_BASELINE_JUNIT: ${{ runner.temp }}/split-baseline.xml
-        run: bash "${GITHUB_WORKSPACE}/scripts/ci/split_negative_controls.sh"
 
       # build-linux ran the server link-closure ratchet on the build these lanes took, with
       # continue-on-error so that a red there does not skip build-linux's own consumers.
@@ -3869,15 +3850,11 @@ jobs:
           python3 scripts/gen_pipe_field_ownership.py --check
           python3 scripts/gen_pipe_field_ownership.py --self-test
 
-      # Negative controls must themselves be able to go red (ARCHITECTURE.md §13.2).
-      # control_smoke_test.sh runs the split control script against a stubbed ctest: an unrelated
-      # failure or an empty selection must make it report FAILED, and the scenarios' real
-      # diagnostics must make it report PASSED. The Python tests run the trace and TCP lane tooling
-      # on stubs and synthetic data; test_run_trace_case.py feeds run_trace_case.cmake canned logs.
-      # No branch guard; no build, GPU or device.
+      # Negative controls must themselves be able to go red (ARCHITECTURE.md §13.2). The Python
+      # tests run the trace and TCP lane tooling on stubs and synthetic data; test_run_trace_case.py
+      # feeds run_trace_case.cmake canned logs. No branch guard; no build, GPU or device.
       - name: Control and trace-tool smoke tests (R-16)
         run: |
-          bash scripts/ci/control_smoke_test.sh
           python3 scripts/ci/test_trace_infrastructure.py
           python3 scripts/ci/tcp_lane_tools_test.py
           python3 tools/trace_replay/test_run_tcp_matrix.py

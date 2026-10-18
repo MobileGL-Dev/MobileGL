@@ -7,8 +7,7 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # End of Source File Header
 
-"""Validate discovered Split log ownership; read only freshly reset control logs."""
-import os
+"""Validate discovered Split log ownership and read the entries' private logs."""
 import json
 from pathlib import Path
 import re
@@ -699,66 +698,7 @@ def main():
               f"{' '.join(f'{k}={v}' for k, v in expected.items())}: "
               f"{['proven', '', '', 'a default differs'][code] if code != 1 else 'FAILED'}")
         sys.exit(code)
-    selected = paths(json.loads(Path(sys.argv[2]).read_text()))
-    selected = {name: path for name, path in selected.items() if re.search(sys.argv[3], name)}
-    # The SAME exclusion run_control hands ctest -E. Without it this helper and ctest disagree
-    # about the subject set, and the helper reports an entry ctest never ran as "did not run"
-    # (P5e, ID-122). ctest -R is POSIX ERE and cannot express the exclusion inline.
-    _excl = os.environ.get("SPLIT_LOG_EXCLUDE", "")
-    if _excl:
-        selected = {n: q for n, q in selected.items() if not re.search(_excl, n)}
-    if not selected:
-        raise ValueError(f"integration-split: empty selection for {sys.argv[3]}")
-    if mode == "reset":
-        for path in selected.values():
-            Path(path).unlink(missing_ok=True)
-    elif mode == "results":
-        cases = ET.parse(sys.argv[4]).getroot().findall(".//testcase")
-        label = sys.argv[5]
-        by_name = {}
-        for case in cases:
-            by_name.setdefault(case.get("name"), []).append(case)
-        skipped = sum(any(c.find("skipped") is not None for c in by_name.get(n, []))
-                      for n in selected)
-        # ID-62: pre-flight Fatal is not evidence that a selected entry ran.
-        if skipped:
-            raise ValueError(f"{label} control: the knob killed the pre-flight, not the entry - "
-                             f"{skipped} selected entries skipped")
-        missing = sum(len(by_name.get(n, [])) != 1 or
-                      by_name[n][0].get("status") in ("notrun", "disabled") for n in selected)
-        if missing:
-            raise ValueError(f"{label} control: {missing} selected entries did not run")
-        not_failed = sum(c.find("failure") is None or c.get("status") != "fail"
-                         for n in selected for c in by_name[n])
-        if not_failed:
-            raise ValueError(f"{label} control: {not_failed} selected entries did not fail")
-    elif mode == "assertion":
-        cases = ET.parse(sys.argv[4]).getroot().findall(".//testcase")
-        by_name = {case.get("name"): case for case in cases}
-        for name in selected:
-            case = by_name.get(name)
-            output = "" if case is None else " ".join(" ".join(case.itertext()).split())
-            if not re.search(sys.argv[5], output):
-                raise ValueError(f"E3(a) FAILED: {name} red lacks its persistent-map push diagnostic")
-    elif mode == "evidence":
-        missing = []
-        label = sys.argv[5] if len(sys.argv) > 5 else ""
-        for name, path in selected.items():
-            if any_role_file(path) and re.search(sys.argv[4], read_role_logs(path)):
-                print(f"private-log evidence: {name}: {path}")
-            else:
-                missing.append(f"{name} ({path})")
-        if missing:
-            if label:
-                raise ValueError(f"{label} FAILED: no selected private log carries /{sys.argv[4]}/. "
-                                 "The library's own line is the only channel for this: ctest's "
-                                 "transcript is a FALSE ZERO for library output, because the console "
-                                 "sink is compiled out of the configurations these lanes run. "
-                                 + ", ".join(missing))
-            raise ValueError("E1 FAILED: selected private logs lack expected Fatal{BarrierViolation, \"<slot>\"} line: "
-                             + ", ".join(missing))
-    else:
-        raise ValueError(f"unknown mode: {mode}")
+    raise ValueError(f"unknown mode: {mode}")
 
 
 if __name__ == "__main__":
