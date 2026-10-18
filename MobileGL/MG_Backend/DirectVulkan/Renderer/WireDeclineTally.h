@@ -100,10 +100,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // from the forced-condition harness; silent when nothing declined, so a green lane stays
         // quiet and a lane that dropped a draw cannot.
         static void Dump(const char* tag) {
-            // The floor counter prints unconditionally: "zero unsound advances" is the reading the
-            // red-once needs, and an absent line cannot be told from a lane that never ran.
-            MGLOG_I("MGWIRE-FLOOR[%s] unsoundSerialComplete=%llu", tag,
-                    static_cast<unsigned long long>(UnsoundSerialCompleteEvents()));
             if (TotalDeclines() == 0 && PeakPendingUploadBytes() == 0) return;
             MGLOG_I("MGWIRE-DECLINES[%s] total=%llu pendingEntries=%llu pendingBytes=%llu peakPendingBytes=%llu", tag,
                     static_cast<unsigned long long>(TotalDeclines()),
