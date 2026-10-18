@@ -379,7 +379,7 @@ jobs:
             ${{ env.ANDROID_SDK_ROOT }}/platform-tools
             ${{ env.ANDROID_SDK_ROOT }}/platforms/android-35
             ${{ env.ANDROID_SDK_ROOT }}/system-images/android-35/google_apis/x86_64
-          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v2-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
+          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v3-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
 
       - name: Create AVD
         if: steps.android-avd-cache.outputs.cache-hit != 'true'
@@ -390,6 +390,33 @@ jobs:
             --arch x86_64 \
             --profile pixel_6 \
             --avd-name "${AVD_NAME}"
+
+      - name: Enable KVM
+        if: steps.android-avd-cache.outputs.cache-hit != 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Boot the new AVD once per emulator GPU mode of the retrace matrix (the backends' `gpu` in
+      # tools/trace_replay/trace_cases.py) and keep a snapshot of each booted device in the cached
+      # AVD, so a retrace job loads one instead of cold-booting. A mode whose snapshot cannot be
+      # saved still leaves the AVD past its first-boot setup.
+      - name: Pre-boot AVD and save snapshots
+        if: steps.android-avd-cache.outputs.cache-hit != 'true'
+        run: |
+          for gpu in software lavapipe; do
+            log="${RUNNER_TEMP}/avd-snapshot-${gpu}.log"
+            pid="${RUNNER_TEMP}/avd-snapshot-${gpu}.pid"
+            if ! sh android-plugin/run-avd-ci.sh snapshot --avd-name "${AVD_NAME}" --gpu "${gpu}" \
+                --name "ci-${gpu}" --emulator-log "${log}" --pid-file "${pid}" --boot-timeout 300; then
+              echo "::warning::no ci-${gpu} snapshot was saved; retrace jobs in that GPU mode cold-boot"
+              tail -50 "${log}" || true
+              sh android-plugin/run-avd-ci.sh stop --avd-name "${AVD_NAME}" --emulator-log "${log}" --pid-file "${pid}"
+              timeout 60 tail --pid="$(cat "${pid}")" -f /dev/null || true
+            fi
+          done
+          du -sh "${ANDROID_AVD_HOME}"
 
   retrace:
     name: retrace (${{ matrix.backend.name }} / ${{ matrix.transport || 'monolith' }}, ${{ matrix.case.name }})
@@ -440,8 +467,29 @@ jobs:
           echo "EMULATOR_LOG=${RUNNER_TEMP}/mobilegl-emulator.log" >> "$GITHUB_ENV"
           echo "EMULATOR_PID_FILE=${RUNNER_TEMP}/mobilegl-emulator.pid" >> "$GITHUB_ENV"
 
+      - name: Restore Android AVD cache
+        id: android-avd-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ env.ANDROID_AVD_HOME }}
+            ${{ env.ANDROID_SDK_ROOT }}/emulator
+            ${{ env.ANDROID_SDK_ROOT }}/platform-tools
+            ${{ env.ANDROID_SDK_ROOT }}/platforms/android-35
+            ${{ env.ANDROID_SDK_ROOT }}/system-images/android-35/google_apis/x86_64
+          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v3-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
+
+      # The cache holds everything a retrace job runs (emulator, adb, image, AVD); the SDK manager
+      # is only needed to create the AVD when the cache missed.
+      - name: Use the cached SDK tools
+        if: steps.android-avd-cache.outputs.cache-hit == 'true'
+        run: |
+          echo "${ANDROID_SDK_ROOT}/platform-tools" >> "$GITHUB_PATH"
+          echo "${ANDROID_SDK_ROOT}/emulator" >> "$GITHUB_PATH"
+
       - name: Setup Android SDK
         id: netsetup415
+        if: steps.android-avd-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         timeout-minutes: 15
         uses: android-actions/setup-android@v4
@@ -460,19 +508,8 @@ jobs:
           cmdline-tools-version: 13114758
 
       - name: Accept Android SDK licenses
+        if: steps.android-avd-cache.outputs.cache-hit != 'true'
         run: yes | sdkmanager --licenses >/dev/null
-
-      - name: Restore Android AVD cache
-        id: android-avd-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            ${{ env.ANDROID_AVD_HOME }}
-            ${{ env.ANDROID_SDK_ROOT }}/emulator
-            ${{ env.ANDROID_SDK_ROOT }}/platform-tools
-            ${{ env.ANDROID_SDK_ROOT }}/platforms/android-35
-            ${{ env.ANDROID_SDK_ROOT }}/system-images/android-35/google_apis/x86_64
-          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v2-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
 
       - name: Download retrace APK
         uses: actions/download-artifact@v8
@@ -503,7 +540,8 @@ jobs:
             --gpu "${{ matrix.backend.gpu }}" \
             --emulator-log "${EMULATOR_LOG}" \
             --pid-file "${EMULATOR_PID_FILE}" \
-            --boot-timeout 300
+            --boot-timeout 300 \
+            --snapshot "ci-${{ matrix.backend.gpu }}"
 
       - name: Retrace and validate
         env:
@@ -610,7 +648,8 @@ jobs:
               --gpu "${{ matrix.backend.gpu }}" \
               --emulator-log "${EMULATOR_LOG}" \
               --pid-file "${EMULATOR_PID_FILE}" \
-              --boot-timeout 300
+              --boot-timeout 300 \
+              --snapshot "ci-${{ matrix.backend.gpu }}"
             run_retrace
           elif [ "${retrace_status}" -ne 0 ]; then
             exit "${retrace_status}"
