@@ -85,11 +85,13 @@ foreach(listName IN ITEMS @MGL_VERIFY_SPLIT_TEST_LISTS@)
         endif()
     endforeach()
 endforeach()
-# The ambient CtWireScenario entries take the counters and a log of their own as well: the
-# integration job's inproc leg runs them on the inproc transport it exports (under monolith they
-# skip). The log is outside split-logs/, which holds the split arms' entries.
+# The ambient CtWireScenario cases that count control records take the counters and a log of their
+# own as well: the integration job's inproc leg runs them on the inproc transport it exports (under
+# monolith they skip). Only those three: a log would also arm the RoleViolation case's check of the
+# guard's line, which the ambient entries never ran. The log is outside split-logs/, which holds
+# the split arms' entries.
 foreach(entry IN LISTS MGL_AMBIENT_TESTS_GLES MGL_AMBIENT_TESTS_VULKAN)
-    if(entry MATCHES "CtWireScenario\\.")
+    if(entry MATCHES "CtWireScenario\\.(ApplierReset|TextureDeath|FramebufferDeath)")
         set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
             "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/ct-wire-${entry}.log;${mglCtWireStatsEnvironment}")
     endif()
