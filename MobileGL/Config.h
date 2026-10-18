@@ -469,12 +469,6 @@ namespace MobileGL::MG_Config {
         // negative control, MOBILEGL_PIPE_VERIFY_CORRUPT, has no field here: only a verify
         // build reads it, when the comparator arms (MG_Impl/Pipe/PipeFill.cpp, ArmVerify).
         Bool PipeVerifyFatal = true;
-        // MOBILEGL_PIPE_POISON_OMIT: <Verb>:<FieldName>; the filler skips the STAMP (not
-        // the value) of that field for that verb, an omission indistinguishable from a
-        // forgotten FillPoints.def row, so that verb's read of it is
-        // Fatal{UnmigratedPipeInput} (negative control B). Unknown name is
-        // Fatal{PipeVerifyBadKnob}.
-        String PipePoisonOmit;
         // MOBILEGL_PIPE_STATS: dump the boundary counters (bytes, calls, roundtrips,
         // texture pulls, upload shapes, residual-block bytes, index mirror bytes).
         Bool PipeStats = false;

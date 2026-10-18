@@ -237,8 +237,8 @@ endif()
 #   * it carries none of the three MGPipe Fatals: Fatal{PipeVerifyDiffer (a push/pull divergence,
 #     the thing the mode exists to find), Fatal{UnmigratedPipeInput (a backend read of a field the
 #     verb's fill table does not list - fixed by adding the row to MG_Pipe/FillPoints.def, never by
-#     marking the field sticky), and Fatal{PipeVerifyBadKnob (a misspelt MOBILEGL_PIPE_VERIFY_CORRUPT
-#     or MOBILEGL_PIPE_POISON_OMIT). The third is in the regex on purpose even though D2 makes it
+#     marking the field sticky), and Fatal{PipeVerifyBadKnob (a misspelt MOBILEGL_PIPE_VERIFY_CORRUPT).
+#     The third is in the regex on purpose even though D2 makes it
 #     abort the process: with MOBILEGL_PIPE_VERIFY_FATAL=0 the abort is exactly what does not
 #     happen, and a typo'd knob would otherwise leave the negative-control lane looking healthy.
 # The Fatal check is not redundant with the replay's exit status: MOBILEGL_PIPE_VERIFY_FATAL=0 is
@@ -286,8 +286,8 @@ if(DEFINED ENV{MOBILEGL_PIPE_VERIFY} AND NOT "$ENV{MOBILEGL_PIPE_VERIFY}" STREQU
                     "divergence and is recorded, not silenced; Fatal{UnmigratedPipeInput, \"<Field>@<Verb>\"} "
                     "is a missing row in MG_Pipe/FillPoints.def's class table - add it, regenerate, rerun "
                     "(never mark the field sticky); Fatal{PipeVerifyBadKnob, ...} is a misspelt "
-                    "MOBILEGL_PIPE_VERIFY_CORRUPT / MOBILEGL_PIPE_POISON_OMIT - fix the spelling, the "
-                    "vocabularies are kMGPipeInputFieldNames[] and kMGPipeVerbNames[].")
+                    "MOBILEGL_PIPE_VERIFY_CORRUPT - fix the spelling, the vocabulary is "
+                    "kMGPipeInputFieldNames[].")
         endif()
         message(STATUS "MGPipe verify: ${pipe_verify_case} armed, zero divergences, zero unmigrated reads")
     endif()

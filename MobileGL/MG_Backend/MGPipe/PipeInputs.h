@@ -46,10 +46,6 @@ namespace MobileGL::MG_Pipe {
     [[noreturn]] void MGPipeInputPoisonFatalForVerb(MGPipeInputField field, MGPipeVerb verb);
     // kMGPipeVerbNames[verb], or "<none>" for kVerbCount (no verb has been filled yet).
     const char* MGPipeVerbName(MGPipeVerb verb);
-    // Name lookups for the runtime knobs (MOBILEGL_PIPE_VERIFY_CORRUPT names a field,
-    // MOBILEGL_PIPE_POISON_OMIT a Verb:Field pair). Empty on an unknown name.
-    Optional<MGPipeInputField> MGPipeFindInputField(const char* name);
-    Optional<MGPipeVerb> MGPipeFindVerb(const char* name);
 
     // The server-side read check (ARCHITECTURE.md §9.2.1). Inside a server-stamped verb
     // (PipeInputs::ServerStampedVerb) a stale read is judged by the field's ownership class:
@@ -996,6 +992,13 @@ namespace MobileGL::MG_Pipe {
     // dereferenced, the snapshot is only ever compared). Returns false for a forwarded field,
     // which has nothing to corrupt.
     Bool MGPipeApplyVerifyCorruption(PipeInputs& snapshot, MGPipeInputField field);
+    // PipeInputs.cpp. Name lookups for MOBILEGL_PIPE_VERIFY_CORRUPT (a field) and
+    // MGPipeSetPoisonOmission (a verb and a field). Empty on an unknown name.
+    Optional<MGPipeInputField> MGPipeFindInputField(const char* name);
+    Optional<MGPipeVerb> MGPipeFindVerb(const char* name);
+    // PipeInputs.cpp. Negative control B's server half, armed by MGPipeSetPoisonOmission: the
+    // server's verb stamp withholds the stamp of `field` at `verb` too.
+    void MGPipeServerSetPoisonOmission(MGPipeVerb verb, MGPipeInputField field);
     // PipeFill.cpp. Writes the MOBILEGL_PIPE_VERIFY_FATAL=0 summary line ("N divergence(s)
     // survived") NOW, while the role's log file is still open. MobileGL::Destroy calls it right
     // before MG_Util::Debug::Close(): the line used to come from a namespace-scope static's

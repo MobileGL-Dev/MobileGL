@@ -81,14 +81,6 @@ namespace MobileGL::MG_Pipe {
     // (TrackerWalk.ABaseInstanceSurvivesTheFirstWalkOnAFreshContext).
     Uint32 MGPipePendingBaseInstance();
 
-    // PipeFill.cpp. Negative control B (P1 brief D6): the filler withholds the STAMP - never
-    // the value - of `field` at `verb`, so that verb's read of it is
-    // Fatal{UnmigratedPipeInput, "Field@Verb"} while every other verb is unaffected. The
-    // MOBILEGL_PIPE_POISON_OMIT knob ("<Verb>:<FieldName>") calls this once, on the first
-    // fill; tests call it directly. Both null clears the omission. An unknown name is
-    // Fatal{PipeVerifyBadKnob}.
-    void MGPipeSetPoisonOmission(const char* verb, const char* field);
-
     // PipeFill.cpp. How many times set_vertex_attrib_defaults' applier failed to reproduce
     // the value the call carried, so the client wrote the mirror itself
     // (EmitVertexAttribDefaults). It is the ONE observable of that repair: the window it
@@ -119,6 +111,13 @@ namespace MobileGL::MG_Pipe {
     // is the branch that survives P13, which is why it is its own function rather than the
     // filler's loop.
     void SnapshotFromGLContext(PipeInputs& snapshot, const MGPipeFieldMask& mask);
+
+    // PipeFill.cpp. Negative control B (P1 brief D6): from now on the filler withholds the STAMP -
+    // never the value - of `field` at `verb`, and so does the server's verb stamp, so that verb's
+    // read of it is Fatal{UnmigratedPipeInput, "Field@Verb"} while every other verb is unaffected.
+    // Names from kMGPipeVerbNames / kMGPipeInputFieldNames; false, arming nothing, for an unknown
+    // one. Call it on the GL thread. The integration harness arms it (Harness/PoisonOmissionArm.h).
+    Bool MGPipeSetPoisonOmission(const char* verb, const char* field);
 #endif
 } // namespace MobileGL::MG_Pipe
 #define MGP_FILL(Verb) ::MobileGL::MG_Pipe::MGPipeValidateForVerb(::MobileGL::MG_Pipe::MGPipeVerb::Verb)

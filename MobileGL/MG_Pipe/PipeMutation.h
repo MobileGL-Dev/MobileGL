@@ -15,7 +15,7 @@
 // materialising a queued clear, overriding a sampler's filter) would leave the copy stale, so
 // the mutator calls MGP_NOTE_MUTATION(Field) where it moves the value. The notice refreshes
 // that one field when it belongs to the verb in flight. It never touches the poison stamp, so a
-// stamp withheld by MOBILEGL_PIPE_POISON_OMIT stays withheld.
+// stamp the fill withheld (negative control B) stays withheld.
 #include <MG_Pipe/MGPipe.h>
 namespace MobileGL::MG_Pipe {
     // MG_Impl/Pipe/PipeFill.cpp (the client side, the only place that may spell pGLContext).

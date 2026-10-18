@@ -75,10 +75,8 @@ namespace {
         void SetUp() override {
             m_previous = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
-            MGPipeSetPoisonOmission(nullptr, nullptr);
         }
         void TearDown() override {
-            MGPipeSetPoisonOmission(nullptr, nullptr);
             MG_State::pGLContext = Move(m_previous);
         }
         SharedPtr<GLContext> m_previous;
@@ -88,11 +86,20 @@ namespace {
     Bool Fresh(MGPipeInputField field) {
         return MGPipeInputFieldIsFresh(gPipeInputs->FilledState(), field);
     }
+
+    // Negative control B's omission, made here rather than by the library: fill `verb`, then put
+    // the stamp of `field` back to what it held before the fill. The value is copied and only the
+    // stamp is withheld, which is what a FillPoints.def row nobody wrote leaves behind.
+    void FillWithholdingTheStamp(MGPipeVerb verb, MGPipeInputField field) {
+        auto& filled = const_cast<MGPipeFilledState&>(gPipeInputs->FilledState());
+        const Uint64 before = filled.FilledGen[static_cast<SizeT>(field)];
+        MGPipeValidateForVerb(verb);
+        filled.FilledGen[static_cast<SizeT>(field)] = before;
+    }
 #endif
 
     [[maybe_unused]] constexpr const char* kOmittedFatal =
         "Fatal{UnmigratedPipeInput, \"GetActiveTextureUnit@GenerateMipmap\"}";
-    [[maybe_unused]] constexpr const char* kOmissionKnob = "GenerateMipmap:GetActiveTextureUnit";
 
 #if MGTEST_HAVE_FORK
     struct ChildResult {
@@ -139,7 +146,7 @@ namespace {
 // Negative control B, layer 1 (P1 brief D6 / G5): the omitted (verb, field) pair is the
 // ONLY thing that goes stale - every other bit of the verb class's mask is fresh, every
 // field outside it is not, and the verb after it neither heals the field (not in kDraw's
-// mask) nor loses one of its own.
+// mask) nor loses one of its own. The omission is the test's own (FillWithholdingTheStamp).
 TEST_F(PipeInputsTest, OmittingOneFieldForOneVerbLeavesExactlyThatFieldStale) {
 #if !MOBILEGL_PIPE_POISON
     GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
@@ -148,8 +155,7 @@ TEST_F(PipeInputsTest, OmittingOneFieldForOneVerbLeavesExactlyThatFieldStale) {
     EXPECT_TRUE(Fresh(MGPipeInputField::GetActiveTextureUnit));
     EXPECT_TRUE(Fresh(MGPipeInputField::GetTextureUnitObject));
 
-    MGPipeSetPoisonOmission("GenerateMipmap", "GetActiveTextureUnit");
-    MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
+    FillWithholdingTheStamp(MGPipeVerb::GenerateMipmap, MGPipeInputField::GetActiveTextureUnit);
     EXPECT_TRUE(Fresh(MGPipeInputField::GetTextureUnitObject));
     EXPECT_FALSE(Fresh(MGPipeInputField::GetActiveTextureUnit));
     // The value was still copied: only the stamp is withheld.
@@ -173,15 +179,15 @@ TEST_F(PipeInputsTest, OmittingOneFieldForOneVerbLeavesExactlyThatFieldStale) {
     // A sticky field stays fresh across every verb.
     EXPECT_TRUE(Fresh(MGPipeInputField::RecordError));
 
-    // And the omission is scoped to its verb: a different verb of the same class keeps it.
+    // And the omission is scoped to its fill: the next verb of the same class stamps it again.
     MGPipeValidateForVerb(MGPipeVerb::BindImageTexture);
     EXPECT_TRUE(Fresh(MGPipeInputField::GetActiveTextureUnit));
 #endif
 }
 
 // Negative control B, layer 2 (G5): the read itself. The child fills GenerateMipmap with the
-// omission and reads gPipeInputs->GetActiveTextureUnit(); the parent expects SIGABRT and the
-// exact Fatal line, and that nothing else was fatal.
+// stamp of GetActiveTextureUnit withheld and reads gPipeInputs->GetActiveTextureUnit(); the
+// parent expects SIGABRT and the exact Fatal line, and that nothing else was fatal.
 TEST_F(PipeInputsTest, ReadingAnOmittedFieldAbortsNamingTheVerb) {
 #if !MOBILEGL_PIPE_POISON
     GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
@@ -190,10 +196,9 @@ TEST_F(PipeInputsTest, ReadingAnOmittedFieldAbortsNamingTheVerb) {
 #else
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
     const ChildResult r = RunInChild([] {
-        MGPipeSetPoisonOmission("GenerateMipmap", "GetActiveTextureUnit");
         MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
         (void)gPipeInputs->GetRenderStateParameters(); // a filled field of the preceding draw: must not abort
-        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
+        FillWithholdingTheStamp(MGPipeVerb::GenerateMipmap, MGPipeInputField::GetActiveTextureUnit);
         (void)gPipeInputs->GetTextureUnitObject(0); // the sibling field: filled, must not abort
         (void)gPipeInputs->GetActiveTextureUnit();  // the omitted field: Fatal
         ::_exit(3);                                 // reached only if the poison failed
@@ -250,53 +255,6 @@ TEST_F(PipeInputsTest, ReadingBeforeAnyFillAbortsNamingNoVerb) {
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetLineWidth@<none>\"}"), std::string::npos) << r.Log;
     EXPECT_EQ(r.Log.find("PipeVerifyDiffer"), std::string::npos) << r.Log;
     EXPECT_EQ(r.Log.find("verify armed"), std::string::npos) << r.Log;
-#endif
-}
-
-// The MOBILEGL_PIPE_POISON_OMIT parser, through the Features field the loader fills: the
-// child sets the knob after its parent filled without it, and the first fill after that
-// parses it, logs the arming line and withholds the stamp exactly as the programmatic form.
-TEST_F(PipeInputsTest, PoisonOmitKnobArmsTheOmission) {
-#if !MOBILEGL_PIPE_POISON
-    GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
-#elif !MGTEST_HAVE_FORK
-    GTEST_SKIP() << "no fork() on this platform";
-#else
-    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
-    MGPipeValidateForVerb(MGPipeVerb::DrawArrays); // the parent's parse saw an empty knob
-    const ChildResult r = RunInChild([] {
-        MG_Config::Features.PipePoisonOmit = kOmissionKnob;
-        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
-        (void)gPipeInputs->GetTextureUnitObject(0); // the sibling field: filled, must not abort
-        (void)gPipeInputs->GetActiveTextureUnit();  // the omitted field: Fatal
-        ::_exit(3);
-    });
-    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("MGPipe: poison omission armed - GetActiveTextureUnit@GenerateMipmap"), std::string::npos)
-        << r.Log;
-    EXPECT_NE(r.Log.find(kOmittedFatal), std::string::npos) << r.Log;
-    EXPECT_EQ(r.Log.find("GetTextureUnitObject@"), std::string::npos) << r.Log;
-#endif
-}
-
-// An unknown verb in the knob is Fatal{PipeVerifyBadKnob} naming the knob and the value,
-// before any stamp is withheld.
-TEST_F(PipeInputsTest, BadPoisonOmitKnobIsFatalNamingTheKnob) {
-#if !MGTEST_HAVE_FORK
-    GTEST_SKIP() << "no fork() on this platform";
-#else
-    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
-    const ChildResult r = RunInChild([] {
-        MG_Config::Features.PipePoisonOmit = "NoSuchVerb:GetActiveTextureUnit";
-        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
-        ::_exit(3);
-    });
-    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{PipeVerifyBadKnob, \"MOBILEGL_PIPE_POISON_OMIT=NoSuchVerb:GetActiveTextureUnit\": "
-                         "no such verb in kMGPipeVerbNames}"),
-              std::string::npos)
-        << r.Log;
-    EXPECT_EQ(r.Log.find("poison omission armed"), std::string::npos) << r.Log;
 #endif
 }
 
@@ -566,8 +524,7 @@ TEST_F(PipeInputsTest, TheMutationNoticeRefreshesTheValueButNotTheStamp) {
     GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
 #else
     auto& ctx = *MG_State::pGLContext;
-    MGPipeSetPoisonOmission("DrawArrays", "GetSamplingResolutionGeneration");
-    MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
+    FillWithholdingTheStamp(MGPipeVerb::DrawArrays, MGPipeInputField::GetSamplingResolutionGeneration);
     ASSERT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration));
     ctx.BumpSamplingResolutionGeneration();
     EXPECT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration))
@@ -575,7 +532,6 @@ TEST_F(PipeInputsTest, TheMutationNoticeRefreshesTheValueButNotTheStamp) {
 
     // FenceSync is a kQuery verb: its mask holds no texture field at all, so the notice must
     // leave the generation unfilled and a read of it Fatal{UnmigratedPipeInput}.
-    MGPipeSetPoisonOmission(nullptr, nullptr);
     MGPipeValidateForVerb(MGPipeVerb::FenceSync);
     ASSERT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration));
     ctx.BumpSamplingResolutionGeneration();

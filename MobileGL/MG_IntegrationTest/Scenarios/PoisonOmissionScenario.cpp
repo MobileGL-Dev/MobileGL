@@ -11,22 +11,26 @@
 // The per-verb poison is the half of P1 that makes a forgotten fill row loud instead of silent: the
 // filler stamps a generation on every field it copies for a verb, and an accessor whose stamp is not
 // this verb's aborts with Fatal{UnmigratedPipeInput, "<Field>@<Verb>"}. A mechanism that can only be
-// observed when someone forgets a row is a mechanism nobody can trust, so MOBILEGL_PIPE_POISON_OMIT
-// forges the mistake on purpose: it names one (verb, field) pair whose STAMP the filler skips while
-// still copying the value, which is indistinguishable from a row that was never written.
+// observed when someone forgets a row is a mechanism nobody can trust, so the control forges the
+// mistake on purpose: the harness marker MGITEST_POISON_OMIT names one (verb, field) pair, and the
+// child arms it through the verify build's setter (Harness/PoisonOmissionArm.h), so the filler skips
+// that pair's STAMP while still copying the value - indistinguishable from a row never written.
 //
 // The scenario asserts both halves of "on THAT verb, and only there":
 //
-//   OmittedFieldAbortsOnThatVerb - with MOBILEGL_PIPE_POISON_OMIT=GenerateMipmap:GetActiveTextureUnit,
-//                                  a draw must still complete (GetActiveTextureUnit is not in kDraw's
-//                                  mask, and the draw's own fields are stamped normally) and the
-//                                  following glGenerateMipmap must abort naming exactly that pair.
-//   WithoutOmissionCompletes     - the identical sequence with the knob unset runs to completion with
-//                                  no Fatal at all. Without this half, "it aborted" would say nothing
-//                                  about WHY: a poison that fired on every verb would look just as red.
+//   OmittedFieldAbortsOnThatVerb - with MGITEST_POISON_OMIT=ReadPixels:GetPixelStoreParameters, the
+//                                  draw and the glGenerateMipmap must still complete (the stamp is
+//                                  withheld at ReadPixels alone, and their own fields are stamped
+//                                  normally) and the following glReadPixels must abort naming
+//                                  exactly that pair.
+//   WithoutOmissionCompletes     - the identical sequence with the marker unset runs to completion
+//                                  with no Fatal at all. Without this half, "it aborted" would say
+//                                  nothing about WHY: a poison that fired on every verb would look
+//                                  just as red.
 //
-// The knob is process-wide, so the two cases cannot share a lane: the first runs in the PoisonOmitted.
-// entries, the second in the ambient Verify. entries (the first skips when the knob is unset).
+// The omission is process-wide, so the two cases cannot share a lane: the first runs in the
+// PoisonOmitted. entries, the second in the ambient Verify. entries (the first skips when the marker
+// is unset).
 //
 // WHY THE SEQUENCE RUNS IN A SEPARATE PROCESS, AND WHY THAT PROCESS IS fork()+execve() AND NOT fork()
 // ALONE. The poison reports with MGLOG_F and then std::abort(), in the middle of a GL command - so the
@@ -56,6 +60,7 @@
 
 #include "../Harness/PipeStatsWindow.h"
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/PoisonOmissionArm.h"
 #include "../Harness/ScenarioFixture.h"
 
 #if !defined(_WIN32) && !defined(__APPLE__) && !defined(__ANDROID__) && __has_include(<sys/wait.h>)
@@ -81,28 +86,23 @@ extern char** environ;
 namespace MGITest {
     namespace {
 
-        // What the PoisonOmitted. ctest entries name, which CI requires to pass by name. Each pair is
-        // spelled here so the assertion below is about the exact string the poison contracts to
-        // print (ARCHITECTURE.md 9.2: Fatal{UnmigratedPipeInput, "<Field>@<Verb>"}).
+        // What the PoisonOmitted. and VerifySplitPoisonOmitted. ctest entries put in
+        // MGITEST_POISON_OMIT, and CI requires both to pass by name. The pair is spelled here so the
+        // assertion below is about the exact string the poison contracts to print (ARCHITECTURE.md
+        // 9.2: Fatal{UnmigratedPipeInput, "<Field>@<Verb>"}).
         //
-        // TWO PAIRS SINCE P7 WAVE 3, ONE PER ARM, because the first one is structurally inert on
-        // the split arm. GenerateMipmap:GetActiveTextureUnit is the monolith control: the monolith
-        // backend resolves the texture to mip through the active unit. Under a transport it does
-        // not - since P5c hd the server's generate_mipmap resolves the texture from the verb's own
-        // handle (MGPipeApplier().VerbMipRes) and never reads the active unit - so omitting that
-        // stamp is omitting a stamp nobody reads, and the child exits 0 (measured on
-        // integration-verify-split, both backends). ReadPixels:GetPixelStoreParameters is the
-        // split control: the server's read_pixels backend call DOES read the pack half through the
-        // accessor, under the server's own stamp, which honours the knob in a verify build
-        // (MG_Backend/MGPipe/PipeInputs.cpp's ServerPoisonOmission).
+        // ONE PAIR FOR BOTH ARMS SINCE P13 W5. The record arm resolves glGenerateMipmap's texture
+        // from the verb's own handle and never reads the active unit, so the old monolith pair,
+        // GenerateMipmap:GetActiveTextureUnit, withheld a stamp nobody reads. ReadPixels' pack
+        // state is read on both arms: by the monolith record arm around its neutral-pack readback,
+        // and by the server's read_pixels under the server's own stamp, which withholds the pair
+        // too (MG_Backend/MGPipe/PipeInputs.cpp, MGPipeServerSetPoisonOmission).
         //
-        // AND EACH PAIR SAYS WHICH ROLE HAS TO FIRE (`FiresOnTheServer`), which is the whole point
-        // of the split pair and was not checked at all until P7 wave 3's V1 fix round. The reader
-        // below concatenates the child's two role halves and the assertion searched the union, so
-        // `VerifySplitPoisonOmitted.` would have been just as green if the stamp the knob withheld
-        // had been the CLIENT's - which is the case it exists to rule out, because the mechanism
-        // under test is MG_Backend/MGPipe/PipeInputs.cpp's server-side stamp honouring the knob.
-        // The monolith pair has one role and one log half, so it keeps the union.
+        // AND THE PAIR SAYS WHICH ROLE HAS TO FIRE (`FiresOnTheServer`, P7 wave 3's V1 fix round).
+        // The reader below concatenates the child's two role halves, so `VerifySplitPoisonOmitted.`
+        // would be just as green if the withheld stamp had been the CLIENT's - the case it exists to
+        // rule out. A build without MOBILEGL_BUILD_DISAGGREGATED has one role and one log half, so
+        // there the union is all there is.
         struct OmittedPair {
             const char* Verb;
             const char* Field;
@@ -110,7 +110,6 @@ namespace MGITest {
             bool FiresOnTheServer;       // the Fatal must be in the child's SERVER half, not merely present
         };
         constexpr OmittedPair kOmittedPairs[] = {
-            {"GenerateMipmap", "GetActiveTextureUnit", {"@DrawArrays", "@DrawArrays"}, false},
             {"ReadPixels", "GetPixelStoreParameters", {"@DrawArrays", "@GenerateMipmap"}, true},
         };
         constexpr const char* kFatalPrefix = "Fatal{UnmigratedPipeInput";
@@ -119,6 +118,11 @@ namespace MGITest {
         // everywhere else (including in the ambient lanes, where it is registered like any other case).
         constexpr const char* kChildMarker = "MGITEST_POISON_OMISSION_CHILD";
         constexpr const char* kWorkerFilter = "--gtest_filter=PoisonOmissionScenario.TheSequenceThePoisonControlsRun";
+
+        // The pair to withhold, as <Verb>:<Field>, set by the PoisonOmitted. ctest entries and
+        // inherited by the child. A HARNESS marker (hence MGITEST_): the library never reads it,
+        // and the worker arms the omission itself (Harness/PoisonOmissionArm.h).
+        constexpr const char* kOmissionMarker = "MGITEST_POISON_OMIT";
 
         constexpr const char* kVS = R"(#version 330 core
 in vec2 aPos;
@@ -265,14 +269,14 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                 glFinish();
                 std::fprintf(stderr, "[itest] poison worker: the draw completed\n");
 
-                // The verb the omission names. Under MOBILEGL_PIPE_POISON_OMIT this must abort.
+                // A texture verb between the draw and the readback; the omission does not name it.
                 glBindTexture(GL_TEXTURE_2D, texture);
                 glGenerateMipmap(GL_TEXTURE_2D);
                 glFinish();
                 std::fprintf(stderr, "[itest] poison worker: glGenerateMipmap returned\n");
 
-                // The split arm's verb (kOmittedPairs[1]): a readback, which is a round trip, so
-                // the server has applied it - and read the pack state - before this returns.
+                // The verb the omission names (kOmittedPairs): a readback, which is a round trip,
+                // so the server has applied it - and read the pack state - before this returns.
                 unsigned char centre[4] = {};
                 glReadPixels(gl.Width() / 2, gl.Height() / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, centre);
                 std::fprintf(stderr, "[itest] poison worker: glReadPixels returned\n");
@@ -382,6 +386,18 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             }
             if (!Ready()) return;
 
+            // The omission the marker names, armed on this thread - the one that issues the GL calls
+            // - before the sequence's first verb. Without the marker nothing is armed, which is
+            // WithoutOmissionCompletes' half.
+            if (const char* marker = std::getenv(kOmissionMarker); marker != nullptr && *marker != '\0') {
+                const std::string pair(marker);
+                const std::string::size_type colon = pair.find(':');
+                ASSERT_NE(colon, std::string::npos) << kOmissionMarker << "=" << pair << " is not <Verb>:<Field>";
+                ASSERT_TRUE(ArmPoisonOmission(pair.substr(0, colon).c_str(), pair.substr(colon + 1).c_str()))
+                    << "could not arm the omission " << kOmissionMarker << "=" << pair
+                    << ": the build has no setter (-DMOBILEGL_PIPE_VERIFY=ON compiles it) or a name is unknown";
+            }
+
             RunSequence();
 
 #if MGITEST_POISON_HAVE_FORK
@@ -404,21 +420,22 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
         TEST_F(PoisonOmissionScenario, OmittedFieldAbortsOnThatVerb) {
             if (!Ready()) return;
 
-            if (!StringKnobIsSet("MOBILEGL_PIPE_POISON_OMIT")) {
-                GTEST_SKIP() << "this case is the poison's negative control and needs "
-                                "MOBILEGL_PIPE_POISON_OMIT=<Verb>:<Field> for the whole process, which "
-                                "is what the PoisonOmitted. ctest entries set";
+            if (!StringKnobIsSet(kOmissionMarker)) {
+                GTEST_SKIP() << "this case is the poison's negative control and needs " << kOmissionMarker
+                             << "=<Verb>:<Field>, which is what the PoisonOmitted. ctest entries set";
             }
-            const std::string knob = std::getenv("MOBILEGL_PIPE_POISON_OMIT");
+            const std::string marker = std::getenv(kOmissionMarker);
             const OmittedPair* pair = nullptr;
             for (const OmittedPair& candidate : kOmittedPairs) {
-                if (knob == std::string(candidate.Verb) + ":" + candidate.Field) pair = &candidate;
+                if (marker == std::string(candidate.Verb) + ":" + candidate.Field) pair = &candidate;
             }
             if (pair == nullptr) {
-                GTEST_SKIP() << "MOBILEGL_PIPE_POISON_OMIT is " << knob << ", but this case only knows "
-                             << "how to provoke " << kOmittedPairs[0].Verb << ":" << kOmittedPairs[0].Field << " and "
-                             << kOmittedPairs[1].Verb << ":" << kOmittedPairs[1].Field;
+                GTEST_SKIP() << kOmissionMarker << " is " << marker << ", but this case only knows how to provoke "
+                             << kOmittedPairs[0].Verb << ":" << kOmittedPairs[0].Field;
             }
+            ASSERT_TRUE(PoisonOmissionArmAvailable())
+                << kOmissionMarker << " is set, but only a -DMOBILEGL_PIPE_VERIFY=ON build compiles the setter "
+                << "the child arms the omission with (Harness/PoisonOmissionArm.h), so this control cannot run here";
             const std::string expectedPair = std::string(pair->Field) + "@" + pair->Verb;
 
             int status = 0;
@@ -452,10 +469,10 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                 << childLog;
 #if MOBILEGL_BUILD_DISAGGREGATED
             // WHICH ROLE, for the split pair (P7 wave 3, V1). The union above answers "did the
-            // poison fire", which is all the monolith pair can be asked; this pair exists to prove
-            // that the SERVER'S OWN verb stamp honours MOBILEGL_PIPE_POISON_OMIT
-            // (MG_Backend/MGPipe/PipeInputs.cpp's ServerPoisonOmission) - the thing that was NOT
-            // true before wave 3 and made the control silently green. A client-side firing would
+            // poison fire", which is all a one-role build can be asked; this pair exists to prove
+            // that the SERVER'S OWN verb stamp honours the omission
+            // (MG_Backend/MGPipe/PipeInputs.cpp's MGPipeServerSetPoisonOmission) - the thing that was
+            // NOT true before wave 3 and made the control silently green. A client-side firing would
             // satisfy the union and prove the opposite of what the entry claims, so the half is
             // named here.
             if (pair->FiresOnTheServer) {
@@ -481,11 +498,11 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
         }
 
         // The ambient half of the pair, in the ambient Verify. lanes: the same sequence with the
-        // knob UNSET must run to completion and log no Fatal at all. The PoisonOmitted. entries are
-        // the armed half (knob set, the verb must abort), and CI requires those entries by name.
+        // marker UNSET must run to completion and log no Fatal at all. The PoisonOmitted. entries are
+        // the armed half (marker set, the verb must abort), and CI requires those entries by name.
         //
-        // It does not skip when MOBILEGL_PIPE_POISON_OMIT is set: run by hand with the knob
-        // exported, it goes red, and the note in its failure says that is the poison firing.
+        // It does not skip when MGITEST_POISON_OMIT is set: run by hand with the marker exported,
+        // it goes red, and the note in its failure says that is the poison firing.
         TEST_F(PoisonOmissionScenario, WithoutOmissionCompletes) {
             if (!Ready()) return;
 
@@ -493,7 +510,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                 GTEST_SKIP() << "the poison is only compiled into the push/verify builds; in an ordinary "
                                 "build there is nothing for this control to be a control OF";
             }
-            const bool omissionArmed = StringKnobIsSet("MOBILEGL_PIPE_POISON_OMIT");
+            const bool omissionArmed = StringKnobIsSet(kOmissionMarker);
 
             int status = 0;
             std::string reason;
@@ -501,10 +518,10 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
 
             const std::string childLog = ReadChildLog();
             const std::string note =
-                omissionArmed
-                    ? std::string(" NOTE: MOBILEGL_PIPE_POISON_OMIT is set in this process, so this failure is "
-                                  "expected: the poison IS armed, and this entry going red is the proof.")
-                    : std::string();
+                omissionArmed ? std::string(" NOTE: ") + kOmissionMarker +
+                                    " is set in this process, so this failure is expected: the poison IS armed, and "
+                                    "this entry going red is the proof."
+                              : std::string();
             ASSERT_TRUE(WIFEXITED(status))
                 << "with no omission armed, a draw followed by glGenerateMipmap must complete; the child "
                 << DescribeStatus(status)

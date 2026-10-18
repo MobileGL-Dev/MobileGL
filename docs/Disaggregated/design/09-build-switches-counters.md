@@ -47,7 +47,7 @@ CMake：`MOBILEGL_BUILD_DISAGGREGATED`（OFF）、`MOBILEGL_BUILD_DISAGGREGATED_
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `MOBILEGL_PIPE_PUSH` | `0x3fff` | 子系统位图（`MG_Pipe/MGPipe.h`，位永不复用）；P13 起位 0–13 固定开，清任何一位都在启动时具名拒绝；只剩位 63（"关 CSO 内容寻址"的行为对照）可设 |
-| `MOBILEGL_PIPE_VERIFY` / `_VERIFY_FATAL` / `_VERIFY_CORRUPT` / `_POISON_OMIT` | 0 / 1 / 空 / 空 | 影子比对与两个阴性对照。比对器只编进 verify 构建，其他构建里 `MOBILEGL_PIPE_VERIFY=1` 只告警；`_VERIFY_CORRUPT` 不进 `Config.h`，只有 verify 构建在比对器武装时读它（`PipeFill.cpp` 的 `ArmVerify`，同样经环境与系统配置文件） |
+| `MOBILEGL_PIPE_VERIFY` / `_VERIFY_FATAL` / `_VERIFY_CORRUPT` | 0 / 1 / 空 | 影子比对与它的阴性对照。比对器只编进 verify 构建，其他构建里 `MOBILEGL_PIPE_VERIFY=1` 只告警；`_VERIFY_CORRUPT` 不进 `Config.h`，只有 verify 构建在比对器武装时读它（`PipeFill.cpp` 的 `ArmVerify`，同样经环境与系统配置文件）。poison 的阴性对照没有运行时开关：集成测试的 harness 标记 `MGITEST_POISON_OMIT` 由重新 exec 的子进程经 verify 构建才有的 `MGPipeSetPoisonOmission` 武装（`Harness/PoisonOmissionArm.h`） |
 | `MOBILEGL_PIPE_STATS` / `_STATS_PERIOD` / `_STATS_FILE` | 0 / 120 / 空 | 边界计数器（附 B）；dump 按角色写 `<base>.client.json` / `<base>.server.json` |
 | `MOBILEGL_PIPE_INDEX_MIRROR_MB` | 64 | 索引镜像预算（P8）；`_LEGACY_MEMOS`、`_TEXEL_RETAIN_MB`、`_HANDLE_ABA_CONTROL` 随各自的臂在 P13 删除 |
 

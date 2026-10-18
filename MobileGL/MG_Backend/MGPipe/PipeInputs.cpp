@@ -6,13 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The backend-side half of the PipeInputs block: the poison Fatal with its verb name, the
-// name lookups the runtime knobs need, and - in a verify build - the per-field equality,
-// the entry comparator and the corruption injector. Compiled only under MOBILEGL_PIPE_PUSH
-// (CMakeLists.txt appends it to SOURCE_FILES there), so the pull build never sees it. Spells
-// no MG_State global: everything that reads the live context lives in MG_Impl/Pipe/PipeFill.cpp.
+// The backend-side half of the PipeInputs block: the poison Fatal with its verb name and -
+// in a verify build - the per-field equality, the entry comparator, the corruption injector,
+// the name lookups its knob and the poison omission need, and the omission's server half.
+// Spells no MG_State global: everything that reads the live context lives in
+// MG_Impl/Pipe/PipeFill.cpp.
 #include <MG_Backend/MGPipe/PipeInputs.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 
@@ -29,22 +30,6 @@ namespace MobileGL::MG_Pipe {
         MGPipeInputPoisonFatal(field, MGPipeVerbName(verb));
     }
 
-    Optional<MGPipeInputField> MGPipeFindInputField(const char* name) {
-        if (name == nullptr) return std::nullopt;
-        for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
-            if (std::strcmp(kMGPipeInputFieldNames[i], name) == 0) return static_cast<MGPipeInputField>(i);
-        }
-        return std::nullopt;
-    }
-
-    Optional<MGPipeVerb> MGPipeFindVerb(const char* name) {
-        if (name == nullptr) return std::nullopt;
-        for (SizeT i = 0; i < kMGPipeVerbCount; ++i) {
-            if (std::strcmp(kMGPipeVerbNames[i], name) == 0) return static_cast<MGPipeVerb>(i);
-        }
-        return std::nullopt;
-    }
-
 // The stamp is the poison's (m_filled, the generations): a build without MOBILEGL_PIPE_POISON
 // compiles no read check that could ask any of this. Every transport build has the poison.
 #if MOBILEGL_PIPE_POISON
@@ -55,46 +40,24 @@ namespace MobileGL::MG_Pipe {
         Uint64 g_residualPulls = 0;
 
 #if MOBILEGL_PIPE_VERIFY
-        // ---- MOBILEGL_PIPE_POISON_OMIT, server half ----
+        // ---- negative control B, server half (MGPipeServerSetPoisonOmission) ----
         //
-        // The knob withholds the stamp of one (verb, field) pair, a negative control for the
+        // The omission withholds the stamp of one (verb, field) pair, a negative control for the
         // poison check. Under a transport the backend reads the server's stamp, which re-stamps
         // every field the verb's class can answer, so the server must withhold the pair too or
-        // the control cannot go red. Parsed here because this file is in the server library and
-        // MG_Impl is not; a malformed value is the client's Fatal{PipeVerifyBadKnob}, and this
-        // side simply does not arm. Verify builds only, so the shipped stamp stays branch-free.
-        struct ServerPoisonOmission {
-            Bool Parsed = false;
-            String Value;
-            Bool Armed = false;
-            MGPipeVerb Verb = MGPipeVerb::kVerbCount;
-            MGPipeInputField Field = MGPipeInputField::kFieldCount;
-        };
-        ServerPoisonOmission g_serverOmission;
+        // the control cannot go red. The harness arms it while the apply thread is already
+        // running, so the pair is ONE atomic word: the verb in the high half, the field in the
+        // low one, and no verb at all (0xffff) until something is armed. Verify builds only, so
+        // the shipped stamp stays branch-free.
+        constexpr Uint32 kNoServerOmission = ~Uint32{0};
+        std::atomic<Uint32> g_serverOmission{kNoServerOmission};
 
-        const ServerPoisonOmission& ServerOmission() {
-            const String& knob = MG_Config::Features.PipePoisonOmit;
-            if (g_serverOmission.Parsed && knob.size() == g_serverOmission.Value.size() &&
-                (knob.empty() || knob == g_serverOmission.Value)) {
-                return g_serverOmission;
-            }
-            g_serverOmission = ServerPoisonOmission{};
-            g_serverOmission.Parsed = true;
-            g_serverOmission.Value = knob;
-            const auto colon = knob.find(':');
-            if (colon == String::npos || colon == 0 || colon + 1 >= knob.size()) return g_serverOmission;
-            const auto verb = MGPipeFindVerb(knob.substr(0, colon).c_str());
-            const auto field = MGPipeFindInputField(knob.substr(colon + 1).c_str());
-            if (!verb || !field) return g_serverOmission;
-            g_serverOmission.Armed = true;
-            g_serverOmission.Verb = *verb;
-            g_serverOmission.Field = *field;
-            return g_serverOmission;
+        constexpr Uint32 PackServerOmission(MGPipeVerb verb, MGPipeInputField field) {
+            return (static_cast<Uint32>(verb) << 16) | static_cast<Uint32>(field);
         }
 
         Bool ServerOmitsStamp(MGPipeVerb verb, MGPipeInputField field) {
-            const ServerPoisonOmission& omission = ServerOmission();
-            return omission.Armed && omission.Verb == verb && omission.Field == field;
+            return g_serverOmission.load(std::memory_order_acquire) == PackServerOmission(verb, field);
         }
 #endif // MOBILEGL_PIPE_VERIFY
 
@@ -453,12 +416,10 @@ namespace MobileGL::MG_Pipe {
             filled.FilledGen[i] = serial & (Uint64{0} - bit);
         }
 #if MOBILEGL_PIPE_VERIFY
-        // Negative control B's server half (ServerPoisonOmission above): the one withheld pair.
+        // Negative control B's server half (g_serverOmission above): the one withheld pair.
         {
-            const ServerPoisonOmission& omission = ServerOmission();
-            if (omission.Armed && omission.Verb == verb) {
-                filled.FilledGen[static_cast<SizeT>(omission.Field)] = 0;
-            }
+            const Uint32 omission = g_serverOmission.load(std::memory_order_acquire);
+            if ((omission >> 16) == static_cast<Uint32>(verb)) filled.FilledGen[omission & 0xffffu] = 0;
         }
 #endif
         MGPipeStampAccess::SetServerStamped(inputs, true);
@@ -474,6 +435,12 @@ namespace MobileGL::MG_Pipe {
     void MGPipeServerClearVerbBoundary() {
         MGPipeStampAccess::SetServerStamped(gPipeInputs, false);
     }
+
+#if MOBILEGL_PIPE_VERIFY
+    void MGPipeServerSetPoisonOmission(MGPipeVerb verb, MGPipeInputField field) {
+        g_serverOmission.store(PackServerOmission(verb, field), std::memory_order_release);
+    }
+#endif
 
     Uint64 MGPipeResidualPullCount() {
         return g_residualPulls;
@@ -690,6 +657,22 @@ namespace MobileGL::MG_Pipe {
             CorruptStorage(x);
             return true;
         });
+    }
+
+    Optional<MGPipeInputField> MGPipeFindInputField(const char* name) {
+        if (name == nullptr) return std::nullopt;
+        for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+            if (std::strcmp(kMGPipeInputFieldNames[i], name) == 0) return static_cast<MGPipeInputField>(i);
+        }
+        return std::nullopt;
+    }
+
+    Optional<MGPipeVerb> MGPipeFindVerb(const char* name) {
+        if (name == nullptr) return std::nullopt;
+        for (SizeT i = 0; i < kMGPipeVerbCount; ++i) {
+            if (std::strcmp(kMGPipeVerbNames[i], name) == 0) return static_cast<MGPipeVerb>(i);
+        }
+        return std::nullopt;
     }
 #endif // MOBILEGL_PIPE_VERIFY
 } // namespace MobileGL::MG_Pipe

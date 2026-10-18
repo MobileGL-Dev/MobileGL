@@ -10,8 +10,8 @@
 // MGP_FILL_VERB_LIST: every GLFunctionsTable function pointer in declaration order, with its
 // class (gen_pipe.py refuses any other set). MGP_FILL_FIELD_LIST: the fields a class may read;
 // sticky fields (MGP_COVERAGE_STICKY_LIST) are implicit. Fix Fatal{UnmigratedPipeInput} by
-// adding a row, never by making it sticky. A row is removed only on a MOBILEGL_PIPE_POISON_OMIT
-// run of the full CTS caselist on both devices; a corpus that never reaches a path proves nothing.
+// adding a row, never by making it sticky. A row is removed only after a poison build without it
+// ran the full CTS caselist on both devices; a corpus that never reaches a path proves nothing.
 // gen_pipe.py's block regexes end at a blank line: keep the empty line after each macro.
 // clang-format off
 

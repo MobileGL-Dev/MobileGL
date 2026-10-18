@@ -56,6 +56,7 @@ add_executable(MobileGLIntegrationTest
     Harness/P4aSeamPeek.cpp
     Harness/P4aFinalFixPeek.cpp
     Harness/PersistentMapPeek.cpp
+    Harness/PoisonOmissionArm.cpp
     Harness/SplitRuntimePeek.cpp
     # ---- P3b/P4b wave 2-D package D2 (own block; D1 edits this file elsewhere) --------------
     # The client texture emitter's own counters, for TextureViewAliasScenario's half of the
@@ -1309,7 +1310,9 @@ if (MOBILEGL_PIPE_VERIFY)
 
     # Negative control B (G5). The omission skips the STAMP of one field for one verb while still
     # copying its value, which is indistinguishable from a fill row nobody wrote; the scenario
-    # forks, so the resulting std::abort() is a datum in waitpid() rather than a dead lane.
+    # forks, so the resulting std::abort() is a datum in waitpid() rather than a dead lane. The
+    # pair is a harness marker, MGITEST_POISON_OMIT: the library has no knob for it, and the
+    # re-executed child arms it through the verify build's setter (Harness/PoisonOmissionArm.h).
     # P13 W5: the pair is the pack state at ReadPixels, which monolith's record arm still reads from
     # the fill (around its neutral-pack readback). GetActiveTextureUnit at GenerateMipmap was the
     # frontend arm's read; the record arm resolves the texture from the verb's own handle and never
@@ -1317,13 +1320,13 @@ if (MOBILEGL_PIPE_VERIFY)
     mgl_itest_join_environment(MGL_ITEST_GLES_POISON_OMIT_ENVIRONMENT
         "MOBILEGL_TRANSPORT=monolith"
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_VERIFY=1"
-        "MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters"
+        "MGITEST_POISON_OMIT=ReadPixels:GetPixelStoreParameters"
         "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-DirectGLES.log"
         ${MGL_ITEST_COMMON_ENV})
     mgl_itest_join_environment(MGL_ITEST_VULKAN_POISON_OMIT_ENVIRONMENT
         "MOBILEGL_TRANSPORT=monolith"
         "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_PIPE_VERIFY=1"
-        "MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters"
+        "MGITEST_POISON_OMIT=ReadPixels:GetPixelStoreParameters"
         "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-DirectVulkan.log"
         ${MGL_ITEST_VULKAN_ENV})
 
@@ -3663,15 +3666,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
         # PoisonOmissionScenario's ReadChildLog reads BOTH role halves of the child's log, because
         # under a transport the poisoned read can fire on either side of the seam.
         #
-        # A DIFFERENT PAIR FROM THE MONOLITH ENTRIES', and the monolith pair is not "also fine
-        # here": GenerateMipmap:GetActiveTextureUnit is inert on this arm - the split backend's
-        # generate_mipmap resolves its texture from the verb's handle and never reads the active
-        # unit, so the child exited 0 with that stamp withheld (measured, both backends).
-        # ReadPixels:GetPixelStoreParameters is read on the server under the server's stamp,
-        # which is the stamp the knob has to withhold on this arm (PipeInputs.cpp's
-        # ServerPoisonOmission). PoisonOmissionScenario.cpp's kOmittedPairs carries both.
+        # THE MONOLITH ENTRIES' PAIR. ReadPixels:GetPixelStoreParameters is read on the server under
+        # the server's stamp, which is the stamp the omission has to withhold on this arm
+        # (PipeInputs.cpp's MGPipeServerSetPoisonOmission). GenerateMipmap:GetActiveTextureUnit is
+        # inert here: generate_mipmap resolves its texture from the verb's handle and never reads
+        # the active unit, so the child exited 0 with that stamp withheld (measured, both backends).
         mgl_itest_lane("${mglItestVerifyBackend}.VerifySplitPoisonOmitted." "PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb"
-            LABELS "integration-verify-split" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} LOCK "pipe-poison-omit-split-${mglItestVerifyBackend}.log" ENV "${mglItestVerifyArmEnv}\;MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-split-${mglItestVerifyBackend}.log")
+            LABELS "integration-verify-split" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} LOCK "pipe-poison-omit-split-${mglItestVerifyBackend}.log" ENV "${mglItestVerifyArmEnv}\;MGITEST_POISON_OMIT=ReadPixels:GetPixelStoreParameters\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-split-${mglItestVerifyBackend}.log")
         # B's AMBIENT HALF. `Verify.PoisonOmissionScenario.WithoutOmissionCompletes` runs the
         # scenario with nothing withheld, and the mechanism filter took it out of the ambient set
         # above along with the rest of the scenario. Registered back by hand, with no knob, so

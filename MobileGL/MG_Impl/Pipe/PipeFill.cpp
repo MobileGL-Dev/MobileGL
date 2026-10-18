@@ -8,9 +8,9 @@
 
 // The client side of the PipeInputs block (ARCHITECTURE.md 9.2 phase A): the only place in
 // the push arm that reads MG_State::pGLContext. Holds the per-verb filler, the F-class
-// forwarders, IsLive, the MOBILEGL_PIPE_POISON_OMIT knob and - in a verify build - the
-// second arm (SnapshotFromGLContext), the entry compare, the compare-at-read hook and the
-// MOBILEGL_PIPE_VERIFY_CORRUPT knob, which only this build reads.
+// forwarders, IsLive and - in a verify build - the second arm (SnapshotFromGLContext), the
+// entry compare, the compare-at-read hook, the MOBILEGL_PIPE_VERIFY_CORRUPT knob, which only
+// this build reads, and the poison omission (MGPipeSetPoisonOmission).
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/BufferState/BufferState.h>
 // C-1: the vertex-elements CSO's death path raises the backend notice from here, between the
@@ -457,62 +457,40 @@ namespace MobileGL::MG_Pipe {
             return null;
         }
 
+#if MOBILEGL_PIPE_VERIFY
         [[noreturn]] void BadKnob(const char* knob, const char* value, const char* why) {
             MGLOG_F("MGPipe: Fatal{PipeVerifyBadKnob, \"%s=%s\": %s}", knob, value, why);
             std::abort();
         }
 
-        // ---- MOBILEGL_PIPE_POISON_OMIT (negative control B, P1 brief D6) ----
+        // ---- negative control B (P1 brief D6), armed by MGPipeSetPoisonOmission ----
         // The filler skips the STAMP (never the value) of one (verb, field) pair: an omission
         // indistinguishable from a forgotten FillPoints.def row, so that verb's read of the
-        // field is Fatal{UnmigratedPipeInput, "Field@Verb"} and no other verb is affected.
+        // field is Fatal{UnmigratedPipeInput, "Field@Verb"} and no other verb is affected. The
+        // GL thread arms it and the GL thread's fill reads it; the server's stamp has its own.
         struct PoisonOmission {
             Bool Armed = false;
             MGPipeVerb Verb = MGPipeVerb::kVerbCount;
             MGPipeInputField Field = MGPipeInputField::kFieldCount;
         };
         PoisonOmission g_omission;
-        Bool g_omissionKnobParsed = false;
-        String g_omissionKnobValue; // the value the last parse saw
 
-        // Parsed on the first fill and again only when the value changes. A lane loads
-        // Features once, before any fill, so that is one parse per process there; a forked
-        // test child that sets Features after its parent already filled gets its own parse,
-        // which is what puts the parser and its Fatal{PipeVerifyBadKnob} under a unit test.
-        // An empty value never clears an omission a test armed through MGPipeSetPoisonOmission.
-        void ParsePoisonOmissionKnob() {
-            const String& knob = MG_Config::Features.PipePoisonOmit;
-            // THE UNSET KNOB IS TWO LENGTH LOADS AND A BRANCH, inline, and that is the whole
-            // change (P5d r3, package C): this runs at every verb - 852 draws a frame on the
-            // profiled workload - and `knob == g_omissionKnobValue` is an out-of-line String
-            // compare even when both sides are empty, which is every shipping configuration.
-            // Sizes first, contents only when a non-empty value is involved; the re-parse
-            // condition is unchanged (the value differing from what the last parse latched).
-            if (g_omissionKnobParsed && knob.size() == g_omissionKnobValue.size() &&
-                (knob.empty() || knob == g_omissionKnobValue)) {
-                return;
+        // The stamp the fill's walk is about to overwrite for the omitted pair, put back after the
+        // branch-free stamp of the whole walk: the value is copied either way, only the stamp is
+        // withheld. Index kMGPipeInputFieldCount is "nothing withheld at this verb".
+        struct WithheldStamp {
+            SizeT Index = kMGPipeInputFieldCount;
+            Uint64 Gen = 0;
+            void PutBack(MGPipeFilledState& filled) const {
+                if (Index < kMGPipeInputFieldCount) filled.FilledGen[Index] = Gen;
             }
-            g_omissionKnobParsed = true;
-            g_omissionKnobValue = knob;
-            if (knob.empty()) return;
-            const auto colon = knob.find(':');
-            if (colon == String::npos || colon == 0 || colon + 1 >= knob.size()) {
-                BadKnob("MOBILEGL_PIPE_POISON_OMIT", knob.c_str(), "expected <Verb>:<FieldName>");
-            }
-            const String verbName = knob.substr(0, colon);
-            const String fieldName = knob.substr(colon + 1);
-            const auto verb = MGPipeFindVerb(verbName.c_str());
-            if (!verb) BadKnob("MOBILEGL_PIPE_POISON_OMIT", knob.c_str(), "no such verb in kMGPipeVerbNames");
-            const auto field = MGPipeFindInputField(fieldName.c_str());
-            if (!field) BadKnob("MOBILEGL_PIPE_POISON_OMIT", knob.c_str(), "no such field in kMGPipeInputFieldNames");
-            MGPipeSetPoisonOmission(verbName.c_str(), fieldName.c_str());
+        };
+        WithheldStamp StampToWithhold(const MGPipeFilledState& filled, MGPipeVerb verb) {
+            if (!g_omission.Armed || g_omission.Verb != verb) return {};
+            const auto index = static_cast<SizeT>(g_omission.Field);
+            return {index, filled.FilledGen[index]};
         }
 
-        [[maybe_unused]] Bool IsOmitted(MGPipeVerb verb, MGPipeInputField field) {
-            return g_omission.Armed && g_omission.Verb == verb && g_omission.Field == field;
-        }
-
-#if MOBILEGL_PIPE_VERIFY
         // ---- the MOBILEGL_PIPE_VERIFY comparator (P1 brief D8) ----
         // Two mechanisms, both active only when Features.PipeVerify is set: the ENTRY compare
         // once per verb (the pushed block against a second snapshot of the live context,
@@ -1906,25 +1884,17 @@ namespace MobileGL::MG_Pipe {
         return published;
     }
 
-    void MGPipeSetPoisonOmission(const char* verb, const char* field) {
-        if (verb == nullptr || field == nullptr) {
-            g_omission = PoisonOmission{};
-            return;
-        }
+#if MOBILEGL_PIPE_VERIFY
+    Bool MGPipeSetPoisonOmission(const char* verb, const char* field) {
         const auto v = MGPipeFindVerb(verb);
         const auto f = MGPipeFindInputField(field);
-        if (!v || !f) BadKnob("MOBILEGL_PIPE_POISON_OMIT", verb, "unknown verb or field");
-        g_omission.Armed = true;
-        g_omission.Verb = *v;
-        g_omission.Field = *f;
-#if MOBILEGL_PIPE_POISON
+        if (!v || !f) return false;
+        g_omission = PoisonOmission{true, *v, *f};
+        MGPipeServerSetPoisonOmission(*v, *f);
         MGLOG_I("MGPipe: poison omission armed - %s@%s", field, verb);
-#else
-        MGLOG_W_ONCE("MGPipe: poison omission %s@%s requested but the poison is not compiled in "
-                     "(MOBILEGL_PIPE_POISON=0): no stamp exists to omit",
-                     field, verb);
-#endif
+        return true;
     }
+#endif
 
     // ---- liveness ----
     Bool PipeInputs::IsLive() const {
@@ -3039,7 +3009,6 @@ namespace MobileGL::MG_Pipe {
         // every verb) and the guard below then fires Fatal{RoleViolation, "gPipeInputs"} on
         // the first unbarriered verb, by name.
         const Bool runAhead = ClientRunsAhead();
-        ParsePoisonOmissionKnob();
 #if MOBILEGL_PIPE_VERIFY
         ArmVerify();
 #else
@@ -3390,18 +3359,19 @@ namespace MobileGL::MG_Pipe {
                 MGPipeFillAccess::CopyField(inputs, *ctx, static_cast<MGPipeInputField>(copies[k]));
             }
 #if MOBILEGL_PIPE_POISON
-            // The value is copied either way; only the stamp is withheld for the omitted pair,
-            // which is put back to what it held after the branch-free stamp of the whole walk.
             const Uint8* const walk = g_fillPlan.Walk[planClass].data();
             const SizeT walkCount = g_fillPlan.WalkCount[planClass];
             const Uint64 serial = filled.CurrentVerbSerial;
-            const Bool omit = g_omission.Armed && g_omission.Verb == verb;
-            const SizeT omitted = omit ? static_cast<SizeT>(g_omission.Field) : 0;
-            const Uint64 omittedGen = omit ? filled.FilledGen[omitted] : 0;
+#if MOBILEGL_PIPE_VERIFY
+            // Negative control B: the omitted pair's stamp goes back after the walk (WithheldStamp).
+            const WithheldStamp withheld = StampToWithhold(filled, verb);
+#endif
             for (SizeT k = 0; k < walkCount; ++k) {
                 filled.FilledGen[walk[k] & ~ResidualFillPlan::kCopy] = serial;
             }
-            if (omit) filled.FilledGen[omitted] = omittedGen;
+#if MOBILEGL_PIPE_VERIFY
+            withheld.PutBack(filled);
+#endif
 #endif
         }
         if (payloadBytes != 0 && MG_Util::PipeStats::Enabled()) {
