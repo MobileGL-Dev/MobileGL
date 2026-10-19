@@ -30,8 +30,8 @@
 // so a forward declaration would not do. Push-only, like everything else P4a adds to this
 // header, so the pull build's include graph is unchanged (D-P).
 #include <MG_Pipe/PipeApply.h>
-// P13 W5: the record arm's deaths (the slot tables' handle refusals below), in every build.
-#include <MG_Pipe/PipeSessionFail.h>
+#include <MG_Pipe/PipeSessionFail.h> // P13 W5: the slot tables' handle refusals, in every build
+#include "NarrowIntegerSeeds.h"
 
 namespace MobileGL::MG_Backend::DirectGLES {
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType);
@@ -1230,9 +1230,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // above, so VertexArrayImpl::SyncCurrentVAOFromRecords calls this ENTRY directly
             // instead of passing a null SharedPtr into a function whose signature promises one.
             // CONTRACT-P5E §4.1's rule ("the object parameter is deleted from the transport
-            // overload, not defaulted to null") is what this obeys. The body is unchanged and
-            // was already record-only - it is this family's existence proof (scout S1 §2).
-            void SyncToBackendFromApplier();
+            // overload, not defaulted to null") is what this obeys. `plan`: IntegerAttributePlan.h.
+            void SyncToBackendFromApplier(const IntegerAttributePlan& plan);
             // P14: the applier's buffer-set serials move whenever ANY VAO's set is published, so
             // switching between two VAOs moves them although neither twin's buffers changed. Called
             // before the draw's syncs: when the window this twin last emitted is the applier's
@@ -1455,12 +1454,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // one monotone Uint64, no wrap, nothing to patch. This is the Track H re-key
             // ARCHITECTURE.md 9.5 counts.
             Uint64 m_syncedIndexSerial = 0;
-            // Byte shift currently baked into the instanced arrays' offsets by the baseInstance
-            // emulation (see SetPendingFetchBaseInstance). It is draw state, not VAO state, so it
-            // is deliberately NOT covered by the config version: the frontend never bumps for it.
-            // Kept here because it describes what was last EMITTED, which is what the next sync
-            // has to correct.
+            // Byte shift baked into the instanced arrays' offsets by the baseInstance emulation:
+            // draw state, not VAO state, kept because the next sync has to correct what was EMITTED.
             Uint32 m_syncedFetchBaseInstance = 0;
+            // The integer arrays last issued with the other signedness (HeldIntegerRetype).
+            Uint32 m_syncedRetypeMask = 0;
             // BufferImpl::g_bufferBackendIdGeneration as of this twin's last emit. A
             // mismatch means some live buffer's driver id was re-minted since; the ids
             // baked into the driver VAO's attribute/element bindings may be dead even
@@ -2847,6 +2845,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // shader failed to transpile or compile, or the link itself failed). Use()
             // must not leave the previously bound program current in that case.
             Bool IsBackendProgramUsable() const { return m_backendProgramUsable; }
+            NarrowIntegerSeedState& NarrowIntegerSeeds() { return m_narrowIntegerSeeds; }
             Uint GetBackendGlobalUBOId() const { return m_backendGlobalUBOId; }
             Uint32 GetSnormFallbackClampOutputMask() const { return m_snormFallbackClampOutputMask; }
             Uint32 GetUnormFallbackClampOutputMask() const { return m_unormFallbackClampOutputMask; }
@@ -2971,7 +2970,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       const std::map<String, String>& inputBlockRenames,
                                       const std::map<String, String>& outputBlockRenames, Bool stripInputBlockLocations,
                                       Bool stripOutputBlockLocations, Int atomicCounterEsslBindingTop,
-                                      Bool enableSpirvValidation, String& outSource,
+                                      Bool narrowIntegerSeedsArmed, Bool enableSpirvValidation, String& outSource,
                                       std::set<String>& outFlattenedXfbBlockNames,
                                       Vector<Int>& outAtomicCounterGlBindings, String& outError) const;
 
@@ -3030,6 +3029,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Vector<Int> m_formatlessImageUnits;
             Uint64 m_imageUnitFormatSignature = 0;
             SamplerPassMemo m_samplerPassMemo;
+            NarrowIntegerSeedState m_narrowIntegerSeeds;
         };
 
         extern Uint32 g_snormFallbackClampOutputMask;

@@ -398,12 +398,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // PrepareForDraw turns into BindBackendVAOId(0) exactly as a null frontend VAO did;
         // logging about it would fire on every draw of a session that legitimately has no
         // vertex-elements CSO yet.
-        void SyncCurrentVAOFromRecords(BackendVertexArrayObject* vaoTwin) {
+        void SyncCurrentVAOFromRecords(BackendVertexArrayObject* vaoTwin, const IntegerAttributePlan& plan) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             if (!vaoTwin) return;
-            vaoTwin->SyncToBackendFromApplier();
+            vaoTwin->SyncToBackendFromApplier(plan);
         }
 
         // GL: a shader input whose generic attribute array is DISABLED reads that attribute's *current
@@ -910,7 +910,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         BufferImpl::SyncNeccessaryBuffers(currentVAO, vaoTwin, vaoConfigVersion, syncBit & DrawSyncBit::IndexBuffer,
                                           syncBit & DrawSyncBit::IndirectBuffer);
-        VertexArrayImpl::SyncCurrentVAOFromRecords(vaoTwin);
+        // The draw's integer arrays and the program's narrow-integer seeds (NarrowIntegerSeeds.h).
+        IntegerAttributePlan integerPlan = ResolveIntegerAttributePlanForDraw(MG_Pipe::MGPipeApplier().DrawProgram);
+        VertexArrayImpl::SyncCurrentVAOFromRecords(vaoTwin, integerPlan);
         TextureImpl::SyncNeccessaryTextures(textureKeys);
         // A draw reads and writes through its image units too, so the unit bindings have to be
         // as current as the sampled ones. Gated (see the sweep): a program with no image binding
@@ -927,7 +929,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // at all; the remaining uses of it below are the two callees' own, and both have a
         // handle arm of their own. P5e (pa) finished it: the pull itself is gone on that arm and
         // `currentProgram` is a null SharedPtr there, which this branch never reaches for.
-        PrgramImpl::SyncCurrentProgramByHandle(MG_Pipe::MGPipeApplier().DrawProgram, true);
+        PrgramImpl::SyncCurrentProgramByHandle(MG_Pipe::MGPipeApplier().DrawProgram, true, &integerPlan);
+        if (DropRefusedNarrowIntegerSeeds(integerPlan, MG_Pipe::MGPipeApplier().DrawProgram))
+            VertexArrayImpl::SyncCurrentVAOFromRecords(vaoTwin, integerPlan);
         RenderStateImpl::SyncRenderState();
 
         BindCurrentFBO(FramebufferTarget::Draw);
@@ -951,6 +955,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         BindCurrentTextures(textureKeys, currentProgram);
         BindCurrentProgramWithResources(currentProgram, textureKeys, MG_Pipe::MGPipeApplier().DrawProgram);
+        PushNarrowIntegerWidthsForDraw(integerPlan, MG_Pipe::MGPipeApplier().DrawProgram);
 
         // Last: opening the capture span needs the program current and the capture
         // buffers bound, and ES rejects most binding changes once it is open.

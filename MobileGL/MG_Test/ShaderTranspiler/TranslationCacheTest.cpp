@@ -1095,6 +1095,11 @@ TEST_F(TranslationCacheTest, L2KeyMovesWithEveryGateThatSteersTheEsslChain) {
         v.stripOutputBlockLocations = true;
         variants.emplace_back("stripOutputBlockLocations", BuildEsslTranslationKey(v));
     }
+    { // arms the narrow-integer seeds of a vertex stage (ExtendNarrowIntegerVertexInputsForEssl)
+        EsslTranslationKeyInputs v = base;
+        v.narrowIntegerSeedsArmed = true;
+        variants.emplace_back("narrowIntegerSeedsArmed", BuildEsslTranslationKey(v));
+    }
     {
         EsslTranslationKeyInputs v = base;
         v.enableSpirvValidation = true;

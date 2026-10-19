@@ -888,8 +888,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const UnorderedMap<String, Int>& storageBlockBindingOverrides,
             const std::map<String, String>& inputBlockRenames, const std::map<String, String>& outputBlockRenames,
             const Bool stripInputBlockLocations, const Bool stripOutputBlockLocations,
-            const Int atomicCounterEsslBindingTop, const Bool enableSpirvValidation, String& outSource,
-            std::set<String>& outFlattenedXfbBlockNames, Vector<Int>& outAtomicCounterGlBindings,
+            const Int atomicCounterEsslBindingTop, const Bool narrowIntegerSeedsArmed, const Bool enableSpirvValidation,
+            String& outSource, std::set<String>& outFlattenedXfbBlockNames, Vector<Int>& outAtomicCounterGlBindings,
             String& outError) const {
             // ESSL cannot express gl_DrawID/gl_BaseInstance/gl_BaseVertex; demote them to
             // plain globals (mg_*) before handing the module to SPIRV-Cross.
@@ -1050,24 +1050,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MG_Util::ShaderTranspiler::ShaderCompiler::SplitArrayVertexInputsForEssl(
                     *effectiveSpirv, splitArrayInputSpirv, enableSpirvValidation) &&
                 !splitArrayInputSpirv.empty() && splitArrayInputSpirv != *effectiveSpirv) {
-                // Only when the pass ACTUALLY split something. The optimizer hands back a
-                // re-serialised copy either way, and adopting that copy for every vertex
-                // shader would put every one of them through a round trip they do not need
-                // - which is not free: it cost the create-indirect retrace 0.15 SSIM the
-                // first time this gate was missing (the original capture; the case is now
-                // minecraft-1.21.1-neoforge-create-indirect-in-world-align1024).
+                // Only when the pass ACTUALLY split something: the optimizer hands back a
+                // re-serialised copy either way, and that round trip is not free - it cost the
+                // minecraft-1.21.1-neoforge-create-indirect-in-world-align1024 retrace 0.15 SSIM.
                 effectiveSpirv = &splitArrayInputSpirv;
             }
 
-            // Adopt the rewritten module only when THIS stage actually had one of the
-            // blocks - the optimizer hands back a re-serialised copy either way, and taking
-            // that copy for a module it did not rewrite is not free (it cost the
-            // create-indirect retrace 0.15 SSIM when the array-input split first missed
-            // this gate; the case is now
-            // minecraft-1.21.1-neoforge-create-indirect-in-world-align1024). The report has to be
-            // per stage, not cumulative: a fragment shader consuming the same block reports a
-            // name the vertex stage already reported,
-            // and its own rewrite must still be taken or the two stages stop matching.
+            // An armed vertex stage's narrow-integer seeds (NarrowIntegerSeeds.h), after the split
+            // and adopted only when the pass rewrote the module. Keyed by narrowIntegerSeedsArmed.
+            Vector<unsigned int> narrowSeededSpirv;
+            effectiveSpirv =
+                SeedNarrowIntegerVertexInputsForEssl(narrowIntegerSeedsArmed && glShaderType == GL_VERTEX_SHADER,
+                                                     *effectiveSpirv, narrowSeededSpirv, enableSpirvValidation);
+
+            // Adopt the rewritten module only when THIS stage actually had one of the blocks, for
+            // the array-input split's reason above. The report is per stage, not cumulative: a
+            // fragment shader consuming a block the vertex stage reported must still take its own
+            // rewrite or the two stages stop matching.
             Vector<unsigned int> flattenedXfbSpirv;
             if (!xfbCaptureBlockNames.empty()) {
                 // Reported into a local first, and published only if the module is really
@@ -1605,9 +1604,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            // Recorded before either early return below, so Use() can always name the GL
-            // program a no-op draw belongs to - including the "linked but not drawable" exit.
+            // Before either early return below, so Use() can name the GL program of a no-op draw.
             m_frontendProgramId = src.GetExternalIndex();
+            BeginNarrowIntegerSeedBuild(m_narrowIntegerSeeds);
 
             // GetSpirvStatus() as well as GetLinkStatus(): a program whose phase-B job was
             // cancelled (teardown) or whose optimizer run failed is fully linked and fully
@@ -1636,9 +1635,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // this build current - the draw path compares the signature and rebuilds on a change.
             const auto& storageBlockBindingOverrides = src.GetShaderStorageBlockBindingOverrides();
             m_shaderStorageBlockBindingSignature = ComputeShaderStorageBlockBindingSignature(src);
-            // Rebuilt by the transpile loop below, one entry per atomic-counter block it finds.
-            // The top is snapshotted here so every stage of this program - and the draw path
-            // reading it afterwards - resolves the same slot for the same GL binding.
+            // Rebuilt by the transpile loop below, one entry per atomic-counter block; the top is
+            // snapshotted so every stage and the draw path resolve one slot per GL binding.
             m_atomicCounterGlBindings.clear();
             m_atomicCounterEsslBindingTop = AtomicCounterEsslBindingTop();
             // Re-established by AttachPassthroughTessControlStage below when this program needs
@@ -2045,6 +2043,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 esslKeyInputs.stripInputBlockLocations = stripInputBlockLocations;
                 esslKeyInputs.stripOutputBlockLocations = stripOutputBlockLocations;
                 esslKeyInputs.enableSpirvValidation = enableSpirvValidation;
+                esslKeyInputs.narrowIntegerSeedsArmed = glShaderType == GL_VERTEX_SHADER && m_narrowIntegerSeeds.built;
 
                 auto& esslCache = MG_Util::ShaderTranspiler::GetEsslTranslationCache();
                 MG_Util::ShaderTranspiler::TranslationCacheKey esslCacheKey;
@@ -2070,9 +2069,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (!TranspileSpirvToEssl(spirvCode, glShaderType, xfbCaptureBlockNames, imageFormatBake,
                                               storageBlockBindingOverrides, inputBlockRenames, outputBlockRenames,
                                               stripInputBlockLocations, stripOutputBlockLocations,
-                                              m_atomicCounterEsslBindingTop, enableSpirvValidation, source,
-                                              stageFlattenedXfbBlockNames, stageAtomicCounterGlBindings,
-                                              transpileError)) {
+                                              m_atomicCounterEsslBindingTop, esslKeyInputs.narrowIntegerSeedsArmed,
+                                              enableSpirvValidation, source, stageFlattenedXfbBlockNames,
+                                              stageAtomicCounterGlBindings, transpileError)) {
                         // MGLOG_E, unlatched, like the compile- and link-failure diagnostics
                         // below: one line per failing stage is bounded by program count and
                         // naming the stage is the entire diagnostic value. A stage that never
@@ -2286,14 +2285,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     pos = source.find(findStr, pos);
                 }
 
+                NoteNarrowIntegerSeedSource(m_narrowIntegerSeeds, source, glShaderType);
                 const char* sourceCStr = source.c_str();
                 MGLOG_D("Setting shader source for backend shader ID: %u\nsrc:\n%s", backendShaderId, sourceCStr);
                 g_GLESFuncs.glShaderSource(backendShaderId, 1, &sourceCStr, nullptr);
                 g_GLESFuncs.glCompileShader(backendShaderId);
 
-                // GL_FALSE, not GL_TRUE: an unwritten out-param must read as "compile failed"
-                // and take the diagnostic path, never as a silent success that attaches an
-                // uncompiled shader.
+                // GL_FALSE, not GL_TRUE: an unwritten out-param must read as "compile failed", never
+                // as a silent success that attaches an uncompiled shader.
                 GLint compileStatus = GL_FALSE;
                 g_GLESFuncs.glGetShaderiv(backendShaderId, GL_COMPILE_STATUS, &compileStatus);
                 if (compileStatus == GL_FALSE) {
@@ -2649,6 +2648,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_backendProgramUsable = false;
                 return;
             }
+            // A capture program with integer inputs is armed at its first build, so arming never
+            // relinks a program in the middle of a capture (NarrowIntegerSeeds.h).
+            const IntegerVertexInputMasks integerInputs = IntegerVertexInputsOf(*record);
+            if (!record->Archive->Link.xfbVaryings.empty() &&
+                (integerInputs.signedInputs | integerInputs.unsignedInputs))
+                m_narrowIntegerSeeds.wanted = true;
             SyncToBackendFromSource(ProgramArchiveSource::FromRecord(cso, *record));
             // The two server-owned keys the draw path's clean condition reads instead of
             // GetLinkVersion()/GetImageUnitVersion(). BindingsSerial is the second because a
@@ -2769,6 +2774,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 binding.lastAssignedMsSampleMax = 0;
                 m_samplerUniformBindings.push_back(binding);
             }
+            FinishNarrowIntegerSeedBuild(m_narrowIntegerSeeds, m_backendProgramId, m_backendProgramUsable);
         }
 
         void BackendProgramObjectImpl::Use() {

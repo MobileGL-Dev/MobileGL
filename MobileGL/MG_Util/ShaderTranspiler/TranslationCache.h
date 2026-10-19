@@ -670,6 +670,10 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // other end is in a different program must keep its location.
         Bool stripInputBlockLocations = false;
         Bool stripOutputBlockLocations = false;
+        // Whether this (vertex) stage carries the narrow-integer seeds - a per-program arming, set
+        // only once some draw fed the program 8/16-bit data of the other signedness, which changes
+        // the emitted ESSL of the same module.
+        Bool narrowIntegerSeedsArmed = false;
 
         // The top of the reserved storage-block window atomic-counter blocks are moved into
         // (`top - N` for GL binding N). Derived from the driver's

@@ -422,7 +422,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // SyncZeroStrideAttribute on the wire views: the one spelling that can carry a resolved
         // stride of zero, which glVertexAttribPointer's zero means the opposite of.
         inline Bool SyncZeroStrideAttributeByHandle(Uint attribIndex, const MGPVertexAttribWire& attrib,
-                                                    const MG_Pipe::MGPVertexBuffer& binding) {
+                                                    const MG_Pipe::MGPVertexBuffer& binding, GLenum issuedType) {
             if (MG_Pipe::MGPipeHandleIsNull(binding.Res)) {
                 MGLOG_W_ONCE("Zero-stride attribute %u has no bound buffer, skipping.", attribIndex);
                 return false;
@@ -438,9 +438,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                  MG_Util::ConvertDataTypeToGLEnum(static_cast<DataType>(attrib.Type)),
                                                  attrib.Normalized ? GL_TRUE : GL_FALSE, 0);
             } else {
-                g_GLESFuncs.glVertexAttribIFormat(attribIndex, static_cast<GLint>(attrib.Size),
-                                                  MG_Util::ConvertDataTypeToGLEnum(static_cast<DataType>(attrib.Type)),
-                                                  0);
+                g_GLESFuncs.glVertexAttribIFormat(attribIndex, static_cast<GLint>(attrib.Size), issuedType, 0);
             }
             g_GLESFuncs.glVertexAttribBinding(attribIndex, attribIndex);
             // The resolved offset goes on the binding point, not into a relative offset (the
@@ -506,7 +504,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //                                                        as the record of what was last
         //                                                        EMITTED, which is what the next
         //                                                        sync has to correct
-        void BackendVertexArrayObject::SyncToBackendFromApplier() {
+        void BackendVertexArrayObject::SyncToBackendFromApplier(const IntegerAttributePlan& plan) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -545,7 +543,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // same whichever side resolved it first - it is idempotent.
             const Uint32 fetchBaseInstance = BackendUsesNativeBaseInstance() ? 0u : st.VertexFetchBaseInstance;
             const Bool baseInstanceDirty = m_syncedFetchBaseInstance != fetchBaseInstance;
-            const Bool emitAttributes = attributesDirty || baseInstanceDirty || m_hasConvertedAttribute;
+            // The integer arrays to issue with the other signedness; only a pointer whose type flips
+            // is re-issued, through the shadow below.
+            const Uint32 retypeHeld = HeldIntegerRetype(m_syncedRetypeMask, plan);
+            const Bool emitAttributes =
+                attributesDirty || baseInstanceDirty || m_hasConvertedAttribute || retypeHeld != m_syncedRetypeMask;
             if (!emitAttributes && !indexBufferDirty) {
                 return;
             }
@@ -649,7 +651,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // The binding API rewrote this attribute's format and binding: whatever the
                     // shadow said about its pointer no longer holds.
                     m_hostPointer[attribIndex].valid = false;
-                    if (!SyncZeroStrideAttributeByHandle(attribIndex, attrib, *binding)) {
+                    const GLenum issuedType =
+                        IntegerAttribTypeForInput(MG_Util::ConvertDataTypeToGLEnum(static_cast<DataType>(attrib.Type)),
+                                                  attrib.IsInteger && ((retypeHeld >> attribIndex) & 1u));
+                    if (!SyncZeroStrideAttributeByHandle(attribIndex, attrib, *binding, issuedType)) {
                         continue;
                     }
                     // No shift here on purpose: a zero stride never advances. Binding index ==
@@ -674,7 +679,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 const SizeT fetchOffset = static_cast<SizeT>(attrib.Offset) +
                                           BaseInstanceByteShiftWire(attrib.Stride, divisor, fetchBaseInstance);
-                const GLenum glType = MG_Util::ConvertDataTypeToGLEnum(static_cast<DataType>(attrib.Type));
+                const GLenum glType =
+                    IntegerAttribTypeForInput(MG_Util::ConvertDataTypeToGLEnum(static_cast<DataType>(attrib.Type)),
+                                              attrib.IsInteger && ((retypeHeld >> attribIndex) & 1u));
                 const GLint glSize = static_cast<GLint>(attrib.Size);
 
                 // The pointer the driver VAO already holds for this attribute - the buffer it
@@ -759,6 +766,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             if (emitAttributes) {
                 m_syncedFetchBaseInstance = fetchBaseInstance;
+                m_syncedRetypeMask = retypeHeld;
                 m_lastWalkWasPlain = walkWasPlain;
             }
             m_syncedBufferIdGeneration = currentBufferIdGeneration;
@@ -923,7 +931,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         reinterpret_cast<const void*>(BaseInstanceByteShift(attrib, fetchBaseInstance)));
                 } else {
                     g_GLESFuncs.glVertexAttribIPointer(
-                        attribIndex, attrib.Size, MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
+                        attribIndex, attrib.Size,
+                        IntegerAttribTypeForInput(MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
+                                                  ((m_syncedRetypeMask >> attribIndex) & 1u) != 0),
                         static_cast<GLsizei>(stride),
                         // See the pointer call above: the divisor'd
                         // arrays' baseInstance shift is the pointer.

@@ -529,6 +529,7 @@ set(SOURCE_FILES
     MobileGL/MG_Backend/DirectGLES/ManagersTextures.cpp
     MobileGL/MG_Backend/DirectGLES/ManagersVertexArrays.cpp
     MobileGL/MG_Backend/DirectGLES/MultiDraw.cpp
+    MobileGL/MG_Backend/DirectGLES/NarrowIntegerSeeds.cpp
 
     MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp
     MobileGL/MG_Backend/DirectVulkan/BackendObject_DirectVulkan.cpp

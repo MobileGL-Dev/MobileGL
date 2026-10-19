@@ -374,6 +374,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (shaderType != GL_VERTEX_SHADER) {
             return source;
         }
+        source = PromoteNarrowIntegerWidthGlobals(std::move(source));
         for (const char* name : {DRAW_ID_UNIFORM_NAME, BASE_VERTEX_UNIFORM_NAME}) {
             for (const char* declPrefix :
                  {"highp int ", "mediump int ", "lowp int ", "int ", "highp uint ", "mediump uint ", "uint "}) {

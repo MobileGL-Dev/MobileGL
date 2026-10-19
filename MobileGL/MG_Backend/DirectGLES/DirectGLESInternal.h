@@ -387,7 +387,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const MG_Pipe::MGPipeShaderCsoRecord* ResolveGlobalConstantsRecordForHandle(MG_Pipe::MGPipeHandle handle,
                                                                                     Uint uboSize);
 
-        void SyncCurrentProgramByHandle(MG_Pipe::MGPipeHandle cso, Bool forDraw);
+        // `plan` (a draw's) arms the program's narrow-integer seeds when it needs them.
+        void SyncCurrentProgramByHandle(MG_Pipe::MGPipeHandle cso, Bool forDraw,
+                                        const IntegerAttributePlan* plan = nullptr);
     } // namespace PrgramImpl
 
     // Defined with the surface registry, below.

@@ -405,6 +405,16 @@ namespace MobileGL::MG_Pipe {
         };
         mutable Array<BackendHashMemoEntry, 4> BackendHashMemo{};
         mutable Uint32 BackendHashMemoNext = 0;
+        // A backend's own derivation from the archive: the locations of its 32-bit int and uint
+        // vertex inputs, valid while Serial holds the value it was taken at. It dies with the
+        // record like the memo above, and nothing in MG_Pipe reads it.
+        struct BackendIntegerInputsMemo {
+            Uint64 Serial = 0;
+            Uint32 SignedInputs = 0;
+            Uint32 UnsignedInputs = 0;
+            Bool Valid = false;
+        };
+        mutable BackendIntegerInputsMemo BackendIntegerInputs{};
     };
 
     // The vertex-elements CSO as the applier holds it: the unpacked blob, both views, plus
