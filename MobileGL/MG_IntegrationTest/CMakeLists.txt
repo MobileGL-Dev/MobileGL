@@ -53,6 +53,7 @@ add_executable(MobileGLIntegrationTest
     Harness/BackendCapsPeek.cpp
     Harness/PipeSlotPeek.cpp
     Harness/PipeApplyPeek.cpp
+    Harness/IntegerAttributeTypePeek.cpp
     Harness/P4aSeamPeek.cpp
     Harness/P4aFinalFixPeek.cpp
     Harness/PersistentMapPeek.cpp

@@ -21,13 +21,23 @@
 // data, so a pipeline or program cached for one array, or the variant the previous draw settled
 // on, must never be handed to the other.
 
+// On DirectGLES every case also watches the driver itself (IntegerAttributeTypePeek.h): an array
+// whose type has the other signedness from its input reads a value ES leaves undefined, so a case
+// can show the right values on one driver and still render black on another. Where the watch
+// cannot look it says so and the value checks still run.
+
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <iostream>
 #include <string>
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/IntegerAttributeTypePeek.h"
 #include "../Harness/ScenarioFixture.h"
+#include "../Harness/SplitRuntimePeek.h"
 
 #ifdef GLAPI
 #undef GLAPI
@@ -67,12 +77,14 @@ void main()
 }
 )";
 
-        // A capture program: the vertex stage's flat outputs `varyings`, interleaved.
-        GLuint BuildCaptureProgram(const char* vertexSource, const std::vector<const char*>& varyings,
-                                   std::string* log) {
+        // A program of `vertexSource` and `fragmentSource` capturing the vertex stage's flat outputs
+        // `varyings` (none: no capture), interleaved; `beforeLink` runs on it just before the link.
+        GLuint BuildProgram(const char* vertexSource, const char* fragmentSource,
+                            const std::vector<const char*>& varyings, std::string* log,
+                            const std::function<void(GLuint)>& beforeLink = {}) {
             const GLuint vertexShader = CompileShader(GL_VERTEX_SHADER, vertexSource, log);
             if (vertexShader == 0) return 0;
-            const GLuint fragmentShader = CompileShader(GL_FRAGMENT_SHADER, kFragmentSource, log);
+            const GLuint fragmentShader = CompileShader(GL_FRAGMENT_SHADER, fragmentSource, log);
             if (fragmentShader == 0) {
                 glDeleteShader(vertexShader);
                 return 0;
@@ -80,8 +92,11 @@ void main()
             const GLuint program = glCreateProgram();
             glAttachShader(program, vertexShader);
             glAttachShader(program, fragmentShader);
-            glTransformFeedbackVaryings(program, static_cast<GLsizei>(varyings.size()), varyings.data(),
-                                        GL_INTERLEAVED_ATTRIBS);
+            if (!varyings.empty()) {
+                glTransformFeedbackVaryings(program, static_cast<GLsizei>(varyings.size()), varyings.data(),
+                                            GL_INTERLEAVED_ATTRIBS);
+            }
+            if (beforeLink) beforeLink(program);
             glLinkProgram(program);
             glDeleteShader(vertexShader);
             glDeleteShader(fragmentShader);
@@ -97,6 +112,12 @@ void main()
                 return 0;
             }
             return program;
+        }
+
+        // A capture program: the vertex stage's flat outputs `varyings`, interleaved.
+        GLuint BuildCaptureProgram(const char* vertexSource, const std::vector<const char*>& varyings, std::string* log,
+                                   const std::function<void(GLuint)>& beforeLink = {}) {
+            return BuildProgram(vertexSource, kFragmentSource, varyings, log, beforeLink);
         }
 
         // Every pairing the correction covers, plus two that must keep their value untouched:
@@ -133,6 +154,88 @@ void main()
 }
 )";
 
+        const char* const kSingleUintInputVertexSource = R"(#version 410 core
+layout(location = 0) in uvec4 value;
+flat out uvec4 captured;
+void main()
+{
+    captured = value;
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+
+        // No layout qualifier: the location comes from glBindAttribLocation.
+        const char* const kUnplacedInputVertexSource = R"(#version 410 core
+in ivec4 value;
+flat out ivec4 captured;
+void main()
+{
+    captured = value;
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+
+        const char* const kWideAndMatchedVertexSource = R"(#version 410 core
+layout(location = 0) in ivec2 uintAsInt;
+layout(location = 1) in uvec2 ushortAsUint;
+flat out ivec4 captured;
+void main()
+{
+    captured = ivec4(uintAsInt, ivec2(ushortAsUint));
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+
+        // A program without a capture list, read back through a 2x1 RGBA32I target instead, so its
+        // first build is not one that captures. Vertex i lands on pixel i.
+        const char* const kRenderVertexSource = R"(#version 410 core
+layout(location = 0) in ivec4 value;
+flat out ivec4 passed;
+void main()
+{
+    passed = value;
+    gl_Position = vec4(gl_VertexID == 0 ? -0.5 : 0.5, 0.0, 0.0, 1.0);
+}
+)";
+
+        const char* const kRenderFragmentSource = R"(#version 410 core
+flat in ivec4 passed;
+layout(location = 0) out ivec4 color;
+void main()
+{
+    color = passed;
+}
+)";
+
+        const char* const kSeparableVertexSource = R"(#version 410 core
+layout(location = 0) in ivec4 value;
+layout(location = 0) flat out ivec4 passed;
+out gl_PerVertex { vec4 gl_Position; };
+void main()
+{
+    passed = value;
+    gl_Position = vec4(gl_VertexID == 0 ? -0.5 : 0.5, 0.0, 0.0, 1.0);
+}
+)";
+
+        const char* const kSeparableFragmentSource = R"(#version 410 core
+layout(location = 0) flat in ivec4 passed;
+layout(location = 0) out ivec4 color;
+void main()
+{
+    color = passed;
+}
+)";
+
+        // The same four bytes as GL_BYTE and as GL_UNSIGNED_BYTE, and the words each reaches an
+        // input with: sign-extended from GL_BYTE, zero-extended from GL_UNSIGNED_BYTE, whatever the
+        // input's own signedness.
+        const GLubyte kBytes[4] = {0xFF, 0x80, 5, 127};
+        const std::vector<GLuint> kBytesAsSigned = {0xFFFFFFFFu, 0xFFFFFF80u, 5u, 127u};
+        const std::vector<GLuint> kBytesAsUnsigned = {255u, 128u, 5u, 127u};
+        const GLubyte kLightBytes[4] = {240, 200, 128, 7};
+        const std::vector<GLuint> kLightWords = {240u, 200u, 128u, 7u};
+
         // One vertex of kEveryPairingVertexSource's per-vertex data, tightly packed.
         struct PerVertex {
             GLubyte ubyteAsInt[4];
@@ -153,10 +256,20 @@ void main()
                 glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, kCaptureWords * sizeof(GLuint), nullptr, GL_DYNAMIC_READ);
                 glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, m_capture);
                 ASSERT_EQ(glGetError(), GL_NO_ERROR) << "capture buffer setup";
+                std::string whyNot;
+                m_watching = StartIntegerAttributeTypeWatch(&whyNot);
+                if (!m_watching) {
+                    // A log line and a property, never a skip: the value checks below still run.
+                    std::cout << "[itest] integer attribute type watch off: " << whyNot << std::endl;
+                    RecordProperty("integer_attribute_type_watch", whyNot);
+                }
             }
 
             void TearDown() override {
                 if (!Ready()) return;
+                if (m_watching) StopIntegerAttributeTypeWatch();
+                if (m_target != 0) glDeleteFramebuffers(1, &m_target);
+                if (m_targetTexture != 0) glDeleteTextures(1, &m_targetTexture);
                 glDisable(GL_RASTERIZER_DISCARD);
                 glUseProgram(0);
                 glBindVertexArray(0);
@@ -188,7 +301,8 @@ void main()
             }
 
             // One point drawn under GL_RASTERIZER_DISCARD; the first `words` captured words.
-            std::vector<GLuint> Capture(GLuint program, GLuint vao, std::size_t words) {
+            std::vector<GLuint> Capture(GLuint program, GLuint vao, std::size_t words,
+                                        const std::function<void()>& draw = {}) {
                 const std::vector<GLuint> poison(kCaptureWords, kPoison);
                 glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, m_capture);
                 glBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, kCaptureWords * sizeof(GLuint), poison.data());
@@ -196,7 +310,10 @@ void main()
                 glBindVertexArray(vao);
                 glEnable(GL_RASTERIZER_DISCARD);
                 glBeginTransformFeedback(GL_POINTS);
-                glDrawArraysInstanced(GL_POINTS, 0, 1, 1);
+                if (draw)
+                    draw();
+                else
+                    glDrawArraysInstanced(GL_POINTS, 0, 1, 1);
                 glEndTransformFeedback();
                 glDisable(GL_RASTERIZER_DISCARD);
                 std::vector<GLuint> result(words, kPoison);
@@ -211,7 +328,74 @@ void main()
                 return result;
             }
 
+            // `points` points drawn into a 2x1 RGBA32I target with `program` (0: the bound pipeline),
+            // by `draw` or one glDrawArrays; the four words its fragment stage wrote for each.
+            std::vector<GLuint> Render(GLuint program, GLuint vao, int points = 1,
+                                       const std::function<void()>& draw = {}) {
+                if (m_target == 0) {
+                    glGenTextures(1, &m_targetTexture);
+                    glBindTexture(GL_TEXTURE_2D, m_targetTexture);
+                    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32I, 2, 1);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    glGenFramebuffers(1, &m_target);
+                    glBindFramebuffer(GL_FRAMEBUFFER, m_target);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_targetTexture, 0);
+                    EXPECT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
+                }
+                glBindFramebuffer(GL_FRAMEBUFFER, m_target);
+                glViewport(0, 0, 2, 1);
+                const GLint poison[4] = {static_cast<GLint>(kPoison), static_cast<GLint>(kPoison),
+                                         static_cast<GLint>(kPoison), static_cast<GLint>(kPoison)};
+                glClearBufferiv(GL_COLOR, 0, poison);
+                glUseProgram(program);
+                glBindVertexArray(vao);
+                if (draw)
+                    draw();
+                else
+                    glDrawArrays(GL_POINTS, 0, 1);
+                GLint pixels[8] = {};
+                glReadPixels(0, 0, 2, 1, GL_RGBA_INTEGER, GL_INT, pixels);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                return std::vector<GLuint>(pixels, pixels + 4 * points);
+            }
+
+            // A vertex array whose location 0 reads `bytes` as four `type` components.
+            GLuint MakeByteArray(const GLubyte (&bytes)[4], GLenum type) {
+                const GLuint vao = MakeVertexArray();
+                MakeBuffer(bytes, sizeof(bytes));
+                glVertexAttribIPointer(0, 4, type, 0, nullptr);
+                glEnableVertexAttribArray(0);
+                return vao;
+            }
+
+            // The driver's view of every draw so far; null where the watch is off.
+            bool ReadWatch(IntegerAttributeTypeTally* tally) {
+                if (!m_watching) return false;
+                glFinish();
+                const bool read = ReadIntegerAttributeTypeWatch(tally);
+                EXPECT_TRUE(read) << "the integer attribute type watch started but could not be read";
+                return read;
+            }
+
+            // Every array a draw so far handed the driver has the signedness of the input it feeds.
+            void ExpectDriverArraysFitTheirInputs() {
+                IntegerAttributeTypeTally tally;
+                if (!ReadWatch(&tally)) return;
+                RecordProperty("integer_attribute_type_watch_draws", static_cast<int>(tally.draws));
+                EXPECT_GT(tally.draws, 0u) << "the watch saw no draw, so it checked nothing";
+                EXPECT_EQ(tally.violations, 0u) << tally.firstViolation;
+            }
+
+            // Driver links so far, or -1 where the watch is off.
+            long LinksSoFar() {
+                IntegerAttributeTypeTally tally;
+                return ReadWatch(&tally) ? static_cast<long>(tally.links) : -1;
+            }
+
             static constexpr std::size_t kCaptureWords = 16;
+            bool m_watching = false;
+            GLuint m_target = 0;
+            GLuint m_targetTexture = 0;
             GLuint m_capture = 0;
             std::vector<GLuint> m_programs;
             std::vector<GLuint> m_vaos;
@@ -258,6 +442,7 @@ void main()
             };
             EXPECT_EQ(captured, expected);
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
         }
 
         TEST_F(NarrowIntegerAttributeScenario, OneProgramFollowsTheSignednessOfEachVertexArray) {
@@ -288,6 +473,350 @@ void main()
             EXPECT_EQ(Capture(program, signedArray, 4), asSigned) << "GL_BYTE again";
             EXPECT_EQ(Capture(program, unsignedArray, 4), asUnsigned) << "GL_UNSIGNED_BYTE again";
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // The negative control for the driver watch, on canned input: the rule must call an
+        // unsigned array into an int input wrong, and every matching pairing right.
+        TEST_F(NarrowIntegerAttributeScenario, TheDriverWatchRuleRejectsAnArrayOfTheOtherSignedness) {
+            EXPECT_FALSE(IntegerAttributeTypeFitsInput(GL_INT_VEC4, true, GL_UNSIGNED_BYTE));
+            EXPECT_FALSE(IntegerAttributeTypeFitsInput(GL_UNSIGNED_INT_VEC2, true, GL_SHORT));
+            EXPECT_FALSE(IntegerAttributeTypeFitsInput(GL_INT, true, GL_UNSIGNED_INT));
+            EXPECT_FALSE(IntegerAttributeTypeFitsInput(GL_INT_VEC4, false, GL_FLOAT));
+            EXPECT_FALSE(IntegerAttributeTypeFitsInput(GL_FLOAT_VEC4, true, GL_BYTE));
+            EXPECT_TRUE(IntegerAttributeTypeFitsInput(GL_INT_VEC4, true, GL_BYTE));
+            EXPECT_TRUE(IntegerAttributeTypeFitsInput(GL_INT_VEC2, true, GL_SHORT));
+            EXPECT_TRUE(IntegerAttributeTypeFitsInput(GL_INT, true, GL_INT));
+            EXPECT_TRUE(IntegerAttributeTypeFitsInput(GL_UNSIGNED_INT_VEC4, true, GL_UNSIGNED_BYTE));
+            EXPECT_TRUE(IntegerAttributeTypeFitsInput(GL_UNSIGNED_INT_VEC3, true, GL_UNSIGNED_SHORT));
+            EXPECT_TRUE(IntegerAttributeTypeFitsInput(GL_UNSIGNED_INT, true, GL_UNSIGNED_INT));
+            EXPECT_TRUE(IntegerAttributeTypeFitsInput(GL_FLOAT_VEC4, false, GL_UNSIGNED_BYTE));
+        }
+
+        // One array read in turn by an int and a uint program: each switch changes which of the two
+        // signednesses the array has to be issued with, and the second round must need no relink.
+        TEST_F(NarrowIntegerAttributeScenario, AnIntAndAUintProgramTakeTurnsOnOneArray) {
+            if (!Ready()) GTEST_SKIP();
+            std::string log;
+            const GLuint intProgram = BuildCaptureProgram(kSingleInputVertexSource, {"captured"}, &log);
+            ASSERT_NE(intProgram, 0u) << log;
+            m_programs.push_back(intProgram);
+            const GLuint uintProgram = BuildCaptureProgram(kSingleUintInputVertexSource, {"captured"}, &log);
+            ASSERT_NE(uintProgram, 0u) << log;
+            m_programs.push_back(uintProgram);
+            const GLuint signedArray = MakeByteArray(kBytes, GL_BYTE);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+
+            EXPECT_EQ(Capture(intProgram, signedArray, 4), kBytesAsSigned) << "int first";
+            EXPECT_EQ(Capture(uintProgram, signedArray, 4), kBytesAsSigned) << "then uint";
+            const long linksAfterFirstRound = LinksSoFar();
+            for (int round = 0; round < 2; ++round) {
+                EXPECT_EQ(Capture(intProgram, signedArray, 4), kBytesAsSigned) << "int, round " << round;
+                EXPECT_EQ(Capture(uintProgram, signedArray, 4), kBytesAsSigned) << "uint, round " << round;
+            }
+            EXPECT_EQ(LinksSoFar(), linksAfterFirstRound) << "switching programs relinked one";
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // A program that never captures is built for the data it first meets. Fed data of the other
+        // signedness afterwards it may be rebuilt once, and every value - before, during and after
+        // the switch - is still GL's.
+        TEST_F(NarrowIntegerAttributeScenario, AProgramFirstDrawnWithMatchingDataKeepsEveryValue) {
+            if (!Ready()) GTEST_SKIP();
+            std::string log;
+            const GLuint program = BuildProgram(kRenderVertexSource, kRenderFragmentSource, {}, &log);
+            ASSERT_NE(program, 0u) << log;
+            m_programs.push_back(program);
+            const GLuint signedArray = MakeByteArray(kBytes, GL_BYTE);
+            const GLuint unsignedArray = MakeByteArray(kBytes, GL_UNSIGNED_BYTE);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+
+            EXPECT_EQ(Render(program, signedArray), kBytesAsSigned) << "matching data first";
+            const long linksAfterFirstDraw = LinksSoFar();
+            EXPECT_EQ(Render(program, unsignedArray), kBytesAsUnsigned) << "then the other signedness";
+            EXPECT_EQ(Render(program, signedArray), kBytesAsSigned) << "matching data again";
+            EXPECT_EQ(Render(program, unsignedArray), kBytesAsUnsigned) << "the other signedness again";
+            if (linksAfterFirstDraw >= 0) EXPECT_LE(LinksSoFar(), linksAfterFirstDraw + 1) << "rebuilt more than once";
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // Two programs from one source, the first built for matching data only and the second for
+        // data of the other signedness. Whatever the backend shares between the two builds must not
+        // hand the second one the first one's shader.
+        TEST_F(NarrowIntegerAttributeScenario, TwoProgramsFromOneSourceKeepTheirOwnBuilds) {
+            if (!Ready()) GTEST_SKIP();
+            std::string log;
+            const GLuint first = BuildProgram(kRenderVertexSource, kRenderFragmentSource, {}, &log);
+            ASSERT_NE(first, 0u) << log;
+            m_programs.push_back(first);
+            const GLuint second = BuildProgram(kRenderVertexSource, kRenderFragmentSource, {}, &log);
+            ASSERT_NE(second, 0u) << log;
+            m_programs.push_back(second);
+            const GLuint signedArray = MakeByteArray(kBytes, GL_BYTE);
+            const GLuint unsignedArray = MakeByteArray(kBytes, GL_UNSIGNED_BYTE);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+
+            EXPECT_EQ(Render(first, signedArray), kBytesAsSigned) << "the first program, matching data";
+            EXPECT_EQ(Render(second, unsignedArray), kBytesAsUnsigned) << "the second, the other signedness";
+            EXPECT_EQ(Render(first, signedArray), kBytesAsSigned) << "the first again";
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // A relink between two draws of the same data: whatever per-program state the correction
+        // keeps has to survive the program being rebuilt underneath it.
+        TEST_F(NarrowIntegerAttributeScenario, ARelinkBetweenDrawsKeepsTheValues) {
+            if (!Ready()) GTEST_SKIP();
+            std::string log;
+            const GLuint program = BuildCaptureProgram(kSingleInputVertexSource, {"captured"}, &log);
+            ASSERT_NE(program, 0u) << log;
+            m_programs.push_back(program);
+            const GLuint unsignedArray = MakeByteArray(kLightBytes, GL_UNSIGNED_BYTE);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+
+            EXPECT_EQ(Capture(program, unsignedArray, 4), kLightWords) << "before the relink";
+            glLinkProgram(program);
+            GLint status = GL_FALSE;
+            glGetProgramiv(program, GL_LINK_STATUS, &status);
+            ASSERT_EQ(status, GL_TRUE);
+            EXPECT_EQ(Capture(program, unsignedArray, 4), kLightWords) << "after the relink";
+            EXPECT_EQ(Capture(program, unsignedArray, 4), kLightWords) << "and once more";
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // A program and a vertex array deleted and created again, most likely under the same names,
+        // with the signedness of input and data swapped: nothing learned about the first pair may
+        // be believed for the second.
+        TEST_F(NarrowIntegerAttributeScenario, AProgramAndAnArrayCreatedAgainStartOver) {
+            if (!Ready()) GTEST_SKIP();
+            std::string log;
+            const GLuint intProgram = BuildCaptureProgram(kSingleInputVertexSource, {"captured"}, &log);
+            ASSERT_NE(intProgram, 0u) << log;
+            GLuint unsignedArray = 0;
+            glGenVertexArrays(1, &unsignedArray);
+            glBindVertexArray(unsignedArray);
+            MakeBuffer(kLightBytes, sizeof(kLightBytes));
+            glVertexAttribIPointer(0, 4, GL_UNSIGNED_BYTE, 0, nullptr);
+            glEnableVertexAttribArray(0);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "first pair setup";
+            EXPECT_EQ(Capture(intProgram, unsignedArray, 4), kLightWords) << "the first pair";
+            glUseProgram(0);
+            glBindVertexArray(0);
+            glDeleteProgram(intProgram);
+            glDeleteVertexArrays(1, &unsignedArray);
+
+            const GLuint uintProgram = BuildCaptureProgram(kSingleUintInputVertexSource, {"captured"}, &log);
+            ASSERT_NE(uintProgram, 0u) << log;
+            m_programs.push_back(uintProgram);
+            const GLuint signedArray = MakeByteArray(kBytes, GL_BYTE);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "second pair setup";
+            RecordProperty("program_name_reused", uintProgram == intProgram ? 1 : 0);
+            RecordProperty("vertex_array_name_reused", signedArray == unsignedArray ? 1 : 0);
+            EXPECT_EQ(Capture(uintProgram, signedArray, 4), kBytesAsSigned) << "the second pair";
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // The input's location comes from glBindAttribLocation rather than the shader.
+        TEST_F(NarrowIntegerAttributeScenario, ABoundAttributeLocationIsCorrected) {
+            if (!Ready()) GTEST_SKIP();
+            std::string log;
+            const GLuint program = BuildCaptureProgram(kUnplacedInputVertexSource, {"captured"}, &log,
+                                                       [](GLuint p) { glBindAttribLocation(p, 5, "value"); });
+            ASSERT_NE(program, 0u) << log;
+            m_programs.push_back(program);
+            ASSERT_EQ(glGetAttribLocation(program, "value"), 5);
+            const GLuint vao = MakeVertexArray();
+            MakeBuffer(kLightBytes, sizeof(kLightBytes));
+            glVertexAttribIPointer(5, 4, GL_UNSIGNED_BYTE, 0, nullptr);
+            glEnableVertexAttribArray(5);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+
+            EXPECT_EQ(Capture(program, vao, 4), kLightWords);
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // The array is described through the direct-state-access entry points.
+        TEST_F(NarrowIntegerAttributeScenario, ADirectStateAccessArrayIsCorrected) {
+            if (!Ready()) GTEST_SKIP();
+            std::string log;
+            const GLuint program = BuildCaptureProgram(kSingleInputVertexSource, {"captured"}, &log);
+            ASSERT_NE(program, 0u) << log;
+            m_programs.push_back(program);
+            GLuint vao = 0;
+            glCreateVertexArrays(1, &vao);
+            m_vaos.push_back(vao);
+            GLuint buffer = 0;
+            glCreateBuffers(1, &buffer);
+            m_buffers.push_back(buffer);
+            glNamedBufferData(buffer, sizeof(kLightBytes), kLightBytes, GL_STATIC_DRAW);
+            glVertexArrayVertexBuffer(vao, 0, buffer, 0, 4);
+            glVertexArrayAttribIFormat(vao, 0, 4, GL_UNSIGNED_BYTE, 0);
+            glVertexArrayAttribBinding(vao, 0, 0);
+            glEnableVertexArrayAttrib(vao, 0);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+
+            EXPECT_EQ(Capture(program, vao, 4), kLightWords);
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // A binding of stride zero, which never advances: two points read the same element.
+        TEST_F(NarrowIntegerAttributeScenario, AZeroStrideBindingIsCorrected) {
+            if (!Ready()) GTEST_SKIP();
+            std::string log;
+            const GLuint program = BuildCaptureProgram(kSingleInputVertexSource, {"captured"}, &log);
+            ASSERT_NE(program, 0u) << log;
+            m_programs.push_back(program);
+            const GLuint vao = MakeVertexArray();
+            const GLuint buffer = MakeBuffer(kLightBytes, sizeof(kLightBytes));
+            glVertexAttribIFormat(0, 4, GL_UNSIGNED_BYTE, 0);
+            glVertexAttribBinding(0, 0);
+            glBindVertexBuffer(0, buffer, 0, 0);
+            glEnableVertexAttribArray(0);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+
+            std::vector<GLuint> expected = kLightWords;
+            expected.insert(expected.end(), kLightWords.begin(), kLightWords.end());
+            EXPECT_EQ(Capture(program, vao, 8, [] { glDrawArrays(GL_POINTS, 0, 2); }), expected);
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // An array in the application's own memory. Only a library-hosted backend reads client
+        // memory at the draw, and only relaxed semantics allow such an array, so the case stops
+        // before its first draw anywhere else.
+        TEST_F(NarrowIntegerAttributeScenario, AClientMemoryArrayIsCorrected) {
+            if (!Ready()) GTEST_SKIP();
+            const std::string transport = SplitLane::MarkerValue("MOBILEGL_TRANSPORT");
+            if (PeekSplitRuntime().transportResolved || (!transport.empty() && transport != "monolith"))
+                GTEST_SKIP() << "client-memory arrays are drawn only with the backend in this library";
+            GLint profile = 0;
+            glGetIntegerv(GL_CONTEXT_PROFILE_MASK, &profile);
+            if ((profile & GL_CONTEXT_CORE_PROFILE_BIT) != 0 &&
+                AmbientQuirkFromEnvironment("MOBILEGL_RELAXED_SEMANTICS") != AmbientQuirk::On) {
+                GTEST_SKIP() << "a core profile without relaxed semantics has no client-memory arrays";
+            }
+            std::string log;
+            const GLuint program = BuildCaptureProgram(kSingleInputVertexSource, {"captured"}, &log);
+            ASSERT_NE(program, 0u) << log;
+            m_programs.push_back(program);
+            const GLuint vao = MakeVertexArray();
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glVertexAttribIPointer(0, 4, GL_UNSIGNED_BYTE, 0, kLightBytes);
+            glEnableVertexAttribArray(0);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+
+            EXPECT_EQ(Capture(program, vao, 4, [] { glDrawArrays(GL_POINTS, 0, 1); }), kLightWords);
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // 32-bit data of the other signedness is the same bits, and 16-bit data of the input's own
+        // signedness is untouched; both still reach the driver with the input's signedness.
+        TEST_F(NarrowIntegerAttributeScenario, WideDataAndMatchingDataKeepTheirBits) {
+            if (!Ready()) GTEST_SKIP();
+            std::string log;
+            const GLuint program = BuildCaptureProgram(kWideAndMatchedVertexSource, {"captured"}, &log);
+            ASSERT_NE(program, 0u) << log;
+            m_programs.push_back(program);
+            const GLuint wide[2] = {0xFFFFFFF0u, 7u};
+            const GLushort matched[2] = {65000, 300};
+            const GLuint vao = MakeVertexArray();
+            MakeBuffer(wide, sizeof(wide));
+            glVertexAttribIPointer(0, 2, GL_UNSIGNED_INT, 0, nullptr);
+            MakeBuffer(matched, sizeof(matched));
+            glVertexAttribIPointer(1, 2, GL_UNSIGNED_SHORT, 0, nullptr);
+            glEnableVertexAttribArray(0);
+            glEnableVertexAttribArray(1);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+
+            const std::vector<GLuint> expected = {0xFFFFFFF0u, 7u, 65000u, 300u};
+            EXPECT_EQ(Capture(program, vao, 4), expected);
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // Two points through one glMultiDrawArrays, read back rather than captured.
+        TEST_F(NarrowIntegerAttributeScenario, AMultiDrawIsCorrected) {
+            if (!Ready()) GTEST_SKIP();
+            std::string log;
+            const GLuint program = BuildProgram(kRenderVertexSource, kRenderFragmentSource, {}, &log);
+            ASSERT_NE(program, 0u) << log;
+            m_programs.push_back(program);
+            const GLubyte points[8] = {240, 200, 128, 7, 250, 129, 1, 255};
+            const GLuint vao = MakeVertexArray();
+            MakeBuffer(points, sizeof(points));
+            glVertexAttribIPointer(0, 4, GL_UNSIGNED_BYTE, 0, nullptr);
+            glEnableVertexAttribArray(0);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+
+            const std::vector<GLuint> expected = {240u, 200u, 128u, 7u, 250u, 129u, 1u, 255u};
+            EXPECT_EQ(Render(program, vao, 2,
+                             [] {
+                                 const GLint firsts[2] = {0, 1};
+                                 const GLsizei counts[2] = {1, 1};
+                                 glMultiDrawArrays(GL_POINTS, firsts, counts, 2);
+                             }),
+                      expected);
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // The integer input belongs to a separable vertex program bound through a pipeline.
+        TEST_F(NarrowIntegerAttributeScenario, AProgramPipelineVertexStageIsCorrected) {
+            if (!Ready()) GTEST_SKIP();
+            const GLuint vertexStage = glCreateShaderProgramv(GL_VERTEX_SHADER, 1, &kSeparableVertexSource);
+            const GLuint fragmentStage = glCreateShaderProgramv(GL_FRAGMENT_SHADER, 1, &kSeparableFragmentSource);
+            ASSERT_NE(vertexStage, 0u);
+            ASSERT_NE(fragmentStage, 0u);
+            m_programs.push_back(vertexStage);
+            m_programs.push_back(fragmentStage);
+            GLint linked = GL_FALSE;
+            glGetProgramiv(vertexStage, GL_LINK_STATUS, &linked);
+            ASSERT_EQ(linked, GL_TRUE);
+            glGetProgramiv(fragmentStage, GL_LINK_STATUS, &linked);
+            ASSERT_EQ(linked, GL_TRUE);
+            GLuint pipeline = 0;
+            glGenProgramPipelines(1, &pipeline);
+            glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vertexStage);
+            glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fragmentStage);
+            const GLuint unsignedArray = MakeByteArray(kLightBytes, GL_UNSIGNED_BYTE);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "pipeline setup";
+
+            glUseProgram(0);
+            glBindProgramPipeline(pipeline);
+            EXPECT_EQ(Render(0, unsignedArray), kLightWords);
+            glBindProgramPipeline(0);
+            glDeleteProgramPipelines(1, &pipeline);
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // Whatever the driver is handed, the application still reads back the type it declared.
+        TEST_F(NarrowIntegerAttributeScenario, TheArrayTypeQueryStillReportsTheDeclaredType) {
+            if (!Ready()) GTEST_SKIP();
+            std::string log;
+            const GLuint program = BuildCaptureProgram(kSingleInputVertexSource, {"captured"}, &log);
+            ASSERT_NE(program, 0u) << log;
+            m_programs.push_back(program);
+            const GLuint unsignedArray = MakeByteArray(kLightBytes, GL_UNSIGNED_BYTE);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+
+            EXPECT_EQ(Capture(program, unsignedArray, 4), kLightWords);
+            glBindVertexArray(unsignedArray);
+            GLint type = 0;
+            GLint integer = 0;
+            glGetVertexAttribiv(0, GL_VERTEX_ATTRIB_ARRAY_TYPE, &type);
+            glGetVertexAttribiv(0, GL_VERTEX_ATTRIB_ARRAY_INTEGER, &integer);
+            EXPECT_EQ(type, GL_UNSIGNED_BYTE);
+            EXPECT_EQ(integer, GL_TRUE);
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
         }
     } // namespace
 } // namespace MGITest
