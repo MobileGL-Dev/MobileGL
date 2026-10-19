@@ -257,6 +257,13 @@
       "target_call": 115019
     },
     {
+      "name": "minecraft-1.20.1-fabric-iris-iterationt-in-world",
+      "trace_archive": "minecraft-1.20.1-fabric-iris-iterationt-in-world.tgz",
+      "golden": "minecraft-1.20.1-fabric-iris-iterationt-in-world.0000375557-linux-mesa.png",
+      "alternate_golden": "minecraft-1.20.1-fabric-iris-iterationt-in-world.0000375557.png",
+      "target_call": 375557
+    },
+    {
       "name": "minecraft-1.21.4-fabric-iris-photon-v1.1-in-world",
       "trace_archive": "minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.tgz",
       "golden": "minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.0000159866.png",

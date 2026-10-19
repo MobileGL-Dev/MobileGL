@@ -111,6 +111,16 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   iterationT after entering a singleplayer world, with Iris' DSA path disabled.
   ![Minecraft 1.21.4 Fabric Iris iterationT no-DSA in-world golden](fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0000115019.png)
+- minecraft-1.20.1-fabric-iris-iterationt-in-world: captured from Minecraft 1.20.1 Fabric with Sodium 0.5.13, Iris
+  1.7.6 and iterationT 3.2.0, in daylight with a block outlined. Iris 1.7 declares Sodium 0.5's lightmap input as
+  `ivec4` while Sodium feeds it `GL_UNSIGNED_BYTE`, a pairing the 1.21.4 fixtures never reach: sign-extending that
+  data turns all terrain black. The trace is a single-frame trim of a capture with a masked GL vendor; its ~64 MiB
+  archive is mostly the pack's own textures (two 33 MiB RGBA32F atmosphere volumes and an 8 MiB noise volume).
+  The golden is the Mesa picture and the NVIDIA capture is the alternate. The pack's outline shader compares the
+  outline alpha with `== 0.4f` and scales its width by `sign(lineOffset.x)`. NVIDIA rounds UNORM8 102/255 exactly and
+  fuses `ndc2.y - ndc1.y` into an FMA, so it draws a full gray box. Mesa is one ulp off and does not fuse, so the
+  outline is black and its screen-horizontal edges have zero width. Both are within GL's precision rules.
+  ![Minecraft 1.20.1 Fabric Iris iterationT in-world golden](fixtures/minecraft-1.20.1-fabric-iris-iterationt-in-world.0000375557-linux-mesa.png)
 - minecraft-1.21.4-fabric-iris-iterationrp-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   iterationRP after entering a singleplayer world, framing the iterationRP name overlay over a lake with far-shore
   tree reflections. iterationRP's temporal auto-exposure makes a single-frame trim overexpose and drop the overlay,
@@ -310,7 +320,7 @@ case pass" but "which cases diverge, and is the divergence reproducible":
 
 | option | what it does |
 | --- | --- |
-| `--matrix` | run the **CI split subset** (the set `retrace-split` runs; 39 cases today) instead of the whole manifest. `--all` additionally includes the non-CI workloads such as rd12, which ID-P7-4 excludes from the exit-gate-3 denominator. Each case runs only the backends its own `ci_backends` names - and a case NAMED with `--case` that does not run the requested backend is an error, not a silent skip. |
+| `--matrix` | run the **CI split subset** (the set `retrace-split` runs; 40 cases today) instead of the whole manifest. `--all` additionally includes the non-CI workloads such as rd12, which ID-P7-4 excludes from the exit-gate-3 denominator. Each case runs only the backends its own `ci_backends` names - and a case NAMED with `--case` that does not run the requested backend is an error, not a silent skip. |
 | `--repeat N` | replay each case/backend N times. Repeats after the first pass `--reuse-fixture`, so they measure the replay and not the push. |
 | `--archive-dir DIR` | copy each repeat's `result.json`, actual PNG, both role logs, `transport-proof.json` and `logcat.txt` to `DIR/<case>-<backend>/repeat-NN/` **before the next run overwrites them**, plus `DIR/run.json` recording the APK SHA-256, the arm and the environment. |
 
@@ -485,7 +495,7 @@ python3 tools/trace_replay/run_tcp_matrix.py \
 `--runner` overrides the catalog runner; fixture paths default to the catalog's
 fixture directory and can be overridden with `--fixtures`. Repeat `--case` or
 `--backend` to select a subset. The default is the manifest's CI split subset
-(currently 39 cases), honoring each case's backend list. Explicit `--case
+(currently 40 cases), honoring each case's backend list. Explicit `--case
 minecraft-1.21.4-rd12-odinlite-in-world` permits that non-CI workload separately;
 an explicit `split:false` always remains excluded.
 
@@ -497,7 +507,7 @@ per backend and the rest is deliberately shared:
 
 - **selection** - a case is planned for a backend only if its own `ci_backends`
   names it, so `minecraft-1.21.4-fabric-iris-iterationrp-in-world` appears in a
-  DirectVulkan sweep (39 cases) and not in a DirectGLES one (38). A `--case` named
+  DirectVulkan sweep (40 cases) and not in a DirectGLES one (39). A `--case` named
   explicitly that does not run a requested backend is a refusal that names the
   case, not one plan fewer and no message;
 - **golden and threshold** - from `backend_overrides.<backend>` in
