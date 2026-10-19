@@ -26,20 +26,33 @@ namespace MobileGL {
             // element (element i sits at location base + i). Inputs at other locations, and modules
             // that are not vertex shaders, are left untouched.
             //
-            // DirectVulkan only: the Vulkan fetch format must match the input's signedness, which is
-            // what moves the extension rule away from the source data's own.
+            // ConstantMasks bakes the listed locations into the module. RuntimeWidths seeds every
+            // 32-bit integer input below location 32 from two Private uint globals instead (see
+            // kNarrowIntegerWidths8GlobalName), so one module serves every data width; a width bit of
+            // 0 leaves the value as fetched.
             class ExtendNarrowIntegerVertexInputsPass : public spvtools::opt::Pass {
             public:
+                enum class Mode : Uint8 {
+                    ConstantMasks,
+                    RuntimeWidths,
+                };
+
                 explicit ExtendNarrowIntegerVertexInputsPass(const NarrowIntegerVertexInputs& inputs)
                     : m_inputs(inputs) {}
+                // RuntimeWidths; `outChanged` (optional) reports whether the module was rewritten.
+                explicit ExtendNarrowIntegerVertexInputsPass(Bool* outChanged)
+                    : m_mode(Mode::RuntimeWidths), m_outChanged(outChanged) {}
                 const char* name() const override { return "mobilegl-extend-narrow-integer-vertex-inputs"; }
                 Status Process() override;
 
                 static spvtools::Optimizer::PassToken CreateExtendNarrowIntegerVertexInputsPass(
                     const NarrowIntegerVertexInputs& inputs);
+                static spvtools::Optimizer::PassToken CreateRuntimeWidthsPass(Bool* outChanged);
 
             private:
                 NarrowIntegerVertexInputs m_inputs;
+                Mode m_mode = Mode::ConstantMasks;
+                Bool* m_outChanged = nullptr;
             };
         } // namespace ShaderTranspiler
     } // namespace MG_Util

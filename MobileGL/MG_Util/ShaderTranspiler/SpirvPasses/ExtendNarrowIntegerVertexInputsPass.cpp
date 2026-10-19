@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "ExtendNarrowIntegerVertexInputsPass.h"
+#include "NarrowIntegerRuntimeWidths.h"
 
 #include "spirv.hpp"
 #include "source/opt/constants.h"
@@ -38,6 +39,8 @@ namespace MobileGL {
                 struct Extension {
                     Uint32 bits = 0; // 0: leave the value alone
                     Bool sign = false;
+                    // The width is read at run time (RuntimeWidths); `bits` is then only non-zero.
+                    Bool runtime = false;
                 };
 
                 Extension ExtensionAt(const NarrowIntegerVertexInputs& inputs, Uint32 location) {
@@ -48,6 +51,17 @@ namespace MobileGL {
                     if (inputs.signExtend8 & bit) return {8, true};
                     if (inputs.signExtend16 & bit) return {16, true};
                     return {};
+                }
+
+                // Every input below location 32 (a width bit exists for it), extended by its own rule.
+                Extension RuntimeExtensionAt(Uint32 location, Bool unsignedInput) {
+                    if (location >= kMaxLocations) return {};
+                    return {32, unsignedInput, true};
+                }
+
+                Bool IsUnsignedInteger(const analysis::Type* type) {
+                    if (const auto* vector = type->AsVector()) type = vector->element_type();
+                    return !type->AsInteger()->IsSigned();
                 }
 
                 // True for a 32-bit integer scalar or vector: the only shapes a 32-bit integer
@@ -72,6 +86,8 @@ namespace MobileGL {
                     // of a sign-extension; 0 where the element is left alone.
                     std::vector<Uint32> operandIds;
                     Uint32 privatePointerTypeId = 0;
+                    Uint32 baseLocation = 0;
+                    NarrowIntegerRuntimeWidths::ShiftType shiftType;
                     // Access chains rooted at the variable (chains of chains included), each with
                     // the Private pointer type its result takes once the variable is Private.
                     std::vector<std::pair<Instruction*, Uint32>> accessChains;
@@ -92,7 +108,8 @@ namespace MobileGL {
             } // namespace
 
             spvtools::opt::Pass::Status ExtendNarrowIntegerVertexInputsPass::Process() {
-                if (!m_inputs.Any()) return Status::SuccessWithoutChange;
+                const Bool runtime = m_mode == Mode::RuntimeWidths;
+                if (!runtime && !m_inputs.Any()) return Status::SuccessWithoutChange;
 
                 auto* irContext = context();
                 auto entryPoints = irContext->module()->entry_points();
@@ -141,11 +158,15 @@ namespace MobileGL {
                         target.arrayLength = static_cast<Uint32>(length->GetZeroExtendedValue());
                         elementCount = target.arrayLength;
                     }
-                    if (!IsInteger32ScalarOrVector(typeMgr->GetType(target.elementTypeId))) continue;
+                    const analysis::Type* elementType = typeMgr->GetType(target.elementTypeId);
+                    if (!IsInteger32ScalarOrVector(elementType)) continue;
+                    target.baseLocation = location->second;
 
                     Bool any = false;
                     for (Uint32 element = 0; element < elementCount; ++element) {
-                        target.extensions.push_back(ExtensionAt(m_inputs, location->second + element));
+                        target.extensions.push_back(
+                            runtime ? RuntimeExtensionAt(location->second + element, IsUnsignedInteger(elementType))
+                                    : ExtensionAt(m_inputs, location->second + element));
                         any = any || target.extensions.back().bits != 0;
                     }
                     if (any) targets.push_back(std::move(target));
@@ -186,11 +207,19 @@ namespace MobileGL {
                         constant ? constantMgr->GetDefiningInstruction(constant, typeId) : nullptr;
                     return inst ? inst->result_id() : 0;
                 };
+                NarrowIntegerRuntimeWidths::Ids runtimeIds;
+                if (runtime && !NarrowIntegerRuntimeWidths::MaterializeTypes(irContext, runtimeIds))
+                    return Status::Failure;
                 Uint32 zeroOffsetId = 0;
                 for (auto& target : targets) {
-                    for (const Extension& extension : target.extensions) {
+                    for (SizeT element = 0; element < target.extensions.size(); ++element) {
+                        const Extension& extension = target.extensions[element];
                         Uint32 operandId = 0;
-                        if (extension.bits != 0) {
+                        if (extension.runtime) {
+                            // The location, which selects the element's bit in the two widths.
+                            operandId = constantMgr->GetUIntConstId(target.baseLocation + static_cast<Uint32>(element));
+                            if (operandId == 0) return Status::Failure;
+                        } else if (extension.bits != 0) {
                             operandId = extension.sign ? constantMgr->GetUIntConstId(extension.bits)
                                                        : constantId(target.elementTypeId, (1u << extension.bits) - 1u);
                             if (operandId == 0) return Status::Failure;
@@ -200,6 +229,11 @@ namespace MobileGL {
                             }
                         }
                         target.operandIds.push_back(operandId);
+                    }
+                    if (runtime) {
+                        target.shiftType = NarrowIntegerRuntimeWidths::MaterializeShiftType(irContext, runtimeIds,
+                                                                                            target.elementTypeId);
+                        if (target.shiftType.typeId == 0) return Status::Failure;
                     }
                     target.privatePointerTypeId =
                         typeMgr->FindPointerToType(target.pointeeTypeId, spv::StorageClass::Private);
@@ -269,9 +303,20 @@ namespace MobileGL {
                     ++insertPoint;
                     return resultId;
                 };
+                const NarrowIntegerRuntimeWidths::Emitter emitter{irContext, &insertPoint, nextId};
+                if (runtime) {
+                    if (!NarrowIntegerRuntimeWidths::DeclareGlobals(irContext, runtimeIds, nextId))
+                        return Status::Failure;
+                    NarrowIntegerRuntimeWidths::LoadWidths(emitter, runtimeIds);
+                }
                 const auto extend = [&](const Target& target, SizeT element, Uint32 valueId) -> Uint32 {
                     const Extension& extension = target.extensions[element];
                     if (extension.bits == 0) return valueId;
+                    if (extension.runtime) {
+                        return NarrowIntegerRuntimeWidths::Extend(emitter, runtimeIds, target.elementTypeId,
+                                                                  target.shiftType, target.operandIds[element],
+                                                                  extension.sign, valueId);
+                    }
                     if (!extension.sign) {
                         return insert(spv::Op::OpBitwiseAnd, target.elementTypeId,
                                       {valueId, target.operandIds[element]});
@@ -345,15 +390,25 @@ namespace MobileGL {
                     }
                     insert(spv::Op::OpStore, 0, {privateId, correctedId});
                 }
+                if (runtime && interfaceListsPrivate) {
+                    entryPoint->AddOperand({SPV_OPERAND_TYPE_ID, {runtimeIds.widths8Id}});
+                    entryPoint->AddOperand({SPV_OPERAND_TYPE_ID, {runtimeIds.widths16Id}});
+                }
 
                 if (outOfIds) return Status::Failure;
                 irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);
+                if (m_outChanged != nullptr) *m_outChanged = true;
                 return Status::SuccessWithChange;
             }
 
             spvtools::Optimizer::PassToken ExtendNarrowIntegerVertexInputsPass::
                 CreateExtendNarrowIntegerVertexInputsPass(const NarrowIntegerVertexInputs& inputs) {
                 return spvtools::Optimizer::PassToken(MakeUnique<ExtendNarrowIntegerVertexInputsPass>(inputs));
+            }
+
+            spvtools::Optimizer::PassToken ExtendNarrowIntegerVertexInputsPass::CreateRuntimeWidthsPass(
+                Bool* outChanged) {
+                return spvtools::Optimizer::PassToken(MakeUnique<ExtendNarrowIntegerVertexInputsPass>(outChanged));
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

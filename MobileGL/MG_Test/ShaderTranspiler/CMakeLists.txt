@@ -36,6 +36,7 @@ add_executable(
         ZeroLayerOutputTest.cpp
         FullCoverageSampleMaskTest.cpp
         ExtendNarrowIntegerVertexInputsTest.cpp
+        ExtendNarrowIntegerVertexInputsRuntimeTest.cpp
         RelaxedOpaqueStructTest.cpp
         ShadingRateEsslTest.cpp
 )

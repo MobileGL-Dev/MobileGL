@@ -34,6 +34,13 @@ namespace MobileGL {
             // Hashed as raw bytes by the program cache, so it must stay free of padding.
             static_assert(sizeof(NarrowIntegerVertexInputs) == 4 * sizeof(Uint32));
 
+            // The two Private uint globals ExtendNarrowIntegerVertexInputsPass's RuntimeWidths mode
+            // reads each location's data width from: bit L of the first is set for 8-bit data at
+            // location L, of the second for 16-bit data. A backend running that mode turns them into
+            // uniforms and sets them per draw; 0, the value after a link, leaves every input as fetched.
+            inline constexpr const char* kNarrowIntegerWidths8GlobalName = "mg_NarrowIntegerWidths8";
+            inline constexpr const char* kNarrowIntegerWidths16GlobalName = "mg_NarrowIntegerWidths16";
+
             // The vertex-input half: the locations whose attribute DATA is narrow integer, by width
             // and signedness. Each backend fills it from its own description of the data.
             struct NarrowIntegerAttributeMasks {

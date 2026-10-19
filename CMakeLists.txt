@@ -420,6 +420,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/RebaseInstanceIndexPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/ZeroBaseVertexPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/ExtendNarrowIntegerVertexInputsPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/NarrowIntegerRuntimeWidths.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LowerPixelCenterIntegerPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/ZeroLayerOutputPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FullCoverageSampleMaskPass.cpp

@@ -1998,6 +1998,19 @@ namespace MobileGL {
                                            outputBinary, true, enableSpirvValidation);
             }
 
+            bool ShaderCompiler::ExtendNarrowIntegerVertexInputsForEssl(const Vector<Uint32>& inputBinary,
+                                                                        Vector<uint32_t>& outputBinary, Bool& changed,
+                                                                        const bool enableSpirvValidation) {
+                using namespace spvtools;
+                changed = false;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(ExtendNarrowIntegerVertexInputsPass::CreateRuntimeWidthsPass(&changed));
+                const bool ok = RunOptimizerChecked("ExtendNarrowIntegerVertexInputsForEssl", optimizer, inputBinary,
+                                                    outputBinary, true, enableSpirvValidation);
+                changed = changed && ok;
+                return ok;
+            }
+
             bool ShaderCompiler::LowerPixelCenterIntegerForVulkan(const Vector<Uint32>& inputBinary,
                                                                   Vector<uint32_t>& outputBinary,
                                                                   const bool enableSpirvValidation) {

@@ -351,6 +351,12 @@ namespace MobileGL {
                                                                      Vector<uint32_t>& outputBinary,
                                                                      const NarrowIntegerVertexInputs& inputs,
                                                                      bool enableSpirvValidation = false);
+                // The same correction with each location's data width read at run time from the two
+                // kNarrowIntegerWidths*GlobalName globals, for a backend that cannot vary the program
+                // per draw. `changed` reports whether the module had an integer input to seed.
+                static bool ExtendNarrowIntegerVertexInputsForEssl(const Vector<Uint32>& inputBinary,
+                                                                   Vector<uint32_t>& outputBinary, Bool& changed,
+                                                                   bool enableSpirvValidation = false);
                 // Drops `layout(pixel_center_integer)` from a fragment module, which the Vulkan
                 // environment forbids, and shifts every gl_FragCoord.xy read by -0.5 to keep its
                 // values. See LowerPixelCenterIntegerPass.
