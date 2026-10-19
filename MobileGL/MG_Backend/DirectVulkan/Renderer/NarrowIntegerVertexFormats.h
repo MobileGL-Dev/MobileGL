@@ -14,7 +14,9 @@
 #include <Includes.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
+    using MG_Util::ShaderTranspiler::IntegerVertexInputMasks;
     using MG_Util::ShaderTranspiler::NarrowIntegerVertexInputs;
+    using MG_Util::ShaderTranspiler::ResolveNarrowIntegerVertexInputs;
 
     // Which vertex inputs need the ExtendNarrowIntegerVertexInputs program variant, decided from
     // two halves that are each computed once and cached with the object they describe.
@@ -58,15 +60,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    // The vertex-input half: the locations whose attribute DATA is narrow integer, by width and
-    // signedness. Filled from the source formats when a vertex input layout is built, so a draw
-    // reads four words instead of walking its attributes.
-    struct NarrowIntegerAttributeMasks {
-        Uint32 unsigned8 = 0;
-        Uint32 unsigned16 = 0;
-        Uint32 signed8 = 0;
-        Uint32 signed16 = 0;
-
+    // The vertex-input half, filled from the source formats when a vertex input layout is built,
+    // so a draw reads four words instead of walking its attributes.
+    struct NarrowIntegerAttributeMasks : MG_Util::ShaderTranspiler::NarrowIntegerAttributeMasks {
         constexpr void Note(Uint32 location, VkFormat format) {
             if (location >= 32) return;
             const Uint32 bit = 1u << location;
@@ -88,46 +84,4 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
     };
-
-    // The program half: the locations whose shader input is a 32-bit int or uint scalar/vector.
-    // Both masks are zero for a program without integer vertex inputs, which is what keeps the
-    // common draw at four AND instructions.
-    struct IntegerVertexInputMasks {
-        Uint32 signedInputs = 0;
-        Uint32 unsignedInputs = 0;
-
-        constexpr void Note(Uint32 location, GLenum shaderInputType) {
-            if (location >= 32) return;
-            const Uint32 bit = 1u << location;
-            switch (shaderInputType) {
-            case GL_INT:
-            case GL_INT_VEC2:
-            case GL_INT_VEC3:
-            case GL_INT_VEC4:
-                signedInputs |= bit;
-                break;
-            case GL_UNSIGNED_INT:
-            case GL_UNSIGNED_INT_VEC2:
-            case GL_UNSIGNED_INT_VEC3:
-            case GL_UNSIGNED_INT_VEC4:
-                unsignedInputs |= bit;
-                break;
-            default:
-                break;
-            }
-        }
-    };
-
-    // Unsigned narrow data into an int input is fetched sign-extended and must be zero-extended;
-    // signed narrow data into a uint input is fetched zero-extended and must be sign-extended.
-    // Matching signedness, 32-bit data and float inputs need nothing.
-    constexpr NarrowIntegerVertexInputs ResolveNarrowIntegerVertexInputs(const IntegerVertexInputMasks& inputs,
-                                                                         const NarrowIntegerAttributeMasks& data) {
-        NarrowIntegerVertexInputs result;
-        result.zeroExtend8 = inputs.signedInputs & data.unsigned8;
-        result.zeroExtend16 = inputs.signedInputs & data.unsigned16;
-        result.signExtend8 = inputs.unsignedInputs & data.signed8;
-        result.signExtend16 = inputs.unsignedInputs & data.signed16;
-        return result;
-    }
 } // namespace MobileGL::MG_Backend::DirectVulkan
