@@ -151,3 +151,12 @@ DirectGLES.VerifySplit.ScenarioIsolationScenario.ACaseLeavesItsDeletedProgramCur
 DirectGLES.VerifySplit.ScenarioIsolationScenario.TheNextCaseStartsWithNoProgramCurrentAndNoErrorPending
 DirectVulkan.VerifySplit.ScenarioIsolationScenario.ACaseLeavesItsDeletedProgramCurrentAndAnErrorUnread
 DirectVulkan.VerifySplit.ScenarioIsolationScenario.TheNextCaseStartsWithNoProgramCurrentAndNoErrorPending
+
+# --------------------------------------------------------------------------------------------
+# CANNED-INPUT CHECKS OF A HARNESS RULE - no GL call at all (2)
+# NarrowIntegerAttributeScenario's driver-watch control feeds the array-type rule fixed type
+# pairs and checks its verdicts. It makes no GL call, so no fill point is reached and the
+# arming line is honestly absent.
+# --------------------------------------------------------------------------------------------
+DirectGLES.VerifySplit.NarrowIntegerAttributeScenario.TheDriverWatchRuleRejectsAnArrayOfTheOtherSignedness
+DirectVulkan.VerifySplit.NarrowIntegerAttributeScenario.TheDriverWatchRuleRejectsAnArrayOfTheOtherSignedness
