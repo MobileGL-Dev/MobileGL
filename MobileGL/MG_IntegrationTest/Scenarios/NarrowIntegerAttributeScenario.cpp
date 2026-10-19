@@ -27,7 +27,6 @@
 // cannot look it says so and the value checks still run.
 
 #include <cstddef>
-#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -37,7 +36,6 @@
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/IntegerAttributeTypePeek.h"
 #include "../Harness/ScenarioFixture.h"
-#include "../Harness/SplitRuntimePeek.h"
 
 #ifdef GLAPI
 #undef GLAPI
@@ -613,8 +611,9 @@ void main()
             m_programs.push_back(uintProgram);
             const GLuint signedArray = MakeByteArray(kBytes, GL_BYTE);
             ASSERT_EQ(glGetError(), GL_NO_ERROR) << "second pair setup";
-            RecordProperty("program_name_reused", uintProgram == intProgram ? 1 : 0);
-            RecordProperty("vertex_array_name_reused", signedArray == unsignedArray ? 1 : 0);
+            // The case is about the reused names; a fresh name would check nothing it is for.
+            EXPECT_EQ(uintProgram, intProgram) << "the program name was not reused";
+            EXPECT_EQ(signedArray, unsignedArray) << "the vertex array name was not reused";
             EXPECT_EQ(Capture(uintProgram, signedArray, 4), kBytesAsSigned) << "the second pair";
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
             ExpectDriverArraysFitTheirInputs();
@@ -687,20 +686,10 @@ void main()
             ExpectDriverArraysFitTheirInputs();
         }
 
-        // An array in the application's own memory. Only a library-hosted backend reads client
-        // memory at the draw, and only relaxed semantics allow such an array, so the case stops
-        // before its first draw anywhere else.
+        // An array in the application's own memory, as ClientVertexArrayScenario draws one on
+        // every arm.
         TEST_F(NarrowIntegerAttributeScenario, AClientMemoryArrayIsCorrected) {
             if (!Ready()) GTEST_SKIP();
-            const std::string transport = SplitLane::MarkerValue("MOBILEGL_TRANSPORT");
-            if (PeekSplitRuntime().transportResolved || (!transport.empty() && transport != "monolith"))
-                GTEST_SKIP() << "client-memory arrays are drawn only with the backend in this library";
-            GLint profile = 0;
-            glGetIntegerv(GL_CONTEXT_PROFILE_MASK, &profile);
-            if ((profile & GL_CONTEXT_CORE_PROFILE_BIT) != 0 &&
-                AmbientQuirkFromEnvironment("MOBILEGL_RELAXED_SEMANTICS") != AmbientQuirk::On) {
-                GTEST_SKIP() << "a core profile without relaxed semantics has no client-memory arrays";
-            }
             std::string log;
             const GLuint program = BuildCaptureProgram(kSingleInputVertexSource, {"captured"}, &log);
             ASSERT_NE(program, 0u) << log;
@@ -815,6 +804,71 @@ void main()
             glGetVertexAttribiv(0, GL_VERTEX_ATTRIB_ARRAY_INTEGER, &integer);
             EXPECT_EQ(type, GL_UNSIGNED_BYTE);
             EXPECT_EQ(integer, GL_TRUE);
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // A capture program's first draws, matching data then the other signedness, inside one
+        // capture: the program has to be built for both before the capture opens, since nothing
+        // may relink it while it captures.
+        TEST_F(NarrowIntegerAttributeScenario, ACaptureProgramMeetsBothSignednessesInOneCapture) {
+            if (!Ready()) GTEST_SKIP();
+            const long linksBefore = LinksSoFar();
+            std::string log;
+            const GLuint program = BuildCaptureProgram(kSingleInputVertexSource, {"captured"}, &log);
+            ASSERT_NE(program, 0u) << log;
+            m_programs.push_back(program);
+            const GLuint signedArray = MakeByteArray(kBytes, GL_BYTE);
+            const GLuint unsignedArray = MakeByteArray(kLightBytes, GL_UNSIGNED_BYTE);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+
+            std::vector<GLuint> expected = kBytesAsSigned;
+            expected.insert(expected.end(), kLightWords.begin(), kLightWords.end());
+            EXPECT_EQ(Capture(program, signedArray, 8,
+                              [unsignedArray] {
+                                  glDrawArrays(GL_POINTS, 0, 1);
+                                  glBindVertexArray(unsignedArray);
+                                  glDrawArrays(GL_POINTS, 0, 1);
+                              }),
+                      expected);
+            if (linksBefore >= 0) EXPECT_LE(LinksSoFar(), linksBefore + 1) << "the program was relinked";
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+            ExpectDriverArraysFitTheirInputs();
+        }
+
+        // The application relinks the same program object with its input at location 0 turned
+        // from ivec4 into uvec4: what was known about the old link's inputs no longer holds.
+        TEST_F(NarrowIntegerAttributeScenario, ARelinkThatChangesTheInputsSignednessStartsOver) {
+            if (!Ready()) GTEST_SKIP();
+            std::string log;
+            const GLuint program = BuildCaptureProgram(kSingleInputVertexSource, {"captured"}, &log);
+            ASSERT_NE(program, 0u) << log;
+            m_programs.push_back(program);
+            const GLuint unsignedArray = MakeByteArray(kLightBytes, GL_UNSIGNED_BYTE);
+            const GLuint signedArray = MakeByteArray(kBytes, GL_BYTE);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR) << "vertex array setup";
+            EXPECT_EQ(Capture(program, unsignedArray, 4), kLightWords) << "the ivec4 link";
+
+            GLuint attached[4] = {};
+            GLsizei attachedCount = 0;
+            glGetAttachedShaders(program, 4, &attachedCount, attached);
+            for (GLsizei i = 0; i < attachedCount; ++i)
+                glDetachShader(program, attached[i]);
+            const GLuint vertexShader = CompileShader(GL_VERTEX_SHADER, kSingleUintInputVertexSource, &log);
+            ASSERT_NE(vertexShader, 0u) << log;
+            const GLuint fragmentShader = CompileShader(GL_FRAGMENT_SHADER, kFragmentSource, &log);
+            ASSERT_NE(fragmentShader, 0u) << log;
+            glAttachShader(program, vertexShader);
+            glAttachShader(program, fragmentShader);
+            glLinkProgram(program);
+            glDeleteShader(vertexShader);
+            glDeleteShader(fragmentShader);
+            GLint status = GL_FALSE;
+            glGetProgramiv(program, GL_LINK_STATUS, &status);
+            ASSERT_EQ(status, GL_TRUE);
+
+            EXPECT_EQ(Capture(program, signedArray, 4), kBytesAsSigned) << "the uvec4 link, GL_BYTE data";
+            EXPECT_EQ(Capture(program, unsignedArray, 4), kLightWords) << "the uvec4 link, matching data";
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
             ExpectDriverArraysFitTheirInputs();
         }
