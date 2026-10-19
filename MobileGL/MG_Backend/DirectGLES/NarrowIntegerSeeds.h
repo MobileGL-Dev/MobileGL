@@ -25,12 +25,14 @@
 //
 // Every failure falls back to the values the driver gives today: a build whose ESSL lacks either
 // uniform, or whose link dropped one, is "refused" and its draws keep the application's type for
-// 8/16-bit data; a build that fails outright disables arming for the object, and it is rebuilt
-// without the seeds.
+// 8/16-bit data; a build that fails outright disables arming until the application relinks the
+// object, and it is rebuilt without the seeds. A relink is presumed to arm until its build says no.
 namespace MobileGL::MG_Backend::DirectGLES {
     struct NarrowIntegerSeedState {
         Bool wanted = false;
         Bool disabled = false;
+        // The record Serial (the application's link) the last build was for.
+        Uint64 buildSerial = 0;
         // What the last build ran with and what it verified.
         Bool built = false;
         Bool declared = false;
@@ -44,8 +46,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool Target() const { return wanted && !disabled; }
         // The program's next build has to change its arming.
         Bool Stale() const { return Target() != built; }
-        // An armed build that could not give the program working seeds.
-        Bool Refused() const { return disabled || (built && !available); }
+        // An armed build of the link at `serial` that could not give the program working seeds.
+        Bool RefusedAt(Uint64 serial) const { return serial == buildSerial && (disabled || (built && !available)); }
+
+        // Before a build of the link at `serial`: a failure of an earlier link says nothing about
+        // this one, a link without integer inputs has nothing to arm, and a capturing one is armed.
+        void PrepareBuild(Uint64 serial, Bool hasIntegerInputs, Bool captures) {
+            if (serial != buildSerial) {
+                disabled = false;
+                buildSerial = serial;
+            }
+            if (!hasIntegerInputs)
+                wanted = false;
+            else if (captures)
+                wanted = true;
+        }
     };
 
     // The program's 32-bit int and uint vertex inputs, memoized on the record.
@@ -60,6 +75,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // After Use(): the two widths on the program the draw runs, when they differ from what it holds.
     void PushNarrowIntegerWidthsForDraw(const IntegerAttributePlan& plan, MG_Pipe::MGPipeHandle program);
 
+    // PrepareBuild from the record the build is for.
+    void PrepareNarrowIntegerSeedBuild(NarrowIntegerSeedState& state, const MG_Pipe::MGPipeShaderCsoRecord& record);
     // The build's three steps: reset at its start, note each stage's final ESSL, verify after the link.
     void BeginNarrowIntegerSeedBuild(NarrowIntegerSeedState& state);
     void NoteNarrowIntegerSeedSource(NarrowIntegerSeedState& state, const String& source, GLenum shaderType);

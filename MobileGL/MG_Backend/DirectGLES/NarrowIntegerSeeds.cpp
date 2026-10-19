@@ -24,6 +24,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return slot != nullptr ? slot->get() : nullptr;
         }
 
+        // Whether the program's build for `record`'s link refused the seeds; a link not built yet
+        // is presumed to take them.
+        Bool SeedsRefused(MG_Pipe::MGPipeHandle program, const MG_Pipe::MGPipeShaderCsoRecord& record) {
+            auto* twin = ExistingProgramTwin(program);
+            return twin != nullptr && twin->NarrowIntegerSeeds().RefusedAt(record.Serial);
+        }
+
         String UniformDeclaration(const char* name) {
             return String("uniform highp uint ") + name + ";";
         }
@@ -70,16 +77,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (attrib.Enabled && attrib.IsInteger && !attrib.IsLong)
                 data.Note(location, static_cast<DataType>(attrib.Type));
         }
-        auto* twin = ExistingProgramTwin(program);
-        return ResolveIntegerAttributePlan(inputs, data, twin == nullptr || !twin->NarrowIntegerSeeds().Refused());
+        // The twin is looked up only for a plan that needs seeds; most integer draws need none.
+        const IntegerAttributePlan plan = ResolveIntegerAttributePlan(inputs, data, true);
+        return plan.NeedsSeeds() && SeedsRefused(program, *record) ? plan.WithoutSeeds() : plan;
     }
 
     Bool DropRefusedNarrowIntegerSeeds(IntegerAttributePlan& plan, MG_Pipe::MGPipeHandle program) {
         if (!plan.NeedsSeeds()) return false;
-        auto* twin = ExistingProgramTwin(program);
-        if (twin == nullptr || !twin->NarrowIntegerSeeds().Refused()) return false;
+        const MG_Pipe::MGPipeShaderCsoRecord* const record = PipeShaderCsoRecordForHandle(program);
+        if (record == nullptr || !SeedsRefused(program, *record)) return false;
         plan = plan.WithoutSeeds();
         return true;
+    }
+
+    void PrepareNarrowIntegerSeedBuild(NarrowIntegerSeedState& state, const MG_Pipe::MGPipeShaderCsoRecord& record) {
+        const IntegerVertexInputMasks inputs = IntegerVertexInputsOf(record);
+        state.PrepareBuild(record.Serial, (inputs.signedInputs | inputs.unsignedInputs) != 0,
+                           record.Archive && !record.Archive->Link.xfbVaryings.empty());
     }
 
     void PushNarrowIntegerWidthsForDraw(const IntegerAttributePlan& plan, MG_Pipe::MGPipeHandle program) {
@@ -121,7 +135,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void FinishNarrowIntegerSeedBuild(NarrowIntegerSeedState& state, GLuint program, Bool programUsable) {
         if (!state.built) return;
         if (!programUsable) {
-            // The seeds may be why the build failed; the next build goes without them.
+            // The seeds may be why the build failed; the next build of this link goes without them.
             state.disabled = true;
             MGLOG_E_ONCE("DirectGLES: a program built with narrow integer seeds did not link; it is rebuilt "
                          "without them, and its 8/16-bit integer attributes keep the driver's own value");

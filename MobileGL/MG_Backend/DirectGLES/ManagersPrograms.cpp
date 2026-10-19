@@ -1606,7 +1606,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
             // Before either early return below, so Use() can name the GL program of a no-op draw.
             m_frontendProgramId = src.GetExternalIndex();
-            BeginNarrowIntegerSeedBuild(m_narrowIntegerSeeds);
 
             // GetSpirvStatus() as well as GetLinkStatus(): a program whose phase-B job was
             // cancelled (teardown) or whose optimizer run failed is fully linked and fully
@@ -1619,6 +1618,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              src.GetExternalIndex());
                 return;
             }
+            // After the return above, which keeps the previous driver program and the widths it holds.
+            BeginNarrowIntegerSeedBuild(m_narrowIntegerSeeds);
 
             MGLOG_D("Syncing program to backend. State program ID: %u, Backend ID: %u", src.GetExternalIndex(),
                     m_backendProgramId);
@@ -2650,10 +2651,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             // A capture program with integer inputs is armed at its first build, so arming never
             // relinks a program in the middle of a capture (NarrowIntegerSeeds.h).
-            const IntegerVertexInputMasks integerInputs = IntegerVertexInputsOf(*record);
-            if (!record->Archive->Link.xfbVaryings.empty() &&
-                (integerInputs.signedInputs | integerInputs.unsignedInputs))
-                m_narrowIntegerSeeds.wanted = true;
+            PrepareNarrowIntegerSeedBuild(m_narrowIntegerSeeds, *record);
             SyncToBackendFromSource(ProgramArchiveSource::FromRecord(cso, *record));
             // The two server-owned keys the draw path's clean condition reads instead of
             // GetLinkVersion()/GetImageUnitVersion(). BindingsSerial is the second because a

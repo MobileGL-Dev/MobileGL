@@ -14,6 +14,7 @@
 #include <gtest/gtest.h>
 
 #include <MG_Backend/DirectGLES/IntegerAttributePlan.h>
+#include <MG_Backend/DirectGLES/NarrowIntegerSeeds.h>
 
 using namespace MobileGL;
 using MobileGL::MG_Backend::DirectGLES::HeldIntegerRetype;
@@ -21,6 +22,7 @@ using MobileGL::MG_Backend::DirectGLES::IntegerAttribTypeForInput;
 using MobileGL::MG_Backend::DirectGLES::IntegerAttributeDataMasks;
 using MobileGL::MG_Backend::DirectGLES::IntegerAttributePlan;
 using MobileGL::MG_Backend::DirectGLES::IntegerVertexInputMasks;
+using MobileGL::MG_Backend::DirectGLES::NarrowIntegerSeedState;
 using MobileGL::MG_Backend::DirectGLES::ResolveIntegerAttributePlan;
 
 namespace {
@@ -111,4 +113,37 @@ TEST(IntegerAttributePlan, TheIssuedTypeOnlyEverSwapsSignedness) {
         EXPECT_EQ(IntegerAttribTypeForInput(swapped, true), data.glType);
     }
     EXPECT_EQ(IntegerAttribTypeForInput(GL_FLOAT, true), static_cast<GLenum>(GL_FLOAT));
+}
+
+// A program's arming across builds: a failed armed build is retried without the seeds for that
+// link only, and an application relink starts over from what the new link declares.
+TEST(NarrowIntegerSeedState, AFailedArmedBuildLastsUntilTheNextLink) {
+    using MobileGL::MG_Backend::DirectGLES::BeginNarrowIntegerSeedBuild;
+    using MobileGL::MG_Backend::DirectGLES::FinishNarrowIntegerSeedBuild;
+    NarrowIntegerSeedState state;
+    state.PrepareBuild(1, true, false);
+    EXPECT_FALSE(state.wanted) << "a program that does not capture is armed by a draw, not a build";
+    state.wanted = true;
+    BeginNarrowIntegerSeedBuild(state);
+    FinishNarrowIntegerSeedBuild(state, 0, false);
+    EXPECT_TRUE(state.RefusedAt(1));
+    EXPECT_TRUE(state.Stale()) << "the failed link is rebuilt without the seeds";
+
+    state.PrepareBuild(1, true, false);
+    BeginNarrowIntegerSeedBuild(state);
+    EXPECT_FALSE(state.built);
+    EXPECT_TRUE(state.RefusedAt(1));
+    EXPECT_FALSE(state.Stale());
+    EXPECT_FALSE(state.RefusedAt(2)) << "a link not built yet is presumed to take the seeds";
+
+    state.PrepareBuild(2, true, false);
+    EXPECT_FALSE(state.RefusedAt(2));
+    EXPECT_TRUE(state.Target()) << "a relink arms again";
+    EXPECT_TRUE(state.Stale());
+
+    state.PrepareBuild(3, false, false);
+    EXPECT_FALSE(state.wanted) << "a link without integer inputs has nothing to arm";
+    EXPECT_FALSE(state.Target());
+    state.PrepareBuild(4, true, true);
+    EXPECT_TRUE(state.Target()) << "a capturing link is armed at its build";
 }
