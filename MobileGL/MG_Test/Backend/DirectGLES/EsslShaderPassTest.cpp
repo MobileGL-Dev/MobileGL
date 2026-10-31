@@ -1051,7 +1051,7 @@ void main() {}
 
 // Whitespace between '#' and the keyword is legal in GLSL, and a shader carrying several
 // extension directives must have exactly the one retargeted.
-TEST(RetargetTextureBufferExtensionTest, SpacedDirectiveIsRewrittenAndNeighboursAreLeftAlone) {
+TEST(RetargetTextureBufferExtensionTest, SpacedDirectiveIsRewrittenAndNeighborsAreLeftAlone) {
     const String source = R"(#version 310 es
 #  extension GL_EXT_texture_buffer : require
 #extension GL_EXT_shader_io_blocks : require
@@ -1475,7 +1475,7 @@ TEST(PassthroughTessControlEsslTest, RequestsTheExtensionBelowEs32) {
     EXPECT_TRUE(Contains(out, "#extension GL_EXT_tessellation_shader : require")) << out;
 }
 
-TEST(PassthroughTessControlEsslTest, MirrorsTheNeighboursPerVertexBlocks) {
+TEST(PassthroughTessControlEsslTest, MirrorsTheNeighborsPerVertexBlocks) {
     const String inMembers = " highp vec4 gl_Position; highp float gl_PointSize; ";
     const String outMembers = " highp vec4 gl_Position; ";
     const String out = BuildPassthroughTessControlEssl(320, 4, inMembers, outMembers, kDefaultOuter, kDefaultInner);

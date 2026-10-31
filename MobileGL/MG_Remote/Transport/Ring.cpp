@@ -78,7 +78,7 @@ namespace MobileGL::MG_Remote::Transport {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
         // Cursors stay monotonic across the drain - only the generation moves,
-        // so any offset either side cached is now recognisably stale.
+        // so any offset either side cached is now recognizably stale.
         control.ringGeneration.fetch_add(1, std::memory_order_acq_rel);
         return MOBILEGL_OK;
     }
@@ -715,7 +715,7 @@ namespace MobileGL::MG_Remote::Transport {
         mix(inputs.DynamicParamsSize);
         mix(inputs.CapsSize);
         mix(inputs.MemberLayout);
-        mix(inputs.CatalogueLayout);
+        mix(inputs.CatalogLayout);
         mix(inputs.RenderStateLayout);
         mix(inputs.FormatCapabilityTargets);
         mix(inputs.FormatCapabilityFormats);

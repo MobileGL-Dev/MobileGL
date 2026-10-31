@@ -118,7 +118,7 @@ void main() { color = vec4(gl_FragCoord.x, gl_FragCoord.y, gl_FragCoord.z, gl_Fr
 }
 
 // A module without the mode is left alone.
-TEST(LowerPixelCenterInteger, LeavesDefaultCentredModulesUnchanged) {
+TEST(LowerPixelCenterInteger, LeavesDefaultCenteredModulesUnchanged) {
     MobileGL::Initialize();
     const Vector<Uint32> input = CompileFragment(R"(#version 330 core
 out vec4 color;

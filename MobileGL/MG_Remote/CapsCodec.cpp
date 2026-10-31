@@ -446,7 +446,7 @@ namespace MobileGL::MG_Remote {
         inputs.DynamicParamsSize = sizeof(MG_Backend::DynamicBackendParameters);
         inputs.CapsSize = sizeof(MG_Pipe::MGPCaps);
         inputs.MemberLayout = MG_Pipe::kMGPipeWireMemberLayoutDigest;
-        inputs.CatalogueLayout = MG_Pipe::kMGPipeWireCatalogueDigest;
+        inputs.CatalogLayout = MG_Pipe::kMGPipeWireCatalogDigest;
         inputs.RenderStateLayout = MG_Pipe::WireRenderStateDigest();
         inputs.FormatCapabilityTargets = MG_Backend::kFormatCapabilityTargetCount;
         inputs.FormatCapabilityFormats = MG_Backend::kFormatCapabilityFormatCount;

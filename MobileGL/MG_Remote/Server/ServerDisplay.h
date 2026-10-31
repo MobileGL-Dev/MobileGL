@@ -60,7 +60,7 @@ namespace MobileGL::MG_Remote::Server {
         Acquired,
         NoDisplay,   // this process owns no display (HasDisplay() is false)
         NoWindow,    // a display, but no window was attached within the wait
-        Cancelled,   // the caller's cancel predicate said so
+        Canceled,    // the caller's cancel predicate said so
         Interrupted, // Interrupt() (the in-process server is stopping)
         // P14 S2: NOT A BUG ANY MORE. Several sessions share one process and the display's window
         // is one window, so a second ON-SCREEN session asking for it is refused by name here

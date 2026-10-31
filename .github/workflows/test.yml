@@ -1544,7 +1544,7 @@ jobs:
       - name: Spawn/split lane parity (9.2)
         run: python3 scripts/ci/spawn_lane_parity.py "${SPLIT_BUILD_DIR}"
 
-      # P8-A (ID-P8-2): every monolith case, tails normalised, is on a gated split arm or is named
+      # P8-A (ID-P8-2): every monolith case, tails normalized, is on a gated split arm or is named
       # with a reason class in scripts/data/split_coverage_exemptions.txt. The same `ctest -N`
       # cost as the parity step above, and the question it cannot answer: parity compares the
       # split arms with EACH OTHER, so a case missing from all three passes it.
@@ -1553,7 +1553,7 @@ jobs:
           python3 scripts/ci/split_coverage.py --self-test
           python3 scripts/ci/split_coverage.py "${SPLIT_BUILD_DIR}"
 
-      # P8-SE: PipeCatalogueTest's unmigrated-emulation list equals the MGPipeUnmigratedEmulation
+      # P8-SE: PipeCatalogTest's unmigrated-emulation list equals the MGPipeUnmigratedEmulation
       # call sites in the tree, one site per name. A source lint: no build needed.
       - name: Unmigrated-emulation list against its call sites (P8-SE)
         run: |
@@ -3626,7 +3626,7 @@ jobs:
           # an unchecked process substitution.
           # 50 rows per page: the jobs endpoint answers HTTP 502 for 90+ rows on a re-run attempt of a run this size.
           gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=50" \
-            --jq '.jobs[] | select((.name | startswith("retrace (")) or (.name | startswith("retrace verify (")) or (.name | startswith("retrace split (")) or (.name | startswith("retrace shipped library ("))) | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name' \
+            --jq '.jobs[] | select((.name | startswith("retrace (")) or (.name | startswith("retrace verify (")) or (.name | startswith("retrace split (")) or (.name | startswith("retrace shipped library ("))) | select(.conclusion == "failure" or .conclusion == "canceled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name' \
             > "${RUNNER_TEMP}/cleanup-jobs.txt"
           gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
             --jq '.artifacts[] | select(.name | startswith("trace-fixture-") or startswith("retrace-result-") or startswith("retrace-split-result-") or startswith("retrace-shipped-result-")) | [.id, .name] | @tsv' \
@@ -3688,7 +3688,7 @@ jobs:
       # The seven generators all read MG_Pipe/*.def, so regenerating and diffing is what
       # keeps the two interface tables, the wire records, the verify comparators, the
       # PipeInputs field ids, the read-inventory coverage and the render-state member list
-      # from drifting apart from the catalogue. The generated files are committed
+      # from drifting apart from the catalog. The generated files are committed
       # deliberately: the build must not depend on python.
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner

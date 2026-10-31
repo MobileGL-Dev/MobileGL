@@ -128,7 +128,7 @@ DirectVulkan.VerifySplit.SampleMaskScopeScenario.TheAdvertisedSampleMaskWordCoun
 # FRAMEBUFFER COMPLETENESS QUERIES - attach and ask, never render (2)
 # glCheckFramebufferStatus on an attachment of that format. Only the DirectGLES half is
 # here: on DirectVulkan both cases SKIP (the format is not renderable on lavapipe), and a skip is
-# recognised without a name.
+# recognized without a name.
 # --------------------------------------------------------------------------------------------
 DirectGLES.VerifySplit.SnormAttachmentScenario.SignedNormalizedColorAttachmentsReportComplete
 DirectGLES.VerifySplit.ThreeChannelAttachmentScenario.ThreeChannelColorAttachmentsReportComplete

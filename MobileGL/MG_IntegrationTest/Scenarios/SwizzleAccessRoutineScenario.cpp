@@ -47,7 +47,7 @@
 namespace MGITest {
     namespace {
 
-        // The conformance test's own source texel, one recognisable value per channel.
+        // The conformance test's own source texel, one recognizable value per channel.
         constexpr std::uint32_t kSourceTexel[4] = {0x3FFFFFFFu, 0x7FFFFFFFu, 0xBFFFFFFFu, 0xFFFFFFFFu};
 
         constexpr int kOutputWidth = 8;

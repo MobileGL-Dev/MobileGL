@@ -275,7 +275,7 @@ void main()
         // A second draw with a DIFFERENT restart index has to be rewritten again. The substitution
         // stages through one scratch buffer, so a cached or half-restored element-array binding
         // would show up here as the second draw reusing the first one's data.
-        TEST_F(PrimitiveRestartScenario, ChangingTheRestartIndexBetweenDrawsIsHonoured) {
+        TEST_F(PrimitiveRestartScenario, ChangingTheRestartIndexBetweenDrawsIsHonored) {
             if (!Ready()) GTEST_SKIP();
 
             glEnable(GL_PRIMITIVE_RESTART);

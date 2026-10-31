@@ -305,8 +305,8 @@ namespace MobileGL::MG_Remote::Wire {
         }
         // The fast check is used on encode; the doorbell probe only runs while
         // staging or at an unsuccessful wait boundary.
-        Bool Cancelled() const {
-            return m_cancelled || (m_sessionLost && m_sessionLost->load(std::memory_order_acquire));
+        Bool Canceled() const {
+            return m_canceled || (m_sessionLost && m_sessionLost->load(std::memory_order_acquire));
         }
         Bool CheckCancellation();
         void SetStageWaitTimeoutMs(Uint32 timeoutMs) { m_stageWaitTimeoutMs = timeoutMs; }
@@ -373,7 +373,7 @@ namespace MobileGL::MG_Remote::Wire {
         const std::atomic<bool>* m_sessionLost = nullptr;
         CancellationHook m_cancellationHook = nullptr;
         void* m_cancellationSelf = nullptr;
-        Bool m_cancelled = false;
+        Bool m_canceled = false;
         Uint32 m_stageWaitTimeoutMs = 120000;
 
         // P5e (ra): the session's event drain, called around the stage-bell park (§2.6).

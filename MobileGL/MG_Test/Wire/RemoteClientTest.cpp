@@ -394,7 +394,7 @@ TEST(RemoteEmitTable, TheSevenI1SlotsAreClassBAndAreNotTheFatalThunk) {
     // rather than counted, so a table that flipped a DIFFERENT seven is red here and not only
     // in the arithmetic. This case used to compare each slot against a slot that was still
     // class C; since P10 B there is none left to compare against, so the class is decided
-    // behaviourally by EachI1SlotReachesRequireSessionUnderItsOwnName below and this case keeps
+    // behaviorally by EachI1SlotReachesRequireSessionUnderItsOwnName below and this case keeps
     // the pointer facts that need no fork.
     const MG_Backend::GlobalBackendFunctionsTable& table = RemoteEmitTable();
     const void* const i1[] = {
@@ -1438,7 +1438,7 @@ TEST(RemoteReadback, ABandedScatterWritesExactlyTheBytesTheWholeScatterWrites) {
 // =====================================================================================
 
 TEST(PipeRouting, TheTablesAreInstalledWithoutAnybodyHavingRememberedTo) {
-    // The gate on the install MECHANISM rather than on the table contents (PipeCatalogueTest
+    // The gate on the install MECHANISM rather than on the table contents (PipeCatalogTest
     // owns the partition). Nothing in this file calls an installer; the tables are installed
     // because MG_Pipe/PipeRoute.h's inline variable is in this binary, which is the property
     // that a static initializer inside PipeRoute.cpp did NOT have - the linker dropped that
@@ -1521,7 +1521,7 @@ TEST(PipeRouting, AnErrorStatusIsNotFoldedIntoAcceptedOrRefused) {
 
 namespace {
     // How many function-pointer cells of `a` differ from `b`, walked as a block of void* -
-    // the structs ARE their function pointers (PipeCatalogueTest static_asserts that shape). A
+    // the structs ARE their function pointers (PipeCatalogTest static_asserts that shape). A
     // routed row that stayed on the monolith adapter reads EQUAL and is not counted, which is
     // exactly the defect this measures.
     template <class T>
@@ -1536,7 +1536,7 @@ namespace {
 } // namespace
 
 TEST(PipeRouting, TheInstalledClientArmIsWireAndNotMonolithAndEveryRoutedRowMoved) {
-    // WHAT B3 SAYS IS MISSING. PipeCatalogueTest installs and COUNTS the monolith table, so a
+    // WHAT B3 SAYS IS MISSING. PipeCatalogTest installs and COUNTS the monolith table, so a
     // client row that was never overwritten stays non-null and still counts - deleting one
     // `gMGPipe*.X = &Wire_X` assignment left every gate green (the cross-family verifier
     // reproduced it: catalog 32/32, all lanes green). The only thing that catches it is
@@ -3171,13 +3171,13 @@ TEST(RemoteRunAhead, ARepublishedServerWindowExtentResizesTheServerOwnedSurfaceA
         republish();
         if (ClientSessionInstance().DrainPublishedEvents() < 1u) ::_exit(92);
         if (query(EGL_WIDTH) != 2560 || query(EGL_HEIGHT) != 1600) ::_exit(93);
-        const IntVec3 colour =
+        const IntVec3 color =
             static_cast<MG_State::GLState::TextureObject2D*>(defaultFramebuffer->colorAttachment.get())
                 ->GetMipmapTexelSize(TextureUploadTarget::Texture2D, 0);
         const IntVec3 depth =
             static_cast<MG_State::GLState::TextureObject2D*>(defaultFramebuffer->depthAttachment.get())
                 ->GetMipmapTexelSize(TextureUploadTarget::Texture2D, 0);
-        if (colour.x() != 2560 || colour.y() != 1600 || depth.x() != 2560 || depth.y() != 1600) ::_exit(94);
+        if (color.x() != 2560 || color.y() != 1600 || depth.x() != 2560 || depth.y() != 1600) ::_exit(94);
 
         // A format-only event (a pbuffer's, a client-named window's) says nothing about the size.
         s_info.Width = 0;

@@ -198,11 +198,11 @@ void main()
 
         const Image image = ReadPixels(kExtent, kExtent);
         ASSERT_FALSE(image.Empty());
-        const Rgba8 centre = image.At(kExtent / 2, kExtent / 2);
-        const int red = static_cast<int>(centre.r);
+        const Rgba8 center = image.At(kExtent / 2, kExtent / 2);
+        const int red = static_cast<int>(center.r);
         const bool blended = red > 100 && red < 160;
         const bool declined = red > 245;
-        EXPECT_TRUE(blended || declined) << "got " << centre
+        EXPECT_TRUE(blended || declined) << "got " << center
                                          << ", which is neither the dual-source blend (~128) nor the declined "
                                          << "straight-through source (255) - the SRC1 factors were mistranslated";
         Gl().EndFrame();
@@ -227,9 +227,9 @@ void main()
 
         const Image image = ReadPixels(kExtent, kExtent);
         ASSERT_FALSE(image.Empty());
-        const Rgba8 centre = image.At(kExtent / 2, kExtent / 2);
-        EXPECT_GT(static_cast<int>(centre.r), 245)
-            << "got " << centre << ": blending is disabled, so the source has to be written straight through";
+        const Rgba8 center = image.At(kExtent / 2, kExtent / 2);
+        EXPECT_GT(static_cast<int>(center.r), 245)
+            << "got " << center << ": blending is disabled, so the source has to be written straight through";
         Gl().EndFrame();
     }
 

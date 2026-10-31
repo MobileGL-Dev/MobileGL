@@ -504,7 +504,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // a real FramebufferObject for framebuffer 0, so a null test can never see this - the
             // object is always there, and framebuffer 0 has to be recognized by identity instead,
             // the same comparison DrawBuffers_State makes. Without this an attach onto the default
-            // framebuffer silently REPLACED its color attachment, permanently desynchronising it
+            // framebuffer silently REPLACED its color attachment, permanently desynchronizing it
             // from what the swapchain keeps publishing.
             const auto& defaultFramebufferInfo = FramebufferImpl::pDefaultFramebufferInfo;
             if (!framebufferObject ||

@@ -237,7 +237,7 @@ endif()
 #   * it carries none of the three MGPipe Fatals: Fatal{PipeVerifyDiffer (a push/pull divergence,
 #     the thing the mode exists to find), Fatal{UnmigratedPipeInput (a backend read of a field the
 #     verb's fill table does not list - fixed by adding the row to MG_Pipe/FillPoints.def, never by
-#     marking the field sticky), and Fatal{PipeVerifyBadKnob (a misspelt MOBILEGL_PIPE_VERIFY_CORRUPT).
+#     marking the field sticky), and Fatal{PipeVerifyBadKnob (a misspelled MOBILEGL_PIPE_VERIFY_CORRUPT).
 #     The third is in the regex on purpose even though D2 makes it
 #     abort the process: with MOBILEGL_PIPE_VERIFY_FATAL=0 the abort is exactly what does not
 #     happen, and a typo'd knob would otherwise leave the negative-control lane looking healthy.
@@ -285,7 +285,7 @@ if(DEFINED ENV{MOBILEGL_PIPE_VERIFY} AND NOT "$ENV{MOBILEGL_PIPE_VERIFY}" STREQU
                     "MOBILEGL_PIPE_VERIFY. Fatal{PipeVerifyDiffer, \"<Field>@<Verb>\"} is a real push/pull "
                     "divergence and is recorded, not silenced; Fatal{UnmigratedPipeInput, \"<Field>@<Verb>\"} "
                     "is a missing row in MG_Pipe/FillPoints.def's class table - add it, regenerate, rerun "
-                    "(never mark the field sticky); Fatal{PipeVerifyBadKnob, ...} is a misspelt "
+                    "(never mark the field sticky); Fatal{PipeVerifyBadKnob, ...} is a misspelled "
                     "MOBILEGL_PIPE_VERIFY_CORRUPT - fix the spelling, the vocabulary is "
                     "kMGPipeInputFieldNames[].")
         endif()
@@ -502,7 +502,7 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
                     "${split_case}: ${split_floor_count} MGWIRE-FLOOR unsound-serial-complete line(s) under "
                     "MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT}. The completed-frame-serial floor was "
                     "raised to a serial an in-flight submission still carries, so a streamed buffer write "
-                    "can take the unsynchronised host path over bytes that submission is still copying "
+                    "can take the unsynchronized host path over bytes that submission is still copying "
                     "(magma-b3.md §2). The clamp in VulkanRenderer::OnSubmitsCompletedUpTo is what makes "
                     "this unreachable; a line here means it was removed or bypassed.")
         endif()

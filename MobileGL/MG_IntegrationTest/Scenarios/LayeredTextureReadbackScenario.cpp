@@ -56,7 +56,7 @@ namespace MGITest {
         constexpr int kCubeLayerFaces = 12; // two cubes, which is what the conformance case uses
         // A value no store writes, so "the store never landed" and "the store wrote the wrong
         // thing" cannot be confused - and so a readback served from the stale CPU shadow is
-        // recognisable on sight.
+        // recognizable on sight.
         constexpr GLuint kSeed = 0xFEEDBEEFu;
         // Deliberately not 0: the unit has to travel through glUniform1i and be baked into the
         // generated ESSL, so a defect there cannot hide behind the default.

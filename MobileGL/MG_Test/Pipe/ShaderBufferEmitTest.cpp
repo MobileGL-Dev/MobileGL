@@ -276,7 +276,7 @@ namespace {
     // bounded by GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, which is a DEVICE number and is exactly
     // what ruling 10 says the client must not pre-clamp the WIRE to. The wire-field half - that
     // the mask reaches point 83 at all - is driven through the applier below, where the window
-    // is 84 by construction, and pinned again in PipeCatalogueTest.
+    // is 84 by construction, and pinned again in PipeCatalogTest.
     TEST(ShaderBufferEmit, OnlyTheWritableClassesSetAMaskAndItReachesTheLastPoint) {
         EmitterScope scope;
         GLint storageBindings = 0;

@@ -330,7 +330,7 @@ namespace MobileGL::MG_Pipe {
             // P5e (pg): NO ARCHIVE ON THIS ARM, and the null is the arm selection rather than a
             // hole. Under monolith the two companion pointers ARE the frontend's own archive,
             // the backend twin reads it through its frontend overload (ruling 1 keeps that arm
-            // token for token), and serializing here to deserialise into the record would put
+            // token for token), and serializing here to deserialize into the record would put
             // EncodeProgramArtifacts on the monolith path - which PipeRoute.h's escape note
             // and PipeApply.h both promise it is not.
             MGPipeApplyCreateShaderState(*desc, link, spirv, nullptr);

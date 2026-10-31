@@ -637,7 +637,7 @@ namespace MobileGL::MG_Pipe {
         // there is no spare byte and a fifth one costs the alignment slack below. It is paid
         // once, on a record that fires at most once per link, and it is confined to the push
         // build (this payload is only ever instantiated under MOBILEGL_PIPE_PUSH), which is
-        // why G1 does not see it. PipeCatalogueTest pins the new size.
+        // why G1 does not see it. PipeCatalogTest pins the new size.
         Uint8 LinkStatus;
         Uint8 Pad0[7];
         MGPBlobRef Spirv[6]; // per stage
@@ -1048,7 +1048,7 @@ namespace MobileGL::MG_Pipe {
     // view the application wrote directly (the verify comparator covers it, and the
     // emission-side suppressor compares the three views, not it). This is the catalog's
     // second payload-size amendment after P5b's MGPCopyRegion 64 -> 72 (CONTRACT-P5C.md §7.6):
-    // 24 -> 56 bytes, and PipeCatalogueTest pins the new size.
+    // 24 -> 56 bytes, and PipeCatalogTest pins the new size.
     struct MGPAttribValue {
         Uint32 Location;
         Uint8 ValueClass; // Float | Int | Uint | Double
@@ -1240,8 +1240,8 @@ namespace MobileGL::MG_Pipe {
     // need an acknowledgment, and this decides. Only an immutable buffer (glBufferStorage) is a
     // synchronous allocation; glBufferData is not. glTexStorage* also sets Immutable, but texture
     // and renderbuffer storage is allocated lazily at sync time, so neither may ack
-    // (ARCHITECTURE.md §8.3). PipeCatalogue.ResourceRespecifyAcksOnlyImmutableStorage
-    // (PipeCatalogueTest.cpp) is the negative control against widening it.
+    // (ARCHITECTURE.md §8.3). PipeCatalog.ResourceRespecifyAcksOnlyImmutableStorage
+    // (PipeCatalogTest.cpp) is the negative control against widening it.
     inline Bool MGPipeResourceRespecifyNeedsAck(const MGPResourceDesc& desc) {
         return desc.Immutable != 0 && desc.Target == kMGPipeResourceTargetBuffer;
     }

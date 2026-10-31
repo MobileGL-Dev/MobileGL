@@ -1209,7 +1209,7 @@ void main() { color = value; }
         if (Gl().BackendName() != "DirectVulkan") GTEST_SKIP() << "Magma short-UBO compatibility policy";
         Attach(GL_RGBA8);
         const char* fragment = R"(#version 430 core
-layout(std140, binding=3) uniform ShortColour { vec4 value; vec4 tail; };
+layout(std140, binding=3) uniform ShortColor { vec4 value; vec4 tail; };
 layout(location=0) out vec4 color;
 void main() { color = value + tail; }
 )";
@@ -1265,7 +1265,7 @@ void main() { color = value + tail; }
         if (Gl().BackendName() != "DirectVulkan") GTEST_SKIP() << "Magma short-UBO compatibility policy";
         Attach(GL_RGBA8);
         const char* fragment = R"(#version 430 core
-layout(std140, binding=3) uniform ShortColour { vec4 value; vec4 tail; };
+layout(std140, binding=3) uniform ShortColor { vec4 value; vec4 tail; };
 layout(location=0) out vec4 color;
 void main() { color = value + tail; }
 )";
@@ -2136,17 +2136,16 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
             for (int layer = 0; layer < 2; ++layer)
                 for (int y = 0; y < 8; ++y)
                     for (int x = 0; x < 8; ++x) {
-                        const auto colour = layer == 0 ? InPlaceQuadrant(x, y) : kInPlaceMagenta;
+                        const auto color = layer == 0 ? InPlaceQuadrant(x, y) : kInPlaceMagenta;
                         const size_t at = (static_cast<size_t>(layer) * 64 + y * 8 + x) * 4;
-                        std::copy(colour.begin(), colour.end(), level0.begin() + at);
+                        std::copy(color.begin(), color.end(), level0.begin() + at);
                     }
             glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 8, 8, 2, GL_RGBA, GL_UNSIGNED_BYTE, level0.data());
             std::vector<GLubyte> level1(4 * 4 * 2 * 4);
             for (int layer = 0; layer < 2; ++layer)
                 for (int at = 0; at < 16; ++at) {
-                    const auto colour = layer == 0 ? kInPlaceCyan : kInPlaceWhite;
-                    std::copy(colour.begin(), colour.end(),
-                              level1.begin() + (static_cast<size_t>(layer) * 16 + at) * 4);
+                    const auto color = layer == 0 ? kInPlaceCyan : kInPlaceWhite;
+                    std::copy(color.begin(), color.end(), level1.begin() + (static_cast<size_t>(layer) * 16 + at) * 4);
                 }
             glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 1, 0, 0, 0, 4, 4, 2, GL_RGBA, GL_UNSIGNED_BYTE, level1.data());
             return name;

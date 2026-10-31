@@ -123,7 +123,7 @@ namespace MobileGL::MG_Pipe {
     // NOT a subsystem, a BEHAVIOR: turn OFF client-side content addressing of CSOs, so
     // every pipeline-version change mints a fresh CSO and the map is never probed. This is
     // the negative control the whole CSO design is measured against (ROADMAP.md P2).
-    inline constexpr Uint64 kMGPipeBehaviourNoCsoContentAddressing = 1ull << 63;
+    inline constexpr Uint64 kMGPipeBehaviorNoCsoContentAddressing = 1ull << 63;
     // The default of a push build with the knob unset (ConfigLoader.cpp). Each phase's
     // constant STAYS, because it is the A/B control for the phase after it: P3a's
     // "everything P2 had and nothing of mine" arm is spelled MOBILEGL_PIPE_PUSH=0x7f.

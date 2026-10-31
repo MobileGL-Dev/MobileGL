@@ -239,7 +239,7 @@ INTERRUPTED=""
 note_interrupt() { [ -n "$INTERRUPTED" ] || INTERRUPTED=$1; }
 # 128 + signal number is how a shell reports a child that died on a signal; nothing this script
 # runs exits above 128 for any other reason (ctest uses 8 for failing tests).
-child_was_signalled() { [ "${1:-0}" -ge 128 ]; }
+child_was_signaled() { [ "${1:-0}" -ge 128 ]; }
 trap 'note_interrupt INT; repair; trap - INT; kill -INT $$' INT
 trap 'note_interrupt TERM; repair; trap - TERM; kill -TERM $$' TERM
 # The EXIT trap covers the paths that leave through an early `exit` with a header still patched
@@ -381,7 +381,7 @@ PY
   say "[$tag] rebuilding with the dropped field"
   cmake --build "$BUILD_DIR" -j "$(nproc)" </dev/null > "$LOG_DIR/build-after-$tag.log" 2>&1
   buildRc=$?
-  if child_was_signalled "$buildRc" || [ -n "$INTERRUPTED" ]; then
+  if child_was_signaled "$buildRc" || [ -n "$INTERRUPTED" ]; then
     note_interrupt "exit $buildRc"
     say "[$tag] INTERRUPTED during the rebuild ($INTERRUPTED). Repairing the tree and stopping:"
     say "a run that carried on here would report a verdict about a control that never ran."
@@ -408,7 +408,7 @@ PY
   ctest --test-dir "$BUILD_DIR" -R "$test" --no-tests=error --output-on-failure </dev/null \
        > "$LOG_DIR/ctest-after-$tag.log" 2>&1
   ctestRc=$?
-  if child_was_signalled "$ctestRc" || [ -n "$INTERRUPTED" ]; then
+  if child_was_signaled "$ctestRc" || [ -n "$INTERRUPTED" ]; then
     note_interrupt "exit $ctestRc"
     say "[$tag] INTERRUPTED while running $test ($INTERRUPTED). A suite that was killed is not a"
     say "suite that went red: repairing the tree and stopping rather than scoring the control."

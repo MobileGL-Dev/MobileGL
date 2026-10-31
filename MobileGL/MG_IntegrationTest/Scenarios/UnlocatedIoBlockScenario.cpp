@@ -330,7 +330,7 @@ void main()
 
             // Clears to BLUE, so "the draw painted nothing" is a color of its own rather
             // than something that could be mistaken for a zeroed payload.
-            Rgba8 DrawAndReadCentre(GLuint program) const {
+            Rgba8 DrawAndReadCenter(GLuint program) const {
                 glViewport(0, 0, Gl().Width(), Gl().Height());
                 glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT);
@@ -413,10 +413,10 @@ void main()
                              << Gl().BackendName() << ", so there is no block to carry through: " << BuildLog();
             }
 
-            const Rgba8 centre = DrawAndReadCentre(program);
+            const Rgba8 center = DrawAndReadCenter(program);
             EXPECT_EQ(FirstGLError(), 0u);
-            EXPECT_TRUE(IsGreen(centre)) << "a four-boundary interface-block chain did not deliver its payload: "
-                                         << centre
+            EXPECT_TRUE(IsGreen(center)) << "a four-boundary interface-block chain did not deliver its payload: "
+                                         << center
                                          << " (blue: nothing drew; red: the plain varying was lost too; black: a block "
                                             "member arrived wrong, i.e. the interface stopped matching)";
         }
@@ -438,9 +438,9 @@ void main()
                                       "desktop GLSL, but the program did not build: "
                                    << BuildLog();
 
-            const Rgba8 centre = DrawAndReadCentre(program);
+            const Rgba8 center = DrawAndReadCenter(program);
             EXPECT_EQ(FirstGLError(), 0u);
-            EXPECT_TRUE(IsGreen(centre)) << "the renamed-and-unlocated interface chain lost its payload: " << centre;
+            EXPECT_TRUE(IsGreen(center)) << "the renamed-and-unlocated interface chain lost its payload: " << center;
         }
 
         // THE ONE CASE THAT CAN FAIL WHEN THE REPAIR SILENTLY STOPS BEING ARMED.
@@ -498,9 +498,9 @@ void main()
             }
             // Drawn as well as built, so a stack that defers its backend program to first use
             // still reaches the transpile this is asserting about.
-            const Rgba8 centre = DrawAndReadCentre(program);
+            const Rgba8 center = DrawAndReadCenter(program);
             EXPECT_EQ(FirstGLError(), 0u);
-            EXPECT_TRUE(IsGreen(centre)) << "the pinned-on lane did not even render correctly: " << centre;
+            EXPECT_TRUE(IsGreen(center)) << "the pinned-on lane did not even render correctly: " << center;
 
             const std::string appended = LibraryLogSince(before);
             EXPECT_NE(appended.find("WITHOUT their layout(location) qualifier"), std::string::npos)

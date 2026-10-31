@@ -669,7 +669,7 @@ def expand_macros(masked, expandable, rounds=4):
     return text
 
 
-def unmodelled_sites(body, relative, pasting):
+def unmodeled_sites(body, relative, pasting):
     """The preprocessor constructs in `body` this script does NOT model, as taint reasons:
     a token paste it could not expand, and a call to a pasting macro it refused."""
     sites = set()
@@ -954,14 +954,14 @@ def state_bodies():
             body = expanded[start:end]
             bodies.setdefault(fn, []).append(body)
             signatures.setdefault(fn, []).append(params)
-            sites = unmodelled_sites(body, relative, pasting)
+            sites = unmodeled_sites(body, relative, pasting)
             if sites:
                 taints.setdefault(fn, set())
                 taints[fn] |= sites
     return bodies, signatures, taints, paths
 
 
-def writers_outside(analysed):
+def writers_outside(analyzed):
     """{MEM token: a file OUTSIDE the analyzed roots that writes it}.
 
     The absence claim is only as good as the set of writers the analysis reads. Every .h/.cpp
@@ -976,7 +976,7 @@ def writers_outside(analysed):
     This scan is textual and file-wide: it sees a direct member write and a member-rooted
     one, not a write through a reference or a mutating call. It is the containment check for
     code the analysis does not read, and that is the limit of what it can say."""
-    seen = set(analysed)
+    seen = set(analyzed)
     out = {}
     for path in source_files(MOBILEGL_ROOT):
         if path in seen:
@@ -1541,7 +1541,7 @@ void Fixture::WriteWholeMember(const RenderStateParameters& fresh) {
 """
 
 
-def analyse_snippet(text):
+def analyze_snippet(text):
     """{function name: (tokens, taints)} for a synthetic source text, through the same
     extractor the real tree goes through (no macros: the text has none)."""
     masked = mask_comments_and_strings(text)
@@ -1710,7 +1710,7 @@ def self_test(scanned, bits, publishers, movers, moved, outside=None, undecided_
     #        shutter reads", said about a body that writes m_parameters through a range-for
     #        reference; the collapse that followed was every setter "supporting" the patch
     #        bit because the shutter resolved to the whole struct.
-    snippet = analyse_snippet(SELF_TEST_BODIES)
+    snippet = analyze_snippet(SELF_TEST_BODIES)
     patch_shutter = {"MEM:m_parameters", "FIELD:m_parameters.PatchVertices",
                      "FIELD:m_parameters.PatchDefaultOuterLevel",
                      "FIELD:m_parameters.PatchDefaultInnerLevel"}
@@ -1912,9 +1912,9 @@ def main():
     publishers = render_state_publishers()
     if not publishers:
         sys.exit("could not derive any RenderState setter out of %s" % RENDER_STATE_PATH)
-    bodies, signatures, taints, analysed = state_bodies()
+    bodies, signatures, taints, analyzed = state_bodies()
     reach, own_taints = written_tokens(bodies, signatures, taints)
-    outside = writers_outside(analysed)
+    outside = writers_outside(analyzed)
     aggregates = aggregate_tokens(bodies, reach)
     moved = {name: expand_aggregates(tokens, aggregates) for name, tokens in reach.items()}
     readers = shutter_readers()
@@ -1969,7 +1969,7 @@ def main():
               "written outside those roots and any absence claim over one is undecided; a "
               "mutating call on a member-rooted lvalue and a call resolved by name both only "
               "WIDEN what a mutator is credited with, and a FIELD token is not scoped to a type"
-              % (sum(len(v) for v in bodies.values()), len(analysed),
+              % (sum(len(v) for v in bodies.values()), len(analyzed),
                  " + ".join(os.path.relpath(root, REPO_ROOT).replace(os.sep, "/")
                             for root in STATE_ROOTS),
                  len(own_taints),

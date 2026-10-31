@@ -514,7 +514,7 @@ TEST_F(FieldOwnershipTest, AServerStampMakesRecordSuppliedFieldsFreshAndWithdraw
 // whatever the serial says - but it tests "never filled" FIRST, so the stamp's withdrawal
 // (FilledGen = 0) wins over kMGPipeInputFieldSticky without a line of the generated file
 // changing. Before this, the seven most dangerous fields were exempt by construction.
-TEST_F(FieldOwnershipTest, TheStickyExemptionIsCancelledByTheServerStamp) {
+TEST_F(FieldOwnershipTest, TheStickyExemptionIsCanceledByTheServerStamp) {
     MGPipeValidateForVerb(MGPipeVerb::Clear); // the CLIENT fills and stamps all 63, sticky included
     EXPECT_TRUE(MGPipeInputFieldIsFresh(gPipeInputs->FilledState(), MGPipeInputField::RecordError));
     MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);

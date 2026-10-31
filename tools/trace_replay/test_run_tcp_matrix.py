@@ -267,7 +267,7 @@ class MatrixTests(unittest.TestCase):
         case=matrix.select_cases(self.manifest,None,[backend])[0]
         return matrix.plan_case(case,backend,catalog,self.plan_args(),{})
 
-    def test_selection_honours_per_case_backends_and_names_an_impossible_pairing(self):
+    def test_selection_honors_per_case_backends_and_names_an_impossible_pairing(self):
         self.write_inputs(extra_cases=[dict(self.VULKAN_ONLY,name='VulkanOnly'),
                                        dict(self.GLES_ONLY,name='GlesOnly')])
         # The default subset is every split case; the per-backend filter happens in main(),

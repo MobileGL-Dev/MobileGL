@@ -428,7 +428,7 @@ void main (void)
             glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, captureBuffer);
             glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-            // The pre-fill that makes "nothing was captured" recognisable.
+            // The pre-fill that makes "nothing was captured" recognizable.
             std::vector<float> prefill(storeFloats);
             for (unsigned i = 0; i < storeFloats; ++i) {
                 prefill[i] = -1.0f - static_cast<float>(i);

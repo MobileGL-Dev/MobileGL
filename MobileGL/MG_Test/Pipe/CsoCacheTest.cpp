@@ -108,7 +108,7 @@ namespace {
     // off the PROBE and the handle reuse, not the records - otherwise it would measure a
     // different design rather than this one without content addressing.
     TEST_F(CsoCacheTest, ContentAddressingOffMintsEveryTime) {
-        MG_Config::Features.PipePush |= kMGPipeBehaviourNoCsoContentAddressing;
+        MG_Config::Features.PipePush |= kMGPipeBehaviorNoCsoContentAddressing;
         MGPipeCsoCache cache;
         Uint64 bytes = 0;
         const RenderStateParameters params = PipelineState(3);

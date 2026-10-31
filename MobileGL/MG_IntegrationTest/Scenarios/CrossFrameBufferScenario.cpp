@@ -579,7 +579,7 @@ void main() {
             const std::vector<Vertex> allRed = SceneVertices(/*leftQuadIsGreen=*/false);
             const GLsizeiptr leftQuadBytes = GLsizeiptr(kLeftQuadVertexCount * sizeof(Vertex));
 
-            int centreSampleMissed = 0;
+            int centerSampleMissed = 0;
             std::string missedVertices;
             for (int staleVertex = 0; staleVertex < kLeftQuadVertexCount; ++staleVertex) {
                 // Every left-quad vertex turns green except this one.
@@ -608,21 +608,21 @@ void main() {
 
                 // What the old two-pixel form of ExpectHalves would have concluded.
                 if (std::strcmp(image.ColorName(w / 4, h / 2), "green") == 0) {
-                    ++centreSampleMissed;
+                    ++centerSampleMissed;
                     if (!missedVertices.empty()) missedVertices += ",";
                     missedVertices += std::to_string(staleVertex);
                 }
             }
 
-            EXPECT_GT(centreSampleMissed, 0)
+            EXPECT_GT(centerSampleMissed, 0)
                 << "no single-vertex staleness was invisible to a center sample, so this negative control "
                 << "is no longer demonstrating anything - re-derive it before trusting it";
-            if (centreSampleMissed > 0) {
-                RecordProperty("centre_sample_blind_to_stale_vertices", missedVertices);
+            if (centerSampleMissed > 0) {
+                RecordProperty("center_sample_blind_to_stale_vertices", missedVertices);
                 std::fprintf(stderr,
                              "[itest] whole-region scan caught all %d single-stale-vertex cases; a center "
                              "sample alone was blind to %d of them (vertices %s)\n",
-                             kLeftQuadVertexCount, centreSampleMissed, missedVertices.c_str());
+                             kLeftQuadVertexCount, centerSampleMissed, missedVertices.c_str());
             }
             EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
         }

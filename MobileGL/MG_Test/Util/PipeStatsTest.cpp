@@ -347,7 +347,7 @@ namespace {
 
         PS::AdvanceSummaryWindow();
         // And it obeys the file's LABEL rule, not a rule of its own: the new window has no
-        // Present in it, so the bracket is relabelled "bytes[" and `seg` carries the window
+        // Present in it, so the bracket is relabeled "bytes[" and `seg` carries the window
         // TOTAL verbatim rather than a figure divided by a faked frame count. That is the same
         // rule the bytes[] bracket follows and the same one the two window-total tests below
         // pin; asserting "seg=0.00" here is what the first cut of this case did, and it was
@@ -488,7 +488,7 @@ namespace {
         EXPECT_EQ(PS::FrameCount(), 0u);
         EXPECT_NE(line.find("window=0"), String::npos) << line;
         EXPECT_NE(line.find("draws/f=n/a"), String::npos) << line;
-        // The bracket is relabelled rather than divided: totals, and marked as totals.
+        // The bracket is relabeled rather than divided: totals, and marked as totals.
         EXPECT_EQ(line.find("bytes/f["), String::npos) << line;
         EXPECT_NE(line.find("bytes[buf=1404550"), String::npos) << line;
     }

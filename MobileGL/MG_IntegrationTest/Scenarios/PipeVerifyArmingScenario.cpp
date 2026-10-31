@@ -189,10 +189,10 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                 glBindVertexArray(0);
                 glDeleteBuffers(1, &vbo);
                 glDeleteVertexArrays(1, &vao);
-                m_centre = pixel;
+                m_center = pixel;
             }
 
-            Rgba8 m_centre{};
+            Rgba8 m_center{};
         };
 
         // THE CASE THAT FAILS A LANE WHOSE LIBRARY NEVER ARMED.

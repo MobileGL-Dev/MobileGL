@@ -13,7 +13,7 @@
 // set_dispatch_program and set_global_constants. create_shader_state is emitted from the
 // GetProgramForDraw() / GetProgramForDispatch() join the verb makes anyway; the tracker's
 // shutter reads GetCurrentProgram() so asking "did the shader move" never forces a compile.
-// The record carries the artifacts only; the server specialises at the verb for the draw-FBO
+// The record carries the artifacts only; the server specializes at the verb for the draw-FBO
 // clamp masks, fragColor broadcast, storage-block bindings, atomic counters, image formats and
 // patch parameters (ARCHITECTURE.md §7). In monolith the artifacts ride beside the record as
 // companion pointers with Size 0 blob refs, so the codec runs only in the verify build.

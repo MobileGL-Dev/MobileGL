@@ -145,7 +145,7 @@ namespace MobileGL {
         // ORDER is the fix - not a wait, and not a friendlier default mask.
         //
         // MG_State::Init() constructs GLContext, and GLContext's TextureState constructor
-        // materialises one default texture object per target (GL 3.3 core 3.8,
+        // materializes one default texture object per target (GL 3.3 core 3.8,
         // TextureState.cpp:62-71). TextureObjectBase's constructor emits resource_create for
         // every one of them (TextureState/TextureObject.cpp:168-169), and that emission is
         // gated, through PipeFill's FamilyIsLive, on

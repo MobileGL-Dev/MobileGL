@@ -1324,7 +1324,7 @@ TEST_F(FramebufferTest, PolygonOffsetFallsBackToTheUnclampedEntryPointWithoutThe
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
-TEST_F(FramebufferTest, ApplicationAlphaMaskOffIsStillHonouredOnANativeDrawBuffer) {
+TEST_F(FramebufferTest, ApplicationAlphaMaskOffIsStillHonoredOnANativeDrawBuffer) {
     // The doctoring only ever REMOVES alpha writes on a widened buffer; it must never add them
     // back on a buffer the application masked itself, and must never touch a native one.
     ScopedRenderStateDriverStubs driver;
@@ -1513,7 +1513,7 @@ TEST_F(FramebufferTest, FramebufferTextureRejectsTheDefaultFramebuffer) {
     DrainPendingGlErrors();
 }
 
-TEST_F(FramebufferTest, FramebufferTextureRejectsAColourAttachmentPastTheLimit) {
+TEST_F(FramebufferTest, FramebufferTextureRejectsAColorAttachmentPastTheLimit) {
     GLuint framebuffer = 0;
     GLuint texture = 0;
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);

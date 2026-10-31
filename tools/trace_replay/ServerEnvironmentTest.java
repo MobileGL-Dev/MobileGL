@@ -105,19 +105,19 @@ public final class ServerEnvironmentTest {
         // ---- P11 B1: the apply core the supervisor announces and the broker relays ---------------------
         // The native policy is the one source; the service only reads the supervisor's start-up line.
         expect("the announcement as the supervisor prints it",
-                ServerEnvironment.parseReservedApplyCore("MG_Remote server: apply core reserved for dialled-in "
+                ServerEnvironment.parseReservedApplyCore("MG_Remote server: apply core reserved for dialed-in "
                         + "shared-segment clients: 0x40 (auto: the lowest of the prime cores, the rest left to the "
-                        + "dialled-in shared-segment client)"), 0x40L);
+                        + "dialed-in shared-segment client)"), 0x40L);
         expect("none reserved is 0, not absent",
-                ServerEnvironment.parseReservedApplyCore("MG_Remote server: apply core reserved for dialled-in "
+                ServerEnvironment.parseReservedApplyCore("MG_Remote server: apply core reserved for dialed-in "
                         + "shared-segment clients: 0x0 (auto: unpinned - no asymmetric big/prime topology to split)"), 0L);
         expect("a 64-bit mask", ServerEnvironment.parseReservedApplyCore(
-                "MG_Remote server: apply core reserved for dialled-in shared-segment clients: 0x8000000000000000 (x)"),
+                "MG_Remote server: apply core reserved for dialed-in shared-segment clients: 0x8000000000000000 (x)"),
                 Long.MIN_VALUE);
         expect("any other supervisor line is not the announcement",
                 ServerEnvironment.parseReservedApplyCore("MG_Remote server: pid=12 listening on @x"), -1L);
         expect("a truncated announcement is not one",
-                ServerEnvironment.parseReservedApplyCore("MG_Remote server: apply core reserved for dialled-in "
+                ServerEnvironment.parseReservedApplyCore("MG_Remote server: apply core reserved for dialed-in "
                         + "shared-segment clients: 0x"), -1L);
 
         if (failures != 0) {

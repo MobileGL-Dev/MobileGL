@@ -82,7 +82,7 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint32_t CalibrateSpinItersPerUs() {
             // The probe body is the spin loop's body with the caller's `ready()` replaced
             // by an atomic load the compiler may not hoist and may not fold: an atomic
-            // the optimiser cannot prove constant is the only portable way to keep the
+            // the optimizer cannot prove constant is the only portable way to keep the
             // loop from vanishing, and it is also the closest thing to what a real
             // `ready()` costs.
             std::atomic<std::uint32_t> probe{0};

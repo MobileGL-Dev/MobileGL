@@ -10,7 +10,7 @@
 //
 // P2's render-state CSO is content-addressed: the client hashes the 396 pipeline bytes, probes a
 // 64-entry cache, memcmps a hash hit and reuses the handle. The whole design is measured against
-// a knob that turns that off - kMGPipeBehaviourNoCsoContentAddressing, bit 63 of the runtime
+// a knob that turns that off - kMGPipeBehaviorNoCsoContentAddressing, bit 63 of the runtime
 // MOBILEGL_PIPE_PUSH bitmask - so that "push is slower" can be told apart from "the CSO design is
 // slower" (P2 brief D.4.5). A measurement knob has one characteristic failure mode: it stops
 // steering anything and every later number is quietly taken against a switch that does nothing.
@@ -305,7 +305,7 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
                     << "with content addressing on the cache must be answering binds it did not mint. " << window.line;
             } else if (m_lane == kLaneNoContentAddressing) {
                 EXPECT_EQ(window.mints, window.binds)
-                    << "kMGPipeBehaviourNoCsoContentAddressing (bit 63 of MOBILEGL_PIPE_PUSH) must make every "
+                    << "kMGPipeBehaviorNoCsoContentAddressing (bit 63 of MOBILEGL_PIPE_PUSH) must make every "
                        "bind mint a fresh CSO - the map is never probed and no handle is ever reused. Equal "
                        "counters are the only reading that proves the bit STEERED anything: if it were "
                        "ignored, this arm would report the same bounded mint count as the other one. It "

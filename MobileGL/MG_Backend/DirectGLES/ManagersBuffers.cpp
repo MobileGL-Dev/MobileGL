@@ -963,7 +963,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return;
                 }
                 // The kill-switch arm, and it reads the application's REAL flags per call -
-                // which is why MGPFlushRange carries them unnormalised.
+                // which is why MGPFlushRange carries them unnormalized.
                 const Flags<BufferMappingAccessBit> appAccess{
                     static_cast<std::underlying_type_t<BufferMappingAccessBit>>(record.AccessFlags)};
                 const Bool invalidate = (appAccess & BufferMappingAccessBit::InvalidateRange) ||

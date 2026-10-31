@@ -73,7 +73,7 @@ public final class SpawnServerPathTest {
         // see LaunchServer refuse by name. contains("MOBILEGL_IPC_SERVER_PATH=") did not match
         // it, so a path was appended after the unset and - last entry wins - undid it.
         String unset = "MOBILEGL_TRANSPORT=spawn;MOBILEGL_IPC_SERVER_PATH";
-        expect("the unset spelling is honoured, not overwritten",
+        expect("the unset spelling is honored, not overwritten",
                 SpawnServerPath.resolve(unset, DIR), unset);
         String emptied = "MOBILEGL_TRANSPORT=spawn;MOBILEGL_IPC_SERVER_PATH=";
         expect("an empty value is a value, and is left alone",

@@ -54,7 +54,7 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
 
     namespace {
         // Every datagram starts with this, so the sideband length is explicit
-        // and a stray datagram is recognisable.
+        // and a stray datagram is recognizable.
         struct SidebandHeader {
             std::uint32_t magic;
             std::uint32_t sidebandSize;

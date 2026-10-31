@@ -221,7 +221,7 @@ namespace MGITest {
         glReadBuffer(GL_COLOR_ATTACHMENT0);
         ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
 
-        auto stripeColour = [](int x, int y) {
+        auto stripeColor = [](int x, int y) {
             const int stripe = y / 32;
             const int half = x / 128;
             return std::array<GLfloat, 4>{static_cast<GLfloat>(stripe) / 16.0f, static_cast<GLfloat>(half),
@@ -231,9 +231,9 @@ namespace MGITest {
         glEnable(GL_SCISSOR_TEST);
         for (int stripe = 0; stripe < kHeight / 32; ++stripe) {
             for (int half = 0; half < 2; ++half) {
-                const auto colour = stripeColour(half * 128, stripe * 32);
+                const auto color = stripeColor(half * 128, stripe * 32);
                 glScissor(half * 128, stripe * 32, 128, 32);
-                glClearColor(colour[0], colour[1], colour[2], colour[3]);
+                glClearColor(color[0], color[1], color[2], color[3]);
                 glClear(GL_COLOR_BUFFER_BIT);
             }
         }
@@ -247,7 +247,7 @@ namespace MGITest {
         std::string first;
         for (int y = 0; y < kHeight; ++y) {
             for (int x = 0; x < kWidth; ++x) {
-                const auto expected = stripeColour(x, y);
+                const auto expected = stripeColor(x, y);
                 const GLfloat* got = pixels.data() + (static_cast<std::size_t>(y) * kWidth + x) * 4;
                 if (std::memcmp(got, expected.data(), sizeof(expected)) != 0 && bad++ == 0) {
                     first = "(" + std::to_string(x) + "," + std::to_string(y) + ") = " + std::to_string(got[0]) + "," +
@@ -278,7 +278,7 @@ namespace MGITest {
     // offset box so every band's own box origin is exercised as well. PACK_ALIGNMENT 8 with an odd
     // ROW_LENGTH pads every row, SKIP_ROWS / SKIP_PIXELS move the first byte - and the bytes GL does
     // NOT name must keep their sentinel, which is what a band scattered on the wrong stride breaks.
-    TEST_F(BandedReadbackScenario, BandedReadsHonourPackAlignmentRowLengthAndSkips) {
+    TEST_F(BandedReadbackScenario, BandedReadsHonorPackAlignmentRowLengthAndSkips) {
         if (!Ready()) return;
         struct PackCase {
             PatternFormat format;

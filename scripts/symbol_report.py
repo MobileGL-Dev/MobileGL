@@ -134,7 +134,7 @@ def parent_scope(prefix):
     return body[:cut + 2] if cut >= 0 else ""
 
 
-def normalise(name, strip_scopes, rename_map):
+def normalize(name, strip_scopes, rename_map):
     """Textual folding of the demangled name: this is what makes a de-nesting a rename."""
     for scope in strip_scopes:
         name = name.replace(scope, parent_scope(scope))
@@ -158,7 +158,7 @@ def build_side(path, nm_tool, size_tool, cxxfilt, strip_scopes, rename_map, cann
     demangled = demangle(raw.keys(), cxxfilt)
     table = {}
     for mangled, (kind, size) in raw.items():
-        key = normalise(demangled.get(mangled, mangled), strip_scopes, rename_map)
+        key = normalize(demangled.get(mangled, mangled), strip_scopes, rename_map)
         table.setdefault(key, []).append({"mangled": mangled, "type": kind,
                                           "size": size or 0,
                                           "demangled": demangled.get(mangled, mangled)})

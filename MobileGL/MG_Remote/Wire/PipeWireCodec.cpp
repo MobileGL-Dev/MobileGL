@@ -886,11 +886,11 @@ namespace MobileGL::MG_Remote::Wire {
     }
 
     Bool PipeWireEncoder::CheckCancellation() {
-        if (Cancelled() || (m_cancellationHook && m_cancellationHook(m_cancellationSelf)) ||
+        if (Canceled() || (m_cancellationHook && m_cancellationHook(m_cancellationSelf)) ||
             (m_stageRetirementBell && m_stageRetirementBell->Dead())) {
-            m_cancelled = true;
+            m_canceled = true;
         }
-        return m_cancelled;
+        return m_canceled;
     }
 
     Uint8* PipeWireEncoder::StageAllocate(Uint64 size) {
@@ -1059,7 +1059,7 @@ namespace MobileGL::MG_Remote::Wire {
 
     Uint64 PipeWireEncoder::EncodeRecord(MGPWireOp op, const void* payload, Uint64 payloadBytes, const WireTail* tails,
                                          Uint32 tailCount, Bool noReply) {
-        if (Cancelled()) return kInvalidSeq;
+        if (Canceled()) return kInvalidSeq;
         if (!Valid()) {
             WireProtocolFatal("PipeWireEncoder::EncodeRecord", "no SEG_CMD producer installed");
         }

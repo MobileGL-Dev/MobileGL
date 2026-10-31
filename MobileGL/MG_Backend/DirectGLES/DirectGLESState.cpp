@@ -1146,7 +1146,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // The ORDERING that made this read come from the frontend is preserved and is what
         // makes reading a record legal here: the client emits every set_* BEFORE the verb and
-        // the server specialises AT the verb, so by the time this runs the record already
+        // the server specializes AT the verb, so by the time this runs the record already
         // describes the framebuffer this draw will use - which is exactly the property the
         // frontend read was buying (a program compiled against a stale count would otherwise
         // not be relinked until the draw after the one that needed it).

@@ -156,7 +156,7 @@ namespace MobileGL::MG_State::GLState {
         if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
             static_assert(sizeof(appAccess.GetRaw()) <= sizeof(Uint32),
                           "MGPFlushRange::AccessFlags is a Uint32 and carries the application's "
-                          "real Flags<BufferMappingAccessBit>, unnormalised");
+                          "real Flags<BufferMappingAccessBit>, unnormalized");
             MG_Pipe::MGPipeEmitResourceFlushRange(*this, range.start, range.end - range.start,
                                                   static_cast<Uint32>(appAccess.GetRaw()));
         }

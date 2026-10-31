@@ -34,17 +34,17 @@ namespace {
         explicit TestJob(std::function<void(TestJob&)> body = {}) : m_body(Move(body)) {}
 
         std::atomic<Uint> ran{0};
-        std::atomic<Bool> observedCancelledInBody{false};
-        std::atomic<Bool> observedCancelledStateInBody{false};
+        std::atomic<Bool> observedCanceledInBody{false};
+        std::atomic<Bool> observedCanceledStateInBody{false};
 
     protected:
         void RunBody() override {
             ran.fetch_add(1, std::memory_order_acq_rel);
             if (m_body) m_body(*this);
-            observedCancelledInBody.store(IsCancellationRequested(), std::memory_order_release);
+            observedCanceledInBody.store(IsCancellationRequested(), std::memory_order_release);
             // A running body sees the request, not the outcome: the node is still Running
             // until it returns, which is exactly the cooperative contract.
-            observedCancelledStateInBody.store(IsCancelled(), std::memory_order_release);
+            observedCanceledStateInBody.store(IsCanceled(), std::memory_order_release);
         }
 
     private:
@@ -174,7 +174,7 @@ TEST(JobNodeSubmit, PostedJobRunsOnAPoolThreadAndWaitJoinsIt) {
 
     EXPECT_TRUE(job->IsTerminal());
     EXPECT_TRUE(job->IsComplete());
-    EXPECT_FALSE(job->IsCancelled());
+    EXPECT_FALSE(job->IsCanceled());
     EXPECT_EQ(job->ran.load(), 1u);
     EXPECT_TRUE(sawPoolThread.load());
     // The joining thread is not a pool thread - the assert inside Wait() depends on it.
@@ -364,7 +364,7 @@ TEST(JobNodeCancel, CancelBeforeAnyDispatchSettlesTheNodeAndSkipsTheBody) {
     auto job = MakeShared<TestJob>();
 
     job->Cancel();
-    EXPECT_TRUE(job->IsCancelled());
+    EXPECT_TRUE(job->IsCanceled());
     EXPECT_TRUE(job->IsTerminal());
     EXPECT_FALSE(job->IsComplete());
 
@@ -372,10 +372,10 @@ TEST(JobNodeCancel, CancelBeforeAnyDispatchSettlesTheNodeAndSkipsTheBody) {
     pool.Post(job);
     job->Wait();
     EXPECT_EQ(job->ran.load(), 0u);
-    EXPECT_TRUE(job->IsCancelled());
+    EXPECT_TRUE(job->IsCanceled());
 }
 
-TEST(JobNodeCancel, CancelWhileTheBodyIsRunningLetsItFinishAndReportsCancelled) {
+TEST(JobNodeCancel, CancelWhileTheBodyIsRunningLetsItFinishAndReportsCanceled) {
     ShaderCompilePool pool(kTestThreads);
 
     Gate gate;
@@ -396,10 +396,10 @@ TEST(JobNodeCancel, CancelWhileTheBodyIsRunningLetsItFinishAndReportsCancelled) 
     job->Wait();
 
     EXPECT_EQ(job->ran.load(), 1u);
-    EXPECT_TRUE(job->IsCancelled());
+    EXPECT_TRUE(job->IsCanceled());
     EXPECT_FALSE(job->IsComplete());
-    EXPECT_TRUE(job->observedCancelledInBody.load());
-    EXPECT_FALSE(job->observedCancelledStateInBody.load());
+    EXPECT_TRUE(job->observedCanceledInBody.load());
+    EXPECT_FALSE(job->observedCanceledStateInBody.load());
 }
 
 TEST(JobNodeCancel, CancelAfterCompletionDoesNotUndoTheResult) {
@@ -413,7 +413,7 @@ TEST(JobNodeCancel, CancelAfterCompletionDoesNotUndoTheResult) {
     // The request is recorded, but a settled result is never retroactively undone.
     EXPECT_TRUE(job->IsCancellationRequested());
     EXPECT_TRUE(job->IsComplete());
-    EXPECT_FALSE(job->IsCancelled());
+    EXPECT_FALSE(job->IsCanceled());
     EXPECT_EQ(job->ran.load(), 1u);
 }
 
@@ -426,7 +426,7 @@ TEST(JobNodeCancel, CancelReleasesContinuationsSoDependentsAreNotStranded) {
 
     EXPECT_EQ(fired.load(), 1u);
     job->Wait(); // must not hang: a canceled pending node is terminal
-    EXPECT_TRUE(job->IsCancelled());
+    EXPECT_TRUE(job->IsCanceled());
 }
 
 // ---------------------------------------------------------------------------------------
@@ -443,7 +443,7 @@ TEST(JobNodeException, AnExceptionEscapingABodyCancelsTheJobInsteadOfTerminating
     job->Wait();
 
     EXPECT_TRUE(job->IsTerminal());
-    EXPECT_TRUE(job->IsCancelled());
+    EXPECT_TRUE(job->IsCanceled());
     EXPECT_FALSE(job->IsComplete());
     ASSERT_EQ(job->diagnostics.logLines.size(), 1u);
     EXPECT_NE(job->diagnostics.logLines[0].text.find("boom"), String::npos);
@@ -456,7 +456,7 @@ TEST(JobNodeException, ANonStandardExceptionIsContainedToo) {
     pool.Post(job);
     job->Wait();
 
-    EXPECT_TRUE(job->IsCancelled());
+    EXPECT_TRUE(job->IsCanceled());
     ASSERT_EQ(job->diagnostics.logLines.size(), 1u);
 }
 
@@ -492,15 +492,15 @@ TEST(ShaderCompilePoolDrain, StopAndDrainWithAThousandQueuedJobsLeavesNoneRunnin
 
     // Every node is terminal, so nothing can be waiting on a worker that will never come.
     Uint complete = 0;
-    Uint cancelled = 0;
+    Uint canceled = 0;
     for (const auto& job : jobs) {
         ASSERT_TRUE(job->IsTerminal());
         if (job->IsComplete()) ++complete;
-        if (job->IsCancelled()) ++cancelled;
+        if (job->IsCanceled()) ++canceled;
         EXPECT_LE(job->ran.load(), 1u);
     }
-    EXPECT_EQ(complete + cancelled, kJobs);
-    EXPECT_GT(cancelled, 0u); // the drain really did abandon queued work rather than run it
+    EXPECT_EQ(complete + canceled, kJobs);
+    EXPECT_GT(canceled, 0u); // the drain really did abandon queued work rather than run it
 }
 
 TEST(ShaderCompilePoolDrain, StopAndDrainWaitsForARunningBodyToReturn) {

@@ -854,8 +854,8 @@ namespace MobileGL::MG_Remote::Client {
             }
             ClientSession& session = RequireSession("CreateShaderState");
             if (link == nullptr || spirv == nullptr) {
-                SessionFail(MGFatalFamily::ArtefactsMissing,
-                            "MGPipe: Fatal{ArtefactsMissing, \"create_shader_state\"} - the record's "
+                SessionFail(MGFatalFamily::ArtifactsMissing,
+                            "MGPipe: Fatal{ArtifactsMissing, \"create_shader_state\"} - the record's "
                             "two typed companions are null. Under monolith the applier reads the "
                             "modules out of spirv->generatedSpirv; under split there is nothing to "
                             "serialize, and emitting the record anyway would create a CSO with no "

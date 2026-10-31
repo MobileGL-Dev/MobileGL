@@ -137,7 +137,7 @@ void main()
             // the whole span instead, which cost seven for those four elements and had to be
             // declined on a stage that could not afford them - hence the budget gate that used
             // to be here.) DirectVulkan needs no rewrite at all.
-            bool PerElementImageUnitsAreHonoured() const {
+            bool PerElementImageUnitsAreHonored() const {
                 if (Gl().BackendName() == "DirectVulkan") return true;
                 GLint maxFragmentImageUniforms = 0;
                 glGetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &maxFragmentImageUniforms);
@@ -172,7 +172,7 @@ void main()
     TEST_F(ImageLoadStoreSsoScenario, PerElementImageUnitsReachAPipelineDraw) {
         if (!Ready()) return;
         if (!ImagesAreUsable()) GTEST_SKIP() << "fewer than 8 image units";
-        if (!PerElementImageUnitsAreHonoured()) {
+        if (!PerElementImageUnitsAreHonored()) {
             GTEST_SKIP() << "fewer than 4 fragment image uniforms: the array under test does not fit";
         }
         HeadlessGL& gl = Gl();

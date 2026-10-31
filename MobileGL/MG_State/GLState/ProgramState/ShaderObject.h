@@ -176,7 +176,7 @@ namespace MobileGL {
             // glCompileShader on the same source enqueues nothing and the eventual join
             // reports GL_FALSE forever. The synchronous path retries in exactly this case.
             Bool HasMemoizedCompile() const {
-                return m_compiled != nullptr && m_compiled->source == m_source && !m_compiled->IsCancelled();
+                return m_compiled != nullptr && m_compiled->source == m_source && !m_compiled->IsCanceled();
             }
 
             // MUST NOT JOIN - this is what GL_COMPLETION_STATUS_KHR will read when the

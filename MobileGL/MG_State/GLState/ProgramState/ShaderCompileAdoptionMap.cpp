@@ -27,14 +27,14 @@ namespace MobileGL::MG_State::GLState {
         // (the enqueue lost a race with teardown, or the body threw), or CANCELLATION
         // REQUESTED but not yet settled (a releaser fired Cancel() while a worker was still
         // inside RunBody(), so the node is stuck at Running until the body returns - see
-        // JobNode::Run: once m_cancelled is set, the node is DOOMED to end up Canceled no
+        // JobNode::Run: once m_canceled is set, the node is DOOMED to end up Canceled no
         // matter how the body finishes, it just has not gotten there yet). All three can
         // never publish artifacts a caller may rely on, so all three are misses. Only the
         // first two are dead weight worth pruning from the index here - a cancellation-
         // requested-but-still-running node is still reachable from its own (about to
         // release) ShaderObject and will get pruned once it actually settles, so leave the
         // entry alone and just refuse to hand this node out.
-        if (!node || node->IsCancelled()) {
+        if (!node || node->IsCanceled()) {
             m_entries.erase(it);
             return nullptr;
         }
@@ -77,7 +77,7 @@ namespace MobileGL::MG_State::GLState {
         Vector<ShaderSourceKey> dead;
         for (const auto& entry : m_entries) {
             const SharedPtr<ShaderCompileTask> node = entry.second.lock();
-            if (!node || node->IsCancelled()) dead.push_back(entry.first);
+            if (!node || node->IsCanceled()) dead.push_back(entry.first);
         }
         for (const ShaderSourceKey& key : dead) {
             m_entries.erase(key);

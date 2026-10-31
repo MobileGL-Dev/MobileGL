@@ -2424,7 +2424,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool depthArmTakesShape =
             planar && layersInRange && (props.optimalTilingFeatures & depthPassFeatures) == depthPassFeatures;
         // The color arm's shape (the two shader shapes are explained at the color arm below).
-        const Bool colour = resource->aspect == VK_IMAGE_ASPECT_COLOR_BIT;
+        const Bool color = resource->aspect == VK_IMAGE_ASPECT_COLOR_BIT;
         // The shader arm samples through a sampler2D and writes a vec4, which is what
         // BlitWireColorImage's own float check enforces; naming it here rather than letting the
         // blit return false is what puts the reason in the decline line.
@@ -2434,15 +2434,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             forcedShaderTier < 2 && (resource->usageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0;
         const Bool viaScratch =
             !attachable && renderableFormat && (resource->usageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0;
-        const Bool colourArmTakesShape =
-            colour && planar && layersInRange && sampledFloat && (attachable || viaScratch);
+        const Bool colorArmTakesShape = color && planar && layersInRange && sampledFloat && (attachable || viaScratch);
         // P8-F: `mipmap-shader-format-or-shape` IS A NAMED DECLINE, NOT A FATAL (rule I (a)).
         // The monolith arm has always answered this chain with a decline (VulkanRenderer.cpp's
         // GenerateMipmap: a format without blit support is skipped and the chain left unwritten),
         // and a shape no shader arm takes is a coverage gap in this backend, not a broken record.
         // The leading word stays, so every device-log grep keyed on it still finds the line.
         const Bool shaderArmTakesShape =
-            resource->aspect == VK_IMAGE_ASPECT_DEPTH_BIT ? depthArmTakesShape : colourArmTakesShape;
+            resource->aspect == VK_IMAGE_ASPECT_DEPTH_BIT ? depthArmTakesShape : colorArmTakesShape;
         if (!nativeBlit && !shaderArmTakesShape) {
             const String detail =
                 MagmaWireShapeDetail("mipmap-shader-format-or-shape", format, resource->format, props, resource->aspect,
@@ -2519,7 +2518,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // the texels still come from GPU contents rather than from a staged shadow.
             //
             // Which of the two (`attachable` or `viaScratch`), and whether either takes the
-            // shape at all, was decided before the growth (colourArmTakesShape, P8-F).
+            // shape at all, was decided before the growth (colorArmTakesShape, P8-F).
             for (Uint32 level = base + 1; level < base + count; ++level) {
                 for (Uint32 layer = baseLayer; layer < baseLayer + layerCount; ++layer) {
                     WireImage source{};

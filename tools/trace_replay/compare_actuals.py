@@ -57,7 +57,7 @@ class ImageError(ValueError):
 # whatever interpreter is at hand, and an unavailable Pillow would turn "the repeats diverged"
 # into "the tool did not run", which are not the same finding. The accepted subset is what
 # libpng gives trace_replay_core after its own normalization (ReadPngRgba, :278): 8- and 16-bit
-# greyscale/RGB/greyscale+alpha/RGBA and 8-bit palette, non-interlaced. Anything else is
+# grayscale/RGB/grayscale+alpha/RGBA and 8-bit palette, non-interlaced. Anything else is
 # REFUSED BY NAME rather than guessed at.
 # ---------------------------------------------------------------------------------------------
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"

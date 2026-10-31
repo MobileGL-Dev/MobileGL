@@ -2157,11 +2157,11 @@ namespace MobileGL::MG_Remote::Client {
                         Wire::WireOpName(op));
         }
 
-        const auto declineCancelled = [&] {
+        const auto declineCanceled = [&] {
             if (statusOut) *statusOut = Wire::ReplySink::kStatusDeclined;
             return Wire::kInvalidSeq;
         };
-        if (DeviceLost() || m_encoder.Cancelled()) return declineCancelled();
+        if (DeviceLost() || m_encoder.Canceled()) return declineCanceled();
         const Bool rowCarriesReplySlot =
             (MG_Pipe::MGPipeCallFlagsFor(op) & static_cast<Uint32>(MG_Pipe::kReplySlot)) != 0;
         const Bool ownsReplySlot = rowCarriesReplySlot && wantReply;
@@ -2186,7 +2186,7 @@ namespace MobileGL::MG_Remote::Client {
         const Bool skipAnswer = rowCarriesReplySlot && !willReadReply;
         Uint64 seq = m_encoder.EncodeRecord(op, payload, payloadBytes, tails, tailCount, skipAnswer);
         if (seq == Wire::kInvalidSeq) {
-            if (DeviceLost() || m_encoder.Cancelled()) return declineCancelled();
+            if (DeviceLost() || m_encoder.Canceled()) return declineCanceled();
             // EncodeRecord already refused individually oversized records. This one fits,
             // but appliedSeq may be ahead of retiredTail: wait for actual reclaimable space,
             // including the wrap pad. Prior EmitAndWait calls have published every record.
@@ -2199,7 +2199,7 @@ namespace MobileGL::MG_Remote::Client {
             const auto wait = m_producer.WaitForCmdSpace(needed, kBarrierTimeoutMs);
             if (wait == Transport::SessionWait::ShutDown) {
                 (void)m_encoder.CheckCancellation();
-                return declineCancelled();
+                return declineCanceled();
             }
             if (wait != Transport::SessionWait::Reached) {
                 SessionFail(MGFatalFamily::RetirementWaitFailed,
@@ -2216,7 +2216,7 @@ namespace MobileGL::MG_Remote::Client {
             DrainEventRing(*m_events);
             seq = m_encoder.EncodeRecord(op, payload, payloadBytes, tails, tailCount);
             if (seq == Wire::kInvalidSeq) {
-                if (DeviceLost() || m_encoder.Cancelled()) return declineCancelled();
+                if (DeviceLost() || m_encoder.Canceled()) return declineCanceled();
                 SessionFail(MGFatalFamily::RingOverrun,
                             "MGPipe: Fatal{RingOverrun, \"SEG_CMD\"} - %s refused after sufficient "
                             "space retired",

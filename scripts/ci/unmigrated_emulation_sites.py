@@ -7,11 +7,11 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # End of Source File Header
 
-"""P8-SE: PipeCatalogueTest's unmigrated-emulation list IS the set of call sites in the tree.
+"""P8-SE: PipeCatalogTest's unmigrated-emulation list IS the set of call sites in the tree.
 
 THE QUESTION. `MGPipeUnmigratedEmulation("<name>")` (MG_Pipe/PipeApply.h) names one emulation
 that reaches into client memory; a split server aborts on it, a monolith arm runs past it. The
-test `PipeCatalogue.EveryUnmigratedEmulationIsNamedOnce` (MG_Test/Pipe/PipeCatalogueTest.cpp)
+test `PipeCatalog.EveryUnmigratedEmulationIsNamedOnce` (MG_Test/Pipe/PipeCatalogTest.cpp)
 pins the LIST of names, and nothing compared that list with the tree: it drifted twice without a
 red (P8-B found a name the list never had; P8-SE a name whose only call site no transport could
 reach). This asserts, every one an error:
@@ -34,7 +34,7 @@ import re
 import sys
 import tempfile
 
-LIST_FILE = Path("MobileGL/MG_Test/Pipe/PipeCatalogueTest.cpp")
+LIST_FILE = Path("MobileGL/MG_Test/Pipe/PipeCatalogTest.cpp")
 TEST_NAME = "EveryUnmigratedEmulationIsNamedOnce"
 SOURCE_ROOT = Path("MobileGL")
 EXCLUDED = (Path("MobileGL/MG_Test"), Path("MobileGL/MG_IntegrationTest"))
@@ -161,7 +161,7 @@ def run(root):
 def self_test():
     """Each rule reds on a synthetic tree and a matching tree is green."""
     listing = """
-TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
+TEST(PipeCatalog, EveryUnmigratedEmulationIsNamedOnce) {
     // "commented-out-name" is not in the list
     const char* const kNames[] = {
 %s

@@ -224,19 +224,19 @@ void main() { oColor = texture(uTex, vec3(vUv, float(uLayer))); }
                              30, 255};
             }
 
-            static std::vector<std::uint8_t> Fill(Rgba8 colour) {
+            static std::vector<std::uint8_t> Fill(Rgba8 color) {
                 std::vector<std::uint8_t> texels(static_cast<std::size_t>(kSize) * kSize * 4);
                 for (std::size_t i = 0; i < texels.size(); i += 4) {
-                    texels[i + 0] = colour.r;
-                    texels[i + 1] = colour.g;
-                    texels[i + 2] = colour.b;
-                    texels[i + 3] = colour.a;
+                    texels[i + 0] = color.r;
+                    texels[i + 1] = color.g;
+                    texels[i + 2] = color.b;
+                    texels[i + 3] = color.a;
                 }
                 return texels;
             }
 
-            void UploadLayerThroughOwner(GLuint owner, int layer, Rgba8 colour) {
-                const std::vector<std::uint8_t> texels = Fill(colour);
+            void UploadLayerThroughOwner(GLuint owner, int layer, Rgba8 color) {
+                const std::vector<std::uint8_t> texels = Fill(color);
                 glBindTexture(GL_TEXTURE_2D_ARRAY, owner);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
                 glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, kSize, kSize, 1, GL_RGBA, GL_UNSIGNED_BYTE,
@@ -247,8 +247,8 @@ void main() { oColor = texture(uTex, vec3(vUv, float(uLayer))); }
             // THE VIEW-SIDE WRITE. A single-layer GL_TEXTURE_2D view of the array: its own level 0
             // is the owner's level <minLevel>, and its own layer 0 is the owner's layer
             // kViewLayer. glTexSubImage2D here is what ToOwnerRegionOffset has to move.
-            void UploadThroughView(GLuint view, Rgba8 colour) {
-                const std::vector<std::uint8_t> texels = Fill(colour);
+            void UploadThroughView(GLuint view, Rgba8 color) {
+                const std::vector<std::uint8_t> texels = Fill(color);
                 glBindTexture(GL_TEXTURE_2D, view);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
                 glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());

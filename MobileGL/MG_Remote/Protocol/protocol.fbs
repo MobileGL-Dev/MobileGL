@@ -17,7 +17,7 @@
 //   - the hot path -> FlatBuffers *structs* (fixed layout, no vtable, no
 //     offset indirection) written straight into the SEG_CMD ring. Those
 //     records are generated from MG_Pipe/PipeCalls.def and are deliberately
-//     NOT in this schema yet: the call catalogue is a separate P0 deliverable
+//     NOT in this schema yet: the call catalog is a separate P0 deliverable
 //     and record numbering must never churn.
 //
 // Regeneration: scripts/gen_protocol.py (flatc is NOT part of the default
@@ -181,7 +181,7 @@ table PairBind {
 //   tableSlotMask - GLFunctionsTable has SIXTY-NINE function-pointer slots
 //     (BackendObject.h:117-292) and a ulong is 64 bits, so the field could never
 //     address the table its own comment named; and ARCHITECTURE.md:114 already
-//     retired "is this table slot null" as the capability probe in favour of
+//     retired "is this table slot null" as the capability probe in favor of
 //     CallMask, so keeping it would re-introduce exactly what replaced it.
 //   prefersCpuXfbPrimitiveAccounting - answered by kCapCpuXfbPrimitiveAccounting
 //     in `callMask` below.

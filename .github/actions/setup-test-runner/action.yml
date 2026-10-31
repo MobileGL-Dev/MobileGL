@@ -45,7 +45,7 @@ runs:
               sudo tee /etc/apt/apt.conf.d/80-mobilegl-ci-network > /dev/null
           fi
           # Cores go through zstd: a unit run's intentional aborts (death tests) left hundreds
-          # of raw cores in /tmp and filled the disk. The handler keeps honouring each
+          # of raw cores in /tmp and filled the disk. The handler keeps honoring each
           # process's RLIMIT_CORE (%c), so only steps that raise it with ulimit -c get cores;
           # read one with 'zstd -d core.<exe>.<pid>.zst' first.
           if [ ! -f /.dockerenv ] && command -v sudo > /dev/null && command -v zstd > /dev/null; then

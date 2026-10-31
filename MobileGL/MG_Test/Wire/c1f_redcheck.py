@@ -47,7 +47,7 @@ def cases():
     site = '&MGPipeRouteResourceDestroy);'
     return [
         ('B1-source', FILL, replace(site, '&MGPipeApplyResourceDestroy);'),
-         ['PipeCatalogue.FrontendNeverTakesAnApplierAddress'], 'PipeCatalogueTest'),
+         ['PipeCatalog.FrontendNeverTakesAnApplierAddress'], 'PipeCatalogTest'),
         ('B1-wire', FILL, replace(site, '&MGPipeApplyResourceDestroy);'),
          [SUITE+'DeleteTexturesAdvancesTheWireOrdinal'], 'RemoteClientTest'),
         ('N2-five-verbs', EMIT, replace('            RequireClientTablesInstalled(slot);', ''),
@@ -126,7 +126,7 @@ def main():
     for label, file, mutate, names, target in selected:
         path = ROOT / file
         original = path.read_bytes()
-        binary = ROOT / 'build-split/MobileGL/MG_Test' / ('Pipe' if target == 'PipeCatalogueTest' else 'Wire') / target
+        binary = ROOT / 'build-split/MobileGL/MG_Test' / ('Pipe' if target == 'PipeCatalogTest' else 'Wire') / target
         build = ['cmake', '--build', 'build-split', '-j', '24', '--target', target]
         run = [str(binary), '--gtest_filter='+':'.join(names)]
         # ID-67: both replacement cases must execute green before/after this mutation.

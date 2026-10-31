@@ -320,12 +320,12 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
             glClearDepth(0.375);
             glClear(GL_DEPTH_BUFFER_BIT);
 
-            const float centre = ReadDepthAt(kWidth / 2, kHeight / 2);
+            const float center = ReadDepthAt(kWidth / 2, kHeight / 2);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             EXPECT_EQ(FirstGLError(), 0u);
-            EXPECT_NEAR(centre, 0.375f, 1.0f / 4096.0f)
-                << "glReadPixels(GL_DEPTH_COMPONENT) off layer " << kSubjectLayer << " returned " << centre
-                << (std::fabs(centre - kDepthPoison) < 1e-6f ? " - the destination was never written at all" : "");
+            EXPECT_NEAR(center, 0.375f, 1.0f / 4096.0f)
+                << "glReadPixels(GL_DEPTH_COMPONENT) off layer " << kSubjectLayer << " returned " << center
+                << (std::fabs(center - kDepthPoison) < 1e-6f ? " - the destination was never written at all" : "");
         }
 
         // The depth leg of the blit path, both endpoints above layer 0. Verified by reading the

@@ -301,7 +301,7 @@ void main() { fragColor = gl_FragCoord.z; }
             // The center of grid cell (x, y), in the bottom-left-origin coordinates glReadPixels
             // returns. Sampling the center rather than a corner keeps the assertion about WHICH
             // viewport was selected rather than about edge rounding.
-            static GLint CellCentre(const std::vector<GLint>& pixels, int stride, int x, int y) {
+            static GLint CellCenter(const std::vector<GLint>& pixels, int stride, int x, int y) {
                 const int px = x * kCellSize + kCellSize / 2;
                 const int py = y * kCellSize + kCellSize / 2;
                 return pixels[static_cast<size_t>(py) * stride + px];
@@ -326,7 +326,7 @@ void main() { fragColor = gl_FragCoord.z; }
             for (int y = 0; y < kGridSide; ++y) {
                 for (int x = 0; x < kGridSide; ++x) {
                     const GLint expected = y * kGridSide + x;
-                    EXPECT_EQ(CellCentre(pixels, kSurfaceSide, x, y), expected)
+                    EXPECT_EQ(CellCenter(pixels, kSurfaceSide, x, y), expected)
                         << "cell (" << x << ", " << y << ") should hold viewport index " << expected
                         << "; a single-viewport backend paints the whole image with 15 (the last invocation)";
                 }
@@ -484,12 +484,12 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
             ASSERT_EQ(glGetError(), GL_NO_ERROR);
             {
                 const std::vector<GLint> pixels = ReadInts(kSurfaceSide, kSurfaceSide);
-                EXPECT_EQ(CellCentre(pixels, kSurfaceSide, kProbeX, kProbeY), kProbeIndex)
+                EXPECT_EQ(CellCenter(pixels, kSurfaceSide, kProbeX, kProbeY), kProbeIndex)
                     << "the scissored index must still paint inside its own box";
                 for (int y = 0; y < kGridSide; ++y) {
                     for (int x = 0; x < kGridSide; ++x) {
                         if (x == kProbeX && y == kProbeY) continue;
-                        EXPECT_EQ(CellCentre(pixels, kSurfaceSide, x, y), kUnwritten)
+                        EXPECT_EQ(CellCenter(pixels, kSurfaceSide, x, y), kUnwritten)
                             << "cell (" << x << ", " << y << ") is outside scissor rectangle " << kProbeIndex
                             << " and must be untouched";
                     }
@@ -509,7 +509,7 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
                 const std::vector<GLint> pixels = ReadInts(kSurfaceSide, kSurfaceSide);
                 for (int y = 0; y < kGridSide; ++y) {
                     for (int x = 0; x < kGridSide; ++x) {
-                        EXPECT_EQ(CellCentre(pixels, kSurfaceSide, x, y), kProbeIndex)
+                        EXPECT_EQ(CellCenter(pixels, kSurfaceSide, x, y), kProbeIndex)
                             << "with the scissor test off for index " << kProbeIndex
                             << ", its full-viewport quad must cover cell (" << x << ", " << y << ")";
                     }
@@ -576,14 +576,14 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
             const std::vector<GLint> pixels = ReadInts(kSurfaceSide, kSurfaceSide);
             // Cell (0, 0) IS viewport 0's rectangle, so it is the one cell an unrouted draw paints
             // with something. Everything it holds comes from the last geometry invocation.
-            EXPECT_EQ(CellCentre(pixels, kSurfaceSide, 0, 0), kViewportCount - 1)
+            EXPECT_EQ(CellCenter(pixels, kSurfaceSide, 0, 0), kViewportCount - 1)
                 << "with the emulation off, viewport 0's rectangle must hold the LAST invocation's "
                    "index - if it holds 0 the routing is still happening and this control proves "
                    "nothing";
             for (int y = 0; y < kGridSide; ++y) {
                 for (int x = 0; x < kGridSide; ++x) {
                     if (x == 0 && y == 0) continue;
-                    EXPECT_EQ(CellCentre(pixels, kSurfaceSide, x, y), kUnwritten)
+                    EXPECT_EQ(CellCenter(pixels, kSurfaceSide, x, y), kUnwritten)
                         << "cell (" << x << ", " << y << ") is outside viewport 0's rectangle and an "
                         << "unrouted draw cannot reach it";
                 }

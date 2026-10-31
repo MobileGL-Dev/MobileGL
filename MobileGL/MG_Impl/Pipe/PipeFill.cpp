@@ -523,7 +523,7 @@ namespace MobileGL::MG_Pipe {
             Bool InHook = false; // a re-read that re-enters an accessor is not re-verified
             Optional<MGPipeInputField> Corrupt;
             std::atomic<Uint64> Divergences{0};
-            Uint64 Summarised = 0; // how many of them the summary line has reported so far
+            Uint64 Summarized = 0; // how many of them the summary line has reported so far
             // THE SUMMARY IS WRITTEN FROM MobileGL::Destroy, NOT FROM HERE (V1 fix round 2). This
             // is a namespace-scope static, so this destructor runs from __run_exit_handlers, AFTER
             // DestroyImpl has called MG_Util::Debug::Close(). Close nulls the role's sink; Log.cpp's
@@ -538,8 +538,8 @@ namespace MobileGL::MG_Pipe {
             ~VerifyState() { FlushSummary(); }
             void FlushSummary() {
                 const Uint64 count = Divergences.load(std::memory_order_relaxed);
-                if (count == 0 || count == Summarised) return;
-                Summarised = count;
+                if (count == 0 || count == Summarized) return;
+                Summarized = count;
                 MGLOG_E("MGPipe: verify summary - %llu divergence(s) survived MOBILEGL_PIPE_VERIFY_FATAL=0",
                         static_cast<unsigned long long>(count));
             }
@@ -1742,7 +1742,7 @@ namespace MobileGL::MG_Pipe {
         // not consulted, and under spawn a silent no-op that leaks every one of those objects.
         // The parameter type is the route's, which is byte-identical to the applier's
         // (const MGPHandleOnly&, void return), so the fix is `&MGPipeRoute<Name>` at the five call
-        // sites; PipeCatalogue.FrontendNeverTakesAnApplierAddress checks MG_Impl in every unit lane.
+        // sites; PipeCatalog.FrontendNeverTakesAnApplierAddress checks MG_Impl in every unit lane.
         Bool EmitDeleteIfPublished(MGPipeKind kind, MGPipeHandle handle, void (*route)(const MGPHandleOnly&)) {
             if (!MGPipeHandleIsPublished(kind, handle)) return false;
             route(HandleOnly(kind, handle));
@@ -2908,7 +2908,7 @@ namespace MobileGL::MG_Pipe {
         // textures/sampler/image/global constants - and that document is explicit that the
         // order is code organization and NOT a contract: all of a verb's set_*/bind_* must
         // complete before the verb, and apart from "a resource create precedes a bind to it"
-        // there is no ordering requirement between them. The server specialises the shader and
+        // there is no ordering requirement between them. The server specializes the shader and
         // the pipeline lazily at the verb, from everything it holds at that moment, which is
         // what makes deriving the fragColor broadcast count from the framebuffer record legal
         // at the verb rather than at the FBO sync.
@@ -3198,7 +3198,7 @@ namespace MobileGL::MG_Pipe {
         // program, then textures / sampler / image / global constants - which is why it stands
         // before the render-state block rather than after it. That order is explicitly code
         // organization and not a contract (all of a verb's set_*/bind_* complete before the
-        // verb, and the server specialises lazily AT the verb from everything it then holds),
+        // verb, and the server specializes lazily AT the verb from everything it then holds),
         // so nothing about the P2 and P3a emissions changes by standing after it; what it buys
         // is that the file reads in the order the design states.
         //

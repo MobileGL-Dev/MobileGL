@@ -29,7 +29,7 @@ namespace MobileGL {
 
                 // The name the decompiled ESSL ends up declaring. Same mg_ prefix as the
                 // draw-parameter lowering, so a global that came from a demoted builtin is
-                // recognisable in a driver log.
+                // recognizable in a driver log.
                 constexpr const char* kLoweredName = "mg_ViewportIndex";
 
                 // The one decoration this pass lowers. OpDecorate only, never OpMemberDecorate:

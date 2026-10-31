@@ -112,7 +112,7 @@ class ResultAccountingTest(unittest.TestCase):
         # different sentence, and must not ride the same row. The accepted half is asserted
         # FIRST: without it this case would pass on a helper that does not list the entry at all
         # (CI's dual-block census went red on exactly that, run 35785685692 onward).
-        name = "DirectGLES.Split.Glsl420DeclarationScenario.AnArrayOfSamplerArraysIsHonouredOrDeclinedCleanly"
+        name = "DirectGLES.Split.Glsl420DeclarationScenario.AnArrayOfSamplerArraysIsHonoredOrDeclinedCleanly"
         self.assertIn(name, helper.DUALBLOCK_ALLOWED_SKIPS)
         for reason, accepted in [
                 ("the frontend's binding-qualifier seeding does not walk an array of arrays, so "

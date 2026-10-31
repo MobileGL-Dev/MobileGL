@@ -45,7 +45,7 @@ namespace {
         std::uint64_t Capacity() const { return m_capacity; }
         bool Invariants() const { return RingCursorsValid(m_control, m_cursors, m_capacity); }
 
-        // Writes one record whose payload is `size` bytes of a recognisable
+        // Writes one record whose payload is `size` bytes of a recognizable
         // pattern seeded by `seed`.
         bool WriteRecord(std::uint16_t kind, std::uint64_t size, std::uint8_t seed) {
             void* payload = m_producer.Reserve(kind, kRecNone, size);

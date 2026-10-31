@@ -647,7 +647,7 @@ TEST(PipelineQuirkTest, WireDepthResolveProbeKnobReplacesTheMeasurementNotTheVer
     EXPECT_EQ(ParseWireDepthResolveProbeKnob(""), WireDepthResolveProbeKnob::Measure);
     EXPECT_EQ(ParseWireDepthResolveProbeKnob("bug"), WireDepthResolveProbeKnob::ForceBug);
     EXPECT_EQ(ParseWireDepthResolveProbeKnob("clean"), WireDepthResolveProbeKnob::ForceClean);
-    EXPECT_EQ(ParseWireDepthResolveProbeKnob("0x5143"), WireDepthResolveProbeKnob::Unrecognised);
+    EXPECT_EQ(ParseWireDepthResolveProbeKnob("0x5143"), WireDepthResolveProbeKnob::Unrecognized);
     Int measured = 0;
     const auto measure = [&] {
         ++measured;
@@ -662,7 +662,7 @@ TEST(PipelineQuirkTest, WireDepthResolveProbeKnobReplacesTheMeasurementNotTheVer
     EXPECT_EQ(clean.verdict, WireDepthResolveProbeVerdict::Clean);
     EXPECT_FALSE(clean.preferShader);
     EXPECT_EQ(measured, 0) << "a forced verdict must not also run the device probe";
-    const auto other = ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::Unrecognised, true, measure);
+    const auto other = ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::Unrecognized, true, measure);
     EXPECT_EQ(measured, 1) << "an unrecognized value runs the probe as if the knob were unset";
     EXPECT_FALSE(other.measurement.fromKnob);
     EXPECT_EQ(other.verdict, WireDepthResolveProbeVerdict::Clean);

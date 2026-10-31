@@ -501,7 +501,7 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint64_t DynamicParamsSize = 0;
         std::uint64_t CapsSize = 0;
         std::uint64_t MemberLayout = 0;
-        std::uint64_t CatalogueLayout = 0;
+        std::uint64_t CatalogLayout = 0;
         std::uint64_t RenderStateLayout = 0;
         std::uint64_t FormatCapabilityTargets = 0;
         std::uint64_t FormatCapabilityFormats = 0;

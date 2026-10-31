@@ -41,7 +41,7 @@ namespace {
     }
 } // namespace
 
-TEST(ServerContextLiveTest, OneSessionsReleaseDoesNotKillANeighboursContext) {
+TEST(ServerContextLiveTest, OneSessionsReleaseDoesNotKillANeighborsContext) {
     const MG_Pipe::PipeInputsThreadResolver previous = MG_Pipe::g_pipeInputsThreadResolver;
     MG_Pipe::g_pipeInputsThreadResolver = &ResolveTestSessionBlock;
     auto* kwinBlock = new MG_Pipe::PipeInputs();

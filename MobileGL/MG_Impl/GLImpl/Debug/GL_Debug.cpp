@@ -94,7 +94,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // has a frontend name check - so this is answered exactly rather than waved through.
         // GL_DISPLAY_LIST is deliberately absent: it exists only in the compatibility profile,
         // which MobileGL does not expose, so it falls to the INVALID_ENUM path below.
-        Bool ValidateLabelledObject(GLenum identifier, GLuint name, Bool& outIdentifierKnown) {
+        Bool ValidateLabeledObject(GLenum identifier, GLuint name, Bool& outIdentifierKnown) {
             outIdentifierKnown = true;
             auto* context = MG_State::pGLContext.get();
             switch (identifier) {
@@ -206,7 +206,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ObjectLabel(GLenum identifier, GLuint name, GLsizei length, const GLchar* label) {
         Bool identifierKnown = false;
-        const Bool objectExists = ValidateLabelledObject(identifier, name, identifierKnown);
+        const Bool objectExists = ValidateLabeledObject(identifier, name, identifierKnown);
         if (!identifierKnown) {
             RecordDebugError(ErrorCode::InvalidEnum, __func__,
                              std::format("identifier {} is not a labellable object type.",
@@ -237,7 +237,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         Bool identifierKnown = false;
-        const Bool objectExists = ValidateLabelledObject(identifier, name, identifierKnown);
+        const Bool objectExists = ValidateLabeledObject(identifier, name, identifierKnown);
         if (!identifierKnown) {
             RecordDebugError(ErrorCode::InvalidEnum, __func__,
                              std::format("identifier {} is not a labellable object type.",
@@ -254,7 +254,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& labels = State().objectLabels;
         const auto it = labels.find(MakeObjectLabelKey(identifier, name));
         const String& text = it != labels.end() ? it->second : String{};
-        // GL 4.6 core 20.5: the returned length excludes the NUL, and an unlabelled object hands
+        // GL 4.6 core 20.5: the returned length excludes the NUL, and an unlabeled object hands
         // back an empty string with length 0 rather than an error.
         SizeT copied = 0;
         if (label != nullptr && bufSize > 0) {

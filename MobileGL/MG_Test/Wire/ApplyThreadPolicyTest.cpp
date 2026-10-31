@@ -7,7 +7,7 @@
 // End of Source File Header
 
 // P11 B1 (CONTRACT-P11 B1): the apply thread's affinity and spin, selected per session from the
-// peer's Hello dial mode and data plane, and the core reserved for a dialled-in shared-segment peer
+// peer's Hello dial mode and data plane, and the core reserved for a dialed-in shared-segment peer
 // on every topology shape that matters - the Redmi's (cpu0-5 performance, cpu6-7 prime: big 0xc0,
 // prime 0xc0 of 0xff), a lone prime core beside other big cores, a lone prime core alone, symmetric
 // machines, an unreadable topology.
@@ -40,13 +40,13 @@ TEST(ApplyThreadPolicy, AutoKeepsEveryBigCoreAndTheConfiguredSpinForAnInProcessO
     for (const ApplyPeer peer : {ApplyPeer::InProcess, ApplyPeer::Forked}) {
         const auto policy =
             SelectApplyThreadPolicy("auto", false, kConfigured, peer, kShm, kRedmiBig, kRedmiPrime, kRedmiOnline);
-        EXPECT_TRUE(policy.recognised);
+        EXPECT_TRUE(policy.recognized);
         EXPECT_EQ(policy.requestedMask, kRedmiBig) << ApplyPeerName(peer);
         EXPECT_EQ(policy.spinUs, kConfigured) << ApplyPeerName(peer);
     }
 }
 
-TEST(ApplyThreadPolicy, AutoKeepsEveryBigCoreForADialledInPeerOnTheStreamPlane) {
+TEST(ApplyThreadPolicy, AutoKeepsEveryBigCoreForADialedInPeerOnTheStreamPlane) {
     // tcp: an io thread feeds the apply thread; nothing changes for a TCP client.
     const auto policy = SelectApplyThreadPolicy("auto", false, kConfigured, ApplyPeer::Connected, kStream, kRedmiBig,
                                                 kRedmiPrime, kRedmiOnline);
@@ -56,7 +56,7 @@ TEST(ApplyThreadPolicy, AutoKeepsEveryBigCoreForADialledInPeerOnTheStreamPlane) 
 
 TEST(ApplyThreadPolicy, SeveralPrimeCoresGiveTheApplyThreadTheLowestOfThem) {
     const auto policy = Connected("auto", kRedmiBig, kRedmiPrime, kRedmiOnline);
-    EXPECT_TRUE(policy.recognised);
+    EXPECT_TRUE(policy.recognized);
     EXPECT_EQ(policy.requestedMask, 0x40u)
         << "the LOWEST prime core: the scheduler puts a foreground client's GL thread on the highest";
     EXPECT_EQ(policy.spinUs, kConnectedPeerSpinUs);
@@ -116,7 +116,7 @@ TEST(ApplyThreadPolicy, AnEmptyOrMissingAffinityIsAuto) {
     }
 }
 
-TEST(ApplyThreadPolicy, AnExplicitSpinWinsForADialledInPeer) {
+TEST(ApplyThreadPolicy, AnExplicitSpinWinsForADialedInPeer) {
     const auto policy =
         SelectApplyThreadPolicy("auto", true, 7, ApplyPeer::Connected, kShm, kRedmiBig, kRedmiPrime, kRedmiOnline);
     EXPECT_EQ(policy.spinUs, 7u);
@@ -128,12 +128,12 @@ TEST(ApplyThreadPolicy, AnExplicitMaskOrOffWinsForEveryPeerAndPlaneAndReservesNo
         for (const Bool plane : {kShm, kStream}) {
             const auto off =
                 SelectApplyThreadPolicy("off", false, kConfigured, peer, plane, kRedmiBig, kRedmiPrime, kRedmiOnline);
-            EXPECT_TRUE(off.recognised);
+            EXPECT_TRUE(off.recognized);
             EXPECT_EQ(off.requestedMask, 0u) << ApplyPeerName(peer);
             EXPECT_EQ(off.spinUs, kConfigured) << "an operator's affinity keeps the configured spin";
             const auto mask =
                 SelectApplyThreadPolicy("0x80", false, kConfigured, peer, plane, kRedmiBig, kRedmiPrime, kRedmiOnline);
-            EXPECT_TRUE(mask.recognised);
+            EXPECT_TRUE(mask.recognized);
             EXPECT_EQ(mask.requestedMask, 0x80u) << ApplyPeerName(peer);
             EXPECT_EQ(
                 SelectApplyThreadPolicy("12", false, kConfigured, peer, plane, kRedmiBig, kRedmiPrime, kRedmiOnline)
@@ -146,10 +146,10 @@ TEST(ApplyThreadPolicy, AnExplicitMaskOrOffWinsForEveryPeerAndPlaneAndReservesNo
     EXPECT_EQ(ReservedApplyCoreForConfig("off", kRedmiBig, kRedmiPrime, kRedmiOnline), 0u);
 }
 
-TEST(ApplyThreadPolicy, UnrecognisedAffinityTextAppliesNothingAndSaysSo) {
+TEST(ApplyThreadPolicy, UnrecognizedAffinityTextAppliesNothingAndSaysSo) {
     for (const char* text : {"big", "0xzz", "auto ", "3cores"}) {
         const auto policy = Connected(text, kRedmiBig, kRedmiPrime, kRedmiOnline);
-        EXPECT_FALSE(policy.recognised) << text;
+        EXPECT_FALSE(policy.recognized) << text;
         EXPECT_EQ(policy.requestedMask, 0u) << text;
     }
 }

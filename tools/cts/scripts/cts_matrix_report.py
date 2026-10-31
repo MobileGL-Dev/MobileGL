@@ -138,7 +138,7 @@ def _sidecar(paths: Sequence[str], name: str) -> set[str]:
 def build_version_report(
     version: str, caselist: str, result_paths: Sequence[str]
 ) -> dict:
-    """Build the serialisable report for one GL mustpass version."""
+    """Build the serializable report for one GL mustpass version."""
 
     expected_cases, expected_duplicates = read_caselist(caselist)
     expected = set(expected_cases)

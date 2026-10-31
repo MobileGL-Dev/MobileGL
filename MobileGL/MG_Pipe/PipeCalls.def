@@ -6,10 +6,10 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The MGPipe call catalogue (ARCHITECTURE.md §3), one X(Name, PayloadStruct, Class, Flags,
+// The MGPipe call catalog (ARCHITECTURE.md §3), one X(Name, PayloadStruct, Class, Flags,
 // WaitClass) per call, read by scripts/gen_pipe.py into MG_Pipe/generated/*.inc. The wire
 // opcode is the 1-based row position: append new calls at the end, keep retired rows in place.
-// MGP_CALL_LIST_DOCUMENTED_COUNT is the row count, pinned by MG_Test/Pipe/PipeCatalogueTest.cpp.
+// MGP_CALL_LIST_DOCUMENTED_COUNT is the row count, pinned by MG_Test/Pipe/PipeCatalogTest.cpp.
 // Class: kScreen rows go to MGPipeScreen, all others to MGPipeContext. kHasBlob means the
 // payload owns an MGPBlobRef member; kNeedsAck means a per-record predicate may ask for an ack.
 // WaitClass (MGPipeWaitClass) is what the client does after publishing under run-ahead;
@@ -141,7 +141,7 @@
     X(Present,                  MGPPresent,                 kCtxVerb,   kNone,                      kWaitPresent)     \
     X(SetSwapInterval,          MGPSwapInterval,            kCtxVerb,   kOptional,                  kWaitNone)        \
     /* ---- APPENDED. Opcodes are positional, so a late arrival goes at the END, never into ---- */ \
-    /* ---- its group: three live GLFunctionsTable entries the catalogue had no carrier for. ---- */ \
+    /* ---- its group: three live GLFunctionsTable entries the catalog had no carrier for. ---- */ \
     /* glGetInteger64v(GL_TIMESTAMP) - GetGpuTimestampNs, a synchronous server answer, which  */    \
     /* the reply slot carries. The query namespace is the context's (plan 4.3).                */    \
     X(QueryTimestamp,           MGPTimestampRequest,        kCtxQuery,  kReplySlot,                 kWaitReply)       \
@@ -243,7 +243,7 @@
     X(SharedImage,              MGPSharedImageOp,          kScreen,    kReplySlot,                 kWaitReply)
 // clang-format on
 
-// Not in the catalogue (ARCHITECTURE.md §3.2):
+// Not in the catalog (ARCHITECTURE.md §3.2):
 //   - GetIntegeri_v / GetInteger64i_v: the only device-answered indexed pnames, the compute
 //     work-group count and size limits, travel in MGPCaps (DynamicBackendParameters); every
 //     other indexed pname is frontend state.

@@ -316,9 +316,9 @@ namespace MGITest {
         EXPECT_EQ(FirstGLError(), 0u);
 
         const Image painted = ReadPixels(width, height);
-        const Rgba8 centre = painted.At(width / 2, height / 2);
-        EXPECT_LT(centre.r, 32) << "the fragment module wrote the wrong channel; constant id 7 was not applied";
-        EXPECT_GT(centre.g, 224) << "the center of a 0.5-scaled quad must be painted";
+        const Rgba8 center = painted.At(width / 2, height / 2);
+        EXPECT_LT(center.r, 32) << "the fragment module wrote the wrong channel; constant id 7 was not applied";
+        EXPECT_GT(center.g, 224) << "the center of a 0.5-scaled quad must be painted";
 
         // A pixel just inside the corner is OUTSIDE the 0.5-scaled quad and must still be the
         // clear color - which is what proves constant id 3 reached the vertex module. At the

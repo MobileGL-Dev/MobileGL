@@ -24,7 +24,7 @@ The backend already maintains a state machine that tracks GLES / Vulkan; all tha
 | § | Content | File |
 |---|---|---|
 | 1–2 | Boundary: two tables, three topologies; object model: handles, two generations, CSO | [`design/01-boundary-and-objects.md`](design/01-boundary-and-objects.md) |
-| 3–4 | Call catalog, generators G1–G8, capability bits; record and payload format | [`design/02-catalogue-and-records.md`](design/02-catalogue-and-records.md) |
+| 3–4 | Call catalog, generators G1–G8, capability bits; record and payload format | [`design/02-catalog-and-records.md`](design/02-catalog-and-records.md) |
 | 5–7 | Frontend tracker (when to push, what to push, how to deduplicate); texture upload; shaders | [`design/03-frontend.md`](design/03-frontend.md) |
 | 8 | Reverse channel: seven callbacks, ordering, errors and ack, texture re-mint (server-local, no pull), XFB | [`design/04-reverse-channel.md`](design/04-reverse-channel.md) |
 | 9–10 | Backend rework (`PipeInputs`, memo re-key, A/B arms); server-side applier | [`design/05-backend-and-server.md`](design/05-backend-and-server.md) |

@@ -553,9 +553,9 @@ void main() { o_color = vec4(1.0); }
         const int height = gl.Height();
 
         static const char* kUniformBlockFS = R"(#version 430 core
-layout(std140) uniform Color { vec4 u_colour; };
+layout(std140) uniform Color { vec4 u_color; };
 out vec4 o_color;
-void main() { o_color = u_colour; }
+void main() { o_color = u_color; }
 )";
         const GLuint vs = MakeSeparable(GL_VERTEX_SHADER, kSeparableVS);
         const GLuint fs = MakeSeparable(GL_FRAGMENT_SHADER, kUniformBlockFS);
@@ -698,9 +698,9 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, u_mvp[3][3]); }
         const int height = gl.Height();
 
         static const char* kUniformBlockFS = R"(#version 430 core
-layout(std140) uniform Color { vec4 u_colour; };
+layout(std140) uniform Color { vec4 u_color; };
 out vec4 o_color;
-void main() { o_color = u_colour; }
+void main() { o_color = u_color; }
 )";
         const GLuint vs = MakeSeparable(GL_VERTEX_SHADER, kSeparableVS);
         const GLuint fs = MakeSeparable(GL_FRAGMENT_SHADER, kUniformBlockFS);
@@ -788,14 +788,14 @@ void main() { o_color = texture(u_tex, vec2(0.5)); }
         // One texture per unit, each a different solid color, so the pixels say which unit the
         // draw actually sampled.
         constexpr int kUnits = 4;
-        const GLubyte colours[kUnits][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255}};
+        const GLubyte colors[kUnits][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255}};
         const char* names[kUnits] = {"red", "green", "blue", "yellow"};
         GLuint textures[kUnits] = {};
         glGenTextures(kUnits, textures);
         for (int unit = 0; unit < kUnits; ++unit) {
             glActiveTexture(GL_TEXTURE0 + unit);
             glBindTexture(GL_TEXTURE_2D, textures[unit]);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, colours[unit]);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, colors[unit]);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         }

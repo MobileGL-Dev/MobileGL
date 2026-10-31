@@ -47,7 +47,7 @@ namespace MobileGL::MG_Pipe {
     // bindings (PipeApply.h, MGPipeVertexElementsRecord), which a revision-1 peer would not.
     inline constexpr Uint32 kMGPipeResourceRespecifyExtentCarrierRevision = 2;
 
-    constexpr Uint64 WireCatalogueDigest() {
+    constexpr Uint64 WireCatalogDigest() {
         Uint64 hash = 1469598103934665603ull;
         for (const auto& call : kMGPipeWireCallLayouts) {
             WireMixName(hash, call.Name);
@@ -58,7 +58,7 @@ namespace MobileGL::MG_Pipe {
         }
         return hash;
     }
-    inline constexpr Uint64 kMGPipeWireCatalogueDigest = WireCatalogueDigest();
+    inline constexpr Uint64 kMGPipeWireCatalogDigest = WireCatalogDigest();
     constexpr Uint64 WireRenderStateDigest() {
         Uint64 hash = 1469598103934665603ull;
         WireMixNumber(hash, kMGPipeRenderStateChunkTableVersion);

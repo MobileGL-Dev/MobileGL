@@ -152,7 +152,7 @@ void main()
             }
 
             // Draw once with `expected` pushed to the shader and report the center pixel.
-            void DrawAndReadCentre(int expectedWidth, int expectedHeight, unsigned char (&centre)[4]) {
+            void DrawAndReadCenter(int expectedWidth, int expectedHeight, unsigned char (&center)[4]) {
                 const GLint location = glGetUniformLocation(m_program, "g_expected_size");
                 ASSERT_NE(location, -1) << "the program has no g_expected_size uniform";
                 glUseProgram(m_program);
@@ -171,7 +171,7 @@ void main()
                 const std::size_t offset =
                     (static_cast<std::size_t>(kTargetSize / 2) * kTargetSize + kTargetSize / 2) * 4;
                 for (int i = 0; i < 4; ++i) {
-                    centre[i] = pixels[offset + static_cast<std::size_t>(i)];
+                    center[i] = pixels[offset + static_cast<std::size_t>(i)];
                 }
             }
 
@@ -207,12 +207,12 @@ void main()
         glBindImageTexture(0, m_image, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
         ASSERT_EQ(FirstGLError(), 0u) << "binding the image texture errored";
 
-        unsigned char centre[4] = {0, 0, 0, 0};
-        DrawAndReadCentre(32, 32, centre);
-        EXPECT_EQ(static_cast<int>(centre[0]), 0)
-            << "the FIRST draw already disagrees about imageSize(): got (" << static_cast<int>(centre[0]) << ", "
-            << static_cast<int>(centre[1]) << ", " << static_cast<int>(centre[2]) << ")";
-        EXPECT_EQ(static_cast<int>(centre[1]), 255);
+        unsigned char center[4] = {0, 0, 0, 0};
+        DrawAndReadCenter(32, 32, center);
+        EXPECT_EQ(static_cast<int>(center[0]), 0)
+            << "the FIRST draw already disagrees about imageSize(): got (" << static_cast<int>(center[0]) << ", "
+            << static_cast<int>(center[1]) << ", " << static_cast<int>(center[2]) << ")";
+        EXPECT_EQ(static_cast<int>(center[1]), 255);
 
         // The re-spec. The image unit is deliberately NOT re-bound: GL 4.6 core 8.26 says the
         // unit references the texture object, so this alone has to be visible to the next draw.
@@ -220,12 +220,12 @@ void main()
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         ASSERT_EQ(FirstGLError(), 0u) << "re-specifying the image texture errored";
 
-        DrawAndReadCentre(16, 16, centre);
-        EXPECT_EQ(static_cast<int>(centre[0]), 0)
+        DrawAndReadCenter(16, 16, center);
+        EXPECT_EQ(static_cast<int>(center[0]), 0)
             << "after the re-spec the draw still sees the OLD image size; center pixel was ("
-            << static_cast<int>(centre[0]) << ", " << static_cast<int>(centre[1]) << ", " << static_cast<int>(centre[2])
+            << static_cast<int>(center[0]) << ", " << static_cast<int>(center[1]) << ", " << static_cast<int>(center[2])
             << ")";
-        EXPECT_EQ(static_cast<int>(centre[1]), 255);
+        EXPECT_EQ(static_cast<int>(center[1]), 255);
     }
 
 } // namespace MGITest

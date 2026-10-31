@@ -1056,7 +1056,7 @@ TEST(DriverBugProbes, VertexInputLocationCeilingSaysWhenTheAttributeIsUnreachabl
 
 // ===================== LAYERED BLIT DESTINATION =====================
 
-TEST(DriverBugProbes, LayeredBlitDestinationIsCleanWhenTheLayerIsHonoured) {
+TEST(DriverBugProbes, LayeredBlitDestinationIsCleanWhenTheLayerIsHonored) {
     ResetFakeDriver();
     const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
     EXPECT_FALSE(ProbeBlitIgnoresDestinationArrayLayer(gl));

@@ -366,7 +366,7 @@ namespace MobileGL::MG_Remote::Server {
         // what this session last handed it.
         void NoteServerWindowExtent(void* window, Uint32 width, Uint32 height);
         // AcquireFor's cancel predicate: the loop is stopping, or the session latched.
-        static Bool ServerWindowWaitCancelled(void* self);
+        static Bool ServerWindowWaitCanceled(void* self);
         // D4: latched at the session's first successful surface creation; reset by Start(). Per
         // session, because the loop is (P14 S2).
         SessionSurfaceMode m_surfaceMode = SessionSurfaceMode::None;
@@ -531,7 +531,7 @@ namespace MobileGL::MG_Remote::Server {
                                          EGLContext curCtx, EGLDisplay dpy, EGLSurface draw, EGLSurface read,
                                          EGLContext ctx);
 
-    // P11 B1 (CONTRACT-P11 B1): the cpu core this process's `auto` policy reserves for a dialled-in
+    // P11 B1 (CONTRACT-P11 B1): the cpu core this process's `auto` policy reserves for a dialed-in
     // shared-segment client's apply thread (ApplyThreadPolicy.h ReservedApplyCoreForConfig over this
     // machine's topology and MOBILEGL_IPC_SERVER_AFFINITY), 0 when none; `outRule` receives the reason.
     // The supervisor announces it at start-up; the server app's broker relays it to the helper.

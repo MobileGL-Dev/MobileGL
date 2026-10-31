@@ -278,7 +278,7 @@ TEST_F(BufferTest, AcquireMemoryRangeWithExplicit) {
 // subtracting the offset the caller asked for - i.e. it sits at the offset's own alignment phase.
 // KHR-GLxx.map_buffer_alignment.functional asserts exactly these two, at offset 63, for 24
 // storage-flag combinations across 14 targets, and failed identically on both test devices.
-TEST_F(BufferTest, MappedPointersHonourTheAdvertisedMapBufferAlignment) {
+TEST_F(BufferTest, MappedPointersHonorTheAdvertisedMapBufferAlignment) {
     GLint advertisedAlignment = 0;
     MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_MIN_MAP_BUFFER_ALIGNMENT, &advertisedAlignment);
     ASSERT_EQ(advertisedAlignment, static_cast<GLint>(MobileGL::MG_State::GLState::MIN_MAP_BUFFER_ALIGNMENT))

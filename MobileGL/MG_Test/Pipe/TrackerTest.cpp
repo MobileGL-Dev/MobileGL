@@ -43,8 +43,8 @@ using namespace MobileGL::MG_Pipe;
 
 namespace {
     // The subsystem bitmask the tracker dispatches on is allocated in every build.
-    TEST(Tracker, SubsystemBitsDoNotOverlapTheBehaviourBit) {
-        EXPECT_EQ(kMGPipeSubsystemsMigratedAtP2 & kMGPipeBehaviourNoCsoContentAddressing, 0ull);
+    TEST(Tracker, SubsystemBitsDoNotOverlapTheBehaviorBit) {
+        EXPECT_EQ(kMGPipeSubsystemsMigratedAtP2 & kMGPipeBehaviorNoCsoContentAddressing, 0ull);
     }
 
     // A composite shutter is only as good as its mix: a collision is a missed fire. The pairs

@@ -443,8 +443,8 @@ void main() { fragColor = color[0]; })";
             const PipeStatsWindow::LogMark mark = SetupFrame();
             ClearTo(0.0f, 0.0f, 0.0f, 0.0f);
 
-            const Rgba8 colourA{200, 60, 30, 255};
-            const Rgba8 colourB{60, 200, 90, 255};
+            const Rgba8 colorA{200, 60, 30, 255};
+            const Rgba8 colorB{60, 200, 90, 255};
             const auto blockBytes = [](std::size_t size, const Rgba8& c) {
                 // The block's vec4 at offset 0; every other slot holds a color no step draws, so a
                 // read off any other offset is as visible as a read off the dead store.
@@ -463,7 +463,7 @@ void main() { fragColor = color[0]; })";
             glGenBuffers(1, &ubo);
             glGenBuffers(1, &pin);
             glBindBuffer(GL_UNIFORM_BUFFER, ubo);
-            const std::vector<std::uint8_t> bytesA = blockBytes(kAbaDeadStoreBytes, colourA);
+            const std::vector<std::uint8_t> bytesA = blockBytes(kAbaDeadStoreBytes, colorA);
             glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(bytesA.size()), bytesA.data(), GL_DYNAMIC_DRAW);
             glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo);
             glBindBuffer(GL_COPY_WRITE_BUFFER, pin);
@@ -496,7 +496,7 @@ void main() { fragColor = color[0]; })";
             glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_STREAM_DRAW);
             // Step 7: a new store through the freed handle value, holding B.
             glBindBuffer(GL_UNIFORM_BUFFER, ubo);
-            const std::vector<std::uint8_t> bytesB = blockBytes(kAbaNewStoreBytes, colourB);
+            const std::vector<std::uint8_t> bytesB = blockBytes(kAbaNewStoreBytes, colorB);
             glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(bytesB.size()), bytesB.data(), GL_DYNAMIC_DRAW);
             glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo);
             glBindBuffer(GL_ARRAY_BUFFER, m_buffer);
@@ -508,8 +508,8 @@ void main() { fragColor = color[0]; })";
             const Image image = ReadPixels(kWidth, kHeight);
             ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
             const Rgba8 got = image.At(kWidth / 2, kHeight / 2);
-            EXPECT_TRUE(Near(got, colourB))
-                << "read " << got << ", wanted " << colourB << " (the live store's bytes). " << colourA
+            EXPECT_TRUE(Near(got, colorB))
+                << "read " << got << ", wanted " << colorB << " (the live store's bytes). " << colorA
                 << " is the DEAD store's color: the draw through the re-minted VkBuffer handle reused a "
                    "descriptor set memoized under the first store's handle and read its freed memory "
                    "(ID-P7-43); anything else is that memory already reused";

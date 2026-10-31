@@ -496,14 +496,14 @@ TEST(ServerDisplayTest, InterruptAndTheCancelPredicateEndAWaitByName) {
               ServerWindowAcquire::Interrupted);
     interrupter.join();
 
-    static std::atomic<bool> cancelled{false};
-    cancelled.store(false);
+    static std::atomic<bool> canceled{false};
+    canceled.store(false);
     std::thread canceller([] {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        cancelled.store(true);
+        canceled.store(true);
     });
-    const auto cancel = [](void*) -> Bool { return cancelled.load(); };
-    EXPECT_EQ(display.AcquireFor(0, 0, 5000, this, nullptr, cancel, nullptr, &lease), ServerWindowAcquire::Cancelled);
+    const auto cancel = [](void*) -> Bool { return canceled.load(); };
+    EXPECT_EQ(display.AcquireFor(0, 0, 5000, this, nullptr, cancel, nullptr, &lease), ServerWindowAcquire::Canceled);
     canceller.join();
 
     // And Uninstall: the display is gone, the waiter hears NoDisplay.

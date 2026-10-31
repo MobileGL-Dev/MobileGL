@@ -719,13 +719,13 @@ void main() {
             // depend on a CPU sub-image reaching a layer whose content the GPU wrote - which
             // DirectVulkan does not currently do even for a plain array texture (no view
             // involved), and which would make a failure here unattributable.
-            const auto uploadLayer = [&](GLuint texture, int layer, Rgba8 colour) {
+            const auto uploadLayer = [&](GLuint texture, int layer, Rgba8 color) {
                 std::vector<std::uint8_t> texels(static_cast<std::size_t>(kSize) * kSize * 4);
                 for (std::size_t i = 0; i < texels.size(); i += 4) {
-                    texels[i + 0] = colour.r;
-                    texels[i + 1] = colour.g;
-                    texels[i + 2] = colour.b;
-                    texels[i + 3] = colour.a;
+                    texels[i + 0] = color.r;
+                    texels[i + 1] = color.g;
+                    texels[i + 2] = color.b;
+                    texels[i + 3] = color.a;
                 }
                 glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -942,7 +942,7 @@ void main() {
             constexpr int kViewNumLayers = 2;
             // One color per level, so a level that was redefined from the view's base extent reads
             // as another level's color rather than as a plausible one.
-            const Rgba8 levelColour[kLevels] = {
+            const Rgba8 levelColor[kLevels] = {
                 {255, 0, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255}, {255, 0, 255, 255}, {0, 255, 255, 255}};
 
             const GLuint storage = MakeTexture();
@@ -953,10 +953,10 @@ void main() {
                 const int side = kBase >> level;
                 std::vector<std::uint8_t> texels(static_cast<std::size_t>(side) * side * kLayers * 4);
                 for (std::size_t at = 0; at < texels.size(); at += 4) {
-                    texels[at + 0] = levelColour[level].r;
-                    texels[at + 1] = levelColour[level].g;
-                    texels[at + 2] = levelColour[level].b;
-                    texels[at + 3] = levelColour[level].a;
+                    texels[at + 0] = levelColor[level].r;
+                    texels[at + 1] = levelColor[level].g;
+                    texels[at + 2] = levelColor[level].b;
+                    texels[at + 3] = levelColor[level].a;
                 }
                 glTexSubImage3D(GL_TEXTURE_2D_ARRAY, level, 0, 0, 0, side, side, kLayers, GL_RGBA, GL_UNSIGNED_BYTE,
                                 texels.data());
@@ -1027,7 +1027,7 @@ void main() {
                     // 3 are outside the view's layer window.
                     const bool inWindow =
                         level >= 2 && level <= 3 && layer >= kViewMinLayer && layer < kViewMinLayer + kViewNumLayers;
-                    const Rgba8 expected = inWindow ? Rgba8{0, 255, 0, 255} : levelColour[level];
+                    const Rgba8 expected = inWindow ? Rgba8{0, 255, 0, 255} : levelColor[level];
                     const std::string what = "the owner's mip " + std::to_string(level) + ", layer " +
                                              std::to_string(layer) +
                                              (inWindow ? ", inside the view's window" : ", outside the view's window");
@@ -1062,7 +1062,7 @@ void main() {
             constexpr std::uint8_t kCanaryByte = 0xAB;
             // One color per storage layer, so a lost layer origin and a read past the window are
             // both visible as another layer's color rather than as a plausible one.
-            const auto layerColour = [](int layer) {
+            const auto layerColor = [](int layer) {
                 return Rgba8{static_cast<std::uint8_t>(10 * (layer + 1)), 40, 7, 255};
             };
             const Rgba8 canary{kCanaryByte, kCanaryByte, kCanaryByte, kCanaryByte};
@@ -1077,11 +1077,11 @@ void main() {
                 for (int layer = 0; layer < kLayers; ++layer) {
                     for (int t = 0; t < side * side; ++t) {
                         std::uint8_t* p = texels.data() + (static_cast<std::size_t>(layer) * side * side + t) * 4;
-                        const Rgba8 colour = layerColour(layer);
-                        p[0] = colour.r;
-                        p[1] = colour.g;
-                        p[2] = colour.b;
-                        p[3] = colour.a;
+                        const Rgba8 color = layerColor(layer);
+                        p[0] = color.r;
+                        p[1] = color.g;
+                        p[2] = color.b;
+                        p[3] = color.a;
                     }
                 }
                 glTexSubImage3D(GL_TEXTURE_2D_ARRAY, level, 0, 0, 0, side, side, kLayers, GL_RGBA, GL_UNSIGNED_BYTE,
@@ -1107,7 +1107,7 @@ void main() {
                 std::memcpy(image.Data(), dst.data() + static_cast<std::size_t>(slice) * side * side * 4,
                             static_cast<std::size_t>(side) * side * 4);
                 const bool inWindow = slice < kViewNumLayers;
-                const Rgba8 expected = inWindow ? layerColour(kViewMinLayer + slice) : canary;
+                const Rgba8 expected = inWindow ? layerColor(kViewMinLayer + slice) : canary;
                 const std::string what = inWindow ? "the view's slice " + std::to_string(slice) +
                                                         ", the owner's layer " + std::to_string(kViewMinLayer + slice)
                                                   : "slice " + std::to_string(slice) +

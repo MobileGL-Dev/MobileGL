@@ -14,7 +14,7 @@
 // 396 pipeline bytes, probes, and confirms a hit with a memcmp: a bare 64-bit match could alias
 // two render states onto one CSO, which is silently wrong pixels. A miss mints a slot and emits
 // create_render_state with every pipeline chunk. 64 entries, LRU, about 26 KB per context; the
-// counters give the hit rate. kMGPipeBehaviourNoCsoContentAddressing (bit 63 of
+// counters give the hit rate. kMGPipeBehaviorNoCsoContentAddressing (bit 63 of
 // MOBILEGL_PIPE_PUSH) disables reuse as a negative control, which CsoContentAddressingScenario
 // keeps exercised.
 #include <Config.h>
@@ -55,7 +55,7 @@ namespace MobileGL::MG_Pipe {
             MGPipeGatherPipelineBytes(params, bytes.data());
             ++m_counters.Binds;
 
-            const Bool contentAddressed = (MG_Config::Features.PipePush & kMGPipeBehaviourNoCsoContentAddressing) == 0;
+            const Bool contentAddressed = (MG_Config::Features.PipePush & kMGPipeBehaviorNoCsoContentAddressing) == 0;
             if (contentAddressed) {
                 const Uint64 hash =
                     s_hashForTest != nullptr ? s_hashForTest(bytes.data()) : MGPipeHashPipelineBytes(bytes.data());

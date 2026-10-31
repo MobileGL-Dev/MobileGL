@@ -282,7 +282,7 @@ void main()
 
             // Clears to BLUE, so "the draw painted nothing" is a color of its own rather
             // than something that could be mistaken for a zeroed payload.
-            Rgba8 DrawAndReadCentre(GLuint program) const {
+            Rgba8 DrawAndReadCenter(GLuint program) const {
                 glViewport(0, 0, Gl().Width(), Gl().Height());
                 glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT);
@@ -344,9 +344,9 @@ void main()
                              << Gl().BackendName() << ", so there is no block to carry through: " << BuildLog();
             }
 
-            const Rgba8 centre = DrawAndReadCentre(program);
+            const Rgba8 center = DrawAndReadCenter(program);
             EXPECT_EQ(FirstGLError(), 0u);
-            EXPECT_TRUE(IsGreen(centre)) << "the control pipeline did not deliver its payload: " << centre;
+            EXPECT_TRUE(IsGreen(center)) << "the control pipeline did not deliver its payload: " << center;
         }
 
         TEST_F(IoBlockNameCollisionScenario, OneBlockNameInBothDirectionsStillCarriesThePayload) {
@@ -368,12 +368,12 @@ void main()
                                       "desktop GLSL, but the program did not build: "
                                    << BuildLog();
 
-            const Rgba8 centre = DrawAndReadCentre(program);
+            const Rgba8 center = DrawAndReadCenter(program);
             EXPECT_EQ(FirstGLError(), 0u);
-            EXPECT_TRUE(IsGreen(centre))
+            EXPECT_TRUE(IsGreen(center))
                 << "the payload did not survive the stage that names its input and output block "
                    "the same: "
-                << centre
+                << center
                 << " (blue: nothing drew; red: the plain varying was lost too; black: "
                    "the block arrived empty)";
         }

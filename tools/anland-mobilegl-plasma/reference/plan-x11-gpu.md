@@ -77,7 +77,7 @@ uses the application's). KWin's launcher also drops `DISPLAY` from Xwayland's en
 `ANLAND_MOBILEGL=1` and `ANLAND_XWAYLAND_GLAMOR != 0`: Xwayland starts **without** `-shm`, with
 `MOBILEGL_IPC_SURFACE=offscreen`, its own `MOBILEGL_LOG_FILE_PATH=/tmp/mgl-xwayland`, `GBM_BACKEND`
 kept, no `LIBGL_ALWAYS_SOFTWARE`/`GALLIUM_DRIVER`, no `DISPLAY`. Otherwise the old `-shm` +
-software environment. If glamor cannot initialise, Xwayland itself falls back to shm rendering.
+software environment. If glamor cannot initialize, Xwayland itself falls back to shm rendering.
 
 ## Stage 2 - GLX presentation through DRI3 + Present
 

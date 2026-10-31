@@ -29,7 +29,7 @@ P7 PACKAGE L ADDS THE SAME QUESTION FOR MAGMA, IN TWO TIERS, AND THE NORMALIZATI
 DIFFERENT ON PURPOSE. The Espryt half above strips the sub-lane tails `F1.` and `Ct.` because
 they name neither the case nor the arm. The Magma half must NOT: `RunAhead.Credit1.` and
 `RunAhead.Credit3.` are two entries of the same case, differing in the credit the lane pins, and
-a normaliser that dropped the tail would fold them together and then report an equal-sized set
+a normalizer that dropped the tail would fold them together and then report an equal-sized set
 that had silently lost one. So there the arm - and only the arm, the SECOND dotted segment - is
 what comes off.
 """
@@ -95,7 +95,7 @@ MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.", "Descr
 # MEASURED (a temporary fatal in each of the three readers): all five knob=1 entries died on
 # split and on spawn and ALL FIVE PASSED on tcp.
 #
-# These are TAILS, not scenarios - the normaliser above keeps the sub-lane tail for the Magma
+# These are TAILS, not scenarios - the normalizer above keeps the sub-lane tail for the Magma
 # tier on purpose, so `.MsResolve1.` names the knob entry and `.MsResolve0.` (the default, which
 # does keep its tcp entry) is untouched.
 #
@@ -233,7 +233,7 @@ def compare_arms(build_dir, tier, labels, inproc_only=(), no_tcp=(), only_on=Non
         names = lane_names(build_dir, label) - FIXTURE_ENTRIES
         sets[arm] = arm_keys(names)
         print(f"{tier}: {label} has {len(names)} case entrie(s), "
-              f"{len(sets[arm])} after normalisation")
+              f"{len(sets[arm])} after normalization")
         if len(names) != len(sets[arm]):
             print(f"::error::{label}: {len(names) - len(sets[arm])} entry name(s) do not parse "
                   f"as <Backend>.<Arm>.<case>, so this comparison silently drops them: "

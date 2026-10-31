@@ -98,10 +98,10 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
         DrawFullViewportQuad(program);
         {
             const Image painted = ReadPixels(width, height);
-            const Rgba8 centre = painted.At(width / 2, height / 2);
-            ASSERT_NEAR(centre.r, 26, 2) << "the setup frame did not paint; the staleness test would be vacuous";
-            ASSERT_NEAR(centre.g, 51, 2);
-            ASSERT_NEAR(centre.b, 77, 2);
+            const Rgba8 center = painted.At(width / 2, height / 2);
+            ASSERT_NEAR(center.r, 26, 2) << "the setup frame did not paint; the staleness test would be vacuous";
+            ASSERT_NEAR(center.g, 51, 2);
+            ASSERT_NEAR(center.b, 77, 2);
         }
         gl.EndFrame();
 
@@ -220,13 +220,13 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
 
         const Image blitted = ReadPixels(width, height);
         EXPECT_EQ(FirstGLError(), 0u);
-        const Rgba8 centre = blitted.At(width / 2, height / 2);
-        EXPECT_NEAR(centre.r, 26, 2) << "the blit into the default framebuffer did not survive the clear that "
+        const Rgba8 center = blitted.At(width / 2, height / 2);
+        EXPECT_NEAR(center.r, 26, 2) << "the blit into the default framebuffer did not survive the clear that "
                                         "preceded it; read back rgba("
-                                     << static_cast<int>(centre.r) << ", " << static_cast<int>(centre.g) << ", "
-                                     << static_cast<int>(centre.b) << ", " << static_cast<int>(centre.a) << ")";
-        EXPECT_NEAR(centre.g, 51, 2);
-        EXPECT_NEAR(centre.b, 77, 2);
+                                     << static_cast<int>(center.r) << ", " << static_cast<int>(center.g) << ", "
+                                     << static_cast<int>(center.b) << ", " << static_cast<int>(center.a) << ")";
+        EXPECT_NEAR(center.g, 51, 2);
+        EXPECT_NEAR(center.b, 77, 2);
 
         DestroyColorFbo(source);
         gl.EndFrame();
@@ -323,10 +323,10 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
         EXPECT_EQ(FirstGLError(), 0u);
 
         const Image painted = ReadPixels(width, height);
-        const Rgba8 centre = painted.At(width / 2, height / 2);
-        EXPECT_NEAR(centre.r, 26, 2) << "the draw did not survive the clear that preceded it";
-        EXPECT_NEAR(centre.g, 51, 2);
-        EXPECT_NEAR(centre.b, 77, 2);
+        const Rgba8 center = painted.At(width / 2, height / 2);
+        EXPECT_NEAR(center.r, 26, 2) << "the draw did not survive the clear that preceded it";
+        EXPECT_NEAR(center.g, 51, 2);
+        EXPECT_NEAR(center.b, 77, 2);
 
         gl.EndFrame();
         glDeleteProgram(program);

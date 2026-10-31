@@ -160,8 +160,8 @@
     X(kDispatch,    GetSamplingResolutionGeneration)                   \
     X(kDispatch,    GetImageTextureBinding)                            \
     X(kDispatch,    GetFramebufferBindingSlot)                         \
-    /* Magma's PrepareStorageImageTextures materialises a queued clear for every  */ \
-    /* storage image the dispatch writes, and the clear pre-compensates its colour */ \
+    /* Magma's PrepareStorageImageTextures materializes a queued clear for every  */ \
+    /* storage image the dispatch writes, and the clear pre-compensates its color */ \
     /* against GL_FRAMEBUFFER_SRGB (VkClearManager::PreCompensateSrgbClearColor).  */ \
     X(kDispatch,    IsCapabilityEnabled)                               \
     X(kDispatch,    GetPatchVertices)                                  \
@@ -224,7 +224,7 @@
     X(kTextureOp,   GetSamplingResolutionGeneration)                   \
     X(kTextureOp,   GetTextureBindGeneration)                          \
     X(kTextureOp,   GetMaxTouchedTextureUnit)                          \
-    /* Magma's GenerateMipmap materialises the texture's queued clear before it    */ \
+    /* Magma's GenerateMipmap materializes the texture's queued clear before it    */ \
     /* blits (MaterializePendingClearForTexture -> PreCompensateSrgbClearColor,    */ \
     /* which reads GL_FRAMEBUFFER_SRGB), and a depth texture takes the shader path */ \
     /* (GenerateDepthMipmapWithShader -> BindProgramUniformBuffers), whose sampler */ \

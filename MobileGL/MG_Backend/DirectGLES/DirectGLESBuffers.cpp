@@ -367,9 +367,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (g_GLESFuncs.glMapBufferRange == nullptr || g_GLESFuncs.glUnmapBuffer == nullptr) return;
 
                 const SizeT packedStride = program->GetTransformFeedbackPackedStride();
-                const SizeT modelledVertices =
+                const SizeT modeledVertices =
                     static_cast<SizeT>(MG_Pipe::gPipeInputs->GetTransformFeedbackCapturedVertices());
-                const SizeT vertices = std::min<SizeT>(modelledVertices, xfb.scatterCapacityVertices);
+                const SizeT vertices = std::min<SizeT>(modeledVertices, xfb.scatterCapacityVertices);
                 if (packedStride == 0 || vertices == 0) {
                     // The scatter path redirected the DRIVER's capture into the scratch buffer,
                     // so bailing here leaves the application's buffers holding their pre-draw
@@ -380,7 +380,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     MGLOG_E_ONCE("EndTransformFeedback: scattered capture discarded - packedStride=%zu, "
                                  "CPU-modeled captured vertices=%zu, scratch capacity=%zu. The capture buffers keep "
                                  "their pre-draw contents.",
-                                 packedStride, modelledVertices, xfb.scatterCapacityVertices);
+                                 packedStride, modeledVertices, xfb.scatterCapacityVertices);
                     return;
                 }
 

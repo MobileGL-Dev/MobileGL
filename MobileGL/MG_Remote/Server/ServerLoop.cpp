@@ -189,7 +189,7 @@ namespace MobileGL::MG_Remote::Server {
         // the topology cannot be read - Windows, macOS, a container that hides the cpufreq
         // tree, or a partially readable one - because with no asymmetry information the honest
         // answer is "do not pin", not "pin to a guess".
-        // P11 B1: and the PRIME set beside it - the cpus AT the peak ceiling - which the dialled-in
+        // P11 B1: and the PRIME set beside it - the cpus AT the peak ceiling - which the dialed-in
         // shared-segment rule needs so it never hands the spinning apply thread the only prime core.
         void DetectCoreTopology(Uint64* outBig, Uint64* outPrime) {
             *outBig = *outPrime = 0;
@@ -218,7 +218,7 @@ namespace MobileGL::MG_Remote::Server {
         }
 
         // Whether MOBILEGL_IPC_SPIN_US was set at all: ConfigLoader answers 50 for "unset" and
-        // for "50", and the dialled-in peer's default spin (ApplyThreadPolicy.h) applies only to
+        // for "50", and the dialed-in peer's default spin (ApplyThreadPolicy.h) applies only to
         // the first.
         Bool SpinSetExplicitly() {
             const char* text = std::getenv("MOBILEGL_IPC_SPIN_US");
@@ -628,10 +628,10 @@ namespace MobileGL::MG_Remote::Server {
         const ApplyThreadPolicy policy =
             SelectApplyThreadPolicy(raw, SpinSetExplicitly(), SpinUsFromConfig(), session.Peer(),
                                     session.PeerSharedSegments(), bigCores, primeCores, OnlineCpuMask());
-        const Bool recognised = policy.recognised;
+        const Bool recognized = policy.recognized;
         const Uint64 requested = policy.requestedMask;
         m_affinityMask = ApplyAffinity(requested);
-        if (!recognised) {
+        if (!recognized) {
             MGLOG_E("MG_Remote server: MOBILEGL_IPC_SERVER_AFFINITY='%s' is not `auto`, `off` or "
                     "a number; NO affinity was applied. This is logged rather than defaulted "
                     "because an affinity that silently did nothing is indistinguishable from "
@@ -1220,7 +1220,7 @@ namespace MobileGL::MG_Remote::Server {
             if (corrupt) {
                 // Ring.h's own rule: a header the producer could not have written is
                 // Fatal{ProtocolCorruption}, never a retry. Retrying re-reads the same bytes
-                // for ever; skipping desynchronises seq, and seq IS the reply-slot id. PH-1 (3):
+                // for ever; skipping desynchronizes seq, and seq IS the reply-slot id. PH-1 (3):
                 // the header is the peer's bytes, so an armed session child latches here and
                 // stops reading the ring - neither a retry nor a skip.
                 (void)SessionLatch(MGFatalFamily::ProtocolCorruption,
@@ -1973,7 +1973,7 @@ namespace MobileGL::MG_Remote::Server {
         }
     }
 
-    Bool ServerLoop::ServerWindowWaitCancelled(void* self) {
+    Bool ServerLoop::ServerWindowWaitCanceled(void* self) {
         const auto* loop = static_cast<const ServerLoop*>(self);
         // A window-lost request also ends the wait: this thread holds a lease on a window that is
         // being destroyed, and the UI thread is blocked until it answers (PumpControlRequest).
@@ -1990,7 +1990,7 @@ namespace MobileGL::MG_Remote::Server {
         {
             const ScopedBackendTurnYield yield;
             acquired = display.AcquireFor(width, height, timeoutMs, this, &ServerWindowLostThunk,
-                                          &ServerWindowWaitCancelled, this, lease, &ServerWindowResizedThunk);
+                                          &ServerWindowWaitCanceled, this, lease, &ServerWindowResizedThunk);
         }
         switch (acquired) {
         case ServerWindowAcquire::Acquired:
@@ -2008,7 +2008,7 @@ namespace MobileGL::MG_Remote::Server {
                     width, height);
             return MOBILEGL_ERR_UNSUPPORTED;
         case ServerWindowAcquire::NoWindow:
-        case ServerWindowAcquire::Cancelled:
+        case ServerWindowAcquire::Canceled:
         case ServerWindowAcquire::Interrupted:
         case ServerWindowAcquire::LeasedElsewhere:
             break;
@@ -2265,7 +2265,7 @@ namespace MobileGL::MG_Remote::Server {
             const ScopedBackendTurnYield yield;
             acquired = ServerDisplayInstance().AcquireFor(
                 m_serverWindowWantWidth, m_serverWindowWantHeight, ServerDisplay::kGeometryGraceMs, this,
-                &ServerWindowLostThunk, &ServerWindowWaitCancelled, this, &lease, &ServerWindowResizedThunk);
+                &ServerWindowLostThunk, &ServerWindowWaitCanceled, this, &lease, &ServerWindowResizedThunk);
         }
         if (acquired != ServerWindowAcquire::Acquired) {
             // Still registered: the next new window wakes this again.

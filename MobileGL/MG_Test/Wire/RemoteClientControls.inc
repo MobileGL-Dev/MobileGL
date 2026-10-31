@@ -1024,7 +1024,7 @@ TEST(RemoteClientControls, TextureUploadsStopOwningAReplyOnTheWireArm) {
         MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
         Uint8 pixels[4 * 4 * 4];
         std::memset(pixels, 0x21, sizeof(pixels));
-        // THE CONTROL ROW, NAMED RATHER THAN TOTALLED, AND MEASURED ACROSS THE WHOLE SETUP. The
+        // THE CONTROL ROW, NAMED RATHER THAN TOTALED, AND MEASURED ACROSS THE WHOLE SETUP. The
         // object's create is the one record an object always pays for (kWaitReply in
         // PipeCalls.def), so ITS counter is the live control - and the baseline goes in before
         // GenTextures, because which call publishes the twin (generate, bind or the storage

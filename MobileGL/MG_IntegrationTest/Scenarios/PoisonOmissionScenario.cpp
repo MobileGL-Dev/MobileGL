@@ -277,8 +277,8 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
 
                 // The verb the omission names (kOmittedPairs): a readback, which is a round trip,
                 // so the server has applied it - and read the pack state - before this returns.
-                unsigned char centre[4] = {};
-                glReadPixels(gl.Width() / 2, gl.Height() / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, centre);
+                unsigned char center[4] = {};
+                glReadPixels(gl.Width() / 2, gl.Height() / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, center);
                 std::fprintf(stderr, "[itest] poison worker: glReadPixels returned\n");
 
                 // The sequence is the WHOLE datum this child reports, so a GL error in it must be

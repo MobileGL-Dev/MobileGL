@@ -83,7 +83,7 @@ PACKAGES = ('clang-20', 'lld-20', 'libc++-20-dev', 'libc++abi-20-dev', 'libvulka
             'libegl1-mesa-dev', 'libgles2-mesa-dev')
 
 
-def normaliser(build_dir, deps_dir=None):
+def normalizer(build_dir, deps_dir=None):
     roots = [(str(Path(build_dir)), '@BUILD@'), (str(Path(build_dir).resolve()), '@BUILD@')]
     if deps_dir:
         roots += [(str(Path(deps_dir)), '@DEPS@'), (str(Path(deps_dir).resolve()), '@DEPS@')]
@@ -244,7 +244,7 @@ def read_image():
 
 def fingerprint(build_dir, deps_dir=None):
     build = Path(build_dir)
-    norm = normaliser(build, deps_dir)
+    norm = normalizer(build, deps_dir)
     result = {
         'cache': read_cache(build, norm),
         'compile': read_compile(build, norm),

@@ -10,9 +10,9 @@
 // Native Vulkan depth mip generation: no GL program, registry entry, or runtime transpilation.
 //
 // The geometry is WireColorBlit.vert's, unchanged - the same quad, the same push-constant
-// rect, the same GL-bottom-left to native-image mapping - so a depth mip and a colour blit
+// rect, the same GL-bottom-left to native-image mapping - so a depth mip and a color blit
 // place their fragments identically and only the fragment stage differs. The block carries
-// one member more than the colour blit's, and the fragment stage is the member's only
+// one member more than the color blit's, and the fragment stage is the member's only
 // reader: a push-constant block must be declared identically in every stage of one pipeline,
 // so it is declared here too rather than split into a second range.
 layout(push_constant) uniform DepthMipmapRect {

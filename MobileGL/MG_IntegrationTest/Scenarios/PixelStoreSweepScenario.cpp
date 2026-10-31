@@ -311,7 +311,7 @@ namespace MGITest {
     // not tell a missing round-up from a present one); SKIP_ROWS 1 and SKIP_PIXELS 2 move the
     // first pixel to byte 24 + 8 = 32 of the image; and the read is issued at buffer offset 16,
     // so the first pixel lands at 48 and a branch that dropped the offset would land at 32.
-    TEST_F(PixelStoreSweepScenario, ReadPixelsIntoAPackBufferHonoursPackStateAndLeavesTheGapsAlone) {
+    TEST_F(PixelStoreSweepScenario, ReadPixelsIntoAPackBufferHonorsPackStateAndLeavesTheGapsAlone) {
         if (!Ready()) return;
         ResetAllPixelStoreModes();
 

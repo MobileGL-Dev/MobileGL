@@ -356,7 +356,7 @@ namespace MobileGL::MG_Pipe {
         // A snapshot of this link's artifacts, so every reflection read by the program twin is
         // of memory the record owns: ProgramObject::Link() replaces the frontend's artifacts in
         // place, and a client running ahead may already have relinked. Under a transport the
-        // decoder deserialises it from SEG_STAGE; in one process PipeRoute copies it without the
+        // decoder deserializes it from SEG_STAGE; in one process PipeRoute copies it without the
         // codec. A SharedPtr because a program-pipeline composite and its stage programs share
         // one link's artifacts and the twin holds it across a build. Every create replaces it.
         SharedPtr<const MG_State::GLState::ProgramArchive> Archive;
@@ -1281,7 +1281,7 @@ namespace MobileGL::MG_Pipe {
     // silent no-op: a record that reached an unimplemented applier and returned quietly is a
     // dropped binding set, which renders wrong rather than stopping - the exact failure mode
     // ID-39's sixty-six lost uploads had. Nothing routes either opcode until its package lands
-    // (PipeCatalogueTest pins both table slots null), so the abort is unreachable today.
+    // (PipeCatalogTest pins both table slots null), so the abort is unreachable today.
 
     // set_shader_buffers, per Class. `tail` is hdr.Count MGPBufferRanges starting at hdr.Start;
     // Class >= kMGPipeShaderBufferClassCount and Start + Count above the capacity are
@@ -1304,7 +1304,7 @@ namespace MobileGL::MG_Pipe {
 
     // create_shader_state. `link` and `spirv` are the program's artifacts and `archive` is the
     // snapshot the record adopts (a null clears the previous one); desc's blob refs are not
-    // read. Under a transport the decoder passes its deserialised archive and pointers into it;
+    // read. Under a transport the decoder passes its deserialized archive and pointers into it;
     // in one process PipeRoute copies the frontend's artifacts into a new archive without the
     // codec. The verify build round-trips the artifacts through the codec before storing, and a
     // mismatch is Fatal{PipeVerifyDiffer, "program-archive"}. `archive` has no default so that a
@@ -1335,7 +1335,7 @@ namespace MobileGL::MG_Pipe {
     // abort loudly rather than degrade silently.
     //
     // Monolith body: (void)name;. The list of names is pinned by
-    // PipeCatalogueTest.EveryUnmigratedEmulationIsNamedOnce and the call count is grepped by
+    // PipeCatalogTest.EveryUnmigratedEmulationIsNamedOnce and the call count is grepped by
     // the purity gate, so a site that quietly disappears is a red gate rather than a surprise
     // at P8.
     void MGPipeUnmigratedEmulation(const char* name);

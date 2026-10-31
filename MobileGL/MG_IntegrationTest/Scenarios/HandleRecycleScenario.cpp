@@ -165,7 +165,7 @@ namespace MGITest {
         // MGITEST_HANDLE_ARM would otherwise downgrade that lane's Handles or AbaControl assertion
         // to the Legacy one, which passes - a lane reporting green for an arm it never ran. Same
         // shape as CsoContentAddressingScenario's FAIL() on an unknown MGITEST_CSO_LANE.
-        bool ArmNameIsRecognised() {
+        bool ArmNameIsRecognized() {
             const char* name = std::getenv(kArmMarker);
             return name == nullptr || std::strcmp(name, "handles") == 0 || std::strcmp(name, "legacy") == 0 ||
                    std::strcmp(name, "aba") == 0;
@@ -440,7 +440,7 @@ void main() { oColor = texture(uTex, vUv); }
             void SetUp() override {
                 ScenarioTest::SetUp();
                 if (!Ready()) return;
-                if (!ArmNameIsRecognised()) {
+                if (!ArmNameIsRecognized()) {
                     const char* raw = std::getenv(kArmMarker);
                     FAIL() << "unknown " << kArmMarker << " value '" << (raw != nullptr ? raw : "")
                            << "': the arms are handles / legacy / aba. Reading an unrecognized name "

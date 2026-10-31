@@ -10,7 +10,7 @@
 //
 // DirectVulkan does not bind a texture GL calls incomplete: it substitutes a fallback so the
 // sampler reads (0,0,0,1) instead of losing the draw. That decision is made twice per draw - once
-// by CollectSampledTextures, which builds the list SetupDraw syncs, materialises pending clears
+// by CollectSampledTextures, which builds the list SetupDraw syncs, materializes pending clears
 // for and transitions to a sampled layout BEFORE the render pass opens, and once by the descriptor
 // resolve inside the pass. Both ask SamplesAsIncompleteTexture.
 //
@@ -138,7 +138,7 @@ void main() {
     } // namespace
 
     // The full sequence, ordered so the ONLY state change between the two draws is the filter.
-    TEST_F(SampledSetStalenessScenario, AQueuedClearIsMaterialisedWhenAFilterChangeCompletesTheTexture) {
+    TEST_F(SampledSetStalenessScenario, AQueuedClearIsMaterializedWhenAFilterChangeCompletesTheTexture) {
         if (!Ready() || IsSkipped()) return;
 
         // 1. Queue a clear on the texture through an FBO and take it straight back out, with no
@@ -186,7 +186,7 @@ void main() {
     // The same flip driven from a SAMPLER OBJECT rather than the texture's own parameters. It is
     // the other half of what feeds the completeness predicate, it moves the same generation, and
     // it likewise binds nothing.
-    TEST_F(SampledSetStalenessScenario, AQueuedClearIsMaterialisedWhenASamplerObjectCompletesTheTexture) {
+    TEST_F(SampledSetStalenessScenario, AQueuedClearIsMaterializedWhenASamplerObjectCompletesTheTexture) {
         if (!Ready() || IsSkipped()) return;
 
         GLuint sampler = 0;

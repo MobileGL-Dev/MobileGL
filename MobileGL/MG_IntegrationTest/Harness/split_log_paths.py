@@ -175,7 +175,7 @@ DUALBLOCK_ALLOWED_SKIPS = {
         "DirectGLES cannot forward a geometry-shader-less adjacency draw",
     "DirectGLES.Split.ForcedDs.DepthStencilReadbackMatrixScenario.AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines":
         "does not produce this picture yet: a flipped multisample depth resolve writes nothing",
-    "DirectGLES.Split.Glsl420DeclarationScenario.AnArrayOfSamplerArraysIsHonouredOrDeclinedCleanly":
+    "DirectGLES.Split.Glsl420DeclarationScenario.AnArrayOfSamplerArraysIsHonoredOrDeclinedCleanly":
         "the frontend's binding-qualifier seeding does not walk an array of arrays",
     # ...and driver capabilities llvmpipe does not have (the runner and the host both skip them).
     "DirectGLES.Split.ForcedDs.DepthStencilReadbackMatrixScenario.SeparateDepthAndStencilAttachmentsAreBothReadable":

@@ -139,9 +139,9 @@ void main() { o_color = vec4(float(gl_NumSamples) * (16.0 / 255.0), 0.0, 0.0, 1.
 
         {
             const Image resolved = ReadPixels(width, height);
-            const Rgba8 centre = resolved.At(width / 2, height / 2);
-            EXPECT_NEAR(centre.r, 16 * realizedSamples, 2)
-                << "gl_NumSamples read " << (centre.r / 16.0) << " into a " << realizedSamples
+            const Rgba8 center = resolved.At(width / 2, height / 2);
+            EXPECT_NEAR(center.r, 16 * realizedSamples, 2)
+                << "gl_NumSamples read " << (center.r / 16.0) << " into a " << realizedSamples
                 << "-sample framebuffer; 1 means the reserved uniform was never written, 0 means it was "
                 << "written but never uploaded";
         }
@@ -165,11 +165,11 @@ void main() { o_color = vec4(float(gl_NumSamples) * (16.0 / 255.0), 0.0, 0.0, 1.
 
         {
             const Image single = ReadPixels(width, height);
-            const Rgba8 centre = single.At(width / 2, height / 2);
+            const Rgba8 center = single.At(width / 2, height / 2);
             // GL 4.6 core 15.2.2: gl_NumSamples is ONE for a non-multisample framebuffer, where
             // glGetIntegerv(GL_SAMPLES) answers zero.
-            EXPECT_NEAR(centre.r, 16, 2)
-                << "gl_NumSamples read " << (centre.r / 16.0)
+            EXPECT_NEAR(center.r, 16, 2)
+                << "gl_NumSamples read " << (center.r / 16.0)
                 << " into a single-sample framebuffer; the value is a property of the DRAW FRAMEBUFFER, "
                 << "so re-using the program must re-write it";
         }
@@ -255,10 +255,10 @@ void main() { o_color = vec4(float(gl_NumSamples) * (16.0 / 255.0), 0.0, 0.0, 1.
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
         const Image resolved = ReadPixels(width, height);
-        const Rgba8 centre = resolved.At(width / 2, height / 2);
+        const Rgba8 center = resolved.At(width / 2, height / 2);
         // The rate changes how OFTEN the shader runs, never what it computes - so the same
         // gl_NumSamples reading has to come back.
-        EXPECT_NEAR(centre.r, 16 * realizedSamples, 2) << "the draw changed its result once sample shading was enabled";
+        EXPECT_NEAR(center.r, 16 * realizedSamples, 2) << "the draw changed its result once sample shading was enabled";
 
         glMinSampleShading(0.0f);
         glDisable(GL_SAMPLE_SHADING);

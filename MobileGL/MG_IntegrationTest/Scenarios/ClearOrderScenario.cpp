@@ -262,7 +262,7 @@ void main() { color = tint; })";
             ExpectPixel(pair.main, 4, 4, green, "the draw after the clear passes the cleared depth");
         }
 
-        TEST_F(ClearOrderScenario, AColourClearThroughItsOwnFramebufferReachesAnotherFramebufferHoldingTheTexture) {
+        TEST_F(ClearOrderScenario, AColorClearThroughItsOwnFramebufferReachesAnotherFramebufferHoldingTheTexture) {
             if (!Ready() || IsSkipped()) return;
             const GLuint texture = NewColor(kSize, kSize, black);
             const GLuint own = NewFramebuffer(texture, 0);

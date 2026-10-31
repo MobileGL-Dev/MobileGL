@@ -344,7 +344,7 @@ void main() { fragColor = vec4(1.0); }
 // LINK_STATUS read has published phase A (m_pendingLink is null), CancelLink() can only reach
 // the SPIR-V job - which is exactly the shape StopAndDrain produces for a phase B queued
 // behind an already-complete phase A.
-TEST_F(AsyncSpirvPhaseTest, ALinkedProgramWhoseSpirvJobWasCancelledDegradesInsteadOfFaulting) {
+TEST_F(AsyncSpirvPhaseTest, ALinkedProgramWhoseSpirvJobWasCanceledDegradesInsteadOfFaulting) {
     const AsyncModeScope async(true);
     const SingleWorkerScope oneWorker;
     constexpr int kPrograms = 12;
@@ -353,7 +353,7 @@ TEST_F(AsyncSpirvPhaseTest, ALinkedProgramWhoseSpirvJobWasCancelledDegradesInste
     Vector<String> sources;
     const Vector<GLuint> programs = LinkBatch(kPrograms, kFirst, sources);
 
-    int cancelled = 0;
+    int canceled = 0;
     for (int i = 0; i < kPrograms; ++i) {
         const GLuint program = programs[static_cast<SizeT>(i)];
         const String n = std::to_string(kFirst + i);
@@ -363,7 +363,7 @@ TEST_F(AsyncSpirvPhaseTest, ALinkedProgramWhoseSpirvJobWasCancelledDegradesInste
         if (object->IsSpirvComplete()) continue; // already published; not the state under test
 
         object->CancelLink(); // phase A is published, so this reaches only the SPIR-V job
-        ++cancelled;
+        ++canceled;
 
         // ---- the contract: linked, fully queryable, not drawable ----
         EXPECT_TRUE(object->GetLinkStatus()) << "a canceled phase B must not retract LINK_STATUS";
@@ -420,7 +420,7 @@ TEST_F(AsyncSpirvPhaseTest, ALinkedProgramWhoseSpirvJobWasCancelledDegradesInste
         EXPECT_EQ(GetError(), GL_NO_ERROR);
     }
 
-    EXPECT_GT(cancelled, 0) << "no phase B was ever canceled; this case proved nothing";
+    EXPECT_GT(canceled, 0) << "no phase B was ever canceled; this case proved nothing";
 }
 
 // The mirror image: with async off the state is not reachable at all, because both bodies run

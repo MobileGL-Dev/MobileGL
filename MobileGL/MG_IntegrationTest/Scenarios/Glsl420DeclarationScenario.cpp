@@ -324,10 +324,10 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         }
         glUseProgram(0);
 
-        const Rgba8 centre = DrawAndRead(program);
+        const Rgba8 center = DrawAndRead(program);
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_EQ(centre.r, 0) << "sampler array elements that read the wrong texture: " << BadElements(centre.r);
-        EXPECT_EQ(centre.g, 255) << "the draw did not reach the fragment stage at all";
+        EXPECT_EQ(center.r, 0) << "sampler array elements that read the wrong texture: " << BadElements(center.r);
+        EXPECT_EQ(center.g, 255) << "the draw did not reach the fragment stage at all";
     }
 
     // An array of ARRAYS of samplers is the shape the two reflections count differently:
@@ -341,7 +341,7 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
     // Deliberately weak on the pixels for that reason: what is asserted on every backend is that
     // the program builds, the draw raises no GL error, and the process survives. Where the
     // descriptors do resolve, the colors are checked too.
-    TEST_F(Glsl420DeclarationScenario, AnArrayOfSamplerArraysIsHonouredOrDeclinedCleanly) {
+    TEST_F(Glsl420DeclarationScenario, AnArrayOfSamplerArraysIsHonoredOrDeclinedCleanly) {
         if (!Ready()) return;
 
         static const std::uint8_t colors[kElements][4] = {
@@ -372,7 +372,7 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         }
         glUseProgram(0);
 
-        const Rgba8 centre = DrawAndRead(program);
+        const Rgba8 center = DrawAndRead(program);
         EXPECT_EQ(FirstGLError(), 0u) << "declining a descriptor array must not raise a GL error";
 
         if (!MultiDimensionalSamplerArraysAreDeclined()) {
@@ -386,14 +386,14 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         // painted nothing, which is the documented Magma outcome. A non-zero red channel is the
         // third: the draw DID reach the fragment stage and elements read the wrong textures,
         // which is exactly the silent mismatch this decline exists to prevent.
-        if (centre.g == 255) {
-            EXPECT_EQ(centre.r, 0) << "elements of the array of arrays that read the wrong texture: "
-                                   << BadElements(centre.r);
+        if (center.g == 255) {
+            EXPECT_EQ(center.r, 0) << "elements of the array of arrays that read the wrong texture: "
+                                   << BadElements(center.r);
             return;
         }
-        EXPECT_EQ(centre.r, 0) << "the array of arrays was not resolved, but the draw still painted "
+        EXPECT_EQ(center.r, 0) << "the array of arrays was not resolved, but the draw still painted "
                                   "a mismatch instead of being declined: "
-                               << BadElements(centre.r);
+                               << BadElements(center.r);
     }
 
     // Instance k of a uniform block array sits on buffer binding point N+k - again both as
@@ -420,10 +420,10 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         }
         EXPECT_EQ(FirstGLError(), 0u) << "the block queries left a GL error behind";
 
-        const Rgba8 centre = DrawAndRead(program);
+        const Rgba8 center = DrawAndRead(program);
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_EQ(centre.r, 0) << "block array instances that read the wrong buffer: " << BadElements(centre.r);
-        EXPECT_EQ(centre.g, 255) << "the draw did not reach the fragment stage at all";
+        EXPECT_EQ(center.r, 0) << "block array instances that read the wrong buffer: " << BadElements(center.r);
+        EXPECT_EQ(center.g, 255) << "the draw did not reach the fragment stage at all";
     }
 
     // 'invariant' written on a fragment input at #version 420. The same source compiles at
@@ -434,10 +434,10 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         const GLuint program = Build(kInvariantInVS, kInvariantInFS);
         if (program == 0) return;
 
-        const Rgba8 centre = DrawAndRead(program);
+        const Rgba8 center = DrawAndRead(program);
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_EQ(centre.g, 255) << "the invariant-qualified varying did not arrive";
-        EXPECT_EQ(centre.r, 0);
+        EXPECT_EQ(center.g, 255) << "the invariant-qualified varying did not arrive";
+        EXPECT_EQ(center.r, 0);
     }
 
     // A #version 420 shader may call atomicCounterIncrement() with no extension at all. The
@@ -477,9 +477,9 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
                          << " yet; the compile above is what this case pins";
         }
 
-        const Rgba8 centre = DrawAndRead(program);
+        const Rgba8 center = DrawAndRead(program);
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_EQ(centre.g, 255) << "the atomic-counter shader linked but painted nothing";
+        EXPECT_EQ(center.g, 255) << "the atomic-counter shader linked but painted nothing";
     }
 
     // `layout(location = 0, index = 0)` is the GL default written out loud, and an application
@@ -495,11 +495,11 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         const GLuint program = Build(kQuadVS, kExplicitColorIndexFS);
         if (program == 0) return;
 
-        const Rgba8 centre = DrawAndRead(program);
+        const Rgba8 center = DrawAndRead(program);
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_EQ(centre.g, 255) << "a fragment output declared layout(location = 0, index = 0) painted "
+        EXPECT_EQ(center.g, 255) << "a fragment output declared layout(location = 0, index = 0) painted "
                                     "nothing; its stage was almost certainly refused by the driver";
-        EXPECT_EQ(centre.r, 0u);
+        EXPECT_EQ(center.r, 0u);
     }
 
 } // namespace MGITest

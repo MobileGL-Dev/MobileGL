@@ -506,9 +506,9 @@ def self_test_parser():
     depths = [e[0] for e in entries]
     if depths != [1, 2, 3]:
         problems.append("depths misparsed: {}".format(depths))
-    normalised = entries[-1][1] if entries else None
-    if normalised != "MobileGL/MG_State/GLState/SamplerState/SamplerObject.h":
-        problems.append("`../` spelling did not normalize: {}".format(normalised))
+    normalized = entries[-1][1] if entries else None
+    if normalized != "MobileGL/MG_State/GLState/SamplerState/SamplerObject.h":
+        problems.append("`../` spelling did not normalize: {}".format(normalized))
     elif not find_violations(entries, PROBES[0]["Forbidden"], []):
         problems.append("normalized path did not match the value-header forbidden list")
     if problems:

@@ -22,12 +22,12 @@ index 588cf7d2a..0721ffee7 100644
          height = (height == glu::RenderConfig::DONT_CARE) ? maxSize : height;
      }
  
-+    // MOBILEGL: allow the colour attachment to be a texture instead of a
++    // MOBILEGL: allow the color attachment to be a texture instead of a
 +    // renderbuffer. MobileGL's DirectVulkan backend returns zeros when reading
 +    // back a renderbuffer-attached FBO, which makes every image comparison fail
 +    // for one reason and hides everything else. Setting
 +    // MOBILEGL_CTS_FBO_COLOR_TEXTURE=1 isolates that single defect so the rest
-+    // of the suite can be measured. Off by default: stock behaviour.
++    // of the suite can be measured. Off by default: stock behavior.
      {
 -        pixelFormat = getPixelFormat(colorFormat);
 +        const char *useTexEnv = getenv("MOBILEGL_CTS_FBO_COLOR_TEXTURE");

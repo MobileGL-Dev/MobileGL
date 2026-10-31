@@ -777,7 +777,7 @@ TEST_F(PipeWireCodecTest, EveryPayloadByteCrossesIncludingTheOnesSpelledPad) {
     //
     // So this case asserts the whole payload byte for byte rather than the named fields: a
     // test that compared only the members would go green through exactly that bug.
-    // IT NAMES NO PAD MEMBER, deliberately. The whole struct is stamped with a recognisable
+    // IT NAMES NO PAD MEMBER, deliberately. The whole struct is stamped with a recognizable
     // byte first and only the fields the decoder validates are then written, so whatever is
     // left - Pad0, Pad1, or the names a later phase gives them - still carries the stamp and a
     // memcmp over the whole payload is the assertion. A case that named `Pad0` would stop
@@ -2097,7 +2097,7 @@ TEST_F(PipeWireCodecTest, TheStageMarkQueueStaysBoundedWithOneRecordAlwaysInFlig
 
 // ---- M4: the reply slot is for kReplySlot rows only ----------------------------------------
 
-TEST_F(PipeWireCodecTest, NoReplyIsWrittenForARowTheCatalogueGivesNoReplySlot) {
+TEST_F(PipeWireCodecTest, NoReplyIsWrittenForARowTheCatalogGivesNoReplySlot) {
     // s1 sizes ReplyPool from MGPipeCallFlagsFor, so a reply written for a record the pool
     // reserved no slot for overwrites a waiter's answer - and because the slot header stamps
     // the WRITER's seq for self-check, the waiter's check then fails for ever and the barrier

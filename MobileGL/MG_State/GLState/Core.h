@@ -732,13 +732,13 @@ namespace MobileGL {
                     Bool hasCompletedSpan = false;
                     Bool everBound = false;
                     // Assigned by the default member initializer, so every way an object comes into
-                    // being - operator[] materialisation, `= {}` in Gen/Create - gets a fresh one,
+                    // being - operator[] materialization, `= {}` in Gen/Create - gets a fresh one,
                     // and a recycled NAME never brings the dead object's id back with it.
                     Uint64 lifetimeId = AllocateTransformFeedbackLifetimeId();
                 };
                 void SaveBoundTransformFeedbackState();
                 void RestoreBoundTransformFeedbackState();
-                // operator[] materialises an entry with the default state on first touch, so
+                // operator[] materializes an entry with the default state on first touch, so
                 // the default object (name 0) needs no seeding here.
                 UnorderedMap<Uint, TransformFeedbackObjectState> m_transformFeedbackObjects;
                 IndexGenerator<Uint> m_transformFeedbackNames;

@@ -17,10 +17,10 @@
 
 namespace MobileGL::MG_Util::Async {
     enum class JobState : Uint8 {
-        Pending,   // constructed, not started; may still be sitting in a queue
-        Running,   // a worker is inside RunBody()
-        Complete,  // RunBody() returned normally and the node's outputs are readable
-        Cancelled, // abandoned before it started, canceled mid-run, or threw
+        Pending,  // constructed, not started; may still be sitting in a queue
+        Running,  // a worker is inside RunBody()
+        Complete, // RunBody() returned normally and the node's outputs are readable
+        Canceled, // abandoned before it started, canceled mid-run, or threw
     };
 
     // A GL error a job body wants to raise. Nothing in the compile/link pipeline produces
@@ -83,13 +83,13 @@ namespace MobileGL::MG_Util::Async {
 
         // Lock-free and non-blocking - safe from any thread, including a pool thread.
         Bool IsTerminal() const;
-        Bool IsComplete() const;  // Complete only; this is what backs GL_COMPLETION_STATUS_KHR
-        Bool IsCancelled() const; // settled AS canceled - the outcome, not the request
+        Bool IsComplete() const; // Complete only; this is what backs GL_COMPLETION_STATUS_KHR
+        Bool IsCanceled() const; // settled AS canceled - the outcome, not the request
         JobState State() const;
 
         // The cancellation *request*, which is what a body polls to bail out early: a
-        // running job stays Running until its body returns, so IsCancelled() is still false
-        // at that point. Kept separate from IsCancelled() precisely so the two questions
+        // running job stays Running until its body returns, so IsCanceled() is still false
+        // at that point. Kept separate from IsCanceled() precisely so the two questions
         // ("should I stop?" and "did it end up canceled?") cannot be confused.
         Bool IsCancellationRequested() const;
 
@@ -142,7 +142,7 @@ namespace MobileGL::MG_Util::Async {
         mutable std::mutex m_mutex;
         std::condition_variable m_cv;
         std::atomic<JobState> m_state{JobState::Pending};
-        std::atomic<Bool> m_cancelled{false};
+        std::atomic<Bool> m_canceled{false};
         Vector<std::function<void()>> m_continuations;
     };
 

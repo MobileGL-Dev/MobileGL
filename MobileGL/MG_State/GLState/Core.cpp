@@ -1421,7 +1421,7 @@ namespace MobileGL::MG_State {
             m_shareGroup->NoteContextAttached();
             // The default transform feedback object (name 0) exists from the start of the context
             // (GL 4.6 core 13.2.1), but nothing binds it, so nothing else would materialize it.
-            // Materialising it here is what lets GetBoundTransformFeedbackLifetimeId() be a plain
+            // Materializing it here is what lets GetBoundTransformFeedbackLifetimeId() be a plain
             // const read instead of an operator[] insert on the draw path.
             m_boundTransformFeedbackLifetimeId = m_transformFeedbackObjects[0].lifetimeId;
             InstallDefaultFramebuffer(DefaultFramebuffer());

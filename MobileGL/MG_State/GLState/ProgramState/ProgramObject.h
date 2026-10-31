@@ -1157,7 +1157,7 @@ namespace MobileGL::MG_State::GLState {
 
         // The phase-B twin of GetLinkReflection, and it exists for exactly one caller:
         // create_shader_state publishes the WHOLE SpirvArtifacts beside the whole
-        // LinkArtifacts, because the archive the far side deserialises into is those two
+        // LinkArtifacts, because the archive the far side deserializes into is those two
         // structs and nothing else. The granular getters above (GetGeneratedSpirv,
         // GetSpirvStatus, UsesNativeFloat64, PointSizeDemoted, GetSpirvValidationEnabled,
         // GetUBOSize) cover what the GL layer needs and deliberately do not reach

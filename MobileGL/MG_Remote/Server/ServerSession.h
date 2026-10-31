@@ -112,7 +112,7 @@ namespace MobileGL::MG_Remote::Server {
         // ---- s1's additions beyond c0's signature block ---------------------------------
 
         // The sizes to create the segments with. Must be called before Accept; after it, the
-        // geometry is on the wire in Welcome and changing it would desynchronise the peer.
+        // geometry is on the wire in Welcome and changing it would desynchronize the peer.
         void SetSegmentSizes(const Transport::SessionSegmentSizes& sizes);
 
         // The server role's private BackendObject (ServerLoop::Backend(), v1's). It is NOT

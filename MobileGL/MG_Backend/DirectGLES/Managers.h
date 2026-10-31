@@ -1934,7 +1934,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // texture that never asks for the stencil aspect never emits the call. The
             // depth/stencil readback and replicate-blit emulations also write this parameter
             // raw, but only ever on their own scratch textures (never on an application
-            // texture), so they cannot desynchronise this cache.
+            // texture), so they cannot desynchronize this cache.
             GLenum m_cacheDepthStencilTextureMode = GL_DEPTH_COMPONENT;
             Uint16 m_syncedSamplerVersion = 0;
             Uint16 m_syncedTextureParamsVersion = 0;

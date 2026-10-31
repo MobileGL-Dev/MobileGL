@@ -25,7 +25,7 @@
 // build only. In monolith the archive does not travel - MGPProgramDesc's seven blob refs are
 // declared with Size 0 and the two structs ride beside the record through the entry point's
 // companion pointers - so a push build pays nothing for it and the header keeps its forward
-// declarations. The verify build serializes, deserialises and compares before storing, which
+// declarations. The verify build serializes, deserializes and compares before storing, which
 // makes the codec LIVE CODE WITH A GATE rather than dead code with a unit test.
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #endif
@@ -2060,7 +2060,7 @@ namespace MobileGL::MG_Pipe {
         // entry. PipeInputs::kMaxVertexAttribs is VertexArrayObject's 32 today, so the
         // out-of-range arm is unreachable - the guard is what keeps that true if the two ever
         // stop agreeing. None of the three consistency checks may be left to MOBILEGL_ASSERT,
-        // which is inert at INFO: a malformed tail would then desynchronise the attribute
+        // which is inert at INFO: a malformed tail would then desynchronize the attribute
         // writes without a word in exactly the builds that ship.
         Uint32 consumed = 0;
         const char* fault = nullptr;
@@ -2303,7 +2303,7 @@ namespace MobileGL::MG_Pipe {
         // resource_respecify is the only kNeedsAck call, and MGPipeResourceRespecifyNeedsAck(desc)
         // narrows the ack to an immutable buffer, i.e. glBufferStorage (ARCHITECTURE.md §8.3). In
         // process the ack is this function's return, so the predicate is not branched on;
-        // PipeCatalogue.ResourceRespecifyAcksOnlyImmutableStorage pins it. A metadata-only update
+        // PipeCatalog.ResourceRespecifyAcksOnlyImmutableStorage pins it. A metadata-only update
         // never acks: the predicate is false for every non-buffer target, and
         // RespecifyRedefinesNoStorage never classifies a buffer as metadata-only.
         if (desc.Target != kMGPipeResourceTargetBuffer) return true;
@@ -3542,10 +3542,10 @@ namespace MobileGL::MG_Pipe {
         record.Live = true;
         // The DESCRIPTOR is what is stored, and the artifacts are not: in monolith the backend
         // reads the frontend's own archive, and under split the descriptor is what the
-        // deserialised archive is attached to. Either way the applier owns identity, extent and
+        // deserialized archive is attached to. Either way the applier owns identity, extent and
         // order, and never content.
         record.Desc = desc;
-        // P5e (pg), gap G-A: "under split the descriptor is what the deserialised archive is
+        // P5e (pg), gap G-A: "under split the descriptor is what the deserialized archive is
         // attached to" is now literally true, and this is the attachment. ADOPTED
         // UNCONDITIONALLY, INCLUDING A NULL: a monolith create must CLEAR an archive a
         // previous split-arm create left behind, because the record outlives a transport
@@ -3731,7 +3731,7 @@ namespace MobileGL::MG_Pipe {
     // rather than degrade silently. It arms on the transport, not the build, because split
     // builds also run in-process lanes where such code is correct. No log or counter: it may sit
     // on hot paths. Product code has no call sites; scripts/ci/unmigrated_emulation_sites.py
-    // and PipeCatalogue.EveryUnmigratedEmulationIsNamedOnce keep the names and sites equal.
+    // and PipeCatalog.EveryUnmigratedEmulationIsNamedOnce keep the names and sites equal.
     namespace {
         thread_local Bool tl_serverOriginatedWrite = false;
     } // namespace

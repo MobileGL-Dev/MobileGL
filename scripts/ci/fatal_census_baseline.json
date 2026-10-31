@@ -32,7 +32,7 @@
     "ApplyThreadJoinTimeout",
     "ApplyThreadNotRunning",
     "ArchiveEmpty",
-    "ArtefactsMissing",
+    "ArtifactsMissing",
     "BackendDeviceLost",
     "BarrierTimeout",
     "BarrierViolation",

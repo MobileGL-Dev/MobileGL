@@ -12,7 +12,7 @@
 // Frontend mutation notices. The verb fill (MG_Impl/Pipe/PipeFill.cpp) copies a verb's may-read
 // set out of the live GLContext at the verb boundary, and the backend reads that copy for the
 // whole verb. A frontend value written inside the verb (Magma synthesising a fallback texture,
-// materialising a queued clear, overriding a sampler's filter) would leave the copy stale, so
+// materializing a queued clear, overriding a sampler's filter) would leave the copy stale, so
 // the mutator calls MGP_NOTE_MUTATION(Field) where it moves the value. The notice refreshes
 // that one field when it belongs to the verb in flight. It never touches the poison stamp, so a
 // stamp the fill withheld (negative control B) stays withheld.

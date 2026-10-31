@@ -216,8 +216,8 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                 return texels;
             }
 
-            static std::vector<float> Flat(const Format& format, int edge, const Rgb& colour, float depth) {
-                return Halves(format, edge, colour, colour, depth, depth);
+            static std::vector<float> Flat(const Format& format, int edge, const Rgb& color, float depth) {
+                return Halves(format, edge, color, color, depth, depth);
             }
 
             static void DefineLevel(const Format& format, int level, int edge, const std::vector<float>& texels) {
@@ -273,8 +273,8 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                             if (std::abs(got.r - want) > 2) return;
                             continue;
                         }
-                        const Rgb& colour = low ? bottom : top;
-                        const int want[3] = {ToByte(colour[0]), ToByte(colour[1]), ToByte(colour[2])};
+                        const Rgb& color = low ? bottom : top;
+                        const int want[3] = {ToByte(color[0]), ToByte(color[1]), ToByte(color[2])};
                         const int have[3] = {got.r, got.g, got.b};
                         for (int c = 0; c < 3; ++c) {
                             EXPECT_NEAR(have[c], want[c], 2)
@@ -285,9 +285,9 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                 }
             }
 
-            static void ExpectFlat(const Image& image, const Format& format, const Rgb& colour, float depth,
+            static void ExpectFlat(const Image& image, const Format& format, const Rgb& color, float depth,
                                    const std::string& what) {
-                ExpectHalves(image, format, colour, colour, depth, depth, what);
+                ExpectHalves(image, format, color, color, depth, depth, what);
             }
 
             void Generate() {

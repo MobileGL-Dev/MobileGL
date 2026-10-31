@@ -31,7 +31,7 @@
 // clip by EVERY declared gl_ClipDistance regardless of the enables, so
 // AnEnabledClipDistanceRemovesTheNegativeHalf goes green there against the broken tree as well,
 // and the two cases that need real per-distance semantics skip (see
-// DriverHonoursPerDistanceEnables). What actually pins the behavior is Adreno, through
+// DriverHonorsPerDistanceEnables). What actually pins the behavior is Adreno, through
 // KHR-GLxx.clip_distance.functional - whose "without dynamic redeclaration" variants declare all
 // gl_MaxClipDistances slots and enable only the first N, i.e. exactly the subset semantics these
 // skipped cases assert. Read a green CI run here as "the state survives the frontend", not as
@@ -183,7 +183,7 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
             // pipeline key - a feature, not a fix, and deliberately not attempted here. The
             // cases that need the real semantics gate on this probe and say so when they skip,
             // rather than being deleted or silently weakened.
-            bool DriverHonoursPerDistanceEnables(GLuint program, GLuint vao) const {
+            bool DriverHonorsPerDistanceEnables(GLuint program, GLuint vao) const {
                 for (int i = 0; i < 8; ++i) {
                     glDisable(static_cast<GLenum>(GL_CLIP_DISTANCE0 + i));
                 }
@@ -323,17 +323,17 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
         EXPECT_EQ(FirstGLError(), 0u);
 
         EXPECT_TRUE(IsGreen(right)) << "with every clip distance disabled the whole triangle must survive";
-        const bool driverHonoursEnables = IsGreen(left);
+        const bool driverHonorsEnables = IsGreen(left);
 
         glUseProgram(0);
         glBindVertexArray(0);
         glDeleteProgram(program);
         glDeleteVertexArrays(1, &vao);
         gl.EndFrame();
-        if (!driverHonoursEnables) {
+        if (!driverHonorsEnables) {
             GTEST_SKIP() << "renderer " << gl.RendererString()
                          << " clips by a DISABLED gl_ClipDistance - it does not implement per-distance enable state "
-                            "(see DriverHonoursPerDistanceEnables). Emulating GL's semantics there needs shader-side "
+                            "(see DriverHonorsPerDistanceEnables). Emulating GL's semantics there needs shader-side "
                             "masking keyed on the enable mask, which is a separate feature";
         }
     }
@@ -363,7 +363,7 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
         glDisable(GL_SCISSOR_TEST);
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);
-        if (!DriverHonoursPerDistanceEnables(program, vao)) {
+        if (!DriverHonorsPerDistanceEnables(program, vao)) {
             glUseProgram(0);
             glBindVertexArray(0);
             glDeleteProgram(program);

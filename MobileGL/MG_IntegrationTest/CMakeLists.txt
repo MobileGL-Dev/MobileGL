@@ -282,7 +282,7 @@ function(mgl_itest_find_driver_json outVar)
             endif()
         endforeach()
     endforeach()
-    # Nothing recognised as hardware. Report the first non-software entry if there
+    # Nothing recognized as hardware. Report the first non-software entry if there
     # is one; otherwise report nothing, so the warning below fires.
     foreach(candidate IN LISTS candidates)
         get_filename_component(leaf "${candidate}" NAME)
@@ -347,7 +347,7 @@ option(MOBILEGL_ITEST_REQUIRE_GPU
 # configured before this change would keep injecting EGL_PLATFORM=x11 and go on
 # binding to a window system - silently, and only on the machines that have one.
 # Someone reproducing a platform-specific bug sets EGL_PLATFORM in their own
-# environment, which the harness still honours.
+# environment, which the harness still honors.
 
 set(MGL_ITEST_COMMON_ENV "")
 if (MOBILEGL_ITEST_EGL_VENDOR)
@@ -394,7 +394,7 @@ endfunction()
 
 # One lane of the integration binary: the cases FILTER selects, registered as PREFIX<suite.case>
 # with the environment ENV (a list joined by mgl_itest_join_environment). LABELS defaults to
-# integration-gpu and TIMEOUT to the scenario timeout. LOCK serialises lanes that share a resource
+# integration-gpu and TIMEOUT to the scenario timeout. LOCK serializes lanes that share a resource
 # such as a log file; TEST_LIST names the ctest-time variable listing the lane's tests; FAIL_REGEX
 # and FIXTURES set those properties; PROPERTIES passes further property pairs through.
 function(mgl_itest_lane prefix filter)
@@ -518,7 +518,7 @@ endfunction()
 
 # DirectGLES' Track H arm, probed by the subsystem bit it is gated on rather than by
 # SlotTables.h existing: the bit is declared in the contract (kMGPipeSubsystemEsprytSlots, MG_Pipe/MGPipe.h) and the
-# backend has to name it to honour MOBILEGL_PIPE_PUSH's default mask, whatever files package C
+# backend has to name it to honor MOBILEGL_PIPE_PUSH's default mask, whatever files package C
 # spreads the slot tables across.
 mgl_itest_probe_for_symbol(MGL_ITEST_ESPRYT_SLOTS
     "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectGLES" "kMGPipeSubsystemEsprytSlots")
@@ -603,7 +603,7 @@ endif()
 # P4a's THIRD re-key question, per backend, and it is not either of the two above. Bits 5/6
 # re-keyed each backend's VERTEX-INPUT memos and bit 7/8 the BUFFER's; P4a re-keys six OBJECT
 # classes - texture, renderbuffer, framebuffer, sampler CSO, sampler view, shader CSO - behind
-# four new subsystem bits, and a backend has to NAME one of those constants to honour
+# four new subsystem bits, and a backend has to NAME one of those constants to honor
 # MOBILEGL_PIPE_PUSH's default mask. A P4a case that read either older marker would arm its
 # Handles arm on a tree where nothing about a texture is keyed on a handle: green for a re-key
 # that does not exist. Probed by the constants rather than by a file, for the reason the block
@@ -938,7 +938,7 @@ mgl_itest_lane("DirectVulkan.OptimisticShaderStatus." "AsyncCompileScenario.Iris
 
 # The negative control for the DirectGLES gl_ViewportIndex emulation, in a process that
 # has it switched off. One case, because it is the only one the switch may touch: with
-# the emulation off the three positive cases in the same fixture describe behaviour the
+# the emulation off the three positive cases in the same fixture describe behavior the
 # backend does not have, so a whole-scenario registration would be three guaranteed reds.
 # DirectGLES only - the flag steers nothing on DirectVulkan, which routes natively.
 mgl_itest_lane("DirectGLES.NoViewportArrayEmulation." "ViewportArrayScenario.WithoutTheEmulationEveryIndexCollapsesOntoViewportZero"
@@ -1029,7 +1029,7 @@ mgl_itest_lane("DirectVulkan.HandleRecycle.Handles." "HandleRecycleScenario.*"
     LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT}")
 # --- CSO content-addressing negative control ----------------------------------------------
 # The On and Off masks differ only in bit 63 of MOBILEGL_PIPE_PUSH
-# (kMGPipeBehaviourNoCsoContentAddressing); the rest of each mask is the default 0x3fff, because
+# (kMGPipeBehaviorNoCsoContentAddressing); the rest of each mask is the default 0x3fff, because
 # subsystem bits 0-13 are fixed on. The cases read the csom / csob counters from the library log,
 # so each lane has a private log path (ARCHITECTURE.md §16.1). MOBILEGL_PIPE_STATS_PERIOD=1 writes
 # one summary line per eglSwapBuffers, so two swaps bracket exactly the workload.
@@ -1144,7 +1144,7 @@ mgl_itest_lane("DirectGLES.MapPersistentRoundtrips." "StorageBufferRegrowScenari
 mgl_itest_lane("DirectGLES.MapPersistentRoundtrips." "LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip"
     LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_GLES_MPR_ARENA_ENVIRONMENT}")
 
-# LargeArenaAdoption's three behavioural cases under BOTH arms of the same A/B. This file is where
+# LargeArenaAdoption's three behavioral cases under BOTH arms of the same A/B. This file is where
 # an adopted store's whole life is exercised - the NULL-data definition that adopts it, an
 # in-flight SubData, a readback and a GPU write - so if the handle path and the legacy
 # BufferBackendOps path disagree about any of it, one of these two lanes goes red and names which.
@@ -1254,7 +1254,7 @@ mgl_itest_lane("DirectGLES.TextureUploadShape." "TextureUploadShapeScenario.TheE
     LOCK texture-upload-shape-DirectGLES.log ENV "${MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT}")
 
 # --- TextureParamsWithoutASamplerViewScenario needs no lane of its own ---------------------
-# Its observable is a sampled colour, not a counter or a log, and its claim is about the shipping
+# Its observable is a sampled color, not a counter or a log, and its claim is about the shipping
 # configuration, so the ambient DirectGLES. / DirectVulkan. registrations at the default mask are
 # the arms it needs. The DirectVulkan entries skip in SetUp: the scenario covers Espryt's
 # SyncAttachmentObject / SyncNeccessaryTextures pair.
@@ -1285,7 +1285,7 @@ if (MOBILEGL_PIPE_VERIFY)
     # PipeVerifyArmingScenario.Armed reads the library's log, and the log is a per-LANE resource: it
     # is opened fopen(path, "w"), so every process in a lane truncates it. In the ambient Verify.
     # lane that is 400-odd processes on one path, run `-j 4` in CI, and a whole-file read there
-    # races a neighbour's bring-up. Every other log-reading scenario in this file (UnlocatedIoBlocks,
+    # races a neighbor's bring-up. Every other log-reading scenario in this file (UnlocatedIoBlocks,
     # the primgen reroute, the point-size demotion) is registered exactly like this for the same
     # reason. MGITEST_PIPE_ARMING_LANE is a harness marker - the library never reads it - and it is
     # what makes the case skip in the ambient lane instead of racing there.
@@ -1326,7 +1326,7 @@ if (MOBILEGL_PIPE_VERIFY)
     # The whole suite again, per backend, with the comparator armed. Same scenarios, same
     # assertions, but every backend read of frontend state is now checked against a snapshot taken
     # from the live context at the verb boundary - which is what "the 742 integration entries
-    # prove push equals pull" means. Labelled integration-gpu as well so a verify build's
+    # prove push equals pull" means. Labeled integration-gpu as well so a verify build's
     # `ctest -L integration-gpu` still describes the whole registration set.
     mgl_itest_lane("DirectGLES.Verify." "-${MGL_ITEST_GLES_VIEW_FILTER}:${MGL_ITEST_SPLIT_ARM_ONLY_FILTER}"
         LABELS "integration-gpu\;integration-verify\;integration-monolith-control" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} ENV "${MGL_ITEST_GLES_VERIFY_ENVIRONMENT}")
@@ -2266,7 +2266,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # the whole-binary discovery.
     mgl_itest_register_split_arms("CopyImageStoreReadbackScenario.*" "")
     # The same cases with MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT pinned: the Espryt server
-    # treats a colour level of exactly that extent as one the driver refused to attach (what an
+    # treats a color level of exactly that extent as one the driver refused to attach (what an
     # Adreno does for RGB16 and 16-bit SNORM), so its staged store has to answer. READ BY THE
     # SERVER, and it reaches all three arms: inproc sees this entry's environment, spawn copies it
     # into the child, and the tcp supervisor carries it in its own fixture ENVIRONMENT (appended to
@@ -2346,7 +2346,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # MOBILEGL_IPC_STRICT_ERRORS=1 a barrier-pulled pipe-input read is Fatal{UnmigratedPipeInput},
     # so these go red if GetProgramForDraw@DrawArrays or GetProgramForDispatch@DispatchCompute is
     # pulled again. The MultiDrawScenario case prepares a draw and checks GL errors, not pixels;
-    # AtomicCounterScenario dispatches. Labelled integration-split only: on the monolith arm the
+    # AtomicCounterScenario dispatches. Labeled integration-split only: on the monolith arm the
     # knob cannot trip, because the client fills every field at every verb.
     mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc" "MOBILEGL_ITEST_REQUIRE_GPU=1"
@@ -2476,8 +2476,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                        ClipDistanceScenario.ADisabledClipDistanceRemovesNothing
                        ClipDistanceScenario.TheEnablesAreIndependentPerDistance
                        CopyImageLayeredScenario.ArrayToArrayCopiesEverySlice
-                       CopyImageLayeredScenario.ArrayToArrayHonoursDifferentLayerOffsets
-                       CopyImageLayeredScenario.VolumeToVolumeHonoursNonZeroZ
+                       CopyImageLayeredScenario.ArrayToArrayHonorsDifferentLayerOffsets
+                       CopyImageLayeredScenario.VolumeToVolumeHonorsNonZeroZ
                        CopyImageLayeredScenario.VolumeToVolumeAtNonZeroMipLevel
                        CopyImageLayeredScenario.ArrayToVolumeCopiesEverySlice
                        CopyImageLayeredScenario.VolumeToArrayCopiesEverySlice)
@@ -2494,7 +2494,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         endforeach()
         # ShaderMip<tier>: MGITEST_MAGMA_FORCE_SHADER_MIPMAP makes GenerateWireMipmap skip its
         # native blit (tier 1) and also treat the level as not attachable (tier 2), the arms
-        # devices take. Lavapipe blits every colour format this binary creates, R11F_G11F_B10F
+        # devices take. Lavapipe blits every color format this binary creates, R11F_G11F_B10F
         # included, so no format choice reaches them. Own entries: the knob retargets every mipmap
         # in the process. A server-read knob set per entry never reaches the shared tcp fixture's
         # server, so knob entries skip the Tcp arm (mglItestServerEnvKnobArm) and are listed in
@@ -2542,7 +2542,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         #
         # TWO ENTRIES OVER ONE CASE, for the reason the ShaderMip pair gives. The plain entry is
         # a regression gate that runs on every driver. The forced entry is the red-once of the
-        # DEFENCE term: it makes the serial half of VkBufferManager's busy predicate answer
+        # DEFENSE term: it makes the serial half of VkBufferManager's busy predicate answer
         # "idle" - the state an unsound completed-serial floor put the wire arm into on the
         # device - so only the submission-fence half is left to order the copy. It does NOT
         # cover the floor fix itself (forcing the serial term bypasses the floor entirely); the
@@ -2583,7 +2583,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # ---- P7 wave 2-B2: `multisample-blit-shape@P7`'s retirement and its decline ----------
         #
         # SPLIT-ONLY, like the in-place copy pair below and for the same reason: the retired arm
-        # does something the monolith arm does not. A scaled multisample colour blit takes the
+        # does something the monolith arm does not. A scaled multisample color blit takes the
         # monolith's `vkCmdResolveImage` at 1:1 into the destination's offset - the scale is
         # dropped - so there is no `DirectVulkan.` reading to register these beside, and an
         # equality between the two arms would be an assertion that the wire arm is as wrong.
@@ -2734,7 +2734,7 @@ endif()
 # Fatal{ReplyTooLarge, "ReadPixels 256x512 0x1908/0x1406 2097152 > 2097136"}. One entry per case
 # for a private log each - two processes append to it on the spawn arm.
 if (MOBILEGL_BUILD_DISAGGREGATED)
-    # P11: LargeArenaAdoptionScenario's cases that run on every Magma arm - the five behavioural
+    # P11: LargeArenaAdoptionScenario's cases that run on every Magma arm - the five behavioral
     # cases and the tier assertion (the mpr and adopt-tier-refusal cases need lane markers of their
     # own). The `Arena.` block below and the Buffers lane both walk it.
     set(MGL_ITEST_ARENA_CASES
@@ -2764,7 +2764,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         foreach(bandCase RenderbufferReadOfExactlyTwoMiBIsBandedNotRefused
                          TwoMiBPlusOneRowIsBanded
                          AReadLargerThanTheWholeReplySegmentIsBanded
-                         BandedReadsHonourPackAlignmentRowLengthAndSkips
+                         BandedReadsHonorPackAlignmentRowLengthAndSkips
                          BandedReadIntoAPixelPackBufferKeepsItsPadding
                          BandedDepthAndDepthStencilReads
                          GetTexImageLargerThanAReplySlotIsWindowed)
@@ -3265,7 +3265,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # THE LABEL IS `integration-magma-split` AND NOT `integration-split-magma`, and that is not
         # a preference: `ctest -L` takes a REGEX, not an exact name, so `-L integration-split`
         # MATCHES a label spelled `integration-split-magma` as a substring. The obvious name would
-        # have left both entries in the Espryt lane while every listing showed them relabelled - a
+        # have left both entries in the Espryt lane while every listing showed them relabeled - a
         # split that looks done and is not. Measured: with that spelling
         # `ctest -N -L integration-split` still listed both DirectVulkan entries.
         if (namedBlitBackend STREQUAL "DirectVulkan")
@@ -3399,7 +3399,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # B2's CPU mip arm x P8-E's driver-written mark: the forced-CPU knob plus E's refused-readback
     # knob at the base level's extent (16x16), both read by the SERVER - so inproc and spawn only,
     # and their own label as B's `CpuMip.` entries have (the tcp arm's server is the shared
-    # TcpServer.Start fixture, and the refusal there would reach every 16x16 colour readback).
+    # TcpServer.Start fixture, and the refusal there would reach every 16x16 color readback).
     foreach(mglItestArm IN ITEMS Split Spawn)
         string(TOUPPER "${mglItestArm}" mglItestArmUpper)
         string(TOLOWER "${mglItestArm}" mglItestArmLower)
@@ -3409,16 +3409,16 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 LABELS "integration-gpu\\;integration-cpu-mip-${mglItestArmLower}" ENV "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1\;MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=16x16\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8se-cpu-mip-refused-${mglItestArmLower}-${cpuMipCase}.log")
         endforeach()
     endforeach()
-    # PipeCatalogueTest's unmigrated-emulation list against the call sites in the tree (a source
+    # PipeCatalogTest's unmigrated-emulation list against the call sites in the tree (a source
     # lint, so the unit lane runs it wherever the split build's unit tests run; CI also runs it
     # beside split_coverage.py).
-    add_test(NAME PipeCatalogue.UnmigratedEmulationSitesSelfTest
+    add_test(NAME PipeCatalog.UnmigratedEmulationSitesSelfTest
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/ci/unmigrated_emulation_sites.py" --self-test)
-    add_test(NAME PipeCatalogue.UnmigratedEmulationSitesMatchTheList
+    add_test(NAME PipeCatalog.UnmigratedEmulationSitesMatchTheList
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/ci/unmigrated_emulation_sites.py"
             "${CMAKE_SOURCE_DIR}")
-    set_tests_properties(PipeCatalogue.UnmigratedEmulationSitesSelfTest
-        PipeCatalogue.UnmigratedEmulationSitesMatchTheList PROPERTIES LABELS unit TIMEOUT 60)
+    set_tests_properties(PipeCatalog.UnmigratedEmulationSitesSelfTest
+        PipeCatalog.UnmigratedEmulationSitesMatchTheList PROPERTIES LABELS unit TIMEOUT 60)
 endif()
 
 # P8-SV: Magma split residuals (docs/archive/notes/p8/SV.md) - the 3D native mip blit's layer
@@ -3615,7 +3615,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
 
     # The arming assertion on this arm, one entry per backend, with a log path nothing else
     # writes to - the monolith VerifyArming. entries' shape and their reason (the case reads the
-    # whole file, and a path shared with 500 neighbours races them under `-j 4`). This is the
+    # whole file, and a path shared with 500 neighbors races them under `-j 4`). This is the
     # entry that cannot be green against a library with no comparator compiled in, and unlike the
     # monolith pair it also cannot be green against one whose comparator never survived the
     # server's bring-up - which is precisely what the relaxed respecify pin unblocked.

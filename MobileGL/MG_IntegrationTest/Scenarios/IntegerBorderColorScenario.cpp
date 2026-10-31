@@ -267,7 +267,7 @@ void main()
     // The floor, and the control that keeps the two tests below from passing vacuously: an INSIDE
     // sample has to fetch the texture's own texel. If this fails the sampler, the shader or the
     // integer readback is broken and nothing about the border color has been measured.
-    TEST_F(IntegerBorderColorScenario, InsideTexelsAreUnaffectedByTheBorderColour) {
+    TEST_F(IntegerBorderColorScenario, InsideTexelsAreUnaffectedByTheBorderColor) {
         if (!Ready()) GTEST_SKIP();
 
         glBindTexture(GL_TEXTURE_2D, m_sourceTexture);
@@ -284,7 +284,7 @@ void main()
 
     // The regression, texture-object spelling. glTexParameterIiv is the entry point the frontend
     // already accepted and then flattened into the same FloatVec4 every other spelling wrote.
-    TEST_F(IntegerBorderColorScenario, TexParameterIivBorderColourSurvivesToAnIntegerSampler) {
+    TEST_F(IntegerBorderColorScenario, TexParameterIivBorderColorSurvivesToAnIntegerSampler) {
         if (!Ready()) GTEST_SKIP();
 
         glBindTexture(GL_TEXTURE_2D, m_sourceTexture);
@@ -299,7 +299,7 @@ void main()
     // and a separate code path in both backends (BackendSamplerObject::Sync on DirectGLES, and the
     // sampler cache key on DirectVulkan, where a border color that is not part of the key would
     // alias two samplers that differ only in it).
-    TEST_F(IntegerBorderColorScenario, SamplerParameterIivBorderColourSurvivesToAnIntegerSampler) {
+    TEST_F(IntegerBorderColorScenario, SamplerParameterIivBorderColorSurvivesToAnIntegerSampler) {
         if (!Ready()) GTEST_SKIP();
 
         glGenSamplers(1, &m_sampler);

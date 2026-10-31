@@ -88,7 +88,7 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         // comparison - the claim is about the vertex SOURCE, not about rasterisation.
         const float kQuad[] = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
 
-        Rgba8 CentreAfter(int width, int height) {
+        Rgba8 CenterAfter(int width, int height) {
             const Image image = ReadPixelsRect(0, 0, width, height);
             return image.At(width / 2, height / 2);
         }
@@ -145,12 +145,12 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         glUseProgram(program);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-        const Rgba8 centre = CentreAfter(width, height);
-        EXPECT_GT(static_cast<int>(centre.g), 200)
-            << "the client-memory vertex array never reached the draw: the center is " << centre
+        const Rgba8 center = CenterAfter(width, height);
+        EXPECT_GT(static_cast<int>(center.g), 200)
+            << "the client-memory vertex array never reached the draw: the center is " << center
             << ", i.e. still the clear color. The draw did not consume its owned client-vertex snapshot";
-        EXPECT_LT(static_cast<int>(centre.b), 60)
-            << "the quad drew, but the clear color is still showing through: " << centre;
+        EXPECT_LT(static_cast<int>(center.b), 60)
+            << "the quad drew, but the clear color is still showing through: " << center;
 
         quad.Release();
         glUseProgram(0);
@@ -302,7 +302,7 @@ void main() {
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
         glUseProgram(program);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
-        EXPECT_GT(CentreAfter(Gl().Width(), Gl().Height()).g, 200);
+        EXPECT_GT(CenterAfter(Gl().Width(), Gl().Height()).g, 200);
         quad.Release();
         glUseProgram(0);
         glDeleteBuffers(1, &ebo);
@@ -351,7 +351,7 @@ void main() { gl_Position = vec4(aPos + aOffset, 0.0, 1.0); }
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
         glUseProgram(program);
         glDrawArraysIndirect(GL_TRIANGLE_STRIP, nullptr);
-        EXPECT_GT(CentreAfter(Gl().Width(), Gl().Height()).g, 200);
+        EXPECT_GT(CenterAfter(Gl().Width(), Gl().Height()).g, 200);
         quad.Release();
         glUseProgram(0);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);

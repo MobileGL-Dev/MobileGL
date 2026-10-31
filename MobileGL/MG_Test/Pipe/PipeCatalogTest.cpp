@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Test/Pipe/PipeCatalogueTest.cpp
+// MobileGL - MobileGL/MG_Test/Pipe/PipeCatalogTest.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -36,7 +36,7 @@
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
 
-TEST(PipeCatalogue, FrontendNeverTakesAnApplierAddress) {
+TEST(PipeCatalog, FrontendNeverTakesAnApplierAddress) {
     namespace fs = std::filesystem;
     auto base = fs::current_path();
     while (!fs::is_directory(base / "MobileGL/MG_Impl") && base != base.root_path())
@@ -86,20 +86,20 @@ namespace {
     // The catalog's own spelling of an opcode, for a failure message. The wire codec has one
     // of these and MG_Pipe may not reach it (MG_Remote is above this layer), so the table is
     // expanded from the catalog here rather than a name being duplicated per EXPECT.
-#define MGP_CATALOGUE_NAME_ROW(Name, Payload, Class, Flags, Wait) #Name,
-    constexpr const char* kCatalogueOpNames[] = {"<kInvalid>", MGP_CALL_LIST(MGP_CATALOGUE_NAME_ROW)};
-#undef MGP_CATALOGUE_NAME_ROW
-    static_assert(sizeof(kCatalogueOpNames) / sizeof(kCatalogueOpNames[0]) == static_cast<SizeT>(MGPWireOp::kOpCount),
+#define MGP_CATALOG_NAME_ROW(Name, Payload, Class, Flags, Wait) #Name,
+    constexpr const char* kCatalogOpNames[] = {"<kInvalid>", MGP_CALL_LIST(MGP_CATALOG_NAME_ROW)};
+#undef MGP_CATALOG_NAME_ROW
+    static_assert(sizeof(kCatalogOpNames) / sizeof(kCatalogOpNames[0]) == static_cast<SizeT>(MGPWireOp::kOpCount),
                   "the diagnostic name table and the opcode space disagree");
 
     const char* WireOpNameForDiag(MGPWireOp op) {
         const SizeT index = static_cast<SizeT>(op);
-        return index < static_cast<SizeT>(MGPWireOp::kOpCount) ? kCatalogueOpNames[index] : "<opcode out of range>";
+        return index < static_cast<SizeT>(MGPWireOp::kOpCount) ? kCatalogOpNames[index] : "<opcode out of range>";
     }
 } // namespace
 
 // The handle is the whole object model. Eight bytes, a register pair, no padding.
-TEST(PipeCatalogue, HandleIsEightBytes) {
+TEST(PipeCatalog, HandleIsEightBytes) {
     static_assert(sizeof(MGPipeHandle) == 8);
     static_assert(alignof(MGPipeHandle) == 4);
     static_assert(std::is_trivially_copyable_v<MGPipeHandle>);
@@ -116,14 +116,14 @@ TEST(PipeCatalogue, HandleIsEightBytes) {
 
 // The catalog, the number documented in its header, and the two generated tables are one
 // fact stated three times. This is the test that notices when they stop being.
-TEST(PipeCatalogue, EntryCountMatchesTheDocumentedCount) {
+TEST(PipeCatalog, EntryCountMatchesTheDocumentedCount) {
     static_assert(kExpandedCallCount == MGP_CALL_LIST_DOCUMENTED_COUNT);
     static_assert(kExpandedCallCount == kMGPipeCallCount);
     EXPECT_EQ(kExpandedCallCount, static_cast<SizeT>(MGP_CALL_LIST_DOCUMENTED_COUNT));
     EXPECT_EQ(kMGPipeCallCount, kExpandedCallCount);
 }
 
-TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
+TEST(PipeCatalog, GeneratedTablesHoldTheWholeCatalog) {
     static_assert(ClassCount<kScreen>() == kMGPipeScreenCallCount);
     static_assert(ClassCount<kScreen>() + ClassCount<kCtxCso>() + ClassCount<kCtxState>() + ClassCount<kCtxObject>() +
                       ClassCount<kCtxVerb>() + ClassCount<kCtxQuery>() ==
@@ -176,7 +176,7 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
 // renaming a case is a removal even when the new name is better: it is indistinguishable, from
 // the gate's side, from a case that was deleted. So this case stays, asserting the half that is
 // still true, and the new half below is an ADDED name.
-TEST(PipeCatalogue, UninstalledTablesAreAllNull) {
+TEST(PipeCatalog, UninstalledTablesAreAllNull) {
     const void* const* screen = reinterpret_cast<const void* const*>(&gMGPipeScreen);
     const void* const* context = reinterpret_cast<const void* const*>(&gMGPipeContext);
     MGPipeInstallMonolithTables();
@@ -209,7 +209,7 @@ TEST(PipeCatalogue, UninstalledTablesAreAllNull) {
     (void)context;
 }
 
-TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
+TEST(PipeCatalog, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     const void* const* screen = reinterpret_cast<const void* const*>(&gMGPipeScreen);
     const void* const* context = reinterpret_cast<const void* const*>(&gMGPipeContext);
     SizeT installed = 0;
@@ -300,7 +300,7 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
 // the type's absence - nothing in the tree can name it any more). What is left to pin is the
 // RETIRED ROW: op 46 keeps its number, because opcodes only ever grow, and its record keeps its
 // layout so a decoder can bounds-check what it then declines.
-TEST(PipeCatalogue, ResidualBlockSizeIsPinned) {
+TEST(PipeCatalog, ResidualBlockSizeIsPinned) {
     EXPECT_EQ(static_cast<Uint32>(MGPWireOp::SetResidualValueState), 46u);
     EXPECT_EQ(sizeof(MGPResidualValueState), 32u);
 }
@@ -309,7 +309,7 @@ TEST(PipeCatalogue, ResidualBlockSizeIsPinned) {
 // of that header's static assertions, so the numbers show up in ctest output on every
 // platform - including one where a static assertion is skipped. Every number here is also
 // what MGL_RESIDUAL_BLOCK_SIZE (MGPipeTypes.h) and the Espryt offsetof spans depend on.
-TEST(PipeCatalogue, ValueTypeLayoutsArePinned) {
+TEST(PipeCatalog, ValueTypeLayoutsArePinned) {
     EXPECT_EQ(sizeof(PixelStoreParameters), 28u);
     EXPECT_EQ(sizeof(PerBufferBlendState), 28u);
     EXPECT_EQ(sizeof(StencilFaceState), 28u);
@@ -334,7 +334,7 @@ TEST(PipeCatalogue, ValueTypeLayoutsArePinned) {
 // What it now pins is the other half of the same statement: the carrier is one capability
 // word, at offset 0, and the members it used to carry are gone rather than merely moved -
 // which is exactly what "MGL_RESIDUAL_BLOCK_SIZE only ever goes down" has to mean.
-TEST(PipeCatalogue, ResidualBlockIsExactlyItsTwoValueStructsPlusPatchTail) {
+TEST(PipeCatalog, ResidualBlockIsExactlyItsTwoValueStructsPlusPatchTail) {
     // P13 W3c deleted the last capability word, so the carrier is gone altogether; the members
     // it used to carry are pinned on the carriers that took them over.
     // The three carriers that took the retired members over.
@@ -347,7 +347,7 @@ TEST(PipeCatalogue, ResidualBlockIsExactlyItsTwoValueStructsPlusPatchTail) {
 // compiler catches only where somebody asked it to. MGP_ASSERT_POD already pins both sizes in
 // MGPipeTypes.h; what is pinned HERE is the SHAPE the two edits were made for, because that is
 // what a later phase would silently undo.
-TEST(PipeCatalogue, TextureParamsNameTheirBuiltinSamplerAndFramebufferStateNamesItsTarget) {
+TEST(PipeCatalog, TextureParamsNameTheirBuiltinSamplerAndFramebufferStateNamesItsTarget) {
     // 32 -> 40: the CSO handle carrying the SamplerParameters of the SamplerObject every
     // ITextureObject owns, plus the second resync bit. Naming the CSO rather than widening
     // this payload with a filter/wrap/border block is what keeps ONE authority for one value -
@@ -401,7 +401,7 @@ TEST(PipeCatalogue, TextureParamsNameTheirBuiltinSamplerAndFramebufferStateNames
 // minting - EVERY TextureTarget has a row, checked at compile time by a table with no
 // `default:` arm, so adding a target is a build break rather than a descriptor that silently
 // describes the wrong kind of storage.
-TEST(PipeCatalogue, EveryTextureTargetMapsToItsOwnResourceTarget) {
+TEST(PipeCatalog, EveryTextureTargetMapsToItsOwnResourceTarget) {
     // The compile-time half is MGPipeEveryTextureTargetIsMapped's static_assert; this is the
     // same walk at runtime, so the case names the offender instead of the build naming a line.
     for (SizeT i = 0; i < static_cast<SizeT>(TextureTarget::TextureTargetCount); ++i) {
@@ -436,7 +436,7 @@ TEST(PipeCatalogue, EveryTextureTargetMapsToItsOwnResourceTarget) {
 // == 0, so a texture record carrying the bare upload enumerator would be indistinguishable
 // from a buffer record exactly when its owner is a 1D texture, and that texture's upload
 // would be dispatched into the buffer path. Nothing else in the tree would have said so.
-TEST(PipeCatalogue, SubDataTargetPacksAResourceTargetAndAnUploadTarget) {
+TEST(PipeCatalog, SubDataTargetPacksAResourceTargetAndAnUploadTarget) {
     // Both halves must fit their byte, or the encoding is not an encoding.
     static_assert(static_cast<Uint32>(MGPipeResourceTarget::Count) <= 0x100u);
     static_assert(static_cast<Uint32>(TextureUploadTarget::TextureUploadTargetCount) <= 0x100u);
@@ -506,7 +506,7 @@ TEST(PipeCatalogue, SubDataTargetPacksAResourceTargetAndAnUploadTarget) {
 // All three were UNSTATED in the contract and were being re-invented on both sides of the
 // boundary - which is the way a wire field acquires two meanings. The values themselves are
 // unremarkable; what this case pins is that there is exactly one spelling of each.
-TEST(PipeCatalogue, SurfaceNamesItsKindItsTextureTargetAndItsDepthStencilAspect) {
+TEST(PipeCatalog, SurfaceNamesItsKindItsTextureTargetAndItsDepthStencilAspect) {
     // MGPipeKind is REUSED rather than a second three-value enum minted beside the field.
     EXPECT_EQ(kMGPipeSurfaceKindNone, static_cast<Uint8>(MGPipeKind::None));
     EXPECT_EQ(kMGPipeSurfaceKindTexture, static_cast<Uint8>(MGPipeKind::Texture));
@@ -569,7 +569,7 @@ TEST(PipeCatalogue, SurfaceNamesItsKindItsTextureTargetAndItsDepthStencilAspect)
 }
 
 // G3's opcode numbering is the wire protocol. Position in PipeCalls.def, 1-based, no holes.
-TEST(PipeCatalogue, WireOpcodesAreThePositionsInTheCatalogue) {
+TEST(PipeCatalog, WireOpcodesAreThePositionsInTheCatalog) {
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::GetCaps), 1);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), kMGPipeCallCount + 1);
     EXPECT_EQ(sizeof(MGPWireRecHeader), 8u);
@@ -583,7 +583,7 @@ TEST(PipeCatalogue, WireOpcodesAreThePositionsInTheCatalogue) {
 // Records are append-only. The three carriers added after the first cut - for the live
 // GLFunctionsTable entries GetGpuTimestampNs, QueryCounterTimestamp and WaitSync - sit at
 // the END of the list, after SetSwapInterval, so no opcode the first cut assigned has moved.
-TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
+TEST(PipeCatalog, LateArrivalsAreAppendedWithoutRenumbering) {
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetSwapInterval), 68);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::QueryTimestamp), 69);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::QueryCounter), 70);
@@ -741,7 +741,7 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
 // It matters because the column is not decoration: on a run-ahead server kWaitNone is a promise
 // that the record's apply reads NOTHING of the client's (rule F), and a row demoted to it by
 // accident is a torn read that renders wrong rather than aborting.
-TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
+TEST(PipeCatalog, EveryRowCarriesTheWaitClassTheContractGivesIt) {
     // kWaitPresent: present alone, paced by the credit taken BEFORE the encode (§2.4).
     EXPECT_EQ(MGPipeWaitClassFor(MGPWireOp::Present), kWaitPresent);
 
@@ -871,7 +871,7 @@ TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
 
 // A well-formed record passes the applier's bounds gate. P0 has no applier, so "accepted"
 // is reported as "not applied" rather than "fatal".
-TEST(PipeCatalogue, ApplierAcceptsAWellFormedRecord) {
+TEST(PipeCatalog, ApplierAcceptsAWellFormedRecord) {
     MGPWireRec_Present record{};
     record.Header.Op = static_cast<Uint16>(MGPWireOp::Present);
     record.Header.Size = sizeof(record);
@@ -881,7 +881,7 @@ TEST(PipeCatalogue, ApplierAcceptsAWellFormedRecord) {
 
 // G4 reports the FIRST differing field by name, and compares field by field so that
 // padding cannot produce a difference that does not exist.
-TEST(PipeCatalogue, VerifyComparatorNamesTheDifferingField) {
+TEST(PipeCatalog, VerifyComparatorNamesTheDifferingField) {
     MGPDrawInfo a{};
     MGPDrawInfo b{};
     const char* field = nullptr;
@@ -909,7 +909,7 @@ TEST(PipeCatalogue, VerifyComparatorNamesTheDifferingField) {
 
 // G6's join over the backend read inventory. P0 allows unmapped rows; from P5 the gate is
 // zero, so the numbers are asserted here to make a regression visible the day it happens.
-TEST(PipeCatalogue, CoverageAccountsForEveryInventoryRow) {
+TEST(PipeCatalog, CoverageAccountsForEveryInventoryRow) {
     EXPECT_EQ(kMGPipeInventoryReadPoints, 477u);
     EXPECT_EQ(kMGPipeInventoryUnmapped, 0u);
     EXPECT_EQ(kMGPipeInventoryMappedToCall + kMGPipeInventoryClientResolved + kMGPipeInventoryReverseChannel +
@@ -920,7 +920,7 @@ TEST(PipeCatalogue, CoverageAccountsForEveryInventoryRow) {
 
 // G5's field ids come from the same accessor list as the coverage table, and every field
 // starts un-filled: reading one before its verb fills it is the poison's whole job.
-TEST(PipeCatalogue, PipeInputFieldsStartUnfilled) {
+TEST(PipeCatalog, PipeInputFieldsStartUnfilled) {
     EXPECT_EQ(kMGPipeInputFieldCount, 63u);
     MGPipeFilledState state{};
     // Before the first fill the serial is 0 as well: 0 == 0 must not read as fresh, on the
@@ -940,7 +940,7 @@ TEST(PipeCatalogue, PipeInputFieldsStartUnfilled) {
 
 // G5b: the verb enum is GLFunctionsTable's member list (71 entries), every class has verbs,
 // and the seven sticky fields ride in every class mask (P1 brief D7).
-TEST(PipeCatalogue, VerbTableIsTheFunctionTable) {
+TEST(PipeCatalog, VerbTableIsTheFunctionTable) {
     EXPECT_EQ(kMGPipeVerbCount, 71u);
     EXPECT_EQ(kMGPipeVerbClassCount, 9u);
     SizeT perClass[kMGPipeVerbClassCount] = {};
@@ -970,7 +970,7 @@ TEST(PipeCatalogue, VerbTableIsTheFunctionTable) {
 
 // The sticky set is exactly the seven forwarded, argument-keyed accessors (P1 brief D6); no
 // version or generation accessor is among them.
-TEST(PipeCatalogue, StickyFieldsAreExactlyTheSeven) {
+TEST(PipeCatalog, StickyFieldsAreExactlyTheSeven) {
     const char* const expected[] = {
         "GetBufferBindingPointCount", "GetProgramObject",    "GetTextureObject", "HasOpenTransformFeedbackSpan",
         "InvalidateCompileEnv",       "ValidateProgramName", "RecordError"};
@@ -993,7 +993,7 @@ TEST(PipeCatalogue, StickyFieldsAreExactlyTheSeven) {
 // G4 compares floating point BY BITS (P1 brief D8): a NaN equals itself, a negative zero
 // does not equal a positive one, and a vector type inside an Array inside a value struct is
 // reached field by field - the differing member of the residual block is named.
-TEST(PipeCatalogue, FloatVectorsCompareBitwise) {
+TEST(PipeCatalog, FloatVectorsCompareBitwise) {
     const Float nan = std::numeric_limits<Float>::quiet_NaN();
     const FloatVec4 a{nan, 1.f, 2.f, 3.f};
     const FloatVec4 b{nan, 1.f, 2.f, 3.f};
@@ -1043,7 +1043,7 @@ TEST(PipeCatalogue, FloatVectorsCompareBitwise) {
 // the client's CSO cache confirms a hash hit with a memcmp over the same bytes, so a codec or
 // a cache that read the padding would mint a fresh CSO per call and the verify lane would
 // abort at random.
-TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
+TEST(PipeCatalog, SixValueStructsHaveFieldLists) {
     // 72 through P5; P5b appended five call payloads (the contract: MGPImageBind,
     // MGPPatchParameter, MGPStreamOutputBind, MGPStorageBlockBinding, MGPCopyFromFramebuffer),
     // each with its own field list, so the comparator sees every one of them: 77. P5c appended
@@ -1118,7 +1118,7 @@ TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
 }
 
 // G7 pins the member list the pipeline/dynamic split is derived from.
-TEST(PipeCatalogue, PipelineSubsetMembersArePinned) {
+TEST(PipeCatalog, PipelineSubsetMembersArePinned) {
     // 44 as of P2, in DECLARATION order. It grew from the 24 members
     // ComputePipelineStateHash used to hash because the chunk table's rule is "a byte is
     // pipeline state iff a setter that calls BumpVersions() writes it", and that is a strict
@@ -1144,7 +1144,7 @@ TEST(PipeCatalogue, PipelineSubsetMembersArePinned) {
 // THE CASE NAME STAYS "…HasTenCallbacks" DELIBERATELY. G2/G14 say the ctest name set only ever
 // grows, so renaming this would delete a name the gate is watching; the count it asserts is what
 // has to be right, and the comment is where the number lives.
-TEST(PipeCatalogue, ReverseChannelHasTenCallbacks) {
+TEST(PipeCatalog, ReverseChannelHasTenCallbacks) {
     EXPECT_EQ(kMGPipeCallbackCount, 7u);
     EXPECT_EQ(sizeof(MGPipeCallbacks), kMGPipeCallbackCount * sizeof(void (*)()));
 }
@@ -1152,7 +1152,7 @@ TEST(PipeCatalogue, ReverseChannelHasTenCallbacks) {
 // The one shape that changes with the transport. In a monolith it resolves to the pointer
 // it was given; with no transport installed a segment-backed span resolves to nothing
 // rather than to garbage.
-TEST(PipeCatalogue, HostSpanResolvesTheMonolithPointer) {
+TEST(PipeCatalog, HostSpanResolvesTheMonolithPointer) {
     static_assert(sizeof(MGHostSpan) == 32);
     const Uint8 bytes[8] = {0, 1, 2, 3, 4, 5, 6, 7};
     MGHostSpan span{};
@@ -1171,7 +1171,7 @@ TEST(PipeCatalogue, HostSpanResolvesTheMonolithPointer) {
 // D-B8: a bound buffer range carries no inline host span. The named-UBO bytes are an
 // optional second var-tail announced by HostSpanCount, so the SSBO, atomic-counter and XFB
 // ranges - the majority - pay nothing for a payload whose shape is not frozen yet.
-TEST(PipeCatalogue, BufferRangeCarriesNoInlineHostSpan) {
+TEST(PipeCatalog, BufferRangeCarriesNoInlineHostSpan) {
     static_assert(sizeof(MGPBufferRange) == 24);
     // P5e (sb, ID-104): 32 -> 40. WritableMask was ONE Uint32 against an 84-point window, so
     // it could describe only the first 32 points and a storage buffer bound at point 32 or
@@ -1220,7 +1220,7 @@ TEST(PipeCatalogue, BufferRangeCarriesNoInlineHostSpan) {
 // The buffer half of resource_subdata has no level and no box of its own: [offset, size)
 // rides in UnionBox.X / UnionBox.W, and only through the two helpers, which also say where
 // one record stops and the emitter has to split.
-TEST(PipeCatalogue, SubDataBufferRangeRidesInTheUnionBox) {
+TEST(PipeCatalog, SubDataBufferRangeRidesInTheUnionBox) {
     MGPSubData record{};
     record.Level = 3;
     record.RegionCount = 2;
@@ -1256,7 +1256,7 @@ TEST(PipeCatalogue, SubDataBufferRangeRidesInTheUnionBox) {
 // baseInstance-only divergence through under MOBILEGL_PIPE_VERIFY - which is the one gate
 // that would otherwise have seen the suppression bug the ContentHash rule exists to prevent.
 // So the field list is pinned the only way it can be: by making the comparator name it.
-TEST(PipeCatalogue, VertexBufferSetCarriesAnExplicitBaseInstance) {
+TEST(PipeCatalog, VertexBufferSetCarriesAnExplicitBaseInstance) {
     static_assert(sizeof(MGPVertexBuffers) == 24);
     static_assert(sizeof(MGPVertexBuffer) == 32); // the per-entry struct did NOT change
     EXPECT_EQ(sizeof(MGPVertexBuffers), 24u);
@@ -1285,7 +1285,7 @@ TEST(PipeCatalogue, VertexBufferSetCarriesAnExplicitBaseInstance) {
 // of, so their sizes are the blob's stride and the applier's bounds arithmetic; and IsLong is
 // carried SEPARATELY from Type, because a GL_DOUBLE format converted to float and a long
 // format that keeps all 64 bits are different requests that a backend has to tell apart.
-TEST(PipeCatalogue, VertexWireViewsAreFlatAndCarryIsLongSeparately) {
+TEST(PipeCatalog, VertexWireViewsAreFlatAndCarryIsLongSeparately) {
     static_assert(sizeof(MGPVertexAttribWire) == 24);
     static_assert(sizeof(MGPVertexBindingPointWire) == 16);
     EXPECT_EQ(sizeof(MGPVertexAttribWire), 24u);
@@ -1322,7 +1322,7 @@ TEST(PipeCatalogue, VertexWireViewsAreFlatAndCarryIsLongSeparately) {
 // This is the negative control for a future flag that over-acks: in monolith the ack is a
 // no-op, so the mistake cannot be shipped from here, and the phase where it would bite
 // inherits this pin rather than the guess.
-TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
+TEST(PipeCatalog, ResourceRespecifyAcksOnlyImmutableStorage) {
     Uint32 flags = 0;
 #define MGP_FLAGS_OF_RESOURCE_RESPECIFY(Name, Payload, Class, Flags, Wait)                                             \
     if (std::strcmp(#Name, "ResourceRespecify") == 0) flags = static_cast<Uint32>(Flags);
@@ -1447,7 +1447,7 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
 // say WHICH one was lost. P8-SE: scripts/ci/unmigrated_emulation_sites.py holds this list against
 // the `MGPipeUnmigratedEmulation("...")` call sites in the tree - equal sets, one site per name -
 // because nothing did before and the list drifted twice unseen (P8-B, and P8-SE's dead name).
-TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
+TEST(PipeCatalog, EveryUnmigratedEmulationIsNamedOnce) {
     // Every one of these is an emulation that reads or writes CLIENT memory a split server
     // would not have: a CPU shadow mirror, a CPU mipmap fallback and a shadow-conversion
     // readback.
@@ -1496,7 +1496,7 @@ TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
 //
 // This case pins both halves: a leaked COMPOSITE moves the band's marks and not the ordinary
 // one, and an ordinary leak still moves the ordinary mark with a composite outstanding.
-TEST(PipeCatalogue, TheCompositeShaderBandIsCountedApartFromTheOrdinarySpace) {
+TEST(PipeCatalog, TheCompositeShaderBandIsCountedApartFromTheOrdinarySpace) {
     MGPipeSlotAllocator slots;
 
     const Uint32 ordinaryBefore = slots.HighWater(MGPipeKind::ShaderCso);

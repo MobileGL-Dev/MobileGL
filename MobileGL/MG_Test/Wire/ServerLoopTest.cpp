@@ -3896,11 +3896,11 @@ namespace {
         kSuspendLatched = 2, // the session latched, or the apply thread left
         kSuspendBackend =
             4, // the backend was not asked to suspend exactly once, on the apply thread, for the lost window
-        kSuspendState = 8,          // the loop's counters / the display's lease and wait are not the suspended state
-        kSuspendRecords = 16,       // presents after the loss were not applied (all of them, none reaching a window)
-        kSuspendResume = 32,        // a new window did not resume the session on it, on the apply thread
-        kSuspendAgain = 64,         // the resumed session did not suspend again on the next loss
-        kSuspendNotCancelled = 128, // the session's end left it waiting for a window
+        kSuspendState = 8,         // the loop's counters / the display's lease and wait are not the suspended state
+        kSuspendRecords = 16,      // presents after the loss were not applied (all of them, none reaching a window)
+        kSuspendResume = 32,       // a new window did not resume the session on it, on the apply thread
+        kSuspendAgain = 64,        // the resumed session did not suspend again on the next loss
+        kSuspendNotCanceled = 128, // the session's end left it waiting for a window
     };
 
     [[noreturn]] void SuspendResumeAndExit() {
@@ -3950,7 +3950,7 @@ namespace {
             failed |= kSuspendAgain;
 
         fixture.Stop();
-        if (display.SuspendedHolders() != 0) failed |= kSuspendNotCancelled;
+        if (display.SuspendedHolders() != 0) failed |= kSuspendNotCanceled;
         std::fprintf(stderr, "[suspend] suspends=%d resumes=%d presents=%d (%d without a window) lost=%llu\n",
                      WindowBackendDouble::suspends.load(), WindowBackendDouble::resumes.load(),
                      WindowBackendDouble::presents.load(), WindowBackendDouble::presentsWithoutWindow.load(),

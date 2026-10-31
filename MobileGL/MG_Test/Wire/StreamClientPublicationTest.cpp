@@ -188,7 +188,7 @@ namespace {
         EXPECT_FALSE(Upload(32768, 0x99));
         EXPECT_TRUE(Client::ClientSession::DeviceLost());
         EXPECT_EQ(MG_Impl::GLImpl::GetGraphicsResetStatus(), GL_UNKNOWN_CONTEXT_RESET);
-        EXPECT_TRUE(client.Encoder().Cancelled());
+        EXPECT_TRUE(client.Encoder().Canceled());
         EXPECT_EQ(client.Encoder().EmitSeq(), 0u);
         EXPECT_EQ(client.LastPublishedSeq(), 0u);
         EXPECT_TRUE(StageIs(0x33));

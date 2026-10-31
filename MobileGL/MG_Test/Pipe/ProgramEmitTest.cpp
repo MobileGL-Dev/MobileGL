@@ -285,7 +285,7 @@ TEST(ProgramEmit, ACreateStoresTheDescriptorAndARelinkCountsUpAndDropsTheBlockKe
 
 // The three refusals a create can produce: no artifacts at all behind seven undeclared blobs, a
 // default uniform block no program can have, and a slot outside the record table's bound.
-TEST(ProgramEmit, ACreateWithNoArtefactsAnOversizedBlockOrACorruptSlotIsRefusedNamingTheProgram) {
+TEST(ProgramEmit, ACreateWithNoArtifactsAnOversizedBlockOrACorruptSlotIsRefusedNamingTheProgram) {
     ApplierGuard guard;
     const LinkArtifacts link;
     const SpirvArtifacts spirv;

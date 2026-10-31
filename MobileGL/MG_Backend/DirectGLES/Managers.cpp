@@ -845,7 +845,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Bit 12 depends on NOTHING, and that is said out loud rather than left as an absence:
         // a ShaderCso handle names no texture and no buffer, the archive rides beside the
         // record as a companion pointer, and the eight extra inputs the server still
-        // specialises on (D-H5) are read from state this backend already holds.
+        // specializes on (D-H5) are read from state this backend already holds.
         const Bool bitSet = (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemPrograms) != 0;
         const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
             bitSet, /*legacyMemosEnabled=*/true, /*legacyArmSurvivesLegacyMemos=*/false);

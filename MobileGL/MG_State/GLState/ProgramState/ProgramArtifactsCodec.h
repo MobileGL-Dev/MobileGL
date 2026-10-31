@@ -27,7 +27,7 @@
 // structs by pointer beside the record, so the applier reads the frontend's own archive and
 // this codec is never called. The VERIFY build is where it is exercised, and it is exercised
 // as LIVE CODE WITH A GATE rather than as dead code with a unit test: the applier serializes,
-// deserialises and field-compares before storing, and a mismatch is
+// deserializes and field-compares before storing, and a mismatch is
 // Fatal{PipeVerifyDiffer, "program-archive"}. Under split, P5 is what makes it the transport's
 // path.
 //

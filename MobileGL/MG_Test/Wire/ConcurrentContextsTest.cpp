@@ -111,12 +111,12 @@ namespace {
     };
 
     // A<<24|B<<16|G<<8|R of the texel each thread draws.
-    Uint32 ColourOf(int index) {
+    Uint32 ColorOf(int index) {
         return 0xFF000000u | (0x40u + 0x50u * static_cast<Uint32>(index % 3)) << 8 |
                (0x20u + 0x30u * static_cast<Uint32>(index / 3));
     }
     // The clear color of a churn cycle (ReadbackRace): a different one per thread and cycle.
-    Uint32 ChurnColourOf(int index, int cycle) {
+    Uint32 ChurnColorOf(int index, int cycle) {
         return 0xFF000000u | (0x10u * static_cast<Uint32>(index)) << 16 |
                (static_cast<Uint32>(cycle * 7) & 0xFFu) << 8 | 0x80u;
     }
@@ -151,7 +151,7 @@ namespace {
         GLuint program = 0;
         GLuint vertexArray = 0;
         GLuint texture = 0;
-        Uint32 colour = 0;
+        Uint32 color = 0;
     };
 
     // The thread's program, vertex array and one-texel texture of its own color.
@@ -183,12 +183,12 @@ namespace {
         if (!linked) glGetProgramInfoLog(drawing.program, sizeof(out->linkLog) - 1, nullptr, out->linkLog);
         glGenVertexArrays(1, &drawing.vertexArray);
         glGenTextures(1, &drawing.texture);
-        drawing.colour = ColourOf(index);
+        drawing.color = ColorOf(index);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, drawing.texture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &drawing.colour);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &drawing.color);
         return drawing;
     }
 
@@ -218,7 +218,7 @@ namespace {
         glDrawArrays(GL_TRIANGLES, 0, 3);
         Uint32 pixel = 0x5A5A5A5Au;
         glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &pixel);
-        Tally(out, frame, pixel, drawing.colour);
+        Tally(out, frame, pixel, drawing.color);
     }
 
     // The frames a thread draws: staggered, so the threads finish (and tear down) one after another
@@ -326,20 +326,19 @@ namespace {
             GLuint texture = 0;
             glGenTextures(1, &texture);
             glBindTexture(GL_TEXTURE_2D, texture);
-            const Uint32 texel = ChurnColourOf(index, cycle);
+            const Uint32 texel = ChurnColorOf(index, cycle);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &texel);
             GLuint vertexArray = 0;
             glGenVertexArrays(1, &vertexArray);
             glBindVertexArray(vertexArray);
-            const Uint32 colour = ChurnColourOf(index, cycle);
+            const Uint32 color = ChurnColorOf(index, cycle);
             glViewport(0, 0, 8, 8);
-            glClearColor(static_cast<float>(colour & 0xFFu) / 255.0f,
-                         static_cast<float>((colour >> 8) & 0xFFu) / 255.0f,
-                         static_cast<float>((colour >> 16) & 0xFFu) / 255.0f, 1.0f);
+            glClearColor(static_cast<float>(color & 0xFFu) / 255.0f, static_cast<float>((color >> 8) & 0xFFu) / 255.0f,
+                         static_cast<float>((color >> 16) & 0xFFu) / 255.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             Uint32 pixel = 0x5A5A5A5Au;
             glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &pixel);
-            Tally(out, cycle, pixel, colour);
+            Tally(out, cycle, pixel, color);
             if (cycle % 2 == 0) glDeleteTextures(1, &texture); // the odd ones die with the context
             (void)eglMakeCurrent(rig->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             (void)eglDestroyContext(rig->dpy, context);

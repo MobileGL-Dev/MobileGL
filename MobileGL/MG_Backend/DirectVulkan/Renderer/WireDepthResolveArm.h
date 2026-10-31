@@ -163,7 +163,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ForceBug,
         ForceClean,
         ElideSubject,
-        Unrecognised
+        Unrecognized
     };
 
     inline WireDepthResolveProbeKnob ParseWireDepthResolveProbeKnob(const char* value) {
@@ -171,7 +171,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (std::strcmp(value, "bug") == 0) return WireDepthResolveProbeKnob::ForceBug;
         if (std::strcmp(value, "clean") == 0) return WireDepthResolveProbeKnob::ForceClean;
         if (std::strcmp(value, "elide-subject") == 0) return WireDepthResolveProbeKnob::ElideSubject;
-        return WireDepthResolveProbeKnob::Unrecognised;
+        return WireDepthResolveProbeKnob::Unrecognized;
     }
 
     // One packed format's worth of readings: the control resolved both aspects; the render pass

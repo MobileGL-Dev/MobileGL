@@ -1657,7 +1657,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MakeWireDepthResolveDeviceIdentity(m_physicalDevice.properties, renderPassArmAvailable, knob);
         static WireDepthResolveArmCache s_choices;
         const WireDepthResolveArmChoice resolved = s_choices.Resolve(identity, [&]() {
-            if (knob == WireDepthResolveProbeKnob::Unrecognised)
+            if (knob == WireDepthResolveProbeKnob::Unrecognized)
                 MGLOG_W("DirectVulkan: MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=%s is not `bug`, `clean` or "
                         "`elide-subject`; the resolve probe runs as if it were unset",
                         knobValue);

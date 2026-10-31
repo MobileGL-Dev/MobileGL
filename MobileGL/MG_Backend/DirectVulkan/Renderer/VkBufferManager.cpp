@@ -416,7 +416,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         //
         // A streamed `glBufferSubData -> draw` pair is only correct if the write is ordered
         // against every draw that still reads the bytes it overwrites; a write this predicate
-        // answers "idle" is applied as an unsynchronised host memcpy, and a draw still reading
+        // answers "idle" is applied as an unsynchronized host memcpy, and a draw still reading
         // the range then renders bytes that are not its own - silently, with no log line, no GL
         // error and no Fatal. That was the OpenRA device divergence (magma-b3.md §2).
         //

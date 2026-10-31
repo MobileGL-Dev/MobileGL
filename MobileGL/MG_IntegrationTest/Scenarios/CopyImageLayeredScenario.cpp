@@ -227,7 +227,7 @@ namespace MGITest {
         // The same pair with the layer ranges offset differently on the two sides: the shape that
         // separates "copies more than slice 0" from "copies the RIGHT slices". A backend that read
         // the source range but wrote from layer 0 (or vice versa) passes the case above.
-        TEST_F(CopyImageLayeredScenario, ArrayToArrayHonoursDifferentLayerOffsets) {
+        TEST_F(CopyImageLayeredScenario, ArrayToArrayHonorsDifferentLayerOffsets) {
             if (!Ready() || IsSkipped()) return;
 
             const GLuint source = MakeTexture(GL_TEXTURE_2D_ARRAY, 1, SourceColor);
@@ -247,7 +247,7 @@ namespace MGITest {
 
         // 3d -> 3d. Neither endpoint has array layers at all: the depth travels on extent.depth and
         // the offsets on srcOffset.z/dstOffset.z, with both layer counts pinned to 1.
-        TEST_F(CopyImageLayeredScenario, VolumeToVolumeHonoursNonZeroZ) {
+        TEST_F(CopyImageLayeredScenario, VolumeToVolumeHonorsNonZeroZ) {
             if (!Ready() || IsSkipped()) return;
 
             const GLuint source = MakeTexture(GL_TEXTURE_3D, 1, SourceColor);

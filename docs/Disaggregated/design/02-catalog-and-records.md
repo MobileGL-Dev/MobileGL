@@ -6,7 +6,7 @@
 
 ### 3.1 Single source of truth
 
-`MobileGL/MG_Pipe/PipeCalls.def`: one `X(Name, Payload, Class, Flags, WaitClass)` per line. **The on-wire opcode is the line order**; you can only append, and retired lines keep their slot; the line count is pinned by `MGP_CALL_LIST_DOCUMENTED_COUNT` (81 today) and `PipeCatalogueTest`. Generator outputs are committed to the tree; CI `pipe-gates` regenerates them and runs `git diff --exit-code`:
+`MobileGL/MG_Pipe/PipeCalls.def`: one `X(Name, Payload, Class, Flags, WaitClass)` per line. **The on-wire opcode is the line order**; you can only append, and retired lines keep their slot; the line count is pinned by `MGP_CALL_LIST_DOCUMENTED_COUNT` (81 today) and `PipeCatalogTest`. Generator outputs are committed to the tree; CI `pipe-gates` regenerates them and runs `git diff --exit-code`:
 
 | | Output | Content |
 |---|---|---|

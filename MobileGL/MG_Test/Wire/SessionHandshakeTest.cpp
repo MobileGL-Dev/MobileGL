@@ -127,7 +127,7 @@ TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
     EXPECT_EQ(inputs.DynamicParamsSize, sizeof(MG_Backend::DynamicBackendParameters));
     EXPECT_EQ(inputs.CapsSize, sizeof(MG_Pipe::MGPCaps));
     EXPECT_EQ(inputs.MemberLayout, MG_Pipe::kMGPipeWireMemberLayoutDigest);
-    EXPECT_EQ(inputs.CatalogueLayout, MG_Pipe::kMGPipeWireCatalogueDigest);
+    EXPECT_EQ(inputs.CatalogLayout, MG_Pipe::kMGPipeWireCatalogDigest);
     EXPECT_EQ(inputs.RenderStateLayout, MG_Pipe::WireRenderStateDigest());
     EXPECT_EQ(inputs.ProgramArtifactsCodecVersion, MG_State::GLState::kProgramArtifactsCodecVersion);
     EXPECT_EQ(inputs.ProgramArtifactsSchema, MG_State::GLState::ProgramArtifactsSchemaFingerprint());
@@ -147,7 +147,7 @@ TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
     EXPECT_NE(production, perturbed([](auto& i) { ++i.DynamicParamsSize; })) << "DynamicParamsSize";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.CapsSize; })) << "CapsSize";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.MemberLayout; })) << "MemberLayout";
-    EXPECT_NE(production, perturbed([](auto& i) { ++i.CatalogueLayout; })) << "CatalogueLayout";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.CatalogLayout; })) << "CatalogLayout";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.RenderStateLayout; })) << "RenderStateLayout";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.FormatCapabilityTargets; })) << "FormatCapabilityTargets";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.FormatCapabilityFormats; })) << "FormatCapabilityFormats";

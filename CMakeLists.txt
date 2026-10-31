@@ -34,7 +34,7 @@ option(MOBILEGL_EXTMEM_PROBE_AS_SERVER "Spike only (P11 B2 step 1): also package
 # The PipeInputs strangler (ARCHITECTURE.md 9.2) is finished: since P13 every build pushes, and
 # there is neither an option nor a macro for it (W3a removed the option, W3b the `#if` guards and
 # the definition). A -DMOBILEGL_PIPE_PUSH=OFF (or the OFF that every pre-P13 build tree holds in its
-# cache, the old default) is named and dropped rather than honoured: a warning, not an error, so an
+# cache, the old default) is named and dropped rather than honored: a warning, not an error, so an
 # existing tree reconfigures. The RUNTIME MOBILEGL_PIPE_PUSH environment bitmask is unrelated.
 if (DEFINED CACHE{MOBILEGL_PIPE_PUSH} AND NOT "$CACHE{MOBILEGL_PIPE_PUSH}")
     message(WARNING "MobileGL: MOBILEGL_PIPE_PUSH=OFF asks for the pull build, which P13 retired; "
@@ -78,7 +78,7 @@ if (ANDROID)
     # Read the level back from the compiler target triple first. Its trailing
     # number (aarch64-none-linux-android26) is precisely what clang turns into
     # __ANDROID_API__, so it cannot disagree with the compile itself, and it is
-    # already past every NDK normalisation step - codename aliases, "latest",
+    # already past every NDK normalization step - codename aliases, "latest",
     # and per-ABI minimum pull-ups. ANDROID_PLATFORM_LEVEL is the fallback for
     # generators/languages where the triple variable is not populated.
     #
@@ -257,7 +257,7 @@ string(SUBSTRING "${GIT_COMMIT_HASH_FULL}" 0 7 GIT_COMMIT_HASH_SHORT)
 #
 # GIT_COMMIT_HASH_SHORT MAY NOT MOVE. It is baked into glGetString(GL_VERSION)
 # (MG_Impl/GLImpl/Getter/GL_Getter.cpp), so redefining it changes an APPLICATION-VISIBLE GL
-# string and the pull build's .rodata - a behaviour leak and a G1 break at once. The handshake
+# string and the pull build's .rodata - a behavior leak and a G1 break at once. The handshake
 # gets its own pair instead, consumed only by the ABI fingerprint, which no pull build compiles.
 #
 # PRESENT IS A FIRST-CLASS INPUT, not the emptiness of VALUE. "this build has no stamp" and
@@ -633,7 +633,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND
     # A NORMAL variable, deliberately not `CACHE BOOL ... FORCE`: forcing OFF into the cache
     # made the plain re-configure after `git submodule update` stay OFF with no message at
     # all. Shadowing the cache entry for this configure only keeps the operator's ON where it
-    # was, so the next configure - with the submodule there - honours it.
+    # was, so the next configure - with the submodule there - honors it.
     set(MOBILEGL_BUILD_DISAGGREGATED OFF)
     # And with it the shim option, or the `-DMOBILEGL_BUILD_DISAGGREGATED_INPROC=1` below
     # would still be defined over a build with no MG_Remote in it at all.
@@ -659,7 +659,7 @@ list(APPEND SOURCE_FILES
     # VisitFields tables. Push-only for the same G1 reason as the three above - in
     # monolith the archive never crosses (create_shader_state hands the two structs over
     # by pointer beside the record), so the codec is live code only in the VERIFY lane,
-    # where the applier serialises, deserialises and field-compares before storing.
+    # where the applier serializes, deserializes and field-compares before storing.
     MobileGL/MG_State/GLState/ProgramState/ProgramArtifactsCodec.cpp
     # P5's contract (integrator ruling R-17, package c1): the MONOLITH arm of the
     # client->wire routing - the thirty-seven adapters that install gMGPipeScreen /

@@ -458,7 +458,7 @@ namespace MobileGL::MG_Util::SelfTest {
         // armed on a device whose stream query was RIGHT on a shape the statistics get
         // wrong - and the renderer reroutes every XFB-inactive draw, so that shape would
         // be downgraded from correct to wrong. "Never worse per draw" is what makes
-        // arming on an uncharacterised driver defensible; it has to be measured, not
+        // arming on an uncharacterized driver defensible; it has to be measured, not
         // assumed.
         Bool statisticsDominateStream = true;
         for (const auto* shape : shapes) {

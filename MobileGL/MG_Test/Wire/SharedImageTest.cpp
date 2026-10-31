@@ -504,7 +504,7 @@ TEST(SharedImageYuv, ThePlaneCopyFillsEveryDestinationLayout) {
 
 // The conversion an import's hints select: BT.709 narrow-range codes of saturated colors decode
 // to those colors, and the defaults are BT.601 narrow.
-TEST(SharedImageYuv, TheConversionDecodesTheHintedColourSpace) {
+TEST(SharedImageYuv, TheConversionDecodesTheHintedColorSpace) {
     const auto decode = [](const SI::Yuv::Conversion& c, double y, double cb, double cr, double max) {
         const double in[3] = {y / max - c.Offset[0], cb / max - c.Offset[1], cr / max - c.Offset[2]};
         std::array<double, 3> rgb{};
@@ -529,9 +529,9 @@ TEST(SharedImageYuv, TheConversionDecodesTheHintedColourSpace) {
     SI::Yuv::Hints full;
     full.Range = SI::Yuv::kEglYuvFullRange;
     const auto cFull = SI::Yuv::ConversionFor(full, 255.0);
-    const auto grey = decode(cFull, 128, 128, 128, 255.0);
+    const auto gray = decode(cFull, 128, 128, 128, 255.0);
     for (int k = 0; k < 3; ++k)
-        EXPECT_NEAR(grey[k], 128.0 / 255.0, 0.005);
+        EXPECT_NEAR(gray[k], 128.0 / 255.0, 0.005);
     EXPECT_EQ(SI::Yuv::Hints{}.EffectiveColorSpace(), SI::Yuv::kEglItuRec601);
     EXPECT_FALSE(SI::Yuv::Hints{}.FullRange());
 }

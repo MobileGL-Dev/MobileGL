@@ -909,7 +909,7 @@ void main()
         //
         // The draw goes into a scratch 2D target, never into the layered attachment, so the
         // materialize path is the only consumer that can fire.
-        TEST_F(LayeredAttachmentShapeScenario, LayeredCubeMapClearMaterialisedBySamplingReachesEveryFace) {
+        TEST_F(LayeredAttachmentShapeScenario, LayeredCubeMapClearMaterializedBySamplingReachesEveryFace) {
             if (!Ready()) return;
 
             const GLuint program = BuildProgram(nullptr, kCubeSampleFragmentSource);
@@ -974,7 +974,7 @@ void main()
 
         // The 1D-array half of the same divergence. Pre-existing rather than introduced by this
         // branch (the clear copy never had ToVulkanLevelExtent), and fixed by the same hoist.
-        TEST_F(LayeredAttachmentShapeScenario, LayeredOneDArrayClearMaterialisedBySamplingReachesEveryLayer) {
+        TEST_F(LayeredAttachmentShapeScenario, LayeredOneDArrayClearMaterializedBySamplingReachesEveryLayer) {
             if (!Ready()) return;
 
             const GLuint program = BuildProgram(nullptr, kOneDArraySampleFragmentSource);

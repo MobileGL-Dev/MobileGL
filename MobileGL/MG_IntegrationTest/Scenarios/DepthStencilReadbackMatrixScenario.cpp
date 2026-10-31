@@ -636,9 +636,9 @@ namespace MGITest {
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectAllDepth(top, 0.25f, "flipped resolve: the destination's top band");
         // Color went the same way up, through the arm that could already do this.
-        std::array<GLubyte, 4> colour{};
-        glReadPixels(kWidth / 2, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, colour.data());
-        EXPECT_EQ(colour, (std::array<GLubyte, 4>{0, 255, 0, 255}))
+        std::array<GLubyte, 4> color{};
+        glReadPixels(kWidth / 2, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, color.data());
+        EXPECT_EQ(color, (std::array<GLubyte, 4>{0, 255, 0, 255}))
             << "flipped resolve: color and depth must agree about which way up the blit landed";
 
         // THE STENCIL ASPECT, NARROW AND OFFSET ON BOTH SIDES. The copy-out moves one aspect
@@ -1280,7 +1280,7 @@ namespace MGITest {
 
     // The PACK pixel-store parameters apply to a depth read exactly as they do to a color
     // one, and the gap regions they create must be left alone.
-    TEST_F(DepthStencilReadbackMatrixScenario, DepthReadbackHonoursThePackPixelStoreParameters) {
+    TEST_F(DepthStencilReadbackMatrixScenario, DepthReadbackHonorsThePackPixelStoreParameters) {
         if (!Ready()) return;
         DepthSource source = MakeTextureSource(GL_DEPTH_COMPONENT24);
         ASSERT_TRUE(SourceIsUsable());

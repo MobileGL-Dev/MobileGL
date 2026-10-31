@@ -117,25 +117,25 @@ namespace {
 
     LinkArtifacts MakeLinkArtifacts() {
         LinkArtifacts link{};
-        link.uniformReflection = {MakeReflection("uColour", 0), MakeReflection("uMatrix", 1)};
+        link.uniformReflection = {MakeReflection("uColor", 0), MakeReflection("uMatrix", 1)};
         link.blockReflection = {MakeReflection("Block", -1)};
         link.pipeInputReflection = {MakeReflection("inPosition", 0)};
-        link.pipeOutputReflection = {MakeReflection("outColour", 0)};
+        link.pipeOutputReflection = {MakeReflection("outColor", 0)};
         link.lastStageIsFragment = true;
         link.computeLocalSize = {8u, 4u, 2u};
-        link.uniformIndexByName = {{"uColour", 0}, {"uMatrix", 1}};
+        link.uniformIndexByName = {{"uColor", 0}, {"uMatrix", 1}};
         link.attribs = {"inPosition", "inNormal"};
         link.attribTypes = {GL_FLOAT_VEC3, GL_FLOAT_VEC3};
-        link.linkedFragDataLocation = {{"outColour", 0u}};
-        link.linkedFragDataIndex = {{"outColour", 1u}};
+        link.linkedFragDataLocation = {{"outColor", 0u}};
+        link.linkedFragDataIndex = {{"outColor", 1u}};
         link.glUniformIndexToTProgram = {0, 1};
         link.tProgramUniformIndexToGl = {0, 1};
         link.glBlockIndexToTProgram = {0};
         link.tProgramBlockIndexToGl = {-1};
         link.glUniformBlockIndexToBlock = {0};
         link.blockIndexToGlUniformBlock = {0};
-        link.linkedExplicitUniformLocations = {{"uColour", 3}};
-        link.uniformLocations = {{"uColour", 0u}, {"uMatrix", 4u}};
+        link.linkedExplicitUniformLocations = {{"uColor", 3}};
+        link.uniformLocations = {{"uColor", 0u}, {"uMatrix", 4u}};
         link.writtenUniformLocationBits = {0x5ull};
         link.writtenUniformIndexBits = {0x3ull};
         link.writtenUniformIndices = {0u, 1u};
@@ -178,7 +178,7 @@ namespace {
         // scalars and two vectors. The codec has a hand-written arm for it because
         // ProgramArtifacts.h gives it no VisitFields table.
         glslang::TIntermediate::TUniformInitializer initializer;
-        initializer.name = "uInitialised";
+        initializer.name = "uInitialized";
         initializer.basicType = glslang::EbtInt;
         initializer.vectorSize = 2;
         initializer.matrixCols = 0;
@@ -252,7 +252,7 @@ TEST(ProgramArtifactsCodec, RoundTripsAFullyPopulatedArchive) {
 
     // The four reflection vectors, with their TypeFacts.
     ASSERT_EQ(decodedLink.uniformReflection.size(), 2u);
-    EXPECT_EQ(decodedLink.uniformReflection[0].name, "uColour");
+    EXPECT_EQ(decodedLink.uniformReflection[0].name, "uColor");
     EXPECT_EQ(decodedLink.uniformReflection[1].location, 1);
     EXPECT_EQ(decodedLink.uniformReflection[0].arrayStride, 16);
     EXPECT_EQ(decodedLink.uniformReflection[0].stages, 0x3u);
@@ -285,7 +285,7 @@ TEST(ProgramArtifactsCodec, RoundTripsAFullyPopulatedArchive) {
 
     // The glslang-typed aggregate, through the codec's one hand-written arm.
     ASSERT_EQ(decodedLink.uniformInitialValues.size(), 1u);
-    EXPECT_EQ(decodedLink.uniformInitialValues[0].name, "uInitialised");
+    EXPECT_EQ(decodedLink.uniformInitialValues[0].name, "uInitialized");
     EXPECT_EQ(decodedLink.uniformInitialValues[0].basicType, glslang::EbtInt);
     EXPECT_EQ(decodedLink.uniformInitialValues[0].arraySize, 3);
     ASSERT_EQ(decodedLink.uniformInitialValues[0].intValues.size(), 6u);

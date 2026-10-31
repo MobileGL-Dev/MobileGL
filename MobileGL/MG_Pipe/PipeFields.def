@@ -10,7 +10,7 @@
 // in MGPipeTypes.h, listing the fields that carry MEANING - padding is deliberately absent,
 // because MOBILEGL_PIPE_VERIFY has to have ZERO false positives and a padding byte is
 // exactly what makes a memcmp of RenderStateParameters false-DIFFER
-// (DirectGLES.cpp documents that behaviour where it does the same comparison itself).
+// (DirectGLES.cpp documents that behavior where it does the same comparison itself).
 //
 // Hand maintained alongside MGPipeTypes.h, MGPipeValueTypes.h, MGPipeHostSpan.h and
 // MG_Backend/BackendFunctions.h. Adding a member to one of these structs without adding it here
@@ -174,7 +174,7 @@
     F(Vertices) F(Outer) F(Inner)
 
 // P2 ratcheted ResidualValueBlock from six rows to one and P13 W3c deleted it; what stays is
-// the retired op 46's payload, which the record catalogue still has to lay out.
+// the retired op 46's payload, which the record catalog still has to lay out.
 
 #define MGP_FIELDS_MGPResidualValueState(F) \
     F(Version) F(Blob)
@@ -191,7 +191,7 @@
 // LevelPad IS PADDING BY ROLE AND NOT BY NAME, and that is the whole reason it has a row here:
 // the cover check excuses only the members NAMED Pad<n>, so this one left out is a pipe-gates
 // failure. The row costs no false positive, because every producer builds the record as
-// `MGPSubData{}` (so the word is a deterministic zero, not an uninitialised byte) and the
+// `MGPSubData{}` (so the word is a deterministic zero, not an uninitialized byte) and the
 // payload rides the wire as one POD memcpy - MGP_ASSERT_POD(MGPSubData, 88) is the whole
 // record, with no untransferred tail - so both sides of a comparison read the same zero.
 #define MGP_FIELDS_MGPSubData(F) \

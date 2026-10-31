@@ -707,7 +707,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         // Only provokingVertexModePerPipeline lets modes differ inside one render pass instance;
         // elsewhere every pipeline takes GL's default so the render pass stays self-consistent, and
-        // glProvokingVertex(GL_FIRST_VERTEX_CONVENTION) goes unhonoured. Honoring it there would
+        // glProvokingVertex(GL_FIRST_VERTEX_CONVENTION) goes unhonored. Honoring it there would
         // mean ending the render pass on every glProvokingVertex change; not worth it until a target
         // device actually lacks the property.
         if (!m_provokingVertexModePerPipeline) {

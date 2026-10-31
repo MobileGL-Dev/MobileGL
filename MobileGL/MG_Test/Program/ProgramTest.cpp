@@ -359,10 +359,10 @@ TEST_F(ProgramTest, ImageUniformLayoutBindingInitializesImageUnit) {
     char infoLog[1024] = "";
     const char* csSrc = R"(#version 460 core
 layout(local_size_x = 1) in;
-layout(binding = 4, rgba8) uniform writeonly image2D colourTexOut;
+layout(binding = 4, rgba8) uniform writeonly image2D colorTexOut;
 
 void main() {
-    imageStore(colourTexOut, ivec2(0), vec4(1.0));
+    imageStore(colorTexOut, ivec2(0), vec4(1.0));
 }
 )";
 
@@ -382,7 +382,7 @@ void main() {
     GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
     ASSERT_EQ(linkStatus, GL_TRUE) << infoLog;
 
-    const GLint location = GetUniformLocation(program, "colourTexOut");
+    const GLint location = GetUniformLocation(program, "colorTexOut");
     ASSERT_GE(location, 0);
     auto programObject = MobileGL::MG_State::pGLContext->GetProgramObject(program);
     ASSERT_NE(programObject, nullptr);
@@ -544,7 +544,7 @@ void main() {
     ASSERT_NE(programObject, nullptr);
 
     // ---- the reference: the old consumer's algorithm, run here over the real modules ----
-    const auto normalise = [](const SpvReflectDescriptorBinding& binding) {
+    const auto normalize = [](const SpvReflectDescriptorBinding& binding) {
         const char* raw = binding.name;
         if (binding.type_description != nullptr && binding.type_description->type_name != nullptr) {
             raw = binding.type_description->type_name;
@@ -571,8 +571,8 @@ void main() {
         }
         std::sort(bindings.begin(), bindings.end(),
                   [&](const SpvReflectDescriptorBinding* lhs, const SpvReflectDescriptorBinding* rhs) {
-                      const String lhsName = lhs ? normalise(*lhs) : String();
-                      const String rhsName = rhs ? normalise(*rhs) : String();
+                      const String lhsName = lhs ? normalize(*lhs) : String();
+                      const String rhsName = rhs ? normalize(*rhs) : String();
                       if (lhsName != rhsName) return lhsName < rhsName;
                       return lhs->binding < rhs->binding;
                   });
@@ -580,7 +580,7 @@ void main() {
             if (binding == nullptr || binding->descriptor_type != SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
                 continue;
             }
-            const String name = normalise(*binding);
+            const String name = normalize(*binding);
             if (name.empty()) continue;
             if (std::find(reference.begin(), reference.end(), name) != reference.end()) continue;
             reference.push_back(name);
@@ -3956,7 +3956,7 @@ void main() { fragColor = vec4(1.0); }
 // link gets to judge: a bare `layout(location = MAX)` is already a compile error inside glslang
 // ("location is too large"), while an array's base compiles fine and only its last element passes
 // the ceiling (...uniform-loc-negative-link-max-num-of-locations).
-TEST_F(ProgramTest, ExplicitUniformLocationsHonourMaxUniformLocations) {
+TEST_F(ProgramTest, ExplicitUniformLocationsHonorMaxUniformLocations) {
     GLint maxLocations = 0;
     GetIntegerv(GL_MAX_UNIFORM_LOCATIONS, &maxLocations);
     ASSERT_GE(maxLocations, 1024) << "GL 4.3 requires at least 1024 uniform locations";

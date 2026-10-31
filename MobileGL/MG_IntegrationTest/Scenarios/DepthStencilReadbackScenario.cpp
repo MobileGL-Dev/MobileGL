@@ -112,11 +112,11 @@ namespace MGITest {
         glClearDepth(0.25);
         glClear(GL_DEPTH_BUFFER_BIT);
 
-        const float centre = ReadDepthAt(width / 2, height / 2);
+        const float center = ReadDepthAt(width / 2, height / 2);
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_NEAR(centre, 0.25f, 1.0f / 4096.0f)
-            << "glReadPixels(GL_DEPTH_COMPONENT) of the default framebuffer returned " << centre
-            << (std::fabs(centre - kDepthPoison) < 1e-6f ? " - the destination was never written at all" : "");
+        EXPECT_NEAR(center, 0.25f, 1.0f / 4096.0f)
+            << "glReadPixels(GL_DEPTH_COMPONENT) of the default framebuffer returned " << center
+            << (std::fabs(center - kDepthPoison) < 1e-6f ? " - the destination was never written at all" : "");
 
         gl.EndFrame();
     }
@@ -139,10 +139,10 @@ namespace MGITest {
         glClearStencil(3);
         glClear(GL_STENCIL_BUFFER_BIT);
 
-        const int centre = ReadStencilAt(width / 2, height / 2);
+        const int center = ReadStencilAt(width / 2, height / 2);
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_EQ(centre, 3) << "glReadPixels(GL_STENCIL_INDEX) of the default framebuffer returned " << centre
-                             << (centre == kStencilPoison ? " - the destination was never written at all" : "");
+        EXPECT_EQ(center, 3) << "glReadPixels(GL_STENCIL_INDEX) of the default framebuffer returned " << center
+                             << (center == kStencilPoison ? " - the destination was never written at all" : "");
 
         gl.EndFrame();
     }

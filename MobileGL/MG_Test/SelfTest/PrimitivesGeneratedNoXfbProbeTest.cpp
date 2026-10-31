@@ -511,7 +511,7 @@ TEST(PrimitivesGeneratedNoXfbProbeTeardownTest, AFenceTimeoutLeaksEverythingAndR
 // The control: a driver that signals normally gets the ordinary teardown - idle
 // wait, every object destroyed, no timeout flag - so the case above is testing the
 // timeout branch and not a probe that never cleans up at all.
-TEST(PrimitivesGeneratedNoXfbProbeTeardownTest, ASignalledFenceTearsDownNormally) {
+TEST(PrimitivesGeneratedNoXfbProbeTeardownTest, ASignaledFenceTearsDownNormally) {
     PrimitivesGeneratedNoXfbProbeContext context = FakeProbeContext();
     g_fake.fenceWaitResult = VK_SUCCESS;
     g_fake.streamGenerated = 1; // healthy: the capture-less draws are counted

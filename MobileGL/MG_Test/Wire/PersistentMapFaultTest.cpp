@@ -105,7 +105,7 @@ TEST(PersistentMapFaultOwnership, AKernelsUntaggedFaultAddressIsOwnedByATaggedSh
 // The same row without needing the host to ignore a top byte at all: the predicate is fed a
 // composed slot, so it runs everywhere and goes red everywhere the normalization is dropped.
 // This is the case the gate rests on; the one above is the device's literal reproduction.
-TEST(PersistentMapFaultOwnership, TheOwnershipRowNormalisesBothSidesBeforeItCompares) {
+TEST(PersistentMapFaultOwnership, TheOwnershipRowNormalizesBothSidesBeforeItCompares) {
     SizeT pageIndex = ~static_cast<SizeT>(0);
     const uintptr_t base = PersistentMapTracker::UntagAddressForTest(kDeviceTaggedShadowBase);
     // Untagged base against untagged fault: owned, on this host and on the device alike.

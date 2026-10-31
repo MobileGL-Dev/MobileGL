@@ -9,7 +9,7 @@
 // Where the apply thread runs and how long it spins before parking, chosen per session from the
 // peer (the Hello's DialMode) and the data plane. With MOBILEGL_IPC_SERVER_AFFINITY=auto an
 // in-process, forked or stream-plane peer gets every big core and the configured spin; a peer
-// that dialled in over shared segments gets at most one core (ReservedApplyCore), never the only
+// that dialed in over shared segments gets at most one core (ReservedApplyCore), never the only
 // prime core, and kConnectedPeerSpinUs unless MOBILEGL_IPC_SPIN_US is set, because it writes the
 // ring the apply thread spins on and its GL thread wants a prime core. An explicit mask or `off`
 // wins for every peer. Pure functions, so the unit suite covers every row; the measurements are
@@ -28,11 +28,11 @@ namespace MobileGL::MG_Remote::Server {
     enum class ApplyPeer : Uint8 {
         InProcess = 0, // DialMode::No     - inproc: the client is another thread of this process
         Forked = 1,    // DialMode::Fork   - the client launched this server (same app, same build)
-        Connected = 2, // DialMode::Connect - the client dialled a standing server: another process,
+        Connected = 2, // DialMode::Connect - the client dialed a standing server: another process,
                        //                     possibly another app (tcp://, unix:, fd:)
     };
 
-    // The apply thread's spin before it parks, for a dialled-in shared-segment peer when
+    // The apply thread's spin before it parks, for a dialed-in shared-segment peer when
     // MOBILEGL_IPC_SPIN_US is not set. 50 us - the global default - by measurement: parking at once
     // (0) lost in every cell measured (rd12 Espryt 120 -> 74 fps on the helper route, 27 -> 17 from the
     // shell), so the short spin stays (CONTRACT-P11 B1).
@@ -41,7 +41,7 @@ namespace MobileGL::MG_Remote::Server {
     struct ApplyThreadPolicy {
         Uint64 requestedMask = 0; // 0 = make no affinity call
         Uint32 spinUs = 0;
-        Bool recognised = true; // false: the affinity text was not `auto`, `off` or a number
+        Bool recognized = true; // false: the affinity text was not `auto`, `off` or a number
         const char* rule = "";  // what the log line names
     };
 
@@ -79,11 +79,11 @@ namespace MobileGL::MG_Remote::Server {
     inline const char* ReservedCoreReasonText(ReservedCoreReason reason) {
         switch (reason) {
         case ReservedCoreReason::LowestOfSeveralPrimeCores:
-            return "auto: the lowest of the prime cores, the rest left to the dialled-in shared-segment client";
+            return "auto: the lowest of the prime cores, the rest left to the dialed-in shared-segment client";
         case ReservedCoreReason::BigCoreBesideTheOnlyPrime:
-            return "auto: a big core beside the only prime core, which is left to the dialled-in shared-segment client";
+            return "auto: a big core beside the only prime core, which is left to the dialed-in shared-segment client";
         case ReservedCoreReason::OnlyPrimeCoreLeftAlone:
-            return "auto: unpinned - the only prime core is left to the dialled-in shared-segment client and there "
+            return "auto: unpinned - the only prime core is left to the dialed-in shared-segment client and there "
                    "is no other big core";
         case ReservedCoreReason::NoAsymmetry:
             return "auto: unpinned - no asymmetric big/prime topology to split";
@@ -91,7 +91,7 @@ namespace MobileGL::MG_Remote::Server {
         return "";
     }
 
-    // The core `auto` reserves for a dialled-in shared-segment peer's apply thread, which spins there.
+    // The core `auto` reserves for a dialed-in shared-segment peer's apply thread, which spins there.
     // `bigCoreMask` = cpus within 15% of the peak clock, `primeMask` = cpus AT the peak clock (both
     // DetectCoreTopology's), `onlineMask` = one bit per cpu counted. The rule never hands the spinning
     // apply thread the ONLY prime core - a foreground client's GL thread wants it:
@@ -141,7 +141,7 @@ namespace MobileGL::MG_Remote::Server {
             char* end = nullptr;
             const unsigned long long parsed = std::strtoull(affinity, &end, 0);
             if (end == affinity || (end != nullptr && *end != '\0')) {
-                policy.recognised = false;
+                policy.recognized = false;
                 policy.rule = "unrecognized";
                 return policy;
             }
@@ -158,7 +158,7 @@ namespace MobileGL::MG_Remote::Server {
             // The stream plane: an io thread feeds the apply thread, which does not spin on the
             // client's writes - B0 measured 7.9 ms/frame of apply CPU there against 26.8 on shm.
             policy.requestedMask = bigCoreMask;
-            policy.rule = "auto: every big core (dialled-in peer on the stream plane)";
+            policy.rule = "auto: every big core (dialed-in peer on the stream plane)";
             return policy;
         }
         policy.spinUs = spinExplicit ? configuredSpinUs : kConnectedPeerSpinUs;
@@ -169,7 +169,7 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     // What the supervisor announces at start-up and the broker relays to the helper: the core this
-    // process's configuration reserves for a dialled-in shared-segment peer's apply thread. An operator's
+    // process's configuration reserves for a dialed-in shared-segment peer's apply thread. An operator's
     // affinity (a mask or `off`) reserves nothing - the client is then not kept off any core.
     inline Uint64 ReservedApplyCoreForConfig(const char* affinity, Uint64 bigCoreMask, Uint64 primeMask,
                                              Uint64 onlineMask, ReservedCoreReason* outReason = nullptr) {

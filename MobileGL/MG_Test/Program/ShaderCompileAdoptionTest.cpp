@@ -454,7 +454,7 @@ TEST_F(ShaderCompileAdoptionTest, DeletingOneSharerLeavesTheOtherIntact) {
 // but JobNode::Cancel on a Running node only sets the cancellation-REQUEST flag; the state
 // stays Running until the worker's body returns and JobNode::Run forces the final transition
 // to Canceled (see JobNode::Run's tail: it takes Canceled instead of Complete whenever
-// m_cancelled is set, regardless of how the body finished). FindAdoptable must refuse a node
+// m_canceled is set, regardless of how the body finished). FindAdoptable must refuse a node
 // in that in-between state - not just one already settled as Canceled - or C inherits a
 // doomed node and glGetShaderiv reports GL_FALSE with an empty info log for valid source.
 TEST_F(ShaderCompileAdoptionTest, RunningCancelRequestedNodeIsNotAdopted) {
@@ -489,7 +489,7 @@ TEST_F(ShaderCompileAdoptionTest, RunningCancelRequestedNodeIsNotAdopted) {
         << "the node already settled; the race window closed before the assertions below "
            "could observe it - widen MakeVeryHeavySource's loop count";
     ASSERT_TRUE(node->IsCancellationRequested());
-    ASSERT_FALSE(node->IsCancelled()) << "the window this test targets does not exist here";
+    ASSERT_FALSE(node->IsCanceled()) << "the window this test targets does not exist here";
 
     // A brand-new shader name, byte-identical source, nothing wrong with it.
     const GLuint c = CreateShader(GL_FRAGMENT_SHADER);
@@ -856,7 +856,7 @@ TEST(ShaderCompileAdoptionMapTest, EnvFingerprintMismatchIsNotAdopted) {
 // A node that settled as Canceled published nothing, so adopting it would hand the new
 // object a compile that can only ever report GL_FALSE. It must be a miss, and the dead entry
 // must be pruned where it is found rather than waiting for the amortized sweep.
-TEST(ShaderCompileAdoptionMapTest, CancelledNodeIsNotAdoptedAndIsPruned) {
+TEST(ShaderCompileAdoptionMapTest, CanceledNodeIsNotAdoptedAndIsPruned) {
     const auto& env = MG_Util::ShaderTranspiler::GetDefaultCompileEnv();
     ShaderCompileAdoptionMap map;
     const String text = "#version 460\nvoid main() {}\n";
@@ -864,7 +864,7 @@ TEST(ShaderCompileAdoptionMapTest, CancelledNodeIsNotAdoptedAndIsPruned) {
     map.Register(node);
     // Never posted, so this settles the node as Canceled right here.
     node->Cancel();
-    ASSERT_TRUE(node->IsCancelled());
+    ASSERT_TRUE(node->IsCanceled());
     ASSERT_EQ(map.GetEntryCount(), 1u);
 
     EXPECT_EQ(map.FindAdoptable(ShaderStage::Fragment, ShaderPreprocessCache::HashSource(text), text, env->fingerprint),

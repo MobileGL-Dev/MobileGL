@@ -38,7 +38,7 @@ namespace MobileGL::MG_Remote::Server {
             return "NoDisplay";
         case ServerWindowAcquire::NoWindow:
             return "NoWindow";
-        case ServerWindowAcquire::Cancelled:
+        case ServerWindowAcquire::Canceled:
             return "Canceled";
         case ServerWindowAcquire::Interrupted:
             return "Interrupted";
@@ -247,7 +247,7 @@ namespace MobileGL::MG_Remote::Server {
         for (;;) {
             if (!m_installed) return ServerWindowAcquire::NoDisplay;
             if (m_interrupts != interrupts) return ServerWindowAcquire::Interrupted;
-            if (cancel != nullptr && cancel(cancelUser)) return ServerWindowAcquire::Cancelled;
+            if (cancel != nullptr && cancel(cancelUser)) return ServerWindowAcquire::Canceled;
             // ANOTHER HOLDER: refused at once while its session goes on, waited for while it ends
             // (its EndLease wakes this). The window is judged only once the lease is free.
             const Bool heldElsewhere = m_leaseHolder != nullptr && m_leaseHolder != holder;

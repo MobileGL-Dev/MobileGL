@@ -139,14 +139,14 @@ void main() {
                 std::vector<unsigned char> bytes(static_cast<std::size_t>(kSize) * kSize * 4, 0);
                 glReadBuffer(GL_COLOR_ATTACHMENT0 + index);
                 glReadPixels(0, 0, kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, bytes.data());
-                std::vector<float> centre(4, -1.0f);
+                std::vector<float> center(4, -1.0f);
                 // The middle pixel: the quad covers the whole target, so every pixel is the same,
                 // and the middle one cannot be a rasterization edge case.
                 const std::size_t offset = (static_cast<std::size_t>(kSize / 2) * kSize + kSize / 2) * 4;
                 for (int i = 0; i < 4; ++i) {
-                    centre[static_cast<std::size_t>(i)] = static_cast<float>(bytes[offset + i]) / 255.0f;
+                    center[static_cast<std::size_t>(i)] = static_cast<float>(bytes[offset + i]) / 255.0f;
                 }
-                return centre;
+                return center;
             }
 
             GLuint m_fbo = 0;

@@ -431,7 +431,7 @@ TEST_F(DemoteFloat64Test, TheSharedChainKeepsFloat64WhenTheBackendConsumesIt) {
 // The exception the vertex path needs, at the level ProgramSpirvTask asks it: no backend here can
 // FETCH 64 bits, so a stage that declares a Float64 input is demoted whole even where the rest of
 // its doubles could have survived.
-TEST_F(DemoteFloat64Test, AFloat64VertexInputIsRecognisedAndOnlyOnAVertexStage) {
+TEST_F(DemoteFloat64Test, AFloat64VertexInputIsRecognizedAndOnlyOnAVertexStage) {
     const Vector<Uint32> vertexWithDoubleInput = CompileToSpirv(GL_VERTEX_SHADER, kWideVertexSource);
     ASSERT_FALSE(vertexWithDoubleInput.empty());
     EXPECT_TRUE(ShaderCompiler::ModuleDeclaresFloat64VertexInput(vertexWithDoubleInput));
@@ -796,7 +796,7 @@ TEST_F(DemoteFloat64Test, AComparisonAgainstZeroIsStillRewritten) {
         << "the rewrite must still fire for a genuine comparison against zero";
 }
 
-TEST_F(DemoteFloat64Test, TheThirtyTwoBitBehaviourIsUnchanged) {
+TEST_F(DemoteFloat64Test, TheThirtyTwoBitBehaviorIsUnchanged) {
     EXPECT_FALSE(RewritesToAnAbsoluteValueTest(CompareAgainst("float", "1.0")))
         << "a float compared against 1.0 must not be rewritten";
     EXPECT_TRUE(RewritesToAnAbsoluteValueTest(CompareAgainst("float", "0.0")))

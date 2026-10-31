@@ -130,7 +130,7 @@ void main() { o_color = texture(u_texture, vec2(0.5, 0.5)); }
                 glUniform1i(glGetUniformLocation(m_program, "u_texture"), 0);
             }
 
-            std::array<GLubyte, 4> DrawAndReadCentre() {
+            std::array<GLubyte, 4> DrawAndReadCenter() {
                 glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
                 glClearColor(0.5f, 0.5f, 0.5f, 0.5f);
                 glClear(GL_COLOR_BUFFER_BIT);
@@ -170,7 +170,7 @@ void main() { o_color = texture(u_texture, vec2(0.5, 0.5)); }
             if (HasFatalFailure()) return;
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, m_source);
-            const auto texel = DrawAndReadCentre();
+            const auto texel = DrawAndReadCenter();
             EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
             EXPECT_EQ(static_cast<int>(texel[0]), 255) << "red: the multisample texture was not bound";
             EXPECT_EQ(static_cast<int>(texel[1]), 0);
@@ -191,12 +191,12 @@ void main() { o_color = texture(u_texture, vec2(0.5, 0.5)); }
             UseProgram(kSample2DSource);
             if (HasFatalFailure()) return;
 
-            const auto bound = DrawAndReadCentre();
+            const auto bound = DrawAndReadCenter();
             ASSERT_EQ(static_cast<int>(bound[0]), 255) << "the control: the bound texture is sampled";
             ASSERT_EQ(static_cast<int>(bound[1]), 0);
 
             glBindTexture(GL_TEXTURE_2D, 0);
-            const auto unbound = DrawAndReadCentre();
+            const auto unbound = DrawAndReadCenter();
             EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
             EXPECT_EQ(static_cast<int>(unbound[0]), 0)
                 << "texture 0 is bound, yet the unit still answers with the texture bound before it";

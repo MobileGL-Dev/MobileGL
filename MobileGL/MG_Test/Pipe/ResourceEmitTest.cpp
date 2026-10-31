@@ -1701,7 +1701,7 @@ namespace {
     // Neither branch may fall through to a table it was not named. A target or a kind outside
     // the catalog would otherwise land in whichever table the code happened to reach first,
     // and destroy a live object of a kind the call was never about.
-    TEST(ResourceEmit, AResourceTargetOrKindTheCatalogueDoesNotNameIsRefusedRatherThanRouted) {
+    TEST(ResourceEmit, AResourceTargetOrKindTheCatalogDoesNotNameIsRefusedRatherThanRouted) {
         ApplierGuard guard;
         const MGPipeHandle res{5, 1};
 

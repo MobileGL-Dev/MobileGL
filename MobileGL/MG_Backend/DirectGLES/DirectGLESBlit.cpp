@@ -980,15 +980,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // only attachment is depth it never can, because the color emulation has no attachment
         // to take a format from (KHR-GL33.framebuffer_blit's depth config test blits
         // COLOR|DEPTH|STENCIL across depth-only framebuffers and kept reading the clear value).
-        const GLbitfield colourBit = mask & static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT);
+        const GLbitfield colorBit = mask & static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT);
         const GLbitfield dsBits = mask & static_cast<GLbitfield>(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
         // The color group's one emulation is the multisample resolve that also converts format,
         // which is the shape this names. It used to double as an early-out for the whole
         // function, which is what cost a depth-only mask its single-aspect retry.
         const Bool multisampleResolve = readSamples > 0 && drawSamples <= 0;
-        if (colourBit != 0) {
+        if (colorBit != 0) {
             DrainBlitErrors();
-            g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, colourBit, filter);
+            g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, colorBit, filter);
             if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
                 const Bool emulated = multisampleResolve &&
                                       ResolveThenBlit(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, filter);

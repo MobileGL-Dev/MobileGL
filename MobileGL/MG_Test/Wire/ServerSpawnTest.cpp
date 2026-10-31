@@ -1569,7 +1569,7 @@ TEST(ServerSpawnTest, AnFdPairTheBrokerConnectedBringsASharedSegmentSessionUp) {
     EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count(),
               4000);
     EXPECT_TRUE(Client::ClientSession::Active() != nullptr);
-    EXPECT_TRUE(Client::ClientSessionInstance().ConnectDial()) << "an fd: pair is a dialled-in (Connect) session";
+    EXPECT_TRUE(Client::ClientSessionInstance().ConnectDial()) << "an fd: pair is a dialed-in (Connect) session";
     EXPECT_NE(::fcntl(control, F_GETFD) & FD_CLOEXEC, 0) << "an adopted descriptor must not leak into children";
     Client::ClientSessionInstance().Stop();
     int exitCode = -1;

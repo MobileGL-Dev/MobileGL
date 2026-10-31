@@ -271,7 +271,7 @@ void main() {
     // outside the range: offset 4 still holds the seed on the CPU side and the first dispatch's
     // increments on the GPU. Renaming it would put the seed back and the second dispatch would
     // count from there.
-    TEST_F(AtomicCounterScenario, APartialSubDataBetweenDispatchesKeepsTheShaderWrittenNeighbour) {
+    TEST_F(AtomicCounterScenario, APartialSubDataBetweenDispatchesKeepsTheShaderWrittenNeighbor) {
         if (!Ready() || IsSkipped()) return;
 
         const GLuint zero = MakeCounterBuffer(0, {0u, 0u});

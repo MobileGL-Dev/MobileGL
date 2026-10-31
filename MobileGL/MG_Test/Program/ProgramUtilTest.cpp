@@ -4788,7 +4788,7 @@ void main() { v = gl_NumSamples; }
     }
 }
 
-TEST_F(ProgramUtilTest, NumSamplesShimHonoursTheVersionAndExtensionGate) {
+TEST_F(ProgramUtilTest, NumSamplesShimHonorsTheVersionAndExtensionGate) {
     using namespace MG_Util::ShaderTranspiler;
 
     struct Case {

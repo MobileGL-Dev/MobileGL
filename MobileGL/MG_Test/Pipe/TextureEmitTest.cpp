@@ -2395,11 +2395,11 @@ TEST(TextureEmit, ASubDataRecordWhoseResourceTargetNamesNoTextureIsRefusedRather
 
     // And so is a value at or above the catalog, and so is the buffer target arriving with a
     // non-zero upload-target half - which the whole-field buffer test above cannot see.
-    MGPSubData pastTheCatalogue = renderbuffer;
-    pastTheCatalogue.Target = static_cast<Uint16>(MGPipeResourceTarget::Count);
+    MGPSubData pastTheCatalog = renderbuffer;
+    pastTheCatalog.Target = static_cast<Uint16>(MGPipeResourceTarget::Count);
     ExpectRefusedNaming("resource_subdata {slot=9, gen=1}: the record's resource target names no texture "
                         "to upload into",
-                        [&pastTheCatalogue, &texels]() { MGPipeApplyResourceSubData(pastTheCatalogue, texels); });
+                        [&pastTheCatalog, &texels]() { MGPipeApplyResourceSubData(pastTheCatalog, texels); });
 
     MGPSubData packedBuffer = renderbuffer;
     packedBuffer.Target = static_cast<Uint16>(0x0100u | kMGPipeResourceTargetBuffer);

@@ -100,7 +100,7 @@ Each row starts with a per-leg trace, e.g.
 `rawmmap[i]=no vkimport[D]=rt gpu[D]=rt` — `[D]` decisive, `[i]` informational,
 `rt` = round-tripped, `read-only`/`write-only`/`no`/`notrun` otherwise. Driver
 error codes are printed verbatim (`VkResult` names, `errno`, GL enums) — that is
-the payload of the spike, so do not summarise them away.
+the payload of the spike, so do not summarize them away.
 
 Two details worth knowing when reading T1 output:
 

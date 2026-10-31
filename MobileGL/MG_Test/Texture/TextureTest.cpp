@@ -7010,7 +7010,7 @@ TEST(EtcDecoder, DecodesTheConformanceSuitesEtc2RgbImage) {
 // The EAC half: a block whose multiplier is 0 still moves every texel by the bare modifier, and a
 // base of 128 with modifier index 4 (+2 in table 0) reads 130 in the alpha channel; the color half
 // is an individual-mode block of one flat color (all-zero indices: +2 on 0x88 = 138).
-TEST(EtcDecoder, DecodesAnEacAlphaBlockAndAnIndividualModeColourBlock) {
+TEST(EtcDecoder, DecodesAnEacAlphaBlockAndAnIndividualModeColorBlock) {
     Uint8 block[16] = {};
     block[0] = 128;  // alpha base
     block[1] = 0x10; // multiplier 1, table 0

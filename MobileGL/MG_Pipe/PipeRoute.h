@@ -243,7 +243,7 @@ namespace MobileGL::MG_Pipe {
     // gates on it); under monolith the row is never produced and the fields keep coming
     // through the residual fill (G1). The row IS an ordinary routed set_* otherwise - the
     // monolith adapter exists so the wire emitter's server-role arm has something defined to
-    // forward to, and the catalog's null-row accounting (PipeCatalogueTest) counts it.
+    // forward to, and the catalog's null-row accounting (PipeCatalogTest) counts it.
     inline void MGPipeRouteSetContextValues(const MGPContextValues& values) {
         MGP_SetContextValues(&values);
     }

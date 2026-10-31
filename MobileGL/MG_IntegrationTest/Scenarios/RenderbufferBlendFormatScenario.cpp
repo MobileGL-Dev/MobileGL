@@ -144,12 +144,12 @@ void main()
         void ExpectBlendedRatherThanOverwritten(const char* what) {
             const Image image = ReadPixels(kExtent, kExtent);
             ASSERT_FALSE(image.Empty()) << what;
-            const Rgba8 centre = image.At(kExtent / 2, kExtent / 2);
-            EXPECT_GT(int(centre.r), 40) << what << ": got " << centre
+            const Rgba8 center = image.At(kExtent / 2, kExtent / 2);
+            EXPECT_GT(int(center.r), 40) << what << ": got " << center
                                          << ", which is darker than a blend of "
                                             "black and 50% white";
-            EXPECT_LT(int(centre.r), 215)
-                << what << ": got " << centre << ", which is the source color - blending was disabled";
+            EXPECT_LT(int(center.r), 215)
+                << what << ": got " << center << ", which is the source color - blending was disabled";
         }
 
     } // namespace

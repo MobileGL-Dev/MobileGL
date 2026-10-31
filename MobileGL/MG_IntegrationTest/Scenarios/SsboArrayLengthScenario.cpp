@@ -136,7 +136,7 @@ void main() {
                 return program;
             }
 
-            // A buffer of `elements` ivec4s, filled with a recognisable pattern.
+            // A buffer of `elements` ivec4s, filled with a recognizable pattern.
             GLuint MakeStorageBuffer(int elements) {
                 std::vector<int> contents(static_cast<std::size_t>(elements) * 4, 41);
                 GLuint buffer = 0;

@@ -151,7 +151,7 @@ void main() {
         // color-mask discipline in SyncRenderState is for. GL_DST_ALPHA blending and
         // glBlitFramebuffer read that stored alpha inside the driver, where no readback fixup can
         // reach it, so "the storage really holds 1.0" is the only workable invariant.
-        TEST_F(ThreeChannelAttachmentScenario, WidenedAttachmentReadsBackOpaqueWhileItsNeighbourKeepsItsAlpha) {
+        TEST_F(ThreeChannelAttachmentScenario, WidenedAttachmentReadsBackOpaqueWhileItsNeighborKeepsItsAlpha) {
             if (!Ready() || IsSkipped()) return;
 
             std::string error;
