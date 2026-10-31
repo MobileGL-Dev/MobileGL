@@ -83,10 +83,10 @@ public final class ServerEnvironment {
 
     /** The supervisor's start-up announcement (MG_Remote/Server/ServerMain.cpp), up to the mask. */
     static final String RESERVED_CORE_ANNOUNCEMENT =
-            "MG_Remote server: apply core reserved for dialled-in shared-segment clients: 0x";
+            "MG_Remote server: apply core reserved for dialed-in shared-segment clients: 0x";
 
     /**
-     * P11 B1 (CONTRACT-P11 B1): the core the running supervisor reserves for a dialled-in shared-segment
+     * P11 B1 (CONTRACT-P11 B1): the core the running supervisor reserves for a dialed-in shared-segment
      * client's apply thread, read off the line it prints on stdout at start-up (the native policy,
      * ApplyThreadPolicy.h ReservedApplyCoreForConfig, is the one source of it; nothing here re-derives
      * it). The mask, or -1 when {@code line} is not that announcement.
