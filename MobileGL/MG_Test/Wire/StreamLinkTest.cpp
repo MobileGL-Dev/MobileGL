@@ -371,7 +371,7 @@ namespace {
 
     // PH-7 (4), ID-P7-3, through the Transport factory pair ServerSession::Accept uses so that
     // session code never names the concrete link (scripts/ci/link_seam_purity.py). In the
-    // production order: created without a descriptor, endpoints initialised, then bound once.
+    // production order: created without a descriptor, endpoints initialized, then bound once.
     // A second bind, and a bind onto a link the factory did not make as a stream, are refused
     // and leave the descriptor with the caller; the bound link then carries a record.
     TEST(StreamLinkFactory, DeferredServerLinkBindsOnceAndThenCarriesARecord) {

@@ -73,7 +73,7 @@ namespace MobileGL::MG_Util::SelfTest {
     // the verdict ranks the dedicated query first. A substitute qualifies only by
     // answering the exact expected count on every shape it is required to cover;
     // a device where no substitute qualifies even for the plain shape gets none
-    // (the honest verdict is the current behaviour); anything that fits neither
+    // (the honest verdict is the current behavior); anything that fits neither
     // the defect nor health is INCONCLUSIVE and must never arm anything. The
     // expected counts are exact (1 triangle per shape), not merely nonzero, so a
     // driver that half-counts cannot arm a half-right repair.
@@ -223,7 +223,7 @@ namespace MobileGL::MG_Util::SelfTest {
         // The defect is present and no substitute qualifies: none is exact
         // everywhere, and the plain-only fallback either misses the plain shape
         // or fails the domination rule above. The honest verdict is the current
-        // behaviour.
+        // behavior.
         Unfixable,
     };
 

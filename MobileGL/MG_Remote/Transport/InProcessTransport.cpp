@@ -40,7 +40,7 @@ namespace MobileGL::MG_Remote::Transport {
     public:
         struct Direction {
             std::mutex mutex;
-            // One variable per predicate. A single cv signalled with
+            // One variable per predicate. A single cv signaled with
             // notify_one would let a SendFrame's wakeup land on a thread
             // blocked in ReceiveFd, which re-tests its own predicate and goes
             // straight back to sleep - leaving a queued message undelivered

@@ -224,7 +224,7 @@ def repo_relative(path, cwd):
     """normpath the -H spelling, then express it repo-relative with forward slashes.
 
     Today's transcripts contain e.g. TextureState/../SamplerState/SamplerObject.h, which
-    only matches a forbidden prefix after normalisation. Anything outside the repo (the
+    only matches a forbidden prefix after normalization. Anything outside the repo (the
     toolchain's own headers, /usr/include) is not our business and returns None.
     """
     absolute = os.path.normpath(os.path.join(cwd, path))
@@ -498,7 +498,7 @@ Multiple include guards may be useful for:
 
 
 def self_test_parser():
-    """Check 4: the trailer paragraph is discarded and a `../` spelling normalises."""
+    """Check 4: the trailer paragraph is discarded and a `../` spelling normalizes."""
     problems = []
     entries = parse_h_output(PARSER_CANNED_GXX, REPO_ROOT)
     if len(entries) != 3:
@@ -508,14 +508,14 @@ def self_test_parser():
         problems.append("depths misparsed: {}".format(depths))
     normalised = entries[-1][1] if entries else None
     if normalised != "MobileGL/MG_State/GLState/SamplerState/SamplerObject.h":
-        problems.append("`../` spelling did not normalise: {}".format(normalised))
+        problems.append("`../` spelling did not normalize: {}".format(normalised))
     elif not find_violations(entries, PROBES[0]["Forbidden"], []):
-        problems.append("normalised path did not match the value-header forbidden list")
+        problems.append("normalized path did not match the value-header forbidden list")
     if problems:
         for problem in problems:
             say("    self-test parser: " + problem)
         return False
-    say("    self-test parser: trailer discarded, `../` normalised and matched")
+    say("    self-test parser: trailer discarded, `../` normalized and matched")
     return True
 
 

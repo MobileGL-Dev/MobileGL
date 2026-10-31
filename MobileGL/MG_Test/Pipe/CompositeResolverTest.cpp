@@ -65,7 +65,7 @@
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/Core.h>
-// create_shader_state takes the two artefact structs by pointer beside the record, so a case
+// create_shader_state takes the two artifact structs by pointer beside the record, so a case
 // that mints a composite record needs their definitions.
 #include <MG_State/GLState/ProgramState/ProgramArtifacts.h>
 

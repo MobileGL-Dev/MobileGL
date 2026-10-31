@@ -90,11 +90,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // end up with a module carrying no Xfb mode - the clip/XFB validation backstop rewinding
         // past the decoration, or XfbCaptureDecoratePass resolving none of the requested varyings
         // and changing nothing. Declining the span leaves the capture buffers untouched, which is
-        // the same nothing the driver would have written, without the undefined behaviour.
+        // the same nothing the driver would have written, without the undefined behavior.
         if (m_currentDrawXfbCaptureDeclined) {
             MGLOG_E_ONCE("BeginXfbCaptureForDraw: declining the capture span - the bound program's last "
                          "pre-rasterization stage carries no Xfb execution mode, so recording one would be "
-                         "undefined behaviour rather than a capture");
+                         "undefined behavior rather than a capture");
             return false;
         }
         return BeginWireXfbCaptureForDraw(frame);

@@ -117,7 +117,7 @@ namespace MobileGL::MG_State::GLState {
         ProgramLinkTask::SpirvHandoff& handoff = m_phaseA->spirvHandoff;
         const Uint externalIndex = m_phaseA->in.externalIndex;
         if (!handoff.ready) {
-            // Phase A did not reach its tail (it failed the link, or was cancelled mid-body).
+            // Phase A did not reach its tail (it failed the link, or was canceled mid-body).
             // Publish nothing; spirvStatus stays false.
             return;
         }

@@ -266,7 +266,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 reasons.push_back("GL_DEPTH_COMPONENT32 native probe failed on OpenGL ES");
             }
             if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
-                reasons.push_back("no colour-renderable three-channel format on OpenGL ES");
+                reasons.push_back("no color-renderable three-channel format on OpenGL ES");
             }
             // A format is either 8- or 16-bit signed normalized, so at most one of the two ever
             // survives GetApplicablePixelFormatNormalizeOptions and the reason is not duplicated.
@@ -369,7 +369,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // did - is not merely untidy: the two texture pnames are ES 3.1 state, so on an ES 3.0
         // context the loader's rejected-probe clamp leaves them at 1 (see the multisample clamps
         // in the GLES loader) and the walk below would never run past one sample, recording {1}
-        // for EVERY colour format while GL_MAX_SAMPLES - ES 3.0 core, so genuinely answered -
+        // for EVERY color format while GL_MAX_SAMPLES - ES 3.0 core, so genuinely answered -
         // reports 4. Once the frontend validates against this list, that would reject every
         // multisample renderbuffer on such a context.
         Int GetGLESRenderbufferFormatMaxSamples(const MG_External::GLESCapabilities& capabilities, GLenum imageFormat) {
@@ -707,7 +707,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 for (SizeT targetIndex = 0; targetIndex < kFormatCapabilityTextureTargetCount; ++targetIndex) {
                     const auto target = static_cast<TextureTarget>(targetIndex);
-                    // Colour-attachable targets need a colour-renderable fallback; the ordinary
+                    // Color-attachable targets need a color-renderable fallback; the ordinary
                     // fallback for a three-channel format is another three-channel one, which ES
                     // accepts as a texture but never as an attachment. Recompute the fallback per
                     // target so those formats get widened where the target demands it.
@@ -814,7 +814,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 const SizeT renderbufferTargetIndex = GetRenderbufferFormatCapabilityTargetIndex();
                 // A renderbuffer exists only to be attached, so it needs the same three-channel
-                // widening the colour-attachable texture targets get - and on the same terms: the
+                // widening the color-attachable texture targets get - and on the same terms: the
                 // native storage is probed first, so a driver that renders to it keeps it.
                 const Flags<PixelFormatNormalizeOptionBit> renderbufferOptions =
                     TextureImpl::GetRenderTargetNormalizeOptions(capabilities, renderbufferTargetIndex);
@@ -1053,7 +1053,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // built).
         UpdateAdvertisedCapabilityExtensions(m_GLESCapabilities);
         UpdateDynamicBackendParameters();
-        // The colour-attachment cap the framebuffer family checks is known from here on.
+        // The color-attachment cap the framebuffer family checks is known from here on.
         DirectGLES::ResolveRecordArmFamilies();
         PopulateFormatCapabilities(m_GLESFunctions, m_GLESCapabilities, MutableFormatCapabilities());
         PrintFormatCapabilities(GetFormatCapabilities());
@@ -1540,7 +1540,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             E_GL_ARB_texture_rg,
             // GL_DEPTH_COMPONENT32F and GL_DEPTH32F_STENCIL8.
             E_GL_ARB_depth_buffer_float,
-            // The floating-point colour formats. Unlike the rest of this block this string DOES
+            // The floating-point color formats. Unlike the rest of this block this string DOES
             // gate CTS cases - KHR-GL4*.internalformat.texture2d.*{16f,32f} is keyed on it with no
             // core-version fallback, so eight cases per version list were NotSupported on formats
             // the backend has always had.
@@ -1557,7 +1557,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //  - multiple capture buffers per stream, gl_SkipComponents / gl_NextBuffer, the
             //    indexed queries and glDrawTransformFeedbackStream (4.0);
             E_GL_ARB_transform_feedback3,
-            //  - GL_RGB10_A2UI (3.3), GL_RGB9_E5 (3.0) and the integer colour formats (3.0);
+            //  - GL_RGB10_A2UI (3.3), GL_RGB9_E5 (3.0) and the integer color formats (3.0);
             E_GL_ARB_texture_rgb10_a2ui, E_GL_EXT_texture_shared_exponent, E_GL_EXT_texture_integer,
             //  - the eleven pipeline-statistics query targets (4.6). Accepted by glBeginQuery and
             //    answered with GL_QUERY_COUNTER_BITS = 0, the spec's own "this counter is not
@@ -1609,7 +1609,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // recorded trace can never cover: Iris and Sodium change their SUBMISSION SCHEDULE
         // the moment they see it - they enqueue whole pipeline batches and poll
         // GL_COMPLETION_STATUS_KHR instead of compiling one program at a time - so
-        // MOBILEGL_ASYNC_SHADER_COMPILE=0 has to withdraw the application-visible behaviour
+        // MOBILEGL_ASYNC_SHADER_COMPILE=0 has to withdraw the application-visible behavior
         // change as well as the threading, or the kill switch would only be half a switch.
         if (MG_Util::Async::AsyncShaderCompileEnabled()) {
             extensions.push_back(E_GL_KHR_parallel_shader_compile);
@@ -1619,7 +1619,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // reaches this backend - so an application that simply uses doubles needs nothing
         // advertised. What the extension additionally promises is 64-bit PRECISION, which no
         // mobile GPU has and the narrowing cannot fake, so advertising it by default would
-        // make an application that checks the string take a path MobileGL cannot honour.
+        // make an application that checks the string take a path MobileGL cannot honor.
         if (MG_Config::Features.AdvertiseFp64) {
             extensions.push_back(E_GL_ARB_gpu_shader_fp64);
         }
@@ -1650,7 +1650,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // DEPTH_STENCIL_TEXTURE_MODE = STENCIL_INDEX and through a view with DEPTH_COMPONENT, in
         // a single shading pass). A copy-based fallback satisfies neither half, and fails
         // silently; withholding the string and answering glTextureView with INVALID_OPERATION is
-        // the only behaviour that cannot be mistaken for success.
+        // the only behavior that cannot be mistaken for success.
         //
         // The host extension is necessary and NOT sufficient, which is why this second gate
         // exists. Adreno 830 has EXT_texture_view, and on it the whole functional half of
@@ -1891,7 +1891,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         // (MaxShaderStorageBufferBindings is assigned above, before the per-stage clamp reads it.)
         // This is the number glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE) hands the application, and
-        // on a host without buffer textures it is knowingly a floor MobileGL cannot honour rather
+        // on a host without buffer textures it is knowingly a floor MobileGL cannot honor rather
         // than a driver answer (m_GLESCapabilities.MaxTextureBufferSizeIsDriverReported says
         // which). Reporting 0 instead was considered and rejected: MobileGL advertises an OpenGL
         // 4.x context, where buffer textures are core and the limit has a spec minimum of 65536,
@@ -2007,7 +2007,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // for gl_ViewportIndex on every driver without GL_OES_viewport_array - which is both test
         // devices. That is not a shortfall being hidden: without the extension only viewport 0 is
         // ever rasterized, so no vertex "selects" a viewport index and naming a convention would
-        // describe behaviour this backend does not implement.
+        // describe behavior this backend does not implement.
         m_dynamicParameters.LayerProvokingVertex = m_GLESCapabilities.LayerProvokingVertex;
         m_dynamicParameters.ViewportIndexProvokingVertex = m_GLESCapabilities.ViewportIndexProvokingVertex;
         // GL_EXT_fragment_shading_rate is a straight pass-through: the pipeline rate and the

@@ -1,72 +1,72 @@
-# 后端改造与 server 侧（原 ARCHITECTURE §9–§10）
+# Backend Changes and the Server Side (formerly ARCHITECTURE §9–§10)
 
-> 设计细节。设计要点与全部章节的索引见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)。章节编号沿用原 `ARCHITECTURE.md`，代码注释里的 `ARCHITECTURE.md §N` 按编号在这里找到。
+> Design details. The design highlights and an index of all sections are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Section numbers follow the original `ARCHITECTURE.md`; `ARCHITECTURE.md §N` in code comments resolves by number here.
 
-## 9. 后端状态机改造
+## 9. Backend state machine changes
 
-### 9.1 原样不动的东西
+### 9.1 Things left untouched
 
-Espryt 的 persistent ring、buffer pool、fallback-repack、scratch FBO、驱动绑定影子、Adreno / Mali workaround、SPIRV-Cross 会话、restart 重写与 multi-draw 分档；Magma 的 `VulkanRenderer` memo、`PipelineFactory`、`ProgramFactory`、`UniformManager`、五个 `Vk*Manager`、`SwapchainObject`、D18 的节点式容器纪律。"输入变了、算法不许动"的那一类由 **G5 字节一致门**把关（`scripts/p3a_untouched_regions.sh` 十一函数、`scripts/p4a_untouched_regions.sh` 17 区），re-pin 必须两份同改。
+Espryt's persistent ring, buffer pool, fallback-repack, scratch FBO, driver binding shadow, Adreno / Mali workarounds, SPIRV-Cross session, restart rewriting and multi-draw tiering; Magma's `VulkanRenderer` memo, `PipelineFactory`, `ProgramFactory`, `UniformManager`, the five `Vk*Manager`s, `SwapchainObject`, and D18's node-style container discipline. The "inputs changed, algorithm must not" category is guarded by the **G5 byte-identity gate** (`scripts/p3a_untouched_regions.sh` eleven functions, `scripts/p4a_untouched_regions.sh` 17 regions), and a re-pin must change both together.
 
-### 9.2 strangler 脚手架：`PipeInputs` + 逐 verb 填充 + poison 世代（P1）
+### 9.2 strangler scaffolding: `PipeInputs` + per-verb fill + poison generation (P1)
 
 ```cpp
-// MG_Backend/MGPipe/PipeInputs.h —— 按 memo 键组织，访问器类型与后端原来读到的完全一致
+// MG_Backend/MGPipe/PipeInputs.h — organized by memo key, with accessor types exactly matching what the backend read before
 #if MOBILEGL_PIPE_PUSH
 
-#### 9.2.1 server 侧的 verb 戳与读检查
+#### 9.2.1 Server-side verb stamps and read checks
 
-client 的残余填充在自己的 verb 边界给全部字段盖戳，server 读 `PipeInputs` 前必须换成自己的戳：与 client 共用一块时，不清零则每次读都“新鲜”、`rsp` 恒为 0，门形同虚设；两块分开时，没有戳则第一次读就中止。
+The client's residual fill stamps every field at its own verb boundary, and the server must swap in its own stamp before reading `PipeInputs`: when it shares one block with the client, without zeroing every read is "fresh" and `rsp` is always 0, making the gate a no-op; when the blocks are separate, without a stamp the first read aborts.
 
-- 盖戳点：`PipeApplier::StampVerbBoundary` 只在 `MGPipeVerbForWireOp`（`FieldOwnership.def` 的 `MGP_VERB_OP_LIST`）映到 verb 的 op 上调用 `MGPipeServerStampVerbBoundary`：递增 `CurrentVerbSerial`、记下 verb，给该 verb 类可读掩码（`FillPoints.def`）内的 `RECORD_SUPPLIED` / `APPLIER_DERIVED` 字段盖新戳，其余字段戳清零（“从未填充”先于 sticky 判定，所以清零也取消 sticky 豁免）。
-- 非边界记录（如两次 draw 之间的 `set_dynamic_state`）不盖戳，沿用前一边界的序号、掩码与 verb 名，但盖戳标志已在上一条记录后清除，读检查按盖戳之外处理；20 个 draw 入口都盖成 `DrawArrays`，掩码正确，Fatal 里的名字是泛称。
-- 读检查只在 server 盖戳的 verb 内按归属类（§3.1 的 G8）分流：`RECORD_SUPPLIED` / `APPLIER_DERIVED` 读到旧值是 `Fatal{RoleViolation}`，`FATAL` 直接中止，`BARRIER_PULLED`（仅供生成器对照，没有生产行）在该 verb 类内计入 `rsp`，由 `CountBarrierPull` 决定何时改为中止（记录未 barrier、两角色用不同块、strict 下未准入）。盖戳之外一律是普通 poison `Fatal{UnmigratedPipeInput}`。
-- 盖戳标志由 `PipeApplier::LeaveApplier` 在每条记录之后清除；server 进程里没有 client 半边替它清，漏清会让之后的读都按上一个 verb 的掩码判定。
+- Stamp points: `PipeApplier::StampVerbBoundary` calls `MGPipeServerStampVerbBoundary` only on ops that `MGPipeVerbForWireOp` (`MGP_VERB_OP_LIST` in `FieldOwnership.def`) maps to a verb: it increments `CurrentVerbSerial`, records the verb, stamps `RECORD_SUPPLIED` / `APPLIER_DERIVED` fields within that verb class's readable mask (`FillPoints.def`) with the new stamp, and zeroes the stamps of the rest ("never filled" precedes the sticky test, so zeroing also cancels the sticky exemption).
+- Non-boundary records (such as `set_dynamic_state` between two draws) are not stamped and carry over the previous boundary's serial, mask and verb name, but the stamped flag has been cleared after the previous record, so the read check treats them as outside a stamp; all 20 draw entry points are stamped as `DrawArrays`, the mask is correct, and the name in the Fatal is generic.
+- The read check splits by ownership class (§3.1's G8) only inside a server-stamped verb: reading a stale value in `RECORD_SUPPLIED` / `APPLIER_DERIVED` is `Fatal{RoleViolation}`, `FATAL` aborts outright, and `BARRIER_PULLED` (for generator cross-check only, no production rows) counts into `rsp` within that verb class, with `CountBarrierPull` deciding when to abort instead (record not barriered, two roles using different blocks, not admitted under strict). Outside a stamp everything is the ordinary poison `Fatal{UnmigratedPipeInput}`.
+- The stamped flag is cleared by `PipeApplier::LeaveApplier` after each record; the server process has no client half to clear it, and a missed clear makes every later read judged by the previous verb's mask.
 
-#### 9.2.2 run-ahead 下 client 对 `PipeInputs` 的写
+#### 9.2.2 Client writes to `PipeInputs` under run-ahead
 
-run-ahead 下，unbarriered 记录 apply 期间 `PipeInputs` 是 server 角色内存：对这类 verb，client 不填充、不盖戳、不撤 server 的戳，只跑 tracker 与 emitter（`MGPipeValidateForVerb` 的 `fillOwed`）。GL 线程唯一合法的写是 barriered verb 的填充，而且写的那一刻就得成立：
+Under run-ahead, while unbarriered records are being applied, `PipeInputs` is server-role memory: for these verbs the client does not fill, does not stamp, and does not withdraw the server's stamp; it only runs the tracker and the emitter (`MGPipeValidateForVerb`'s `fillOwed`). The only legal write by the GL thread is the fill of barriered verbs, and it must hold at the moment of writing:
 
-- 验证点的顺序是填充 → 发射 → park，填充时 apply 线程可能还在执行先前发布的 unbarriered 记录，所以每次写之前 `QuiesceApplierBeforeFill` 先等 applier 追上最后发布的序号（`ClientSession::WaitForApplyToCatchUp`，与 `glFinish` 同一种强制等待）。
-- 块的写分两段、夹着记录发布：发射前写 verb 序号、撤 server 戳与 verb 名，发射后做残余字段遍历；发出的记录 apply 时要读这块，一次等待盖不住两段。
-- `ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt` 查的是事实（apply 线程不在 applier 内），不采信调用方的声明；漏掉等待即 `Fatal{RoleViolation, "gPipeInputs"}`。
-- lockstep 下 `appliedSeq` 已在最后发布的序号上，等待立即返回。client 与 server 用不同块时（`MGPipeBlocksAreDistinct`：分角色演练或 spawn），client 只写自己的块、不必等待，server 块的戳只由 `PipeApplier::LeaveApplier` 清除。
+- The validate order is fill → emit → park; during fill the apply thread may still be executing previously published unbarriered records, so before every write `QuiesceApplierBeforeFill` first waits for the applier to catch up with the last published seq (`ClientSession::WaitForApplyToCatchUp`, the same kind of forced wait as `glFinish`).
+- The block's write is split into two parts with the record publication in between: before emission write the verb serial and withdraw the server stamp and the verb name; after emission do the residual field walk; the emitted record reads this block when it is applied, and one wait cannot cover both parts.
+- `ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt` checks the fact (the apply thread is not inside the applier) and does not trust the caller's declaration; a missing wait is `Fatal{RoleViolation, "gPipeInputs"}`.
+- Under lockstep `appliedSeq` is already on the last published seq, so the wait returns immediately. When client and server use different blocks (`MGPipeBlocksAreDistinct`: role drills or spawn), the client writes only its own block and need not wait, and the server block's stamp is cleared only by `PipeApplier::LeaveApplier`.
 #  define MGB_CTX (&::MobileGL::MG_Pipe::gPipeInputs)
 #else
 #  define MGB_CTX (::MG_State::pGLContext)
 #endif
 ```
 
-三步：A 别名（P1，机械替换 + 逐 verb 类填充点，`nm` 不变）→ B 推送（P2，tracker 填 `gPipeInputs`，verify 构建逐 draw 比对快照版）→ C 句柄化（P3a–P4a、P7，`SharedPtr<前端对象>` → 句柄 + 描述符，写回变回调）。poison 是**逐 verb 世代**：读一个当前 verb 未填的字段是 `Fatal{UnmigratedPipeInput, "<Getter>@<Verb>"}`。
+Three steps: A alias (P1, mechanical replacement + per-verb-class fill points, `nm` unchanged) → B push (P2, the tracker fills `gPipeInputs`, verify builds compare against the snapshot version draw by draw) → C handle conversion (P3a–P4a, P7, `SharedPtr<frontend object>` → handle + descriptor, writeback becomes a callback). Poison is **per-verb generation**: reading a field not filled for the current verb is `Fatal{UnmigratedPipeInput, "<Getter>@<Verb>"}`.
 
-**P13 收尾**：pull 分支与宏一起删掉（W3b，`MGB_CTX` 不再存在，后端只经 `gPipeInputs` 与 applier 记录取状态）；单进程也走记录臂（W4–W5），后端的前端对象臂与前端键 twin 入口删除（W6）——Espryt 的 twin 表只收 client 铸好的句柄，对象死亡通知带句柄、按句柄释放（与 server 的 `object_death` 同一释放）。
+**P13 wrap-up**: the pull branch is deleted together with the macro (W3b, `MGB_CTX` no longer exists, and the backend takes state only through `gPipeInputs` and applier records); the monolith also goes through the record arm (W4–W5), and the backend's frontend-object arm and frontend-keyed twin entries are deleted (W6) — Espryt's twin table only accepts client-minted handles, object death notifications carry a handle, and release is by handle (the same release as the server's `object_death`).
 
 ### 9.3 Track V / Track H
 
-Track V（值类型：render state、pixel store、capability 位、标量）是机械迁移；Track H（167 个 `SharedPtr<MG_State…>` 读点）是真活。74% 的读点是翻译输入，所以"bump 一个版本让 server 自己拉"行不通，值本身必须过去。
+Track V (value types: render state, pixel store, capability bits, scalars) is a mechanical migration; Track H (167 `SharedPtr<MG_State…>` read sites) is the real work. 74% of the read sites are translation inputs, so "bump a version and let the server pull" does not work; the values themselves must go over.
 
-### 9.4 残余值块
+### 9.4 Residual value block
 
-迁移期临时调用 `SetResidualValueState`（`ResidualValueBlock`）：尺寸只降不升（1248 → 8，只剩 `CapabilityBits`），P13 W3c 删除——op 46 退役为拒绝行，capability 交叉核对交给 verify 比较器；`set_context_values` 携带剩下的值类字段（单进程也发，W4d / W8）。
+During migration, `SetResidualValueState` (`ResidualValueBlock`) is called temporarily: its size only shrinks, never grows (1248 → 8, only `CapabilityBits` left), and it is deleted in P13 W3c — op 46 retires as a rejecting line, and the capability cross-check goes to the verify comparator; `set_context_values` carries the remaining value-class fields (also sent under monolith, W4d / W8).
 
-### 9.5 身份 memo 的重键
+### 9.5 Re-keying identity memos
 
-`{slot, gen}` + 显式 destroy 让 21 条身份 memo 中 **11 条直接删除**、2 条的去抖搬到 client（§5.4）、7 条重键成更便宜的比较、1 条（D18）不动。统一事实：进 memo 键的版本计数器要么会回绕，要么根本不被它害怕的 mutation bump，身份比较是堵洞的补丁。
+`{slot, gen}` + explicit destroy means that of the 21 identity memos, **11 are deleted outright**, 2 move their debounce to the client (§5.4), 7 are re-keyed to a cheaper comparison, and 1 (D18) is untouched. The unified fact: a version counter that enters a memo key either wraps or is simply not bumped by the mutation it fears; identity comparison is a patch over the hole.
 
-### 9.6 A/B 与口径收窄
+### 9.6 A/B and narrowing the criteria
 
-`MOBILEGL_PIPE_PUSH` 子系统位图在阶段 B 是真 A/B；阶段 C 之后位清零时后端仍跑重键后的代码，所以**编译期** `MOBILEGL_PIPE_LEGACY_MEMOS` 曾保留 pre-handle 臂。P13 结束了这段：`LEGACY_MEMOS` 与 pre-handle 臂删除，位 0–13 固定开、清位即启动期具名拒绝（原 Off 车道改为这条拒绝的阴性对照），只剩位 63 可设。位依赖两侧都拒（客户端族门里**根本不发射**，否则会"客户端已清 dirty、服务端却走旧臂"而丢上传）；没有消费者的后端一条不发。
+`MOBILEGL_PIPE_PUSH`'s subsystem bitmap is a real A/B in phase B; after phase C, when the bits are cleared, the backend still runs the re-keyed code, so the **compile-time** `MOBILEGL_PIPE_LEGACY_MEMOS` once preserved the pre-handle arm. P13 ended this: `LEGACY_MEMOS` and the pre-handle arm are deleted, bits 0–13 are permanently on, and clearing a bit is a named refusal at startup (the original Off lane becomes the negative control for this refusal), leaving only bit 63 settable. Dependencies between bits are refused on both sides (the client family gate **does not emit at all**, otherwise "the client has cleared dirty while the server takes the old arm" would drop uploads); a backend with no consumers sends nothing.
 
-## 10. server 侧
+## 10. Server side
 
-### 10.1 对象表与 applier
+### 10.1 Object tables and the applier
 
-`MG_Remote/Server/PipeApplier`：解码 → 更新对象表与 `PipeInputs` → 调后端。单进程（P13 起）是同一记录臂少了编解码与环：状态记录经 `PipeRoute` 的单进程表直进 applier，verb 记录由 `MG_Impl/Pipe/Verb` 的发射器交给本进程的 `MG_Backend/Record/RecordVerbSink`。server 不持有 buffer 的完整副本（只有 staged shadow）、不持有前端对象图；任何传输下都不得有 `SharedPtr` 或裸前端指针跨过 applier 边界（P5c 角色守卫、P5e 规则 F）。`InProcessTransport` 与 spawn 走完全相同的编解码路径。
+`MG_Remote/Server/PipeApplier`: decode → update the object tables and `PipeInputs` → call the backend. Monolith (since P13) is the same record arm minus the codec and the ring: state records go straight into the applier through `PipeRoute`'s monolith table, and verb records are handed by the emitters in `MG_Impl/Pipe/Verb` to this process's `MG_Backend/Record/RecordVerbSink`. The server does not hold a full copy of buffers (only the staged shadow) and does not hold the frontend object graph; under any transport, no `SharedPtr` or raw frontend pointer may cross the applier boundary (P5c role guard, P5e rule F). `InProcessTransport` and spawn go through exactly the same codec path.
 
-### 10.2 monolith 侧的净收益
+### 10.2 Net gain on the monolith side
 
-即使 IPC 永不上线：复用地址 ABA 一整类不可表达；FBO → program 排序 hazard 消失；`SwapchainObject` 写 `MG_Impl` 的分层倒置消失；`inproc` = 渲染线程。monolith 净代码量是增加的，论据只看逐线程 CPU。
+Even if IPC never ships: a whole class of address-reuse ABA becomes inexpressible; the FBO → program ordering hazard disappears; the layering inversion of `SwapchainObject` writing into `MG_Impl` disappears; `inproc` = the render thread. The monolith's net line count increases; the argument looks only at per-thread CPU.
 
-### 10.3 索引宿主镜像（`Server/IndexHostMirror`，P8，待重裁）
+### 10.3 Index host mirror (`Server/IndexHostMirror`, P8, pending a new ruling)
 
-设计：`kCapNeedsHostIndexBytes` 下，server 从本来就要收的 `ResourceCreate/Respecify/SubData` 流增量维护 element-array buffer 的宿主镜像，零额外流量；预算 `MOBILEGL_PIPE_INDEX_MIRROR_MB`（默认 64），超预算退化为逐 draw 经 `MGHostSpan` 传送。**P6 的 a6 审计实测宿主索引 span 无 producer、client 索引已是 owned buffer**，所以 P8 要按真实消费者重新裁定，不照抄本节（见 git 历史）。
+Design: under `kCapNeedsHostIndexBytes`, the server incrementally maintains a host mirror of element-array buffers from the `ResourceCreate/Respecify/SubData` stream it has to receive anyway, with zero extra traffic; the budget is `MOBILEGL_PIPE_INDEX_MIRROR_MB` (default 64), and beyond the budget it degrades to transporting via `MGHostSpan` per draw. **P6's a6 audit measured that host index spans have no producer and client indices are already owned buffers**, so P8 must be ruled again against real consumers rather than copying this section (see the git history).

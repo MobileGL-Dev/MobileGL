@@ -107,12 +107,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         FramebufferImpl::InvalidateSyncedFramebufferSerial(target);
     }
 
-    // Sized internal format of the currently bound READ framebuffer's read colour
+    // Sized internal format of the currently bound READ framebuffer's read color
     // attachment, 0 when it cannot be determined.
     static GLenum QueryReadColorAttachmentInternalFormat() {
         GLint attachmentType = 0;
         GLint attachmentName = 0;
-        // Ask the point the backend read buffer actually names, not COLOR_ATTACHMENT0. The colour map
+        // Ask the point the backend read buffer actually names, not COLOR_ATTACHMENT0. The color map
         // in BackendFramebufferObject is a permutation, so the read attachment's image only sits at
         // CA0 when that map is identity; querying CA0 unconditionally would size the resolve
         // renderbuffer from a different attachment's format and either convert wrongly or fail the
@@ -561,7 +561,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         // The guard already left the pipeline neutral (nothing culled, tested, blended or
         // coverage-masked) on the borrowed texture unit; what is left is this pass's own
-        // choices - the destination rectangle, and colour writes off because it writes only
+        // choices - the destination rectangle, and color writes off because it writes only
         // depth and stencil.
         VertexArrayImpl::BindBackendVAOId(s_vertexArray);
         g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, s_texture);
@@ -626,7 +626,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // into a scratch framebuffer of the source's own native format, then run the caller's blit
     // - same mask, same filter, same orientation - from the scratch into the real destination.
     // Overlapping rectangles stay undefined, as GL leaves them. A LINEAR blit that scales reads
-    // clamped texels at the rectangle's edge where GL would read the neighbouring ones.
+    // clamped texels at the rectangle's edge where GL would read the neighboring ones.
 
     // What a framebuffer attachment point resolves to on the DRIVER side: the native object and,
     // for a texture, the level, layer and cube face. A null name means the point is empty.
@@ -661,7 +661,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                a.Face == b.Face;
     }
 
-    // The colour attachment point the bound READ framebuffer reads from, GL_NONE when it reads
+    // The color attachment point the bound READ framebuffer reads from, GL_NONE when it reads
     // nothing.
     static GLenum DriverReadColorAttachment() {
         GLint readBuffer = GL_NONE;
@@ -878,7 +878,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
         g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
 
-        // Every point is (re)attached on every call: the scratch is shared between colour and
+        // Every point is (re)attached on every call: the scratch is shared between color and
         // depth/stencil shapes, and a stale attachment would make it incomplete or blit an
         // aspect the source does not have.
         g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_scratchFramebuffer);
@@ -934,7 +934,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
         // Two ES restrictions desktop GL does not have are worth a second attempt: a
-        // multisample resolve that also converts colour format, and any blit into a
+        // multisample resolve that also converts color format, and any blit into a
         // multisample draw framebuffer. Both need to know how the two sides are sampled.
         GLint readSamples = 0;
         GLint drawSamples = 0;
@@ -968,21 +968,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (ReplicateBlitIntoMultisampleDraw(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask)) {
                 if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
                     MGLOG_E_ONCE(
-                        "BlitFramebuffer: colour replicate into a multisample draw framebuffer is not emulated");
+                        "BlitFramebuffer: color replicate into a multisample draw framebuffer is not emulated");
                 }
             }
             return;
         }
         // The combined call raised an error, so by GL 4.6 2.3.1 it wrote nothing at all: BOTH
         // aspect groups still owe their copy, and each has to be retried on its own. Re-issuing
-        // the depth/stencil half only as a rider on a SUCCESSFUL colour resolve dropped it
-        // silently whenever the colour half could not be emulated - and on a framebuffer whose
-        // only attachment is depth it never can, because the colour emulation has no attachment
+        // the depth/stencil half only as a rider on a SUCCESSFUL color resolve dropped it
+        // silently whenever the color half could not be emulated - and on a framebuffer whose
+        // only attachment is depth it never can, because the color emulation has no attachment
         // to take a format from (KHR-GL33.framebuffer_blit's depth config test blits
         // COLOR|DEPTH|STENCIL across depth-only framebuffers and kept reading the clear value).
         const GLbitfield colourBit = mask & static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT);
         const GLbitfield dsBits = mask & static_cast<GLbitfield>(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-        // The colour group's one emulation is the multisample resolve that also converts format,
+        // The color group's one emulation is the multisample resolve that also converts format,
         // which is the shape this names. It used to double as an early-out for the whole
         // function, which is what cost a depth-only mask its single-aspect retry.
         const Bool multisampleResolve = readSamples > 0 && drawSamples <= 0;
@@ -993,7 +993,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const Bool emulated = multisampleResolve &&
                                       ResolveThenBlit(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, filter);
                 if (!emulated) {
-                    MGLOG_E_ONCE("BlitFramebuffer: the colour aspect was dropped - the driver rejected it on its "
+                    MGLOG_E_ONCE("BlitFramebuffer: the color aspect was dropped - the driver rejected it on its "
                                  "own and no emulation applies");
                 }
             }
@@ -1002,7 +1002,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             DrainBlitErrors();
             g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, dsBits, filter);
             if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
-                // Nothing to fall back on yet: ResolveThenBlit is colour-only and the replicate
+                // Nothing to fall back on yet: ResolveThenBlit is color-only and the replicate
                 // pass runs in the opposite direction, so a driver that declines a multisample
                 // depth/stencil resolve leaves the destination holding its clear value. The log
                 // is the whole diagnostic - the frontend performs no validation of its own, so
@@ -1283,7 +1283,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         });
         MGLOG_D("ES %s(%d, %d, %d, %d, %d, %d, %d, %d, 0x%x, %s)", __func__, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0,
                 dstX1, dstY1, mask, MG_Util::ConvertGLEnumToString(filter).c_str());
-        // A no-op on every driver that honours a non-zero destination array layer, which is all
+        // A no-op on every driver that honors a non-zero destination array layer, which is all
         // of them but the probed one. Whatever it performs itself is taken out of the mask.
         // P5e (fb, §5.4): the bound arm's two binding-slot reads were the last GetBoundObject
         // pair on this path; under a transport the two bound RECORDS answer instead

@@ -77,7 +77,7 @@ PROFILE_VERIFIED=0
 require_verified_profile() {
   # The default is UNVERIFIED. A profile that simply omits the key is a profile nobody has
   # confirmed against its device, and defaulting it to "verified" would hand exactly the
-  # fail-open behaviour this guard exists to prevent to the most likely way a new profile is
+  # fail-open behavior this guard exists to prevent to the most likely way a new profile is
   # written - by copying an existing one and editing the serial. The variable is reset to 0
   # immediately before the profile is sourced, so this test reads the FILE and not the shell.
   if [ "${PROFILE_VERIFIED:-0}" = "1" ]; then return 0; fi

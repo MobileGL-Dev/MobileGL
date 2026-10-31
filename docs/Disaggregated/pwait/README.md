@@ -6,7 +6,7 @@ thread records and applies. Inproc: the GL thread records and `mgl-srv-apply` ap
 
 The timelines and latency below come from one 4.9 s Perfetto run per arm (`pwlat`, with frametimeline).
 The fps numbers come from the 3-rep A/B in SCOREBOARD.md (section pwab).
-The mechanism is analysed in depth in PRESENT-WAIT.md.
+The mechanism is analyzed in depth in PRESENT-WAIT.md.
 
 ## Summary
 
@@ -264,7 +264,7 @@ the display. Both are separate decisions and are not measured here.
   images, and a request of 7 (extra 2) gives 7 (logcat "Swapchain created ... imageCount", all runs). The
   platform rounds the MAILBOX request up to at least 6, so extra=2 is only one image more than the
   default. extra=1 would probably give no change; that was not run.
-- **Memory:** each image costs a full-size RGBA8 colour buffer plus a D24S8 depth/stencil buffer of the
+- **Memory:** each image costs a full-size RGBA8 color buffer plus a D24S8 depth/stencil buffer of the
   same size (Magma's default framebuffer has one per image). At FCL's 1280x800 surface in these runs that
   is about 4.1 + 4.1 = 8.2 MB per image. At a native 2560x1600 surface it would be about 33 MB. Driver
   compression metadata adds a little.
@@ -317,7 +317,7 @@ Nothing outside the throttle moved: frame = CPU + throttle still holds (2.43 + 0
 - The +24 % bound came from the older traces' CPU of 2.86-2.9 ms (3.60 -> 2.9). At this baseline the
   presenting-thread CPU is 2.39 ms (reps) or 2.49 ms (trace). So removing the throttle alone allows up to
   +32 % (trace: 3.29 -> 2.49).
-- The after arm also has lever A, and A did more than modelled. The model charged the window pass a full
+- The after arm also has lever A, and A did more than modeled. The model charged the window pass a full
   0.8 ms start latency plus the pass, about 0.95 ms after the release. Measured E-R is 0.69 ms, so the
   start for the small final batch is shorter than for a whole-frame batch. The GPU-after-release wait fell
   from 0.50 to 0.11 ms per frame. The display-before-release wait fell from 0.28 to 0.11, from fewer gated

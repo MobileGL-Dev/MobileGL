@@ -262,7 +262,7 @@ void main() {
         }
 
         // The block's contents, at the offsets the standard puts them. Padding stays zero, which
-        // is what makes a byte-for-byte comparison against the (zero-initialised) output buffer
+        // is what makes a byte-for-byte comparison against the (zero-initialized) output buffer
         // catch a member that landed somewhere it should not have.
         std::vector<unsigned char> MakeBlockContents(const BlockLayout& layout) {
             std::vector<unsigned char> bytes(static_cast<std::size_t>(layout.size), 0);
@@ -441,7 +441,7 @@ void main() {
             const GLint scalar = glGetUniformLocation(m_program, "uScalar");
             ASSERT_GE(scalar, 0);
             // 0.1 has no exact float (or double) representation, so this only passes if the
-            // value really travelled through the demoted slot rather than being read out of
+            // value really traveled through the demoted slot rather than being read out of
             // some other four bytes.
             glUniform1d(scalar, 0.1);
             glUseProgram(0);

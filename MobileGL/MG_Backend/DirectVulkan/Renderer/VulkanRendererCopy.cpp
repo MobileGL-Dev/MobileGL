@@ -726,11 +726,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Nothing else on this path asks: the three checks around it cover the mip range, the region
         // bounds and the slice range, and none of them ever looked at a format.
         //
-        // A decline rather than a MOBILEGL_ASSERT, for the reason the neighbouring guards spell out:
+        // A decline rather than a MOBILEGL_ASSERT, for the reason the neighboring guards spell out:
         // assertions compile out of the release build that the CTS and shipping both run, which is
         // exactly where the corruption was observed.
         if (srcImage.format != dstImage.format) {
-            // Size-compatibility is the COLOUR rule. Vulkan makes each depth/stencil format compatible
+            // Size-compatibility is the COLOR rule. Vulkan makes each depth/stencil format compatible
             // only with ITSELF, and the texel block sizes cannot tell them apart: X8_D24_UNORM_PACK32,
             // D32_SFLOAT and D24_UNORM_S8_UINT are all 4 bytes and all in different compatibility
             // classes, so a raw block-size test waves through exactly the pairs Vulkan forbids. The
@@ -1419,9 +1419,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, imageAspect, mipLevel, 1);
         MOBILEGL_ASSERT(ok, "%s: failed to transition depth-stencil source image", __func__);
 
-        // The swapchain's depth/stencil image is stored display-side-up like its colour twin, so
+        // The swapchain's depth/stencil image is stored display-side-up like its color twin, so
         // the GL rect has to be mapped into that space before the copy and the copied rows
-        // re-oriented afterwards - the same two halves the colour ReadPixels path applies.
+        // re-oriented afterwards - the same two halves the color ReadPixels path applies.
         VkOffset2D copyOffset{x, y};
         VkExtent2D copyExtent{static_cast<Uint32>(width), static_cast<Uint32>(height)};
         if (defaultFramebufferOrientation) {

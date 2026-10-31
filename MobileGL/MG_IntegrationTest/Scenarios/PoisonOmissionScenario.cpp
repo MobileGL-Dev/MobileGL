@@ -369,7 +369,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             static std::string DescribeStatus(int status) {
                 if (WIFEXITED(status)) return "exited with status " + std::to_string(WEXITSTATUS(status));
                 if (WIFSIGNALED(status)) return "died on signal " + std::to_string(WTERMSIG(status));
-                return "ended in an unrecognised way";
+                return "ended in an unrecognized way";
             }
 #endif
         };
@@ -470,7 +470,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
 #if MOBILEGL_BUILD_DISAGGREGATED
             // WHICH ROLE, for the split pair (P7 wave 3, V1). The union above answers "did the
             // poison fire", which is all a one-role build can be asked; this pair exists to prove
-            // that the SERVER'S OWN verb stamp honours the omission
+            // that the SERVER'S OWN verb stamp honors the omission
             // (MG_Backend/MGPipe/PipeInputs.cpp's MGPipeServerSetPoisonOmission) - the thing that was
             // NOT true before wave 3 and made the control silently green. A client-side firing would
             // satisfy the union and prove the opposite of what the entry claims, so the half is
@@ -480,7 +480,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                     << "the child aborted with " << expectedFatal
                     << ", but NOT in its server-role log. "
                        "This pair is the split arm's control and its whole claim is that the stamp the "
-                       "SERVER writes at the verb boundary honours the omission - a firing anywhere "
+                       "SERVER writes at the verb boundary honors the omission - a firing anywhere "
                        "else means the withheld stamp was the client's and the server-side half is "
                        "untested. Client half:\n"
                     << halves.Client << "\nServer half:\n"

@@ -49,7 +49,7 @@ namespace MGITest {
         Texture,
         Renderbuffer,
         // Framebuffer has a HANDLE but no wire lifetime (D-I2): no create_*, no destroy row in
-        // the catalogue, and its death helper does the notice and the free and emits nothing.
+        // the catalog, and its death helper does the notice and the free and emits nothing.
         // That makes the allocator the ONLY observable of its lifetime, so this row matters
         // more here than the others rather than less.
         Framebuffer,

@@ -10,7 +10,7 @@
 // (§5.6, rulings 10 and 11; package sb).
 //
 // WHAT THIS SUITE IS FOR. Three properties of this family are invisible in a picture and are
-// exactly what an optimisation or a merge deletes:
+// exactly what an optimization or a merge deletes:
 //   1. the ZERO EARLY-OUT - a class nothing has bound emits nothing, before any hash;
 //   2. a BASE binding travels as kMGPipeWholeBuffer and never as a resolved extent, so a
 //      glBufferData between the emission and the apply binds the NEW extent as GL does;

@@ -19,7 +19,7 @@
 //                      at glCompileShader - a different entry point from the one L1
 //                      memoizes - and fresh shader objects meant ShaderCompileAdoptionMap
 //                      could not hand the earlier parse over either. L1c is what closed
-//                      that: the compile half of the memo recognises each stage's source
+//                      that: the compile half of the memo recognizes each stage's source
 //                      and publishes its verdict without parsing, so on a hit this case now
 //                      constructs no glslang object at all.
 //
@@ -405,7 +405,7 @@ BENCHMARK(BM_EsslTranspile_CacheOn)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosec
 // shows up here and nowhere else.
 //
 // The distinct fragment sources also churn both front-end levels through their FIFO caps,
-// which is the eviction behaviour a real shaderpack load produces; over a long run the
+// which is the eviction behavior a real shaderpack load produces; over a long run the
 // constant vertex entry is occasionally evicted by that churn and re-inserted, so the L1c
 // hit rate reported below is high but not exactly 1.0 per iteration.
 namespace {

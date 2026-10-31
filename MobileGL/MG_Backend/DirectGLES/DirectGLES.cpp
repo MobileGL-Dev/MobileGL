@@ -20,7 +20,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // deliberate and it is not this phase's to change: ARCHITECTURE.md assigns the two
     // backend-specific post-processings of the resolved sampler set - this one and Magma's
     // feedback-loop detection - to the server, acting ON the already-resolved set, and the
-    // ROADMAP puts "raw-depth-fetch sampler 原生化" in P3b/P4b beside Magma's placeholder
+    // ROADMAP puts "native raw-depth-fetch sampler" in P3b/P4b beside Magma's placeholder
     // textures. What P4a changes is only what the substitution READS: the resolved view's
     // format answers IsDepthFormatInternalFormat and the sampler CSO record's parameters
     // answer compareMode / minFilter / mipmapMode / magFilter.

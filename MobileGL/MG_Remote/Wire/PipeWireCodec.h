@@ -173,13 +173,13 @@ namespace MobileGL::MG_Remote::Wire {
 
     // `payload` must already be known to hold at least the op's payload struct - that is what
     // MGP_WIRE_CHECK_BOUNDS proves, and this function is only ever called after it. Returns
-    // false for an opcode outside the catalogue; a count past its own GL bound is Fatal,
+    // false for an opcode outside the catalog; a count past its own GL bound is Fatal,
     // because a decoder holding such a record has nothing safe left to do with it - and in an
     // armed session child (PH-1 (3)) that Fatal latches instead and this returns false too, which
     // is why the decoder asks the opcode question itself before calling.
     Bool MGPipeWireRecordLayout(MG_Pipe::MGPWireOp op, const void* payload, WireRecordLayout& out);
 
-    // The catalogue's own spelling of an opcode, for a Fatal line. Out of range is "<opcode>".
+    // The catalog's own spelling of an opcode, for a Fatal line. Out of range is "<opcode>".
     const char* WireOpName(MG_Pipe::MGPWireOp op);
 
     // P13 W5: the tail is MG_Pipe's (PipeVerbSink.h) - the record arm's in-process port speaks it too.
@@ -437,7 +437,7 @@ namespace MobileGL::MG_Remote::Wire {
         //
         // RingControl::appliedSeq has exactly ONE writer - s1's SessionConsumer::ApplyOne, +1
         // per record, pads never counted - and this class writes NO RingControl field at all.
-        // That is deliberate rather than a division of labour: two writers of a watermark is
+        // That is deliberate rather than a division of labor: two writers of a watermark is
         // how a waiter resumes on a record the server has not run, which is what R-9's "never
         // publish a watermark early" forbids, and there is no checksum on this ring that would
         // catch it.
@@ -466,7 +466,7 @@ namespace MobileGL::MG_Remote::Wire {
         // WHAT IT ACTUALLY COVERS is "the blob runs the arm resolved", which today is AT MOST
         // ONE per record: tails live in SEG_CMD and are never noted, and CreateShaderState's
         // six per-stage runs are Fatal rather than resolved, so the one archive is the only
-        // multi-kilobyte run in the catalogue that reaches it. The array is eight deep so a
+        // multi-kilobyte run in the catalog that reaches it. The array is eight deep so a
         // later phase that declares more can fill it without a code change - and overflowing
         // it is Fatal rather than a silent drop, because a poison that quietly stopped
         // covering a run is the same failure as no poison at all.
@@ -500,7 +500,7 @@ namespace MobileGL::MG_Remote::Wire {
         Uint64 SkippedAnswers() const;
 
         // Points MG_Pipe::gMGPipeWireRecordApply at this layer's thunk. Called once from the
-        // constructor and modelled on SegmentTable::InstallProcessResolver, which is the same
+        // constructor and modeled on SegmentTable::InstallProcessResolver, which is the same
         // shape for the same reason; Uninstall belongs beside that one at teardown. The thunk
         // is inert without a decoder on the calling thread, so installing it early changes
         // nothing for a monolith caller of MGPipeApplyWireRecord.

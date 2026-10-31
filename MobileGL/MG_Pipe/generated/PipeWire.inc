@@ -166,8 +166,8 @@ enum class MGPWireOp : Uint16 {
 // GetCaps and CreateSamplerState came to carry an MGPBlobRef member with no kHasBlob on
 // their line at all - nothing compared the two, because nothing had both in one place.
 //
-// Index 0 is MGPWireOp::kInvalid and is kNone: the catalogue is 1-based, and an encoder
-// that reads flags for an opcode it never got from the catalogue must see the empty set
+// Index 0 is MGPWireOp::kInvalid and is kNone: the catalog is 1-based, and an encoder
+// that reads flags for an opcode it never got from the catalog must see the empty set
 // rather than another call's flags.
 //
 // kHasBlob here means EXACTLY "the payload owns an MGPBlobRef member". Three calls carry
@@ -268,7 +268,7 @@ static_assert(sizeof(kMGPipeCallFlags) / sizeof(kMGPipeCallFlags[0]) ==
               "the flags table and the opcode space disagree");
 
 // The only supported read of the table. Out-of-range is kNone rather than undefined
-// behaviour, because the one caller that can pass a bad opcode is a decoder holding bytes
+// behavior, because the one caller that can pass a bad opcode is a decoder holding bytes
 // off a stream, and it must reach its own Fatal{ProtocolCorruption} rather than read past
 // the array on the way there.
 inline constexpr Uint32 MGPipeCallFlagsFor(MGPWireOp op) {
@@ -277,7 +277,7 @@ inline constexpr Uint32 MGPipeCallFlagsFor(MGPWireOp op) {
                                                            : static_cast<Uint32>(kNone);
 }
 
-// The catalogue class of every opcode, indexed the same way; index 0 is kCallClassCount,
+// The catalog class of every opcode, indexed the same way; index 0 is kCallClassCount,
 // never a real class, for the flags table's reason.
 inline constexpr Uint8 kMGPipeCallClasses[static_cast<SizeT>(MGPWireOp::kOpCount)] = {
     /*  0                         */ static_cast<Uint8>(kCallClassCount),
@@ -381,7 +381,7 @@ inline constexpr MGPipeCallClass MGPipeCallClassFor(MGPWireOp op) {
 
 // P5e (2.2): THE WAIT CLASS OF EVERY OPCODE, indexed the same way.
 // Index 0 is kWaitClassCount - never a real class - for the flags table's reason: the one
-// caller that can pass an opcode this catalogue never produced is a decoder holding bytes off
+// caller that can pass an opcode this catalog never produced is a decoder holding bytes off
 // a stream, and it must reach its own Fatal{ProtocolCorruption} rather than a wait decision.
 //
 // This is the STATIC HALF of MGPipeBarriered(op, payload, applierState), the predicate the emit
@@ -489,7 +489,7 @@ inline constexpr MGPipeWaitClass MGPipeWaitClassFor(MGPWireOp op) {
 }
 
 // THE COLUMN'S OWN INVARIANT, stated in C++ as well as in the generator: a reply-slot row
-// waits for its reply and a waiting row owns a slot. gen_pipe.py refuses a catalogue where the
+// waits for its reply and a waiting row owns a slot. gen_pipe.py refuses a catalog where the
 // two disagree, and this is the same statement where a reader of the generated table will look
 // for it - a kReplySlot row that did not wait would run on and read a slot nobody had posted
 // into, and a kWaitReply row with no slot would block on an answer nobody posts.
@@ -504,7 +504,7 @@ static_assert(MGPipeWaitClassFor(MGPWireOp::ApplierReset) == kWaitApplied,
 static_assert(MGPipeWaitClassFor(MGPWireOp::ReadPixels) == kWaitReply,
               "a readback's answer is not derivable (R-5)");
 
-// Spot checks the generator states about its own output, so that a catalogue edit that
+// Spot checks the generator states about its own output, so that a catalog edit that
 // silently drops a flag is a build break here and not a wrong decode six packages away.
 static_assert(MGPipeCallFlagsFor(MGPWireOp::kInvalid) == static_cast<Uint32>(kNone),
               "opcode 0 is not a call and carries no flags");
@@ -1259,9 +1259,9 @@ inline MGPipeWireRecordApplyFn gMGPipeWireRecordApply = nullptr;
 // record's own count fields and require it to EQUAL MGPWireRecHeader::Size - belongs to the
 // decoder, which has the payload (MG_Remote/Wire's MGPipeWireRecordLayout, P5 w1).
 //
-// The switch and the opcode enum come from the same list, so a call added to the catalogue
+// The switch and the opcode enum come from the same list, so a call added to the catalog
 // cannot be forgotten here; the default arm is for the opcode that never came from this
-// catalogue at all - a byte off a corrupt stream - and it is fatal for the same reason the
+// catalog at all - a byte off a corrupt stream - and it is fatal for the same reason the
 // bounds check is.
 //
 // With no decoder installed - every monolith build, and a split build before

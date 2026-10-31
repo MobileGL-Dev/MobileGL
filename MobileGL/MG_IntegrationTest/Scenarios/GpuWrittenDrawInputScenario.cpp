@@ -194,7 +194,7 @@ void main() {
                 ScenarioTest::SetUp();
                 if (!Ready()) return;
                 m_target = MakeColorFbo(kSurface, kSurface);
-                ASSERT_NE(m_target.fbo, 0u) << "the 64x64 colour target did not build";
+                ASSERT_NE(m_target.fbo, 0u) << "the 64x64 color target did not build";
                 glGenVertexArrays(1, &m_vao);
                 glBindVertexArray(m_vao);
                 glDisable(GL_DEPTH_TEST);
@@ -410,7 +410,7 @@ void main() {
                     << what << ": the gap is covered, so the restart at index 7 was dropped";
             }
 
-            // Left and right half of the halves scene, sampled at their centres.
+            // Left and right half of the halves scene, sampled at their centers.
             static Rgba8 Half(const Image& image, int half) {
                 return image.At(kSurface * (1 + 2 * half) / 4, kSurface / 2);
             }

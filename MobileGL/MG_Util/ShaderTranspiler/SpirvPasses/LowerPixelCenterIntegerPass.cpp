@@ -139,7 +139,7 @@ namespace MobileGL {
                                     refused = true;
                                     return;
                                 }
-                                // z and w keep their values; only the centre of x and y moves.
+                                // z and w keep their values; only the center of x and y moves.
                                 if (component >= 2) return;
                                 const uint32_t half = scalarOffset(chainUser->type_id(), 0.5f);
                                 if (half == 0) {

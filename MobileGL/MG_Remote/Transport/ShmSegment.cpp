@@ -457,8 +457,8 @@ namespace MobileGL::MG_Remote::Transport {
             }
         }
         m_replySlotCount = replySlotCount;
-        // NOT DeriveViews' control-page initialisation: the SERVER created these
-        // and already initialised both RingControls. Re-initialising here would
+        // NOT DeriveViews' control-page initialization: the SERVER created these
+        // and already initialized both RingControls. Re-initializing here would
         // zero the owner's cursors out from under a session that is already
         // running - the same reason AttachInProcess does not do it either.
         DeriveViews();

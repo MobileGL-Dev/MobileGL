@@ -35,7 +35,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // two never-synced textures as equal. The identity has to exist before the twin does.
         //
         // Split by the RUNTIME arm, not by the build, for exactly the reason g_fbSlotCache is:
-        // MOBILEGL_PIPE_PUSH=0 has to reproduce P1's behaviour (ConfigLoader.cpp), and a
+        // MOBILEGL_PIPE_PUSH=0 has to reproduce P1's behavior (ConfigLoader.cpp), and a
         // legacy-arm run that debounced on lifetime ids would be running P2's mechanism while
         // the A/B attributed the result to P1. The two answers are equivalent - OwnerEquals on
         // two empty pointers is true and LifetimeIdOf(nullptr) == 0 == 0; a live-versus-expired
@@ -454,7 +454,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // A texture that is an attachment of the READ framebuffer ONLY reaches
         // SyncAttachmentObject, which calls SyncMipmapsToBackend AND NOTHING ELSE - so its
-        // swizzle, its GL_DEPTH_STENCIL_TEXTURE_MODE, its LOD clamp and its border colour
+        // swizzle, its GL_DEPTH_STENCIL_TEXTURE_MODE, its LOD clamp and its border color
         // never reach the driver. The list that pushes texture PARAMETERS for an attachment is
         // the one below, and it reads the DRAW binding slot alone. That is the gap
         // ARCHITECTURE.md's D10 names, and the roadmap makes closing it a mandatory,
@@ -464,7 +464,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // DELIBERATELY NOT GATED ON THE FRAMEBUFFER SUBSYSTEM BIT. It is a deliverable of the
         // phase rather than an arm of it, so both arms of the object A/B carry it and the A/B
-        // keeps measuring the arm rather than the arm plus a behaviour change. It is inside
+        // keeps measuring the arm rather than the arm plus a behavior change. It is inside
         // MOBILEGL_PIPE_PUSH, so the pull build is untouched.
         //
         // Its own list and its own key rather than an extension of the draw list's, because
@@ -562,7 +562,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // and the alias contest between two real textures on one native target was arbitrated
             // by the program's own sampler types. So the window IS the work list.
             //
-            // NAMED BEHAVIOUR DELTA (P5e-5, contract §5.2): this syncs the PROGRAM-RESOLVED
+            // NAMED BEHAVIOR DELTA (P5e-5, contract §5.2): this syncs the PROGRAM-RESOLVED
             // texture per unit, where the frontend walk syncs every slot of every touched unit.
             // Coverage is unchanged - views UNION image units UNION the FBO attachment lists
             // UNION the waited texture ops still cover every texture anything reads - so it

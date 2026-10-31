@@ -343,7 +343,7 @@ def render_state_publishers():
 # not read. What it models is written down here, and what it does not model taints the
 # function it is in, which turns every answer depending on that function into UNDECIDED:
 #
-#   modelled  ++m_x / m_x = / m_x op= (a whole-member write: MEM:m_x, FIELD:m_x.*); a write
+#   modeled  ++m_x / m_x = / m_x op= (a whole-member write: MEM:m_x, FIELD:m_x.*); a write
 #             through a member-rooted lvalue (m_x.f, m_x[i].f, m_x->f, nested), which records
 #             MEM:m_x and FIELD:m_x.f - the first field below the member, deeper paths
 #             collapse to it, because that is the granularity the shutter reads at; a
@@ -356,7 +356,7 @@ def render_state_publishers():
 #             memcpy/memset/memmove/swap whose destination is one, all credited as a whole
 #             write of that lvalue - a read-only call is over-credited, which only WIDENS the
 #             writer side; a write to a value local, a by-value parameter or an aggregate
-#             initialiser's `.f = v`, which touch no member; a write through a const alias
+#             initializer's `.f = v`, which touch no member; a write through a const alias
 #             with `.` or through a const raw pointer, which the language forbids - but `->`
 #             through a const REFERENCE may be a smart pointer's and is NOT taken as
 #             read-only; MGP_NOTE_AGGREGATE; a call to any function whose body is under the
@@ -417,7 +417,7 @@ AGGREGATE_CASE_RE = re.compile(r"case\s+MGPipeAggregate::(\w+)\s*:\s*([^;]*);")
 # is then `!`, `<` or `>` and no alternative here begins with one except <<= / >>=.
 ASSIGN = r"(?:\+\+|--|\+=|-=|\*=|/=|%=|&=|\|=|\^=|<<=|>>=|=(?!=))"
 # A write to the member itself: ++m_x, m_x = v, m_x += v. Used by the OUTSIDE scan only; the
-# analysed bodies go through extract_writes below.
+# analyzed bodies go through extract_writes below.
 MEMBER_WRITE_RE = re.compile(r"\+\+\s*(m_\w+)|\b(m_\w+)\s*%s" % ASSIGN)
 # A write THROUGH a member: m_x.f = v, m_x[i].f = v, m_x->f = v, and nested. Outside scan only.
 MEMBER_ROOTED_WRITE_RE = re.compile(
@@ -451,8 +451,8 @@ READ_ONLY_METHODS = frozenset(("size", "empty", "begin", "end", "cbegin", "cend"
 # memcpy(&dst, ...), memset(&dst, ...), memmove(&dst, ...), swap(a, b): whole writes.
 BULK_RE = re.compile(r"\b(?:std\s*::\s*)?(memcpy|memmove|memset|swap)\s*\(")
 # A local declaration: [qualifiers] Type[<...>][::More] [const] [& | && | *] name, then the
-# initialiser's opener. A `&`/`*` mark (or an initialiser that takes an address) makes the
-# local an ALIAS whose initialiser must resolve to a member-rooted lvalue; anything else is
+# initializer's opener. A `&`/`*` mark (or an initializer that takes an address) makes the
+# local an ALIAS whose initializer must resolve to a member-rooted lvalue; anything else is
 # a value local, which cannot alias a member - unless the body later writes through it with
 # `->` or `*`, in which case it is a pointer or an iterator and is treated as an alias. A
 # pointer alias is REBOUND by `p = expr;` (every binding counts); a reference alias is
@@ -494,7 +494,7 @@ ASSIGN_OP_RE = re.compile(r"(\+\+|--|<<=|>>=|[-+*/%&|^]=|(?<![=!<>\[\-+*/%&|^])=
 # answered.
 MACRO_DIRECTIVE_RE = re.compile(
     r"^[ \t]*#[ \t]*(define|undef)[ \t]+(\w+)(\([^()\n]*\))?((?:\\\n|[^\n])*)", re.M)
-# MGP_NOTE_AGGREGATE is modelled directly (its hop is read out of MGPipeNoteAggregate's own
+# MGP_NOTE_AGGREGATE is modeled directly (its hop is read out of MGPipeNoteAggregate's own
 # switch), so expanding it would delete the very token AGGREGATE_RE looks for.
 NEVER_EXPAND = frozenset(("MGP_NOTE_AGGREGATE", "MGP_NOTE_MUTATION"))
 MACRO_BODY_LIMIT = 4000
@@ -856,7 +856,7 @@ def extract_writes(body, params_text, site):
                    % (site, what, root))
 
     def designated(text, root_at):
-        """`{.f = v, .g = w}`: an aggregate initialiser, not a write to a field named f."""
+        """`{.f = v, .g = w}`: an aggregate initializer, not a write to a field named f."""
         before = text[:root_at].rstrip()
         if not before.endswith("."):
             return False
@@ -934,7 +934,7 @@ def extract_writes(body, params_text, site):
 
 def state_bodies():
     """({function name: [body text]}, {function name: [parameter text]},
-    {function name: {taint reason}}, [analysed paths]) over MG_State/GLState and
+    {function name: {taint reason}}, [analyzed paths]) over MG_State/GLState and
     MG_Impl/Pipe, macros expanded first."""
     paths = []
     for root in STATE_ROOTS:
@@ -962,15 +962,15 @@ def state_bodies():
 
 
 def writers_outside(analysed):
-    """{MEM token: a file OUTSIDE the analysed roots that writes it}.
+    """{MEM token: a file OUTSIDE the analyzed roots that writes it}.
 
     The absence claim is only as good as the set of writers the analysis reads. Every .h/.cpp
-    under MobileGL/ that is not one of the analysed files is scanned with the direct write
+    under MobileGL/ that is not one of the analyzed files is scanned with the direct write
     patterns, and a shutter member that turns up here is undecided rather than answered.
 
     A file that DECLARES a member of that name is writing its own, not the frontend's - the
     backend's PipeInputs mirrors half of GLState's member names - so its writes do not count.
-    That is the one judgement here, and it is the conservative way round only for names the
+    That is the one judgment here, and it is the conservative way round only for names the
     two sides share; a genuine outside writer of a frontend member does not declare it.
 
     This scan is textual and file-wide: it sees a direct member write and a member-rooted
@@ -1375,7 +1375,7 @@ def derive_bit_answers(mapping, bits, movers, moved, outside=None):
             unread = sorted(set(outside[token] for token in shutter if token in outside))
             if unread:
                 out[(mutator, bit)] = (UNDECIDED, "that shutter's members are written outside "
-                                                  "the analysed roots too, e.g. %s, so 'it writes "
+                                                  "the analyzed roots too, e.g. %s, so 'it writes "
                                                   "nothing that shutter reads' is not a fact this "
                                                   "script has" % unread[0])
                 continue
@@ -1702,8 +1702,8 @@ def self_test(scanned, bits, publishers, movers, moved, outside=None, undecided_
         hidden[token] = "MobileGL/MG_Backend/a-file-this-analysis-never-reads.cpp"
     verdicts = derive_bit_answers(with_wrong_bit, bits, movers, moved, hidden)
     verdict, detail = verdicts.get(("SetCurrentVertexAttributeInt", "NEW_PIXEL_PACK"), ("", ""))
-    tripped(verdict == UNDECIDED and "outside the analysed roots" in detail,
-            "10 (a shutter member written outside the analysed roots)")
+    tripped(verdict == UNDECIDED and "outside the analyzed roots" in detail,
+            "10 (a shutter member written outside the analyzed roots)")
 
     # 11-14. THE WRITE ANALYSIS ITSELF, on synthetic bodies through the real extractor. The
     #        review's false verdict was "SetBlendEquation writes nothing NEW_PATCH_STATE's

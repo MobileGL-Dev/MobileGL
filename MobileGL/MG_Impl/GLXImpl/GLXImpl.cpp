@@ -329,7 +329,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
         };
         thread_local ThreadCurrent t_current;
 
-        // vblank_mode=0 (the benchmark convention X11 GL drivers honour) never waits for the
+        // vblank_mode=0 (the benchmark convention X11 GL drivers honor) never waits for the
         // display, whatever the application asks; anything else leaves the interval to it.
         Bool VblankForcedOff() {
             static const Bool off = [] {

@@ -348,7 +348,7 @@ namespace {
     }
 
     // ------------------------------------------------------------------------------------
-    // The raw-record peer driver (F2's, generalised)
+    // The raw-record peer driver (F2's, generalized)
     // ------------------------------------------------------------------------------------
 
     constexpr Uint64 Align8(Uint64 value) {
@@ -544,7 +544,7 @@ namespace {
         samplers.Count = 1;
         const P::MGPipeHandle unboundSampler = P::kMGPipeNullHandle;
         const P::MGPContextValues context{};
-        // A render state with the GL-initial colour writemask. The server reads the mask from
+        // A render state with the GL-initial color writemask. The server reads the mask from
         // the bound CSO and nowhere else, so without one a clear writes nothing (the mask is
         // the struct's zero, not RenderState's all-true constructor).
         MobileGL::RenderStateParameters params{};

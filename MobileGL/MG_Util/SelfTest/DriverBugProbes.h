@@ -25,7 +25,7 @@ namespace MobileGL::MG_Util::SelfTest {
     // The inventory comes from CAMPAIGN FINDINGS, not from anything the driver reports.
     //
     // EVERY PROBE MUST CARRY A CONTROL. The geometry entry below is why the rule is written
-    // down: the same defect was first characterised as "this driver drops all geometry-stage
+    // down: the same defect was first characterized as "this driver drops all geometry-stage
     // storage-buffer writes", which would have justified withdrawing
     // GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS entirely. A control showed geometry-stage writes
     // land perfectly well when they precede EmitVertex(), so the limit is not a lie and
@@ -42,7 +42,7 @@ namespace MobileGL::MG_Util::SelfTest {
     // report only ever lists bugs actually present on this device.
     enum class DriverBugVerdict : Uint8 {
         // A MobileGL quirk repairs or substitutes for the defect and the application sees
-        // correct behaviour.
+        // correct behavior.
         Fixed,
         // There is no substitute. `detail` says what MobileGL does defensively instead, and
         // what an application can still rely on.
@@ -61,10 +61,10 @@ namespace MobileGL::MG_Util::SelfTest {
     struct LocatedIoBlockMeasurement {
         // The driver delivers nothing through an inter-stage interface block that carries an
         // explicit layout(location=) once a geometry stage is in the pipeline. The only field
-        // any caller's behaviour depends on.
+        // any caller's behavior depends on.
         Bool detected = false;
         // ...and it does the same WITHOUT a geometry stage, i.e. between a vertex and a
-        // fragment stage. False on the device this was characterised on, and reported because
+        // fragment stage. False on the device this was characterized on, and reported because
         // DirectGLES's repair is scoped to tessellation/geometry programs: a driver that
         // answered true here would be losing block payloads the repair does not reach.
         Bool alsoAffectsVertexToFragment = false;
@@ -100,13 +100,13 @@ namespace MobileGL::MG_Util::SelfTest {
     // while the control lands correctly.
     //
     // Adreno 830 writes to layer 0 whatever layer the DRAW framebuffer's
-    // glFramebufferTextureLayer attachment names, for colour and depth alike, and raises no
+    // glFramebufferTextureLayer attachment names, for color and depth alike, and raises no
     // error. Everything else about the layer works on the same driver, which is what makes this
     // a blit defect rather than a layered-attachment one.
     //
     // THE CONTROL is the same blit onto destination layer 0. It passes on every implementation
     // that can blit between array layers at all, and because the value it looks for exists only
-    // on the SOURCE's layer 1 it also proves the source layer is honoured - so a driver with no
+    // on the SOURCE's layer 1 it also proves the source layer is honored - so a driver with no
     // working glFramebufferTextureLayer reaches no verdict instead of being reported as this.
     //
     // Returns false when an entry point is missing, when the probe's own framebuffers come back
@@ -212,7 +212,7 @@ namespace MobileGL::MG_Util::SelfTest {
     // with a separately linked program each time. Returns true only when the swizzled read goes
     // wrong while every control read stays right.
     //
-    // Adreno 830 returns uninitialised memory - a different value every run - for
+    // Adreno 830 returns uninitialized memory - a different value every run - for
     // texelFetch(sampler2DMS, ..., sampleIndex != 0).w on an R32F multisample texture whose
     // GL_TEXTURE_SWIZZLE_A is not the default, from the SECOND such program in the context
     // onward. The first program reads correctly, which is why the probe links two.
@@ -224,7 +224,7 @@ namespace MobileGL::MG_Util::SelfTest {
     // simply cannot render R32F, or cannot sample multisample textures at all, would be
     // reported as having this very specific corruption.
     //
-    // Returns false when the driver cannot host the shape (no multisample R32F colour target,
+    // Returns false when the driver cannot host the shape (no multisample R32F color target,
     // fewer than two samples, a missing entry point, an incomplete framebuffer): an
     // inconclusive probe must never be reported as a bug. Restores every piece of GL state it
     // touches.

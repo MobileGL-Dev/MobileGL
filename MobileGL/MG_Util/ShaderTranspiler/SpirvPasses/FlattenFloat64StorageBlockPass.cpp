@@ -500,7 +500,7 @@ namespace MobileGL {
                         return m_context->get_constant_mgr()->GetDefiningInstruction(constant)->result_id();
                     }
 
-                    // The word index the chain names, materialised at the chain's own position so
+                    // The word index the chain names, materialized at the chain's own position so
                     // every load and store that uses it is dominated by it.
                     uint32_t WordIndexOf(const ChainPlan& plan) {
                         InstructionBuilder builder(m_context, plan.chain, kPreservedAnalyses);
@@ -847,7 +847,7 @@ namespace MobileGL {
                             Binary(builder, spv::Op::OpIEqual, m_boolTypeId, exponent, UintConstant(0xFFu));
 
                         // A binary32 subnormal is below every binary64 this can name without a
-                        // normalising loop, so it becomes the signed zero it is nearest to.
+                        // normalizing loop, so it becomes the signed zero it is nearest to.
                         uint32_t high = Select(builder, isMaxExponent, maxHigh, normalHigh);
                         *hi = Select(builder, isZeroExponent, sign, high);
                         *lo = Select(builder, isZeroExponent, UintConstant(0), significandLow);
@@ -885,7 +885,7 @@ namespace MobileGL {
                 // spirv-val), so no search for an existing one is needed; the LENGTH CONSTANT is
                 // not exempt, and if the module already declares it after the block there is
                 // nowhere legal to put the array - the block is then declined and keeps today's
-                // behaviour. Returns 0 for that; an open-ended block has no length constant to
+                // behavior. Returns 0 for that; an open-ended block has no length constant to
                 // place, so that reason cannot reach it.
                 //
                 // The `uint` element type is a different matter, and only for an OPEN-ENDED

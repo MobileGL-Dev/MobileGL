@@ -54,7 +54,7 @@ void main() {
 )";
 
         // texelFetch at the texture's own last texel: a texture whose shape moved to B's would
-        // fetch a different texel, and one whose contents moved would fetch B's colour.
+        // fetch a different texel, and one whose contents moved would fetch B's color.
         constexpr const char* kFetchFS = R"(#version 330 core
 uniform sampler2D uTex;
 out vec4 oColor;

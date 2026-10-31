@@ -324,7 +324,7 @@ class IpcConfigProofTest(unittest.TestCase):
         pins, line = self.inproc(ra="0")
         self.assertEqual(self.check([("A", "pass", pins + ["MOBILEGL_IPC_RUN_AHEAD=0"], line)]), 0)
         self.assertEqual(self.check([("A", "pass", pins + ["MOBILEGL_IPC_RUN_AHEAD=1"], line)]), 1,
-                         "a pinned value the run did not honour is red, not a changed default")
+                         "a pinned value the run did not honor is red, not a changed default")
 
     def test_the_value_is_matched_whole(self):
         pins, line = self.inproc(ra="10")

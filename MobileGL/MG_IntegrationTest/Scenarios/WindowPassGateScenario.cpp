@@ -25,7 +25,7 @@
 // shape), frames that never touch the window at all, and a readback of the window inside the
 // frame. Every frame changes what it draws, so a window pass that ran ahead of the off-screen
 // work it reads, or a frame that lost its off-screen half, shows up as the previous frame's
-// colours. The DirectVulkan.WindowPassGate. entry also asserts the renderer's latched MGLOG_I:
+// colors. The DirectVulkan.WindowPassGate. entry also asserts the renderer's latched MGLOG_I:
 // on a renderer that submits the frame in one piece it is the assertion that goes red.
 
 #include <string>
@@ -83,7 +83,7 @@ void main() { o_color = texture(uTex, vUv); }
             const char* name;
         };
 
-        // Saturated colours only: ColorName() names them exactly whatever the rounding.
+        // Saturated colors only: ColorName() names them exactly whatever the rounding.
         constexpr NamedColor kCycle[] = {
             {1.0f, 0.0f, 0.0f, "red"},    {0.0f, 1.0f, 0.0f, "green"}, {0.0f, 0.0f, 1.0f, "blue"},
             {1.0f, 1.0f, 0.0f, "yellow"}, {1.0f, 1.0f, 1.0f, "white"},
@@ -98,7 +98,7 @@ void main() { o_color = texture(uTex, vUv); }
             return kCycle[(frame + 2) % kCycleLength];
         }
 
-        // The NDC rectangle [x0, x1] x [y0, y1] in one colour; aPos at 0, aColor at 1.
+        // The NDC rectangle [x0, x1] x [y0, y1] in one color; aPos at 0, aColor at 1.
         void DrawRect(unsigned int program, float x0, float y0, float x1, float y1, const NamedColor& c) {
             const float vertices[] = {
                 x0, y0, c.r, c.g, c.b, 1.0f, x1, y0, c.r, c.g, c.b, 1.0f,

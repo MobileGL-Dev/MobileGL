@@ -559,7 +559,7 @@ void main() { g_color = vec4(1); }
              GL_INVALID_VALUE},
             {"glBlitFramebuffer with a filter that is neither GL_NEAREST nor GL_LINEAR",
              [] { BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT, GL_NONE); }, GL_INVALID_ENUM},
-            {"glBlitFramebuffer of colour+stencil with GL_LINEAR",
+            {"glBlitFramebuffer of color+stencil with GL_LINEAR",
              [] {
                  BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_LINEAR);
              },

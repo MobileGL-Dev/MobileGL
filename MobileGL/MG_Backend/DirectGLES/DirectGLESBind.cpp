@@ -636,7 +636,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 // BOUNDS-CHECKED, exactly as ProgramObject::GetAttribType is not: the frontend's
                 // form indexes attribTypes raw because the mask it walked came off the same
-                // artefacts instance, and here the two vectors arrived over a wire. A short tail
+                // artifacts instance, and here the two vectors arrived over a wire. A short tail
                 // is an archive whose halves disagree; 0 classifies as Unsupported and says so
                 // below rather than reading past the end.
                 const GLenum attribType = location < link.attribTypes.size() ? link.attribTypes[location] : 0;
@@ -686,7 +686,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // declined to run it.
         //
         // P4a e3 (D-G4) leaves BOTH properties of this gate exactly as they are, and says so
-        // because they are the kind of thing a later optimisation deletes:
+        // because they are the kind of thing a later optimization deletes:
         //
         //   1. the g_imageUnitHighWaterMark == 0 early-out is what makes every Minecraft draw
         //      pay one integer test, and it is asked BEFORE anything reads a record;
@@ -1710,7 +1710,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                             // The last sample a usampler2DMS fetch may name, from the texture
                             // actually bound: a stencil texture's real count is not an integer
-                            // colour texture's. Keyed like the bias above - a texture's storage or
+                            // color texture's. Keyed like the bias above - a texture's storage or
                             // a unit's binding moving is what invalidates this pass's memo.
                             if (samplerBinding.msSampleMaxLocation >= 0) {
                                 const Int sampleMax =

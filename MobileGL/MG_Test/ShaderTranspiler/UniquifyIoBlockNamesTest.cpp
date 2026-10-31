@@ -249,7 +249,7 @@ TEST_F(UniquifyIoBlockNamesTest, ReportsNothingWhenThePlanNamesNoBlockThisStageD
     Vector<Uint32> output;
     ASSERT_TRUE(ShaderCompiler::UniquifyIoBlockNamesForEssl(input, renames, renames, renamed, output, true));
     // Empty is what tells the DirectGLES program build to keep the module it already had
-    // instead of adopting the optimizer's re-serialised copy.
+    // instead of adopting the optimizer's re-serialized copy.
     EXPECT_TRUE(renamed.empty());
 
     const String dis = Disassemble(output);

@@ -66,9 +66,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // EGL content-validity tracking for the default framebuffer. A color
         // buffer's content is undefined once its image has been presented
-        // (EGL_BUFFER_DESTROYED swap behaviour, the implementation default),
+        // (EGL_BUFFER_DESTROYED swap behavior, the implementation default),
         // and every ancillary (depth/stencil) buffer's content is undefined
-        // after ANY swap regardless of swap behaviour (EGL 1.5 §3.10.1). The
+        // after ANY swap regardless of swap behavior (EGL 1.5 §3.10.1). The
         // render-pass manager turns an undefined attachment's tile load into
         // LOAD_OP_DONT_CARE. Flags start false (a fresh swapchain image holds
         // garbage) and a render pass storing into an attachment sets it back

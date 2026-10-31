@@ -89,14 +89,14 @@ namespace MobileGL::MG_Remote::Transport {
         SessionSegments(const SessionSegments&) = delete;
         SessionSegments& operator=(const SessionSegments&) = delete;
 
-        // Creates and maps all four, initialises BOTH control pages (SEG_CMD's
+        // Creates and maps all four, initializes BOTH control pages (SEG_CMD's
         // and SEG_EVENT's), and books the mapping in `role`'s ledger.
         MobileGLResult Create(const SessionSegmentSizes& sizes, MemoryRole role);
         // Private, identically addressed mirrors for the stream data plane.
         MobileGLResult CreatePrivate(const SessionSegmentSizes& sizes, MemoryRole role);
 
         // The inproc peer's view of the owner's four segments, booked under the other role. It
-        // does not re-initialise the control pages: they are shared, and that would zero the
+        // does not re-initialize the control pages: they are shared, and that would zero the
         // owner's cursors. On POSIX each descriptor is dup()ed and adopted (ShmSegment::Adopt +
         // Map), a real second mapping, so the inproc attach runs the same path as the cross-process
         // one (AdoptFromDescriptors) and the two views close independently. Windows has no Adopt
@@ -493,7 +493,7 @@ namespace MobileGL::MG_Remote::Transport {
 
     // -----------------------------------------------------------------------
     // P6.5 wire fingerprint: one mixer, driven by compiler-derived layout facts.
-    // CapsCodec supplies generated member/catalogue digests; build identity and
+    // CapsCodec supplies generated member/catalog digests; build identity and
     // negotiated window sizes do not participate in wire compatibility.
     // -----------------------------------------------------------------------
     // Wire facts only. Segment geometry and build identity are negotiated separately.

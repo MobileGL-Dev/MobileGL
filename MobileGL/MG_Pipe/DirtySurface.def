@@ -169,7 +169,7 @@
     X(UseProgram,                         NEW_SHADER|NEW_SAMPLER_VIEWS|NEW_SHADER_IMAGES)      \
     X(BindVertexArray,                    NEW_VERTEX_ELEMENTS)                                 \
     /* NOT NEW_SHADER, and the derivation refutes it outright rather than leaving it a      */  \
-    /* judgement: this mutator writes m_boundProgramPipeline (plus the pipeline name table) */  \
+    /* judgment: this mutator writes m_boundProgramPipeline (plus the pipeline name table) */  \
     /* and bit 6's shutter reads m_currentProgram's lifetime id and link version - disjoint */  \
     /* sets, on every path. That is not an oversight in the shutter either: it reads        */  \
     /* GetCurrentProgram() and DELIBERATELY NOT GetProgramForDraw(), because the tracker    */  \

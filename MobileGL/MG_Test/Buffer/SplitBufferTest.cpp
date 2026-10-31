@@ -208,7 +208,7 @@ TEST_F(SplitBufferSet, Row2AWritableImageBufferTextureIsMarkedByADraw) {
     binding = MG_State::GLState::ImageTextureBinding{};
 }
 
-// Row 2's BOUND, and it is the half an optimisation is allowed to get wrong in exactly one
+// Row 2's BOUND, and it is the half an optimization is allowed to get wrong in exactly one
 // direction (P5d round 3, package C). The sweep used to be MAX_TEXTURE_IMAGE_UNITS wide on every
 // draw - 2.15% self of the GL thread on the Minecraft inproc profile, in a workload with no image
 // binding anywhere - and is now bounded by the frontend's image-unit high-water mark.
@@ -376,7 +376,7 @@ TEST_F(SplitBufferSet, TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) {
 
     // The SET agrees with the predicate, asked through the production entry point rather than by
     // reading a member: NoteMapStateChanged is what every one of the five maintenance events
-    // calls, and it must refuse to enrol an adopted store.
+    // calls, and it must refuse to enroll an adopted store.
     PersistentMapTracker::Instance().NoteMapStateChanged(*adopted);
     EXPECT_EQ(PersistentMapTracker::Instance().MemberCount(), 1u)
         << "only the declined twin: enrolling an adopted store would make the push read its "

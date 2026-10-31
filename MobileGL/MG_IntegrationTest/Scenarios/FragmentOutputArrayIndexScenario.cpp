@@ -128,7 +128,7 @@ void main() {
                 ScenarioTest::TearDown();
             }
 
-            // Clears both attachments to a colour no shader below writes, so an attachment that
+            // Clears both attachments to a color no shader below writes, so an attachment that
             // was never written reads back as the sentinel rather than as a plausible value.
             void ClearToSentinel() {
                 glClearColor(0.0f, 0.0f, 1.0f, 1.0f);

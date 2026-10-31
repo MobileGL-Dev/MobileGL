@@ -1092,11 +1092,11 @@ namespace MobileGL {
             String GLESShadingLanguageVersionString;
             Bool SupportsPersistentMapping = false;
             Bool SupportsNorm16Texture = false;
-            // GL_EXT_render_snorm is present, so the signed-normalized formats are colour-renderable
+            // GL_EXT_render_snorm is present, so the signed-normalized formats are color-renderable
             // (and usable as multisample texture storage) rather than texture-only.
             Bool SupportsRenderSnorm = false;
             // GL_EXT_color_buffer_float is present, so GL_RGBA16F / GL_RGBA32F / GL_R11F_G11F_B10F
-            // (and the R/RG float formats) are colour-renderable. ES 3.x core makes them
+            // (and the R/RG float formats) are color-renderable. ES 3.x core makes them
             // texture-only, and every Iris shaderpack renders into at least R11F_G11F_B10F, so
             // without this no shaderpack can work at all.
             Bool SupportsColorBufferFloat = false;
@@ -1113,7 +1113,7 @@ namespace MobileGL {
             // anisotropy may be forwarded without raising GL_INVALID_ENUM in GLES.
             Bool SupportsTextureFilterAnisotropy = false;
             // GL_TEXTURE_BORDER_COLOR and GL_CLAMP_TO_BORDER: ES 3.2 core, or
-            // EXT/OES_texture_border_clamp before that. Without it every border-colour parameter
+            // EXT/OES_texture_border_clamp before that. Without it every border-color parameter
             // raises INVALID_ENUM on the driver, so the syncs have to be gated on it.
             Bool SupportsTextureBorderClamp = false;
             // GL_TEXTURE_CUBE_MAP_ARRAY: ES 3.2 core, or EXT/OES_texture_cube_map_array before it.
@@ -1314,7 +1314,7 @@ namespace MobileGL {
             // by block name and member sequence instead.
             //
             // Defaults TRUE and stays true when the probe cannot run, because that is the
-            // behaviour every driver had before the probe existed - a capability like this
+            // behavior every driver had before the probe existed - a capability like this
             // must never be assumed broken on a driver nobody measured.
             Bool SupportsLocatedInterStageIoBlocks = true;
             // True when a geometry shader's storage writes made AFTER EmitVertex() are dropped
@@ -1386,10 +1386,10 @@ namespace MobileGL {
             Int MaxComputeWorkGroupInvocations = 128;
             // GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE per axis, as the driver answers
             // glGetIntegeri_v. Raw: the frontend floors them at the GL minimums itself. The
-            // initialisers are those minimums, for a context that rejects the query.
+            // initializers are those minimums, for a context that rejects the query.
             Int MaxComputeWorkGroupCount[3] = {65535, 65535, 65535};
             Int MaxComputeWorkGroupSize[3] = {1024, 1024, 64};
-            // GL_MAX_COMPUTE_SHARED_MEMORY_SIZE; the initialiser is the ES 3.1 minimum. The budget
+            // GL_MAX_COMPUTE_SHARED_MEMORY_SIZE; the initializer is the ES 3.1 minimum. The budget
             // the subgroup emulation's workgroup scratch has to fit in.
             Int MaxComputeSharedMemorySize = 16384;
             // GL_KHR_shader_subgroup on the ES driver, with what it answers for it. Extension-only

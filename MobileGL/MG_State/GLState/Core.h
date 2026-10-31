@@ -597,7 +597,7 @@ namespace MobileGL {
                 // itself when it rehashes. The cache is refreshed by
                 // RestoreBoundTransformFeedbackState, which every bind (and the revert a delete
                 // performs) goes through, and seeded for the default object by the constructor.
-                // Never returns 0 - the counter starts at 1 so a zero-initialised memo slot cannot
+                // Never returns 0 - the counter starts at 1 so a zero-initialized memo slot cannot
                 // be mistaken for a live object.
                 Uint64 GetBoundTransformFeedbackLifetimeId() const { return m_boundTransformFeedbackLifetimeId; }
                 Uint64 GetTransformFeedbackLifetimeId(Uint index) const;
@@ -731,7 +731,7 @@ namespace MobileGL {
                     Uint64 recordedVertices = 0;
                     Bool hasCompletedSpan = false;
                     Bool everBound = false;
-                    // Assigned by the default member initialiser, so every way an object comes into
+                    // Assigned by the default member initializer, so every way an object comes into
                     // being - operator[] materialisation, `= {}` in Gen/Create - gets a fresh one,
                     // and a recycled NAME never brings the dead object's id back with it.
                     Uint64 lifetimeId = AllocateTransformFeedbackLifetimeId();

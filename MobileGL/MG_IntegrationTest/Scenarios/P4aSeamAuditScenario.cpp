@@ -95,7 +95,7 @@ void main() { oColor = uColor; }
 )";
 
         // texelFetch, so WHICH image the unit holds is the whole answer and no filter, wrap or
-        // completeness rule can explain a colour away.
+        // completeness rule can explain a color away.
         constexpr const char* kFetchFS = R"(#version 330 core
 uniform sampler2D uTex;
 out vec4 oColor;
@@ -104,7 +104,7 @@ void main() { oColor = texelFetch(uTex, ivec2(0, 0), 0); }
 
         // texture() at (1.5, 1.5): outside the image on both axes, so the WRAP mode of whichever
         // sampler applies - the unit's sampler object or the texture's built-in one - decides
-        // whether the texel or the border colour comes back.
+        // whether the texel or the border color comes back.
         constexpr const char* kOutsideSampleFS = R"(#version 330 core
 uniform sampler2D uTex;
 out vec4 oColor;
@@ -191,7 +191,7 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
                 return false;
             }
 
-            // A 2x2 RGBA8 texture filled with one colour, NEAREST, single level - complete under
+            // A 2x2 RGBA8 texture filled with one color, NEAREST, single level - complete under
             // every rule, so nothing about completeness can enter the F-1 and F-4 sequences.
             static GLuint MakeSolidTexture2D(std::uint8_t r, std::uint8_t g, std::uint8_t b) {
                 std::uint8_t texels[2 * 2 * 4];
@@ -311,7 +311,7 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             glBindFramebuffer(GL_FRAMEBUFFER, fbo);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
             ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE))
-                << "an SRGB8 colour attachment must be complete (natively or through the widening)";
+                << "an SRGB8 color attachment must be complete (natively or through the widening)";
             glViewport(0, 0, kSize, kSize);
             glUseProgram(program);
             glUniform4f(colorLocation, 0.0f, 1.0f, 0.0f, 0.25f);
@@ -497,7 +497,7 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             glUniform4f(colorLocation, 0.0f, 1.0f, 0.0f, 0.25f);
             DrawQuad();
             // dst = stored alpha; src factor GL_DST_ALPHA, dst factor GL_ZERO, source white =>
-            // the colour becomes (storedAlpha, storedAlpha, storedAlpha) - ThreeChannelAttachment's
+            // the color becomes (storedAlpha, storedAlpha, storedAlpha) - ThreeChannelAttachment's
             // own probe, which nothing on the readback path can doctor.
             glEnable(GL_BLEND);
             glBlendFunc(GL_DST_ALPHA, GL_ZERO);
@@ -737,7 +737,7 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
 
             // The texture's built-in sampler REPEATS, so (1.5, 1.5) reads the red texel through it;
             // the sampler object CLAMPS TO A WHITE BORDER, so the same coordinate reads white
-            // through it. White is a Vulkan palette border colour, so Magma needs no extension.
+            // through it. White is a Vulkan palette border color, so Magma needs no extension.
             const GLuint red = MakeSolidTexture2D(255, 0, 0);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);

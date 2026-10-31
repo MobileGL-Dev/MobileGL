@@ -748,7 +748,7 @@ namespace MobileGL::MG_Util::SelfTest {
         // One vertex shader per round. The `round` term is multiplied by zero, so it changes
         // nothing about the result and everything about the source text - which is the point:
         // the corruption only appears from the SECOND separately compiled sampling program
-        // onward, and a driver that recognised an identical source could hand back the first
+        // onward, and a driver that recognized an identical source could hand back the first
         // program's binary and hide it.
         String BuildMsaaSampleVertexSource(Int sampleIndex, char component, Int round) {
             return format("#version 320 es\n"
@@ -1008,7 +1008,7 @@ namespace MobileGL::MG_Util::SelfTest {
             Drain(gl);
         }
 
-        // Reads the colour target back and counts the texels the shader did NOT paint with
+        // Reads the color target back and counts the texels the shader did NOT paint with
         // kProbePassColor. A negative result means the readback itself failed.
         Int CountFailedTexels(const GLESFunctionsTable& gl, const ImageDrawTargets& targets) {
             Vector<GLubyte> pixels(static_cast<SizeT>(targets.size) * targets.size * 4, 0);
@@ -1225,7 +1225,7 @@ namespace MobileGL::MG_Util::SelfTest {
         if (!HasMsaaEntryPoints(gl)) return false;
 
         // A sample index other than 0 is the whole subject, so a driver that cannot host a
-        // multisample colour target at all has nothing to say here.
+        // multisample color target at all has nothing to say here.
         Drain(gl);
         GLint maxColorTextureSamples = 0;
         gl.glGetIntegerv(GL_MAX_COLOR_TEXTURE_SAMPLES, &maxColorTextureSamples);
@@ -1260,7 +1260,7 @@ namespace MobileGL::MG_Util::SelfTest {
             swizzledSource = MakeSwizzledMultisampleSource(gl, samples, GL_RED);
             defaultSwizzleSource = MakeSwizzledMultisampleSource(gl, samples, GL_ALPHA);
             if (swizzledSource == 0 || defaultSwizzleSource == 0) {
-                inconclusive = "the driver would not host a filled R32F multisample colour target";
+                inconclusive = "the driver would not host a filled R32F multisample color target";
                 break;
             }
 
@@ -1529,7 +1529,7 @@ namespace MobileGL::MG_Util::SelfTest {
                     "%d; the glFinish-separated two-draw control missed %d%s",
                     static_cast<int>(subjectFailed), static_cast<int>(measurement.totalTexels),
                     static_cast<int>(emittedFailed), static_cast<int>(controlFailed),
-                    measurement.detected ? " - THE IN-INVOCATION ORDERING IS NOT HONOURED" : "");
+                    measurement.detected ? " - THE IN-INVOCATION ORDERING IS NOT HONORED" : "");
         } while (false);
 
         if (inconclusive != nullptr) {
@@ -1663,7 +1663,7 @@ namespace MobileGL::MG_Util::SelfTest {
         Drain(gl);
 
         // THE CONTROL: the same blit onto destination layer 0, which is the case no
-        // implementation gets wrong. It also proves the SOURCE layer is honoured, since the
+        // implementation gets wrong. It also proves the SOURCE layer is honored, since the
         // magic byte it looks for only exists on source layer 1 - so a driver that cannot blit
         // between array layers at all, or that has no working glFramebufferTextureLayer, fails
         // here and reaches no verdict rather than being reported as having this bug.
@@ -1704,12 +1704,12 @@ namespace MobileGL::MG_Util::SelfTest {
             return DriverBugFinding{"glBlitFramebuffer ignores the destination array layer", DriverBugVerdict::Fixed,
                                     "a glBlitFramebuffer whose DRAW framebuffer attaches a non-zero array layer with "
                                     "glFramebufferTextureLayer writes to layer 0 instead, and raises no error doing "
-                                    "it. Measured here on the colour aspect; the depth aspect behaves the same way on "
-                                    "the device this was characterised on. The layer is honoured everywhere else on "
+                                    "it. Measured here on the color aspect; the depth aspect behaves the same way on "
+                                    "the device this was characterized on. The layer is honored everywhere else on "
                                     "the same driver - the blit's own SOURCE layer is read correctly, which is this "
                                     "probe's control - so neither layered attachments nor blitting is withdrawn. "
                                     "MobileGL performs such a blit with glCopyImageSubData instead, which takes the "
-                                    "destination layer explicitly and honours it here, and applies that substitute to "
+                                    "destination layer explicitly and honors it here, and applies that substitute to "
                                     "the depth and stencil aspects as well; a blit that scales, flips, changes format, "
                                     "resolves samples or is clipped by the scissor cannot be expressed as a copy and "
                                     "is still handed to the driver"};
@@ -2011,7 +2011,7 @@ namespace MobileGL::MG_Util::SelfTest {
 
         SavedState saved;
         Save(gl, saved);
-        // The colour mask is not in SavedState - no other probe touches it - so this one saves
+        // The color mask is not in SavedState - no other probe touches it - so this one saves
         // and puts back its own. It has to be forced open: a masked channel would read back as
         // zero and turn a healthy driver into a "payload lost" verdict.
         GLboolean savedColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
@@ -2038,7 +2038,7 @@ namespace MobileGL::MG_Util::SelfTest {
                 measurement.detected = true;
                 // The second control, and the one that scopes the repair: the same located
                 // block between a vertex and a fragment stage. It arrives on the driver this
-                // was characterised on, which is why DirectGLES only drops the qualifier for
+                // was characterized on, which is why DirectGLES only drops the qualifier for
                 // programs that have a tessellation or geometry stage. A driver where this one
                 // ALSO fails is losing payloads the repair does not reach, and the report says
                 // so rather than implying the fix is complete.
@@ -2467,7 +2467,7 @@ namespace MobileGL::MG_Util::SelfTest {
             if (!R32FMultisampleSwizzleCorrupted(gl)) return std::nullopt;
             return DriverBugFinding{"R32F multisample fetch through a swizzled alpha", DriverBugVerdict::Unfixable,
                                     "texelFetch() on an R32F GL_TEXTURE_2D_MULTISAMPLE texture whose "
-                                    "GL_TEXTURE_SWIZZLE_A is not the default returns uninitialised memory - a "
+                                    "GL_TEXTURE_SWIZZLE_A is not the default returns uninitialized memory - a "
                                     "different value every run - for any sample index other than 0, from the SECOND "
                                     "such program in the context onward. The identical fetch with the default alpha "
                                     "swizzle, at sample index 0, or through .x instead of .w is correct, so neither "
@@ -2505,7 +2505,7 @@ namespace MobileGL::MG_Util::SelfTest {
                                     "pre-store value. The identical shader pair with the two halves renamed keeps "
                                     "every store, which is what proves the stage's image writes work and only the "
                                     "merge is at fault. MobileGL renames the two halves (mg_imageWo_ / mg_imageRo_) so "
-                                    "the driver cannot merge them, and application behaviour is correct"};
+                                    "the driver cannot merge them, and application behavior is correct"};
         }
 
         Optional<DriverBugFinding> ProbeImageCoherencyResidualBug(const GLESFunctionsTable& gl) {
@@ -2524,7 +2524,7 @@ namespace MobileGL::MG_Util::SelfTest {
                        "today (`coherent` plus memoryBarrierImage()) misses {} ({:.2f}%) on this "
                        "driver. The same dependency split across two draws with a glMemoryBarrier and "
                        "a glFinish between them is clean, so writes do become visible; it is the "
-                       "ordering inside one invocation that is not honoured. MobileGL keeps the "
+                       "ordering inside one invocation that is not honored. MobileGL keeps the "
                        "coherent pair and the barrier - without them every texel is wrong - and a "
                        "shader that reads back its own image write within one invocation cannot be "
                        "relied on here",
@@ -2559,7 +2559,7 @@ namespace MobileGL::MG_Util::SelfTest {
             if (repairDisabled) {
                 detail += ". THE REPAIR IS DISABLED in this process: MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS "
                           "is set to force located blocks ON, so DirectGLES emits the location "
-                          "qualifier the driver cannot honour and the payload is lost. Unset the "
+                          "qualifier the driver cannot honor and the payload is lost. Unset the "
                           "variable to get the repair back";
             } else {
                 detail += ". MobileGL emits a tessellation/geometry program's interface blocks with no "
@@ -2582,7 +2582,7 @@ namespace MobileGL::MG_Util::SelfTest {
             // reassurance this file exists to refuse. Auto and ForceOn both widen once this
             // probe has fired. Should POST ever run before env parsing, the field still holds
             // its Auto default - which is also what the widening itself consults, so the row
-            // and the behaviour cannot disagree.
+            // and the behavior cannot disagree.
             const Bool widened = MG_Config::Features.EsprytWidenPacked16Storage != MG_Config::QuirkOverride::ForceOff;
             String detail = "the driver stores SOME 16-bit packed images (RGB565 / RGB5_A1 / RGBA4) with the "
                             "R/G/B/A fields packed from the other end of the word - which allocations get the "

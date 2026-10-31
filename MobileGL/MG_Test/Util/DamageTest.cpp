@@ -98,7 +98,7 @@ TEST(Damage, NormalizeMergesDownToTheLimitAndStillCoversEverything) {
     for (const Rect& r : input)
         EXPECT_TRUE(Covers(region, r, 1000, 700)) << r.X << "," << r.Y;
 
-    // Two neighbours and one far away, limit 2: the neighbours merge, the far one stays apart.
+    // Two neighbors and one far away, limit 2: the neighbors merge, the far one stays apart.
     Region three = Of({{0, 0, 10, 10}, {10, 0, 10, 10}, {500, 500, 10, 10}});
     three.Normalize(1000, 1000, 2);
     EXPECT_EQ(three, Of({{0, 0, 20, 10}, {500, 500, 10, 10}}));

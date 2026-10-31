@@ -47,7 +47,7 @@ namespace {
                   << "                            GPU completion and not just CPU submission (default: 1)\n"
                   << "  --benchmark-result=PATH   Timing JSON output (default: OUTPUT/benchmark.json)\n"
                   << "  --dump-fbo-attachments CALL:DIR[:FBO,FBO,...]\n"
-                  << "                            At CALL, write every colour attachment and the depth\n"
+                  << "                            At CALL, write every color attachment and the depth\n"
                   << "                            attachment of every live framebuffer object into DIR as\n"
                   << "                            fbo<N>-att<M>.png / fbo<N>-depth.png, plus a manifest.txt\n"
                   << "                            of formats and per-channel statistics. Repeatable.\n";

@@ -573,7 +573,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLuint CreateShader_State(GLenum type) {
-        // GL 4.6 core 7.1: shaderType is an enum, so an unrecognised one is INVALID_ENUM (it
+        // GL 4.6 core 7.1: shaderType is an enum, so an unrecognized one is INVALID_ENUM (it
         // used to be documented as INVALID_VALUE). The check has to happen HERE: the state
         // layer hands out a name for ShaderStage::Unknown just as happily as for a real
         // stage, so the old "shaderId == 0 means bad type" test could never fire and an
@@ -3324,7 +3324,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetProgramResourceiv(GLuint program, GLenum programInterface, GLuint index, GLsizei propCount,
                               const GLenum* props, GLsizei bufSize, GLsizei* length, GLint* params) {
         // Every early-out below reports "nothing was written", and it has to say so before it can
-        // take one: callers legitimately leave *length uninitialised and then loop to it. The CTS
+        // take one: callers legitimately leave *length uninitialized and then loop to it. The CTS
         // does exactly that (gl4cProgramInterfaceQueryTests.cpp:2172 declares `GLsizei length;` and
         // walks `for (i = 0; i < length; ++i)` over a 1000-entry stack array), so an untouched
         // *length turned every error path here into a stack overrun inside the caller -
@@ -3414,7 +3414,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // already carries, so this is a rename of glGetProgramResourceiv's props onto the older
     // entry point's - and the two are required to agree, which is only true while both read the
     // same model. It was a silent stub: it wrote nothing, raised nothing, and left every probe
-    // reading its own uninitialised output.
+    // reading its own uninitialized output.
     static Bool TryMapActiveAtomicCounterBufferProp(GLenum pname, GLenum& outProp) {
         switch (pname) {
         case GL_ATOMIC_COUNTER_BUFFER_BINDING:
@@ -3547,7 +3547,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // raise is one of theirs, raised at the point they would raise it.
     GLuint CreateShaderProgramv(GLenum type, GLsizei count, const GLchar* const* strings) {
         // GL 4.6 core 7.3: a negative count is INVALID_VALUE and is checked before anything
-        // is created, so a bad count never leaks a shader name. An unrecognised type is
+        // is created, so a bad count never leaks a shader name. An unrecognized type is
         // INVALID_ENUM, which CreateShader_State raises below.
         if (count < 0) {
             MG_State::pGLContext->RecordError(

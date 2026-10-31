@@ -266,7 +266,7 @@ namespace MobileGL {
         // of a storage block's trailing member, and legal on the block instance itself - aborts
         // the process inside mapIO's collect callback in any build with assertions live. The
         // repo defines no NDEBUG of its own, so a CMake Debug build is exactly such a build; the
-        // "reports 0" behaviour the previous comment relied on is only what NDEBUG happens to do.
+        // "reports 0" behavior the previous comment relied on is only what NDEBUG happens to do.
         // An unsized array occupies one binding here, which is also what GL means by it.
         long long elementCount = 1;
         if (type.isArray() && type.isSizedArray()) {

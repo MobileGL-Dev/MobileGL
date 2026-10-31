@@ -212,7 +212,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The floor now advances only to a serial NO remaining in-flight submission still
         // carries. NotifyFrameSerialComplete is monotone and already refuses the still-
         // recording serial, so this can only ever advance the floor later, never further.
-        // On the disaggregated build's MONOLITH arm this is behaviour-identical (one
+        // On the disaggregated build's MONOLITH arm this is behavior-identical (one
         // submission per serial). The #else branch below is the pull build's statement,
         // unchanged, which is what keeps G1's .text byte-identical.
         Bool retiredAny = false;
@@ -707,7 +707,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         // Only provokingVertexModePerPipeline lets modes differ inside one render pass instance;
         // elsewhere every pipeline takes GL's default so the render pass stays self-consistent, and
-        // glProvokingVertex(GL_FIRST_VERTEX_CONVENTION) goes unhonoured. Honouring it there would
+        // glProvokingVertex(GL_FIRST_VERTEX_CONVENTION) goes unhonoured. Honoring it there would
         // mean ending the render pass on every glProvokingVertex change; not worth it until a target
         // device actually lacks the property.
         if (!m_provokingVertexModePerPipeline) {

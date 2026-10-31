@@ -17,7 +17,7 @@ namespace MobileGL {
         namespace ShaderTranspiler {
             // GL 4.6 core table 23.53 requires GL_MAX_SAMPLES >= 4, so MobileGL floors every
             // multisample ceiling it advertises to 4 (GL_Getter's kFrontendMaxSamples) no matter
-            // what the ES driver reports. The realised allocation cannot be floored the same way -
+            // what the ES driver reports. The realized allocation cannot be floored the same way -
             // the driver would simply reject it - so DirectGLES clamps the count it passes to
             // glTexStorage*Multisample down to what the format really supports
             // (ClampSamplesToBackendSupport). On Adreno and on Mali's Immortalis-G925 that is ONE
@@ -45,17 +45,17 @@ namespace MobileGL {
             //
             // Category comes from the OpTypeImage: an OpTypeInt sampled type is the integer
             // class (GL_MAX_INTEGER_SAMPLES), a float one is depth when the image's Depth operand
-            // is exactly 1 and colour otherwise. That last clause is deliberate: glslang writes
+            // is exactly 1 and color otherwise. That last clause is deliberate: glslang writes
             // Depth 0 for a plain sampler and 2 ("unknown") wherever it cannot tell, and GLSL has
             // no multisampled shadow sampler at all, so only an explicit 1 is treated as a depth
-            // image and everything else falls to the colour limit - which is the one a
+            // image and everything else falls to the color limit - which is the one a
             // mis-classified image would want anyway.
             //
             // An UNSIGNED integer image is the one category whose static ceiling can be wrong
-            // in both directions: a usampler2DMS reads integer colour formats AND the stencil
+            // in both directions: a usampler2DMS reads integer color formats AND the stencil
             // aspect of a multisample STENCIL_INDEX8 / depth-stencil texture, and the backend
             // allocates the latter under the DEPTH ceiling (Adreno: 4 samples where integer
-            // colour gets 1). Clamping such a fetch to the integer ceiling reads sample 0 for
+            // color gets 1). Clamping such a fetch to the integer ceiling reads sample 0 for
             // every index of a four-sample stencil texture. With deferDirectUnsignedFetches the
             // caller takes those fetches over at runtime - a per-sampler uniform holding the
             // bound texture's real last sample index (DirectGLES ClampUnsignedMultisampleFetches)

@@ -53,7 +53,7 @@ namespace MobileGL::MG_Remote::Server {
         // owned the backend, and a texture bind was skipped because the shadow described the
         // other session's context. So an apply thread holds the turn while it does backend work
         // (control requests, a drain batch, fence reports, teardown) and gives it up before it
-        // parks. FIFO, so a session with a busy ring cannot starve its neighbours; reentrant for
+        // parks. FIFO, so a session with a busy ring cannot starve its neighbors; reentrant for
         // the thread that holds it. When the turn moves to a different thread the backend takes
         // ownership for it and drops its binding shadows (DirectGLES::OnBackendTurnHandoff).
         class BackendTurnLock {
@@ -270,7 +270,7 @@ namespace MobileGL::MG_Remote::Server {
             }
             if (applied == 0) return 0;
             if (sched_setaffinity(0, sizeof(set), &set) != 0) return 0;
-            // Read back the mask the kernel really honoured. This is the codex-11 fix: the log
+            // Read back the mask the kernel really honored. This is the codex-11 fix: the log
             // and ResolvedAffinityMask() report the EFFECTIVE set, so a request the cpuset trimmed
             // is visible as a smaller resolved mask rather than as a lie that matched the request.
             cpu_set_t effective;
@@ -764,7 +764,7 @@ namespace MobileGL::MG_Remote::Server {
                 if (ready()) continue;
             }
 
-            // Never park holding the turn: a neighbour session may be waiting for it.
+            // Never park holding the turn: a neighbor session may be waiting for it.
             turn.reset();
             const Uint64 waits = m_parks.fetch_add(1, std::memory_order_acq_rel) + 1;
             // THE WAIT LEDGER'S SERVER HALF (P5d round 3, package T item 4). The client may not
@@ -1096,7 +1096,7 @@ namespace MobileGL::MG_Remote::Server {
         // to Present on the apply thread. Their difference is everything that is NOT applying:
         // waiting on the ring for the next record, retiring, and the socket. So one line answers
         // "is the phone CPU-bound, or is it waiting for the client?" without a profiler, which is
-        // the question the next optimisation has to be chosen from.
+        // the question the next optimization has to be chosen from.
         //
         // FUNCTION-LOCAL STATIC BECAUSE THE FRAME DOES NOT FIT IN ONE DrainRing CALL: records
         // trickle in, so a frame spans many drains, and state that reset per drain would measure a
@@ -1576,7 +1576,7 @@ namespace MobileGL::MG_Remote::Server {
         //
         // PH-1 (3): false = the refusal latched (an armed spawn / TCP session child, where the
         // frame's values came off the wire through SurfaceOpCodec). Under spawn the codec has
-        // already mapped the wire WindowKind onto a legal tag, so this arm is defence in depth
+        // already mapped the wire WindowKind onto a legal tag, so this arm is defense in depth
         // there; unarmed it still dies.
         Bool WindowBackendFromFrameValue(Int value, MG_Backend::WindowBackend* out) {
             if (value < static_cast<Int>(MG_Backend::WindowBackend::Unknown) ||
@@ -1739,7 +1739,7 @@ namespace MobileGL::MG_Remote::Server {
             // MakeEGLCurrent), and the native bind below resolves the context through the session's
             // current token - which still names whatever another thread bound last, since this
             // thread's own bind_context follows the frame. Bound first, so the surface is made
-            // current with ITS context and not attached to a neighbour's. A frame from a client
+            // current with ITS context and not attached to a neighbor's. A frame from a client
             // that sends a handle names no token and leaves the binding alone.
             if (m_session != nullptr && frame.context != 0) (void)m_session->BindContext(frame.context);
             const MakeCurrentOutcome outcome = ApplyMakeCurrent(
@@ -1905,7 +1905,7 @@ namespace MobileGL::MG_Remote::Server {
         // refuses None), so reaching this line means the slot's bytes were not written by the
         // poster at all - the ring's Fatal{ProtocolCorruption} discipline, one channel over.
         // PH-1 (3): latched in an armed session child (under spawn SurfaceOpCodec has already
-        // refused an unknown wire kind, so this is defence in depth); unarmed it dies.
+        // refused an unknown wire kind, so this is defense in depth); unarmed it dies.
         frame.ok = false;
         (void)SessionLatch(MGFatalFamily::ProtocolCorruption,
                            "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.kind\"} - the control slot held "
@@ -1956,7 +1956,7 @@ namespace MobileGL::MG_Remote::Server {
     void ServerLoop::ServerWindowAttachedThunk(void* self) {
         auto* loop = static_cast<ServerLoop*>(self);
         // As the lost hook. Called under the display's lock while this loop is registered as suspended,
-        // and the registration is cancelled (under that lock) before the apply thread exits and before
+        // and the registration is canceled (under that lock) before the apply thread exits and before
         // Stop() lets go of m_session.
         loop->m_windowRequests.fetch_or(kWindowAttached, std::memory_order_acq_rel);
         if (loop->m_session != nullptr && loop->m_session->DataLink() != nullptr) {

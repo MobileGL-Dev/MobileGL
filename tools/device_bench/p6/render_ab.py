@@ -49,7 +49,7 @@ def steady_state_cpu(arm):
     `tailFrames`:
 
       - `medianFrameCpuMs` / `p95FrameCpuMs`: the client thread's own `clock_gettime(CLOCK_THREAD_
-        CPUTIME_ID)` deltas per frame, summarised over the tail. Host-side per-frame sampling cannot
+        CPUTIME_ID)` deltas per frame, summarized over the tail. Host-side per-frame sampling cannot
         reproduce this - a 0.5 s poll interval cannot resolve an 8 ms frame - and it is the primary
         metric (MEASUREMENTS.md section 9).
       - `medianFrameMs` / `p95FrameMs`: wall time per frame, which is what the frame budget is.
@@ -240,7 +240,7 @@ def main():
     # --- headline: frame time and per-thread CPU ------------------------------------------------
     lines.append("### Frame time and per-thread CPU (best of N)")
     lines.append("")
-    lines.append("The `frame cpu` column is the CLIENT thread's own per-frame CPU clock, summarised by the")
+    lines.append("The `frame cpu` column is the CLIENT thread's own per-frame CPU clock, summarized by the")
     lines.append("device over the trailing `tailFrames` - the primary metric (MEASUREMENTS.md section 9).")
     lines.append("`client total` / `server total` are the sampler's per-role CPU TOTALS over that repeat,")
     lines.append("which includes the one-off shader bring-up frame; they are not per-frame rates. See")

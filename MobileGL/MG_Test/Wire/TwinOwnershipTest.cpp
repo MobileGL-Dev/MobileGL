@@ -206,7 +206,7 @@ namespace {
         EXPECT_NE(inA, inB);
 
         // This is what DropEveryTwinForEndedServerSession now does, and the reason it is scoped:
-        // it runs on the apply thread of the session that is ENDING, while a neighbour session
+        // it runs on the apply thread of the session that is ENDING, while a neighbor session
         // may still be rendering in this process (P14 S2).
         EXPECT_EQ(table.DropBucketsOfSession(kSessionA), 1u) << "the ended session's group was not dropped";
         BindKey(kSessionA, kGroupOne);

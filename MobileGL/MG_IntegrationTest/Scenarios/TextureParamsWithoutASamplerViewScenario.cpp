@@ -9,10 +9,11 @@
 // Scenario - A TEXTURE'S PARAMETERS TAKE EFFECT EVEN WHEN IT HAS NO SAMPLER VIEW (gate G9), the
 // one scenario the acceptance gate names by hand and requires to be RED before P4a lands.
 //
-// THE DESIGN STATEMENT IT TESTS, ARCHITECTURE.md §3.2 (D10), verbatim: "SetTextureParams 按资源寻址、
-// 与 sampler view 分开（D10）：只作 FBO attachment / image 单元 / glCopyImageSubData 端点的纹理没有
-// sampler view，但 Espryt 对 attachment 也同步纹理参数，且 RequireImageBindableStorage 需要在前端参数
-// 版本不动时强制重同步." A texture that is only an attachment, only an image-unit binding or only a
+// THE DESIGN STATEMENT IT TESTS, ARCHITECTURE.md §3.2 (D10), verbatim: "SetTextureParams addresses by resource,
+// separately from the sampler view (D10): a texture used only as an FBO attachment / image unit /
+// glCopyImageSubData endpoint has no sampler view, but Espryt also synchronizes texture parameters
+// for attachments, and RequireImageBindableStorage must force a resync when the frontend parameter
+// version has not moved." A texture that is only an attachment, only an image-unit binding or only a
 // copy endpoint has NO sampler view at all - so a design that carried texture parameters on the
 // view would silently drop them for exactly those textures. P4a addresses set_texture_params by
 // RESOURCE, independently of any binding, which is what makes the record exist for every texture
@@ -48,7 +49,7 @@
 //     in particular they would go RED if any of the four reachability paths were ever made to
 //     depend on the texture having a sampler VIEW - which is exactly the coupling P4a's
 //     resource-addressed set_texture_params removes and the thing a later phase could reintroduce;
-//   * the "must be red before landing" artefact the acceptance gate asks for is NOT produced by the public-GL half
+//   * the "must be red before landing" artifact the acceptance gate asks for is NOT produced by the public-GL half
 //     of this file, and no public-GL integration scenario on a monolith tree can produce it.
 //     Producing it needs an observation of the DRIVER's texture object taken while the texture is
 //     still read-attachment-only. ID-19 rules that G9 is therefore a WHITE-BOX assertion, and this
@@ -109,7 +110,7 @@
 // so a texture that is exclusively a READ attachment gets its STORAGE synced
 // and its PARAMETERS never. P4a closes that gap deliberately (D-E3): the record is addressed by
 // resource, and Espryt's SyncAttachmentObject applies parameters for ANY attachment, draw or read.
-// It is a behaviour change and it is the deliverable, not a drive-by dev fix (guide/discipline.md).
+// It is a behavior change and it is the deliverable, not a drive-by dev fix (guide/discipline.md).
 //
 // HOW EACH CASE OBSERVES "REACHED THE DRIVER", and why the observation is always a LATER SAMPLE.
 // A texture parameter is by definition a sampling parameter: nothing about an attachment, an image
@@ -120,7 +121,7 @@
 //   2. move a parameter while it is reachable ONLY that way (through the DSA entry points
 //      glTextureParameteri / glTextureSubImage2D, so no step of the setup ever binds the texture to
 //      a sampler unit - a bind would put it on the unit list and answer the question by accident),
-//   3. sample it once, at the end, and read the colour back.
+//   3. sample it once, at the end, and read the color back.
 //
 // - and the difference between them is step 1 alone. A case that is red says: the parameter set
 // while the texture was reachable only that way did not survive to the sample.
@@ -164,7 +165,7 @@ void main() {
 )";
 
         // Samples texel (0,0) with an explicit fetch: no filtering, no derivatives, no wrap - so
-        // the colour that comes back is the texel as the driver's swizzle presents it and nothing
+        // the color that comes back is the texel as the driver's swizzle presents it and nothing
         // else can move it.
         constexpr const char* kFetchFS = R"(#version 330 core
 uniform sampler2D uTex;
@@ -174,7 +175,7 @@ void main() { oColor = texelFetch(uTex, ivec2(0, 0), 0); }
 
         // The stencil aspect of a packed depth/stencil texture is an UNSIGNED INTEGER texture, so
         // it needs a usampler2D. The case that uses it turns "the stencil value is what was
-        // cleared" into a colour, because a colour is the only thing this harness can read back.
+        // cleared" into a color, because a color is the only thing this harness can read back.
         constexpr const char* kStencilFetchFS = R"(#version 330 core
 uniform usampler2D uTex;
 uniform uint uExpected;
@@ -255,7 +256,7 @@ void main() {
                 }
             }
 
-            // A 4x4 RGBA8 texture, one solid colour, created and filled WITHOUT EVER BINDING IT.
+            // A 4x4 RGBA8 texture, one solid color, created and filled WITHOUT EVER BINDING IT.
             GLuint MakeSolidTextureWithoutBinding(std::uint8_t r, std::uint8_t g, std::uint8_t b) {
                 std::vector<std::uint8_t> texels(kTextureSize * kTextureSize * 4);
                 for (std::size_t i = 0; i < texels.size(); i += 4) {
@@ -299,7 +300,7 @@ void main() {
             }
 
             // R -> ZERO and G -> ONE, so a RED texel samples as GREEN if and only if the swizzle
-            // reached the driver, and as RED if it did not. Two colours the harness can name, from
+            // reached the driver, and as RED if it did not. Two colors the harness can name, from
             // one parameter change, with no third outcome that could be mistaken for either.
             void SwizzleRedIntoGreen(GLuint texture) {
                 glTextureParameteri(texture, GL_TEXTURE_SWIZZLE_R, GL_ZERO);
@@ -757,7 +758,7 @@ void main() {
                    "(the swizzle reached the driver); RED means the copy landed and the swizzle did "
                    "not; BLUE means neither happened, i.e. the destination is still its own original "
                    "texel and glCopyImageSubData wrote nothing. The swizzle is what turns any texel "
-                   "into (0,1,0), so the colour separates the two failures rather than merging them.";
+                   "into (0,1,0), so the color separates the two failures rather than merging them.";
 
             GLuint cleanup[2] = {source, destination};
             glDeleteTextures(2, cleanup);

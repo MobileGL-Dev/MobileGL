@@ -1,36 +1,36 @@
-# 设计与架构（索引）
+# Design and architecture (index)
 
-> 这一页只有设计要点和章节去向；每一部分的完整设计在 [`design/`](design/)。章节编号 §1–§17、附 A / B 沿用至今，代码注释里写的 `ARCHITECTURE.md §N` 按下表找到对应文件。各阶段的 wire 契约原文见 git 历史，与设计文字冲突时以更新的契约为准。
+> This page holds only the design points and where each chapter lives; the full design of each part is in [`design/`](design/). Section numbers §1–§17 and appendices A / B are still in use; `ARCHITECTURE.md §N` written in code comments maps to a file in the table below. The original wire contracts for each phase are in git history; where they conflict with the design text, the newer contract wins.
 
-## 一句话
+## In one sentence
 
-后端本来就维护着一台贴着 GLES / Vulkan 的状态机，缺的只是"我被告知了什么"。MGPipe 让前端在每条做事的命令之前，把状态变化以**记录**的形式推给后端；后端只认这些记录、不读前端内存，所以两者之间可以隔一个线程、一个进程或一根网线。
+The backend already maintains a state machine that tracks GLES / Vulkan; all that is missing is an explicit statement of "what I was told". MGPipe has the frontend push state changes to the backend as **records** before each command that does work; the backend recognizes only these records and does not read frontend memory, so a thread, a process, or a network cable can sit between the two.
 
-## 设计要点
+## Key design points
 
-1. **一份调用目录生成一切**：`PipeCalls.def` 一行一个调用，线上编号就是行序、只追加；两张函数指针表、编解码、校验器都由它生成。
-2. **对象用句柄 `{slot, gen}` 寻址**：由前端分配，后端从不回传，所以创建对象不需要往返。
-3. **状态在命令之前一次性推送**，不是每个 GL setter 都推；整块数据过线、按内容去重，没变就不发。
-4. **同一份后端实现，三种拓扑**：单线程直调 / 同进程两线程 / 两个进程（可跨机）。
-5. **反向消息是具名回调**（错误、GPU 写回、窗口尺寸……），走一条与命令同样有序的事件通道。
-6. **着色器以 SPIR-V + 反射信息过线**：编译在前端，转译与按状态特化在后端。
-7. **传输分两层**：控制面（握手、EGL 控制）与数据面（命令、批量数据），各自可选本机共享内存或字节流 / TCP，可以混搭；上层代码不区分链路种类。
-8. **client 发完就走（run-ahead）**：只有需要答案的命令才等；靠 present 配额限速。
-9. **出错不崩**：server 崩溃或断线时 client 进入"设备丢失"状态；外来连接要令牌，畸形输入被拒绝而不是让 server 退出。
-10. **可证明的迁移**：每个门都必须能变红；单进程构建的二进制在整个拆分过程中逐字节不变（G1）。
+1. **One call catalog generates everything**: `PipeCalls.def` has one call per line; the wire number is the line order and is append-only; the two function pointer tables, the codec, and the validator are all generated from it.
+2. **Objects are addressed by handle `{slot, gen}`**: allocated by the frontend, never sent back by the backend, so creating an object needs no round trip.
+3. **State is pushed once before a command**, not by every GL setter; whole blocks cross the wire and are deduplicated by content, and unchanged data is not sent.
+4. **One backend implementation, three topologies**: direct calls in one thread / two threads in one process / two processes (possibly across machines).
+5. **Reverse messages are named callbacks** (errors, GPU writeback, window size…), over an event channel ordered like commands.
+6. **Shaders cross the wire as SPIR-V + reflection information**: compiled in the frontend, translated and specialized by state in the backend.
+7. **The transport has two layers**: control plane (handshake, EGL control) and data plane (commands, bulk data), each independently choosing local shared memory or a byte stream / TCP, and they can be mixed; upper-layer code does not distinguish link types.
+8. **The client runs ahead (run-ahead)**: only commands that need an answer wait; present credit paces it.
+9. **Errors do not crash**: when the server crashes or disconnects, the client enters a "device lost" state; external connections need a token, and malformed input is rejected rather than making the server exit.
+10. **Provable migration**: every gate must be able to turn red; the monolith build's binary stays byte-identical throughout the split (G1).
 
-## 章节去向
+## Where the chapters live
 
-| § | 内容 | 文件 |
+| § | Content | File |
 |---|---|---|
-| 1–2 | 边界：两张表、三种拓扑；对象模型：句柄、两种代数、CSO | [`design/01-boundary-and-objects.md`](design/01-boundary-and-objects.md) |
-| 3–4 | 调用目录、生成器 G1–G8、能力位；记录与 payload 格式 | [`design/02-catalogue-and-records.md`](design/02-catalogue-and-records.md) |
-| 5–7 | 前端 tracker（何时推、推什么、怎么去重）；纹理上传；着色器 | [`design/03-frontend.md`](design/03-frontend.md) |
-| 8 | 反向通道：七个回调、有序性、错误与 ack、纹理重铸（server 本地，无拉取）、XFB | [`design/04-reverse-channel.md`](design/04-reverse-channel.md) |
-| 9–10 | 后端改造（`PipeInputs`、memo 重键、A/B 臂）；server 侧 applier | [`design/05-backend-and-server.md`](design/05-backend-and-server.md) |
-| 11 | 传输：共享段、环、门铃、控制面、背压、等待规则、事件、两根轴 | [`design/06-transport.md`](design/06-transport.md) |
-| 12–13 | persistent map 与大缓冲采纳；回读、往返清单、五部分验证门 | [`design/07-memory-readback-verification.md`](design/07-memory-readback-verification.md) |
-| 14–15 | 帧节奏与线程；进程、握手、EGL、Android（含上屏 server）、崩溃处理 | [`design/08-runtime-and-platform.md`](design/08-runtime-and-platform.md) |
-| 16、附 A、附 B | 源码目录与构建选项；全部开关；边界计数器 | [`design/09-build-switches-counters.md`](design/09-build-switches-counters.md) |
-| 17 | 各阶段落地时的形状与仍生效的规则（原文见 git 历史） | [`design/10-phase-shapes.md`](design/10-phase-shapes.md) |
-| — | 状态归属：多 session / 多 context / share group（anland 统一 server 前置） | [`design/11-state-ownership.md`](design/11-state-ownership.md) |
+| 1–2 | Boundary: two tables, three topologies; object model: handles, two generations, CSO | [`design/01-boundary-and-objects.md`](design/01-boundary-and-objects.md) |
+| 3–4 | Call catalog, generators G1–G8, capability bits; record and payload format | [`design/02-catalogue-and-records.md`](design/02-catalogue-and-records.md) |
+| 5–7 | Frontend tracker (when to push, what to push, how to deduplicate); texture upload; shaders | [`design/03-frontend.md`](design/03-frontend.md) |
+| 8 | Reverse channel: seven callbacks, ordering, errors and ack, texture re-mint (server-local, no pull), XFB | [`design/04-reverse-channel.md`](design/04-reverse-channel.md) |
+| 9–10 | Backend rework (`PipeInputs`, memo re-key, A/B arms); server-side applier | [`design/05-backend-and-server.md`](design/05-backend-and-server.md) |
+| 11 | Transport: shared segment, ring, doorbell, control plane, backpressure, wait rules, events, two axes | [`design/06-transport.md`](design/06-transport.md) |
+| 12–13 | Persistent map and large-buffer adoption; readback, round-trip list, five-part verification gate | [`design/07-memory-readback-verification.md`](design/07-memory-readback-verification.md) |
+| 14–15 | Frame pacing and threads; process, handshake, EGL, Android (including the on-screen presentation server), crash handling | [`design/08-runtime-and-platform.md`](design/08-runtime-and-platform.md) |
+| 16, Appendix A, Appendix B | Source directory and build options; all switches; boundary counters | [`design/09-build-switches-counters.md`](design/09-build-switches-counters.md) |
+| 17 | The shape each phase landed in and the rules still in force (originals in git history) | [`design/10-phase-shapes.md`](design/10-phase-shapes.md) |
+| — | State ownership: multiple sessions / multiple contexts / share groups (prerequisite for the anland unified server) | [`design/11-state-ownership.md`](design/11-state-ownership.md) |

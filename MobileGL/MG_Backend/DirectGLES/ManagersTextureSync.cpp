@@ -212,7 +212,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-        // A three-channel format widened to four to keep a colour attachment renderable (see
+        // A three-channel format widened to four to keep a color attachment renderable (see
         // NormalizePixelFormat) is described to the driver as a four-component transfer, so the
         // three-component client data has to be repacked with an alpha of 1.0 - otherwise the
         // driver walks three texels' worth of data per four-texel row and the image shears.
@@ -467,7 +467,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The transfer half of the image-format widening: an image-bindable texture whose ES
         // storage was widened to a core carrier is described to the driver as a four-component
         // transfer, so its narrower client data has to be repacked the same way the three-channel
-        // colour-renderable widening repacks its own.
+        // color-renderable widening repacks its own.
         //
         // Three shapes, because the carriers come in three kinds. Most of them keep the frontend
         // format's component TYPE and only add channels, so padding the shadow out to four
@@ -836,7 +836,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // consume is a swap-and-pop - so every one of them is taken, used and dropped
             // inside one level's iteration, and never held across a consume.
             if (pushedStorage != nullptr) {
-                // THE METADATA RESPECIFY, HONOURED (ID-18 M4, review M-2). BindMask and
+                // THE METADATA RESPECIFY, HONORED (ID-18 M4, review M-2). BindMask and
                 // ImageBindableHint are STICKY facts the client discovers AFTER allocation - a
                 // texture first bound as a shader image - and an IMMUTABLE texture never has a
                 // later redefinition to carry them, so they arrive on a respecify that restates
@@ -868,7 +868,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // ONE compare replaces the whole cheap-gate trio AND the content version. The
                 // applier bumps Serial on every respecify and every sub-data it applies to this
                 // resource, which is exactly the union those four keys covered - without the
-                // coarse behaviour the sampling-resolution generation had, where any texture's
+                // coarse behavior the sampling-resolution generation had, where any texture's
                 // shape churn re-opened every other texture's gate.
                 //
                 // The pending set is the second half and it is not redundant: a previous sync
@@ -2086,7 +2086,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // transport-gated - safe by a chain rather than by its own statement, which
                 // is exactly the shape that cost the monolith arm 137 scenarios. Under a
                 // transport the conjunct is already implied by `pushedStorage != nullptr`, so
-                // this changes no behaviour and closes no door; it says the thing instead of
+                // this changes no behavior and closes no door; it says the thing instead of
                 // depending on it.
                 const Bool texBufferByRecord = pushedStorage != nullptr && MGB_TEXTURE_HANDLE_ARM_OFF(*this) == false;
                 static const SharedPtr<MG_State::GLState::BufferObject> kNoFrontendBuffer{};

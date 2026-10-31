@@ -16,7 +16,7 @@
 // ScenarioFixture's emit-ordinal rule.
 //
 // object_death (§5.2): a texture and a framebuffer die, the deaths cross, and the slots
-// recycle. The picture after recycling is the behavioural half: a stale twin answering for
+// recycle. The picture after recycling is the behavioral half: a stale twin answering for
 // the recycled object renders the DEAD object's content (or errors), which is the exact
 // shape LiveGenAt's generation check exists to refuse.
 //
@@ -333,7 +333,7 @@ namespace MGITest {
             }
             glDeleteRenderbuffers(1, &renderbuffer);
 
-            // Recycle: a new FBO and a new backing store, cleared to a different colour. A stale
+            // Recycle: a new FBO and a new backing store, cleared to a different color. A stale
             // twin answering for the recycled framebuffer renders the blue of the dead one.
             glGenFramebuffers(1, &fbo);
             glGenRenderbuffers(1, &renderbuffer);

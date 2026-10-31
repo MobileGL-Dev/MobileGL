@@ -1,95 +1,95 @@
-# 传输与数据面（原 ARCHITECTURE §11）
+# Transport and data plane (formerly ARCHITECTURE §11)
 
-> 设计细节。设计要点与全部章节的索引见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)。章节编号沿用原 `ARCHITECTURE.md`，代码注释里的 `ARCHITECTURE.md §N` 按编号在这里找到。
+> Design details. The design points and the index of all chapters are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Section numbers follow the original `ARCHITECTURE.md`; an `ARCHITECTURE.md §N` in a code comment is found by its number here.
 
-## 11. 传输与数据面（`MobileGL/MG_Remote/`）
+## 11. Transport and data plane (`MobileGL/MG_Remote/`)
 
-### 11.1 段
+### 11.1 Segments
 
-| 段 | 拥有者 | 默认 | 内容 |
+| Segment | Owner | Default | Contents |
 |---|---|---|---|
-| `SEG_CMD` | client（server 只读） | 8 MiB | `RingControl` 页 + POD 记录 + 小内联负载 |
-| `SEG_STAGE` | client | 32 MiB | bulk 字节：buffer / 纹理 subdata、UBO、client 数组、persistent-map 脏块 |
-| `SEG_REPLY` | server | 16 MiB，8 × 2 MiB slot | readback 像素、acceptance 答案（ID-47） |
-| `SEG_EVENT` | server | 256 KiB SPSC ring | 回调事件 |
-| `SEG_SHADOW` / `SEG_ADOPT` | client / server | — | 零拷贝 shadow（Phase 2）/ ≥16 MiB 采纳（P11）；stream 数据面上具名拒绝（`MG_Remote/Transport/AdoptTier.cpp`，握手期，P11 A1） |
+| `SEG_CMD` | client (server read-only) | 8 MiB | `RingControl` page + POD records + small inline payloads |
+| `SEG_STAGE` | client | 32 MiB | bulk bytes: buffer / texture subdata, UBOs, client arrays, persistent-map dirty blocks |
+| `SEG_REPLY` | server | 16 MiB, 8 × 2 MiB slots | readback pixels, acceptance answers (ID-47) |
+| `SEG_EVENT` | server | 256 KiB SPSC ring | callback events |
+| `SEG_SHADOW` / `SEG_ADOPT` | client / server | — | zero-copy shadow (Phase 2) / ≥16 MiB adoption (P11); refused by name on the stream data plane (`MG_Remote/Transport/AdoptTier.cpp`, during the handshake, P11 A1) |
 
-段在同机上由 `ShmSegment` 创建（Android `ASharedMemory`、Linux `memfd`、Windows `CreateFileMappingW`），描述符经 `SCM_RIGHTS` 传递；stream 数据面上两端各持一份同尺寸的私有段（§11.9）。
+On the same machine the segments are created by `ShmSegment` (Android `ASharedMemory`, Linux `memfd`, Windows `CreateFileMappingW`), and descriptors are passed with `SCM_RIGHTS`; on the stream data plane each end holds a private segment of the same size (§11.9).
 
-### 11.2 `RingControl`（`Ring.h`）
+### 11.2 `RingControl` (`Ring.h`)
 
-一页 4 KiB，每个争用组一条 cache line，按写者分组（P6 lk）：producer 线 `cmdHead` / `submittedSeq`；consumer 线两个 tail；四个 consumer 写的水位收成 `Progress`（`appliedSeq` / `retiredSeq` / `completedFrameSerial` / `presentAckSerial`）；最后是 epoch、generation、park 标志与 `eventRingFull` / `eventDropped`。游标是单调字节计数、2 的幂掩码、永不重置；pad 记录处理 wrap；不可能的头 → `Fatal{ProtocolCorruption}`。
+One 4 KiB page, one cache line per contention group, grouped by writer (P6 lk): the producer line holds `cmdHead` / `submittedSeq`; the consumer line holds two tails; the four watermarks written by the consumer are collected into `Progress` (`appliedSeq` / `retiredSeq` / `completedFrameSerial` / `presentAckSerial`); finally the epoch, generation, park flags and `eventRingFull` / `eventDropped`. Cursors are monotonic byte counts with a power-of-two mask and are never reset; pad records handle the wrap; an impossible head → `Fatal{ProtocolCorruption}`.
 
-#### 11.2.1 五个水位
+#### 11.2.1 The five watermarks
 
-| 水位 | 由谁推进 | 含义 |
+| Watermark | Advanced by | Meaning |
 |---|---|---|
-| `submittedSeq` | producer，发布之后 | 诊断量（client 领先 server 多少），没有人等它；放在 producer 的 cache line 上，`LinkProgress` 因此单写者 |
-| `appliedSeq` | consumer，每 apply 一条记录 +1 | verb barrier 与每个 reply 等待读它，所以不得批量：批量会让等待方卡在已完成的工作上，或在未完成的工作上醒来 |
-| `retiredSeq` | consumer，记录引用的 `SEG_STAGE` 字节用完后 | staging 分配器只在它之后回收；不超过 `appliedSeq` |
-| `completedFrameSerial` | server，present 完成时 | 回收与老化等它；比 `appliedSeq` 落后一个 GPU 深度，不得混用 |
-| `presentAckSerial` | server，归还 present credit 时 | present 节流等它；唯一限制延迟而非字节的背压 |
+| `submittedSeq` | producer, after publishing | a diagnostic (how far the client is ahead of the server), nobody waits on it; it sits on the producer's cache line, so `LinkProgress` stays single-writer |
+| `appliedSeq` | consumer, +1 per applied record | verb barriers and every reply wait read it, so it must not batch: batching leaves a waiter stuck on work that has already completed, or wakes it on work that has not |
+| `retiredSeq` | consumer, once the `SEG_STAGE` bytes a record references are done with | the staging allocator reclaims only after it; never beyond `appliedSeq` |
+| `completedFrameSerial` | server, when present completes | reclamation and aging wait on it; it trails `appliedSeq` by one GPU depth and must not be mixed with it |
+| `presentAckSerial` | server, when the present credit is returned | present throttling waits on it; the only backpressure that limits latency rather than bytes |
 
-规则（`SessionRings.h` 的 `Watermark` 是唯一实现）：所有等待用 `>=`，两侧都可能一次前进多步，`==` 会错过唤醒。水位只许晚发布、不许早发布：晚只是多等，早会让等待方静默使用尚未发生的工作，环上没有校验能发现；除 `appliedSeq` 外都可惰性发布，回退是 `Fatal{ProtocolCorruption}`。wrap 填充（`kRecPad`）不推进 seq：seq 就是 reply slot 的 id，只有一侧计数填充时两侧序号每次 wrap 偏一、静默读到别的调用的答案，所以两侧都在计数前跳过它（`RingConsumer::Pop`）。
+The rule (`Watermark` in `SessionRings.h` is the only implementation): every wait uses `>=`, since either side may advance several steps at once and `==` would miss the wakeup. A watermark may only be published late, never early: late just means waiting longer, while early makes a waiter silently use work that has not happened, and no check on the ring can detect it; all but `appliedSeq` may be published lazily, and going backward is `Fatal{ProtocolCorruption}`. The wrap padding (`kRecPad`) does not advance seq: seq is the reply slot id, and if only one side counted the padding the two sides' sequence numbers would be off by one on every wrap and silently read another call's answer, so both sides skip it before counting (`RingConsumer::Pop`).
 
-### 11.3 双向 doorbell（`Doorbell.h`）
+### 11.3 Bidirectional doorbell (`Doorbell.h`)
 
-两个方向都是"先自旋、再置 parked、再阻塞"，发布方仅当对端 parked 时敲；丢失唤醒由两个 `seq_cst` fence 关闭。`CondVarDoorbell`（同进程，带 `Kill()`）与 `SocketDoorbell`（跨进程，对端关闭即死亡检测）。stream 数据面上门铃是本地条件变量，由读线程敲。
+Both directions do "spin first, then set parked, then block", and the publisher rings only when the peer is parked; lost wakeups are closed off by two `seq_cst` fences. `CondVarDoorbell` (same process, with `Kill()`) and `SocketDoorbell` (across processes, where the peer closing is the death detection). On the stream data plane the doorbell is a local condition variable, rung by the read thread.
 
-#### 11.3.1 丢失唤醒为什么靠两道 fence
+#### 11.3.1 Why lost wakeups rest on two fences
 
-等待方：置 park 标志 → `std::atomic_thread_fence(seq_cst)` → 重测条件（`Doorbell::Wait`）；通知方：发布水位 → 同样的 fence → 读 park 标志（`NotifyIfParked`）。两道 fence 都在 seq_cst 全序里、必有先后，按 [atomics.order] 至少一侧看得见另一侧的写，所以标志自身的读写可以是 relaxed。
+Waiter: set the park flag → `std::atomic_thread_fence(seq_cst)` → re-test the condition (`Doorbell::Wait`); notifier: publish the watermark → the same fence → read the park flag (`NotifyIfParked`). Both fences are in the seq_cst total order and must have an order, so by [atomics.order] at least one side sees the other side's writes, and the flag's own reads and writes can be relaxed.
 
-只把标志的 store / load 改成 seq_cst 不够：Dekker 论证要求四个访问都在全序里，而水位发布是 release store（`RingProducer::Publish`）、条件重测是 acquire load。x86 上 release store 是普通 MOV，还停在 store buffer 里时，对标志的普通 MOV 读就可能读到 0，通知方于是不敲门铃，等待方在旧水位上永久 park；ARMv8 上 STLR→LDAR 是 RCsc，只是碰巧没事。所以两道 fence 都不可删，且 `NotifyIfParked` 必须在水位发布之后调用：fence 只约束它之前的访问。
+Making only the flag's store / load seq_cst is not enough: the Dekker argument requires all four accesses to be in the total order, while the watermark publication is a release store (`RingProducer::Publish`) and the condition re-test is an acquire load. On x86 a release store is a plain MOV, and while it is still in the store buffer a plain MOV read of the flag may read 0, so the notifier does not ring the doorbell and the waiter parks forever on the old watermark; on ARMv8 STLR→LDAR is RCsc and merely happens to be fine. So neither fence can be removed, and `NotifyIfParked` must be called after the watermark publication: a fence only orders the accesses before it.
 
-### 11.4 控制面（`protocol.fbs`、`Framing.h`、`ITransport.h`）
+### 11.4 Control plane (`protocol.fbs`, `Framing.h`, `ITransport.h`)
 
-- 一份 FlatBuffers schema：热路径是 `struct` 直接进 ring（与 POD 逐条 `static_assert` 对齐）；罕见 / 变长 / 需演进的走控制连接的 `CtrlMsg`（`Hello`、`Welcome`、`Refuse`、`CapsSnapshot`、`SurfaceOp/SurfaceReply`、`SessionFault`、`LogLine` …），union tag 只追加，控制修订号钉在 `sha256(protocol.fbs)` 上。
-- 生成物提交进树，CI `flatc-check` 重生成并 diff；codegen 不进默认构建图。
-- 封帧 `[u32 'MGLF'][u32 len][payload]`，64 MiB 上限，读时校验，坏帧立即闩住失败。
+- One FlatBuffers schema: the hot path uses `struct`s that go straight into the ring (aligned one by one with the POD records by `static_assert`); the rare / variable-length / evolving cases go through `CtrlMsg` on the control connection (`Hello`, `Welcome`, `Refuse`, `CapsSnapshot`, `SurfaceOp/SurfaceReply`, `SessionFault`, `LogLine` …), union tags are append-only, and the control revision is pinned to `sha256(protocol.fbs)`.
+- The generated output is committed to the tree, and the CI `flatc-check` regenerates it and diffs; codegen is not in the default build graph.
+- Framing is `[u32 'MGLF'][u32 len][payload]`, with a 64 MiB cap, validated on read, and a bad frame latches the failure immediately.
 
-### 11.5 WAR 危害、拷贝账与背压
+### 11.5 WAR hazards, the copy accounting and backpressure
 
-Phase 1（今天）：GL 调用时刻把字节拷进 stage slot，slot 到 apply 越过它为止不可变，危害按构造消除，代价一次 memcpy；Phase 2（`SEG_SHADOW` 零拷贝）未做。server 没有第二份 `BufferObject`，不存在中间拷贝。分配失败升级：扩容 → 对最老未退休批次有界等待 → 硬 drain + generation bump（之后 tracker 全部重推）。
+Phase 1 (today): the bytes are copied into a stage slot at the moment of the GL call, the slot is immutable until apply passes it, hazards are eliminated by construction, and the cost is one memcpy; Phase 2 (`SEG_SHADOW` zero copy) is not done. The server has no second `BufferObject`, so there is no intermediate copy. Allocation failure escalates: grow → bounded wait on the oldest unretired batch → hard drain + generation bump (after which the tracker re-pushes everything).
 
-### 11.6 publish、序号与 credit
+### 11.6 Publish, sequence numbers and credit
 
-- 每条记录 release-store `cmdHead`，仅当 consumer parked 时敲门铃；显式门铃点：`present`、`kNeedsAck`、`eglMakeCurrent`、`glFlush`、stage 余量不足、轮询类入口。
-- seq = 记录序数；字节 credit 与 present credit 两个独立窗口。
-- **等待规则由 `WaitClass` 列决定（P5e）**：`kWaitReply` / `kWaitPresent` / `kWaitApplied` / `kWaitNone`；run-ahead 武装时 `kWaitNone` 发布即返回。barriered 谓词（`MGPipeBarriered`）client 与 server 用同一个函数、同一份数据算。
-- 强制等待点：`MapBuffer(READ)` / `GetBufferSubData` 源走 `SyncGpuWrites`；`glFinish` = 等 `appliedSeq` 追上再排空反向通道；每个 `Server*` EGL forwarder 之前等一次。`glGetError` 最多晚一个 present credit。
+- Every record release-stores `cmdHead`, and the doorbell is rung only when the consumer is parked; explicit doorbell points: `present`, `kNeedsAck`, `eglMakeCurrent`, `glFlush`, insufficient stage headroom, and polling-style entry points.
+- seq = the record ordinal; byte credit and present credit are two independent windows.
+- **The wait rule is decided by the `WaitClass` column (P5e)**: `kWaitReply` / `kWaitPresent` / `kWaitApplied` / `kWaitNone`; with run-ahead armed, `kWaitNone` returns as soon as it publishes. The barriered predicate (`MGPipeBarriered`) is computed with the same function and the same data on the client and on the server.
+- Forced wait points: `MapBuffer(READ)` / the `GetBufferSubData` source goes through `SyncGpuWrites`; `glFinish` = wait until `appliedSeq` catches up, then drain the reverse channel; wait once before every `Server*` EGL forwarder. `glGetError` may lag by at most one present credit.
 
-#### 11.6.1 barriered 谓词的条款
+#### 11.6.1 The terms of the barriered predicate
 
-`MGPipeBarriered(op, payload, applierState)`（`MG_Pipe/PipeApply.h`）由 server 的 `ApplyOne` 计算，决定这条记录能否读 client 内存；client 不调用它，而是在发布前对同样的条款求值（`ClientSession` 的等待规则读 `WaitClass` 列，`PipeFill.cpp` 的 `ClientVerbIsBarriered` 另判 XFB）。两侧答案一旦不同，失败是静默的（client 继续跑，server 读到已经变了的值），所以条款只读线上可见的数据：静态 `WaitClass` 列、记录自身的 payload、ring 上更早的记录写进 applier 的状态。条款只有三条：
+`MGPipeBarriered(op, payload, applierState)` (`MG_Pipe/PipeApply.h`) is computed by the server's `ApplyOne` and decides whether this record may read client memory; the client does not call it, but evaluates the same terms before publishing (the wait rule in `ClientSession` reads the `WaitClass` column, and `ClientVerbIsBarriered` in `PipeFill.cpp` separately decides XFB). If the two sides' answers ever differ, the failure is silent (the client keeps running and the server reads a value that has already changed), so the terms read only data visible on the wire: the static `WaitClass` column, the record's own payload, and the state that earlier records on the ring wrote into the applier. There are only three terms:
 
-1. `WaitClass != kWaitNone`；
-2. 打开的 XFB span 内的 `kCtxVerb`（XFB 保持 lockstep）；
-3. 带 `kDrawClientArrays` 的 `draw_vbo`：run-ahead 下 client 在发布前就拒绝它，此条只为 lockstep 臂而在，使谓词完备。
+1. `WaitClass != kWaitNone`;
+2. a `kCtxVerb` inside an open XFB span (XFB stays lockstep);
+3. a `draw_vbo` with `kDrawClientArrays`: under run-ahead the client refuses it before publishing, so this term exists only for the lockstep arm, to make the predicate complete.
 
-新条款必须在同一次改动里同时加进这个函数与 client 侧的对应判断，不能只在一侧加。评判候选条款要问**哪条臂为它付代价**，而不是它让哪条车道变绿：曾为让 Espryt 间接 multi-draw 档读 `GL_DRAW_INDIRECT_BUFFER` 绑定合法化，把所有普通 multi-draw 升级为 barriered，于是默认档的每次 `glMultiDraw*` 都多一次会合，而这次读只发生在两个可选档里；最终改由做绑定的一侧按句柄回答（`MultiDraw.cpp` 的 `BoundDrawIndirectBufferId`），撤回了该条款。
+A new term must be added to this function and to the corresponding client-side decision in the same change, never on one side only. Judging a candidate term means asking **which arm pays for it**, not which lane it turns green: once, to make the Espryt indirect multi-draw tier's read of `GL_DRAW_INDIRECT_BUFFER` bindings legitimate, every ordinary multi-draw was upgraded to barriered, so every `glMultiDraw*` in the default tier gained one more rendezvous, while that read happens only in two optional tiers; in the end the side that does the binding answers by handle instead (`BoundDrawIndirectBufferId` in `MultiDraw.cpp`), and the term was withdrawn.
 
-### 11.7 事件回传与溢出
+### 11.7 Event return and overflow
 
-client 在 `glGetError`、query / sync 查询、`eglSwapBuffers`、buffer 回读与每轮等待循环中排空 `SEG_EVENT`。日志有损；语义事件无损：环满时 server 置 `eventRingFull`、在记录边界停 apply、敲 client，client 排空后清标志并敲回（两半都在，才不死锁）。run-ahead 下 producer 阻塞等排空，整笔预算 `MOBILEGL_IPC_EVENT_WAIT_MS`；client 不排空 / 已走 / 会话停止 → `ReverseChannelForfeit{…}` 弃投并闩住（Ph PH-6），而不是 `Fatal` 打掉 server。不发布 `kCapRunAheadApply` 的 server（lockstep 臂）保留 P5c 的 Fatal。
+The client drains `SEG_EVENT` in `glGetError`, query / sync queries, `eglSwapBuffers`, buffer readback, and each wait-loop round. Logs are lossy; semantic events are lossless: when the ring is full the server sets `eventRingFull`, stops applying at a record boundary, and rings the client; after draining, the client clears the flag and rings back (both halves are present, so there is no deadlock). Under run-ahead the producer blocks waiting for the drain, with a whole budget of `MOBILEGL_IPC_EVENT_WAIT_MS`; if the client does not drain / has gone away / the session stops → `ReverseChannelForfeit{…}` forfeits delivery and latches (Ph PH-6), instead of a `Fatal` taking down the server. A server that does not publish `kCapRunAheadApply` (the lockstep arm) keeps the P5c Fatal.
 
-### 11.8 fence 与无 present 负载（P10）
+### 11.8 Fences and present-free workloads (P10)
 
-fence 完成度必须来自真的逐 fence 退休，不是 present 水位（DirectGLES 的 `g_completedFrameSerial` 今天只在 `Present` 前进）；无 present 循环需要 server 插非 present fence tick。Magma 那半已随 run-ahead 落地。
+Fence completion must come from real per-fence retirement, not from the present watermark (`g_completedFrameSerial` in DirectGLES today only advances in `Present`); a present-free loop needs the server to insert a non-present fence tick. The Magma half has landed with run-ahead.
 
-### 11.9 传输栈的两根轴（P6.5）
+### 11.9 The two axes of the transport stack (P6.5)
 
-终局（2026-09-22）：client 与 server 可在不同机器、不同 OS / 架构上经 TCP 连接，同机 `spawn` 保留。传输栈拆成**两根独立可选、握手协商、可混搭**的轴，上层只见两个接口：
+The end goal (2026-09-22): the client and the server may connect over TCP from different machines and different OSes / architectures, and same-machine `spawn` is kept. The transport stack is split into **two independently selectable, handshake-negotiated, mixable** axes, and the layers above see only two interfaces:
 
-| 轴 | 接口 | 实现 | 选项（`MOBILEGL_IPC_CONTROL` / `MOBILEGL_IPC_DATA`） |
+| Axis | Interface | Implementations | Options (`MOBILEGL_IPC_CONTROL` / `MOBILEGL_IPC_DATA`) |
 |---|---|---|---|
-| 控制面 | `ITransport`（只承载控制帧，不承载描述符） | `SocketTransport` | `fork`（继承 fd）、`unix:<path>`、`tcp://host:port` |
-| 数据面 | `ILink`（记录预留 / 提交、水位、reply、event、span 解析） | `ShmLink`（共享段 + `RingControl` + 门铃）、`StreamLink`（分块封帧，水位与 reply 变消息，发送窗口） | `shm`、`stream`、`auto` |
+| control plane | `ITransport` (carries only control frames, never descriptors) | `SocketTransport` | `fork` (inherited fd), `unix:<path>`, `tcp://host:port` |
+| data plane | `ILink` (record reservation / commit, watermarks, reply, event, span resolution) | `ShmLink` (shared segment + `RingControl` + doorbell), `StreamLink` (chunked framing, watermarks and replies become messages, send window) | `shm`, `stream`, `auto` |
 
-- 配对在会话建立时选定一次；`LinkTerms`（数据面、窗口尺寸、`maxReplyBytes` …）由 **server 陈述**，client 请求可被钳制。
-- 共享段交付与控制面解耦：`ShmLink` 自带 AF_UNIX aux 汇合名，在 `Welcome` 里公布，所以同机"TCP 控制 + 共享段数据"是合法配对。`auto` 的判据是**段实际交付成功**，回落到 `stream` 必须具名进日志。
-- **上层零链路种类分支**：`ShmLink` / `StreamLink` / `RingControl` 等只出现在 `Transport/` 与其测试（纯度 grep 门）；角色谓词回答"谁在哪个进程"，不回答"用什么链路"。
-- 两端是不同二进制：`wireFingerprint`（`PipeFields.def` 派生的逐成员布局摘要 + 目录摘要 + 字节序 / 指针宽度）永远比较；`buildFingerprint` 只在 `Dial == Fork`（或 `MOBILEGL_IPC_REQUIRE_SAME_BUILD=1`）下比较；不一致是 `Refuse`，不是 abort。
-- TCP 上每条 `kWaitReply` 就是一个 RTT、`SEG_STAGE` 字节对的是 30–100 MB/s 的链路：这两列从"记录项"变成可行性数（开放问题 19、20）。
+- The pairing is chosen once at session setup; `LinkTerms` (data plane, window sizes, `maxReplyBytes` …) is **stated by the server**, and the client's request may be clamped.
+- Shared-segment delivery is decoupled from the control plane: `ShmLink` carries its own AF_UNIX aux rendezvous name, announced in `Welcome`, so "TCP control + shared-segment data" on the same machine is a valid pairing. The `auto` criterion is **that the segment actually delivered successfully**, and a fallback to `stream` must be named in the log.
+- **Zero link-kind branches above**: `ShmLink` / `StreamLink` / `RingControl` and the like appear only in `Transport/` and its tests (a purity grep gate); role predicates answer "who is in which process", not "what link is used".
+- The two ends are different binaries: `wireFingerprint` (the per-member layout digest derived from `PipeFields.def` + the catalog digest + byte order / pointer width) is always compared; `buildFingerprint` is compared only under `Dial == Fork` (or `MOBILEGL_IPC_REQUIRE_SAME_BUILD=1`); a mismatch is a `Refuse`, not an abort.
+- Over TCP every `kWaitReply` is one RTT, and the `SEG_STAGE` bytes face a 30–100 MB/s link: these two columns turn from "record items" into feasibility numbers (open questions 19, 20).
 
-第一波（全 TCP 控制 + stream 数据）已落地；同机混搭（nd `auto` / sd）是第二波。细节与契约见 git 历史。
+The first wave (all-TCP control + stream data) has landed; same-machine mixing (nd `auto` / sd) is the second wave. Details and contracts are in the git history.

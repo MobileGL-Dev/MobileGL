@@ -22,7 +22,7 @@
 //
 // The two cases below run in declaration order in ONE process (the
 // ScenarioIsolationScenario.CasesInOneProcess registrations in CMakeLists.txt). The first one is
-// the careless neighbour; the second asserts what ScenarioTest::SetUp owes every case. Each is
+// the careless neighbor; the second asserts what ScenarioTest::SetUp owes every case. Each is
 // green on its own, so the ordinary one-case-per-process entries cannot see the bug.
 
 #include <string>
@@ -65,7 +65,7 @@ void main() {
 
     } // namespace
 
-    // The careless neighbour: its program is deleted while current and never unbound, and it
+    // The careless neighbor: its program is deleted while current and never unbound, and it
     // leaves an error in the queue that nobody reads.
     TEST_F(ScenarioIsolationScenario, ACaseLeavesItsDeletedProgramCurrentAndAnErrorUnread) {
         if (!Ready()) return;

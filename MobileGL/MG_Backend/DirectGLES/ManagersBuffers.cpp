@@ -321,7 +321,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // (Ops_H_ImportExternal below). The twin holds its own reference, and every path that
             // ends the store - a respecify, a destroy, a re-import - deletes the GL id and then
             // RETIRES the reference here: a fence is inserted after the delete, and the reference is
-            // released only once that fence has signalled, i.e. once every command that could still
+            // released only once that fence has signaled, i.e. once every command that could still
             // read or write the pages has completed on this context's GPU. The client's own
             // reference ends independently (it releases on respecify/destroy); the pages live until
             // the last of the two. No link watermark is involved (F-L2): the fence is this server's.
@@ -1046,8 +1046,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // sees the reconciled shadow on return, exactly as before.
                 //
                 // THE ORDER FROM HERE IS A CORRECTNESS RULE, NOT A PREFERENCE
-                // (ARCHITECTURE.md 8.2: "写回的 epoch bump 必须在任何后续读该 handle 的命令之前被
-                // server 应用；反向通道需要与正向通道相同的有序保证"):
+                // (ARCHITECTURE.md 8.2: "the writeback's epoch bump must be applied by the server before any
+                // later command that reads that handle; the reverse channel needs the same ordering guarantees as the
+                // forward channel"):
                 //   1. writeback   - the client's shadow takes the bytes,
                 //   2. unmap       - the read mapping goes away,
                 //   3. serial stamp- syncedChangeSerial catches up with the record, so the next
@@ -1900,7 +1901,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         // The seventh slot table. A process-lifetime global, like the other six, so it links
-        // itself into its own holder list from its own constructor with no initialisation
+        // itself into its own holder list from its own constructor with no initialization
         // order question to answer (SlotTables.h).
         BackendBufferResourceTable g_backendBufferResources;
 
@@ -2112,7 +2113,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P11 B2: the T0 half of the deferred-release drain, run right after it at both sync
         // points (ProcessDeferredBufferReleases itself moves verbatim, G5). Retired imports whose
-        // fence signalled let go of their AHardwareBuffer; a deferred T0 destroy is retired once
+        // fence signaled let go of their AHardwareBuffer; a deferred T0 destroy is retired once
         // the drain deleted its id (the fence then follows the delete) or its context is gone.
         void ProcessDeferredT0Retires() {
             if (!g_t0Retired.empty()) SweepT0Retired(false);
@@ -2309,7 +2310,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const SizeT poolSize = ResourceWidthOf(res);
                 // The pool DECISION is the legacy one, unchanged: extent and residence only.
                 // An earlier cut added "and a shadow base was recorded", which silently stopped
-                // a buffer recycling pool ids - a change to D-F's pool behaviour, not to "the
+                // a buffer recycling pool ids - a change to D-F's pool behavior, not to "the
                 // source of bytes" the conversion is allowed to move, and one that moves
                 // AcquireFromPool call counts StreamedArenaScenario observes.
                 const Uint reused = (poolSize > 0 && !resource->persistentMapped) ? AcquireFromPool(poolSize) : 0;

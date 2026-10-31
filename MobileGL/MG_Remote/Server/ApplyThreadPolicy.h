@@ -142,7 +142,7 @@ namespace MobileGL::MG_Remote::Server {
             const unsigned long long parsed = std::strtoull(affinity, &end, 0);
             if (end == affinity || (end != nullptr && *end != '\0')) {
                 policy.recognised = false;
-                policy.rule = "unrecognised";
+                policy.rule = "unrecognized";
                 return policy;
             }
             policy.requestedMask = static_cast<Uint64>(parsed);

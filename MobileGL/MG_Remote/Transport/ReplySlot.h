@@ -11,7 +11,7 @@
 // server stamps the seq into the 16-byte ReplySlotHeader so a wrong-slot read is detected.
 // DECLINED is a real answer, not a failure: MapPersistent's nullptr, the Bool appliers' `false`.
 // A reply never exceeds one slot and is never chunked; the client bands large reads
-// (ARCHITECTURE.md §13.1.3), so Post's refusal is a last line of defence. The server posts, then
+// (ARCHITECTURE.md §13.1.3), so Post's refusal is a last line of defense. The server posts, then
 // advances appliedSeq (release); the client reads a slot only after an acquire load shows
 // appliedSeq >= seq. The fences in Post and Read cover readers that bypass appliedSeq.
 
@@ -129,7 +129,7 @@ namespace MobileGL::MG_Remote::Transport {
         //     Fatal{ReplyTooLarge, "ReadPixels <w>x<h> <format> <bytes> > <cap>"}
         // and abort. Never truncated, never chunked, and never a server-side
         // abort the client cannot name: Post's own refusal below stays as the
-        // last line of defence, but it fires on the apply thread with the record
+        // last line of defense, but it fires on the apply thread with the record
         // already on the wire, where the only thing the client sees is a hang.
         //
         // `format`/`type` are the GL enums the record carries (MGPReadbackInfo::
@@ -181,7 +181,7 @@ namespace MobileGL::MG_Remote::Transport {
                              "record\" and can never name a slot (R-3: seq is 1-based)");
             }
             if (size > MaxReplyBytes()) {
-                // The server's LAST line of defence, not the first: the client refuses an
+                // The server's LAST line of defense, not the first: the client refuses an
                 // oversize ReadPixels by name before it emits (RequireReadPixelsFits, ID-47),
                 // so reaching this means the two sides disagree about the frame.
                 WireLogFatal("MG_Remote reply pool: Fatal{ProtocolCorruption} - a %llu byte answer "

@@ -175,7 +175,7 @@ namespace {
 
         // A forked child's "I got there" to the test that forked it: the child writes one byte, the
         // test waits for it. Made before the fork; the test drops its copy of the child's end right
-        // after it, so a child that exits without signalling ends the wait too.
+        // after it, so a child that exits without signaling ends the wait too.
         class ReadyPipe {
         public:
             ReadyPipe() {
@@ -470,7 +470,7 @@ namespace {
         }
 
         // A HEALTHY SESSION: one record applied and, with headless EGL, a clear read back -
-        // PeerLatchTest's session B, verbatim in what it sends. P14 S2: the clear's colour is
+        // PeerLatchTest's session B, verbatim in what it sends. P14 S2: the clear's color is
         // HealthySessionWithColor's parameter so a suite that runs several sessions can tell whose
         // read-back it is reading; HealthySession keeps the two-argument shape every existing
         // caller takes its address of.
@@ -478,7 +478,7 @@ namespace {
         // THE PACKING IS THE READ-BACK'S OWN, A<<24|B<<16|G<<8|R - a GL_RGBA/GL_UNSIGNED_BYTE
         // texel little-endian in a Uint32, which is how PeerReport::pixel comes back and how every
         // expectation on it is written (green (0,1,0,1) is 0xFF00FF00). Decoding it in the other
-        // order would clear the complement of the colour the caller asked for.
+        // order would clear the complement of the color the caller asked for.
         inline void HealthySessionWithColor(Remote::Client::ClientSession& client, PeerReport& r, Uint32 rgba) {
             P::MGPMemoryBarrier barrier{};
             barrier.Bits = 0x2000u;

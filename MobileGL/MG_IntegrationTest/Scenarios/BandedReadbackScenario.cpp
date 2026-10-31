@@ -203,7 +203,7 @@ namespace MGITest {
     // THE CTS SHAPE, byte for byte: KHR-GL46.direct_state_access.renderbuffers_storage reads a
     // 256x512 RGBA32F renderbuffer as GL_RGBA/GL_FLOAT - 2,097,152 bytes, sixteen more than a slot.
     // A renderbuffer cannot be uploaded, so it is painted with scissored clears: 16 row stripes x 2
-    // column halves, each its own colour (every value a multiple of 1/32, exact in float and inside
+    // column halves, each its own color (every value a multiple of 1/32, exact in float and inside
     // [0, 1] so no backend's clamping can move it). The last band is the single top row.
     TEST_F(BandedReadbackScenario, RenderbufferReadOfExactlyTwoMiBIsBandedNotRefused) {
         if (!Ready()) return;

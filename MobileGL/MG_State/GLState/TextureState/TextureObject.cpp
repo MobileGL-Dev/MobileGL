@@ -150,7 +150,7 @@ namespace MobileGL {
                 // NOTHING THE DERIVED CLASS IMPLEMENTS IS TOUCHED HERE and that is a
                 // correctness requirement rather than a style: the derived object does not exist
                 // yet, so ITextureObject::GetStorageType and ::GetUploadTargets - PURE, with no
-                // body on this base - would be undefined behaviour. The emitter reads GetTarget()
+                // body on this base - would be undefined behavior. The emitter reads GetTarget()
                 // and GetExternalIndex(), which TextureObjectBase itself overrides and which
                 // therefore dispatch to this class's own bodies over members the mem-init list
                 // has already written; the storage kind is derived from the target, which is
@@ -400,7 +400,7 @@ namespace MobileGL {
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
                 // Immutable is a descriptor fact the backend reads - and NOT a request for an
-                // acknowledgement: MGPipeResourceRespecifyNeedsAck names the buffer target
+                // acknowledgment: MGPipeResourceRespecifyNeedsAck names the buffer target
                 // explicitly, because texture allocation is lazy in monolith and stays lazy in
                 // split. The level clamp above is params.
                 PipePublishDescriptor();

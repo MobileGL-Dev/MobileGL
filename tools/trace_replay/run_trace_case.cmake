@@ -371,7 +371,7 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
             message(FATAL_ERROR
                     "MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT} is set for ${split_case} and this "
                     "runner has no marker for it, so the run could not be checked. ConfigLoader "
-                    "recognises monolith|inproc|spawn|unix:<path>|pipe:<name> and REFUSES the last "
+                    "recognizes monolith|inproc|spawn|unix:<path>|pipe:<name> and REFUSES the last "
                     "two BY NAME, staying on monolith - a run that asked for one of those would "
                     "have replayed monolith. Add a row above when the transport lands; do not let "
                     "an unasserted transport reach a green.")

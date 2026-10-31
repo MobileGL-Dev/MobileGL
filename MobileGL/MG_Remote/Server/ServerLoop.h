@@ -246,7 +246,7 @@ namespace MobileGL::MG_Remote::Server {
         // a release without forwarding it, and returns whether a native bind happened so the
         // caller (ServerMakeEGLCurrent) knows whether to re-publish the caps snapshot (R-12).
         struct MakeCurrentOutcome {
-            Bool ok = false;            // the request was honoured
+            Bool ok = false;            // the request was honored
             Bool boundNatively = false; // a native eglMakeCurrent ran (=> republish caps)
         };
         MakeCurrentOutcome ApplyMakeCurrent(MG_Backend::BackendObject* backend, EGLDisplay dpy, EGLSurface draw,
@@ -429,10 +429,10 @@ namespace MobileGL::MG_Remote::Server {
         UniquePtr<MG_Backend::BackendObject> m_backend;
 
         // The blocking control channel. ONE slot, because the verb barrier already leaves one
-        // client thread runnable at a time; m_callerMutex serialises anything that is not.
+        // client thread runnable at a time; m_callerMutex serializes anything that is not.
         // The slot carries ONE SurfaceControlFrame BY VALUE (P5f, package fc) - no function
         // pointer, no address of caller storage. The poster's frame is copied in at publish and
-        // the dispatch's reply half is copied back over it before m_controlDone is signalled.
+        // the dispatch's reply half is copied back over it before m_controlDone is signaled.
         std::mutex m_callerMutex;
         std::mutex m_controlMutex;
         // THE MAILBOX'S ONE-BIT SHADOW, and the only field of it the idle poll may read.

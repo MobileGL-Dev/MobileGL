@@ -357,7 +357,7 @@ TEST(RemoteEmitTable, EachUnmigratedShapeRefusalNamesItsOwnShape) {
 
 // P5b d1: a class-B draw slot with no session aborts Fatal{NoClientSession, "<slot>"} - the
 // class-B shape - and NOT Fatal{UnmigratedVerb}: that is what distinguishes a flipped slot from
-// the stub it replaced, by behaviour rather than by pointer. Red once by: moving DrawElements
+// the stub it replaced, by behavior rather than by pointer. Red once by: moving DrawElements
 // back into MGR_UNMIGRATED_D1_SLOTS - the log then reads UnmigratedVerb.
 TEST(RemoteEmitTable, AFlippedDrawSlotDemandsASessionRatherThanNamingItselfUnmigrated) {
     const ChildResult r = RunInChild(
@@ -432,7 +432,7 @@ TEST(RemoteEmitTable, AClassBSlotWithNoSessionAbortsRatherThanFallingThrough) {
 }
 
 TEST(RemoteEmitTable, EachI1SlotReachesRequireSessionUnderItsOwnName) {
-    // The behavioural half: an i1 slot is class B, so with no ClientSession it reaches
+    // The behavioral half: an i1 slot is class B, so with no ClientSession it reaches
     // RequireSession and aborts Fatal{NoClientSession, "<slot>"} - NOT Fatal{UnmigratedVerb}
     // (which would mean the flip never happened) and NOT quietly (which is the split lane
     // running monolith and going green, R-4). The name in the message is the slot's own, which
@@ -1441,7 +1441,7 @@ TEST(PipeRouting, TheTablesAreInstalledWithoutAnybodyHavingRememberedTo) {
     // The gate on the install MECHANISM rather than on the table contents (PipeCatalogueTest
     // owns the partition). Nothing in this file calls an installer; the tables are installed
     // because MG_Pipe/PipeRoute.h's inline variable is in this binary, which is the property
-    // that a static initialiser inside PipeRoute.cpp did NOT have - the linker dropped that
+    // that a static initializer inside PipeRoute.cpp did NOT have - the linker dropped that
     // object from every test binary that named no symbol in it, and five CsoCacheTest cases
     // took a null function pointer.
     EXPECT_TRUE(MGPipeTablesAreInstalled());
@@ -1539,7 +1539,7 @@ TEST(PipeRouting, TheInstalledClientArmIsWireAndNotMonolithAndEveryRoutedRowMove
     // WHAT B3 SAYS IS MISSING. PipeCatalogueTest installs and COUNTS the monolith table, so a
     // client row that was never overwritten stays non-null and still counts - deleting one
     // `gMGPipe*.X = &Wire_X` assignment left every gate green (the cross-family verifier
-    // reproduced it: catalogue 32/32, all lanes green). The only thing that catches it is
+    // reproduced it: catalog 32/32, all lanes green). The only thing that catches it is
     // observing that the CLIENT install actually MOVED each routed row off the monolith adapter.
     //
     // The monolith adapters are kept beside the installed tables (MGPipeMonolith*()), so the
@@ -1622,7 +1622,7 @@ TEST(PipeRouting, TheInstalledClientArmIsWireAndNotMonolithAndEveryRoutedRowMove
 #if MGTEST_HAVE_FORK
 TEST(PipeRouting, AClientWireRowWithNoSessionRefusesByNameRatherThanApplying) {
     // THE RUNTIME HALF of B3, and it distinguishes a Wire_* row from the monolith adapter by
-    // BEHAVIOUR: with the client tables installed and no session, a routed call reaches
+    // BEHAVIOR: with the client tables installed and no session, a routed call reaches
     // RequireSession and aborts Fatal{NoClientSession}. The monolith adapter (the deleted-
     // assignment state) would instead run MGPipeApply* and NOT abort with that string - so the
     // control goes red the moment a row falls back to monolith.
@@ -1642,7 +1642,7 @@ TEST(PipeRouting, AClientWireRowWithNoSessionRefusesByNameRatherThanApplying) {
 TEST(PipeRouting, ARoutedCallDuringTeardownRefusesByNameNotRunsTheApplier) {
     // codex 4: UninstallClientWireTables marks the tables uninstalled; a routed call in that
     // window must abort by name rather than run the applier on the caller. Reverting Uninstall
-    // to reinstall the monolith adapters (round 2's behaviour) makes this call run the applier
+    // to reinstall the monolith adapters (round 2's behavior) makes this call run the applier
     // and NOT abort with this string - the red-once.
     const ChildResult child = RunInChild([] {
         InstallClientWireTables();
@@ -3113,7 +3113,7 @@ TEST(RemoteRunAhead, AnEventBurstBehindAnUnwaitedSequenceFlowControlsInsteadOfAb
 // (what a headless compositor sizes its output from) and reallocate the default framebuffer's
 // attachments at it; a format-only event must change no size. Red with the drain's
 // ApplyServerOwnedSurfaceExtent call deleted (exit 93: the query keeps 1920x1080) and with
-// ApplySurfaceChangedToClient's extent arm deleted (exit 94: the colour stays at the placeholder's).
+// ApplySurfaceChangedToClient's extent arm deleted (exit 94: the color stays at the placeholder's).
 TEST(RemoteRunAhead, ARepublishedServerWindowExtentResizesTheServerOwnedSurfaceAndTheDefaultFramebuffer) {
     const auto child = RunInChild([] {
         StartRunAheadSession();

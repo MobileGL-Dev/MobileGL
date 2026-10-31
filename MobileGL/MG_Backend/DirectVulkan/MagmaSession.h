@@ -14,7 +14,7 @@
 //
 // SessionLocal<T> is that copy. It resolves through the CALLING THREAD's bound MagmaSession, and to
 // the process-wide default session on every thread nothing bound - which is the monolith, the client
-// role and every unit case, i.e. exactly the old behaviour, on whatever thread the app renders from.
+// role and every unit case, i.e. exactly the old behavior, on whatever thread the app renders from.
 // A served session's backend owns its MagmaSession and binds it on its apply thread (the only thread
 // that runs that session's backend), so the two never mix.
 

@@ -32,9 +32,9 @@
 // registrations with the emulation off, so both spellings of the interface are covered and a
 // regression in either shows up.
 //
-// Colour code, so a failure names its own cause:
+// Color code, so a failure names its own cause:
 //   green  - the payload crossed all four stage boundaries, which is the pass.
-//   blue   - the clear colour: nothing was drawn at all (the program did not link, or the
+//   blue   - the clear color: nothing was drawn at all (the program did not link, or the
 //            backend program was rejected and every draw became a no-op).
 //   red    - the pipeline ran but the plain (non-block) varying did not arrive, i.e. the
 //            failure is not about interface blocks.
@@ -271,7 +271,7 @@ void main()
 
             // Same calibration IoBlockNameCollisionScenario uses, and for the same reason:
             // GL_MAX_TESS_GEN_LEVEL is a real backend answer while GL_MAX_GEOMETRY_* are
-            // frontend constants, so a stack with no five-stage pipeline is recognised by
+            // frontend constants, so a stack with no five-stage pipeline is recognized by
             // trying to build one, not by asking.
             static bool BackendHostsTessellationAndGeometry() {
                 GLint maxTessGenLevel = 0;
@@ -328,7 +328,7 @@ void main()
                 return program;
             }
 
-            // Clears to BLUE, so "the draw painted nothing" is a colour of its own rather
+            // Clears to BLUE, so "the draw painted nothing" is a color of its own rather
             // than something that could be mistaken for a zeroed payload.
             Rgba8 DrawAndReadCentre(GLuint program) const {
                 glViewport(0, 0, Gl().Width(), Gl().Height());

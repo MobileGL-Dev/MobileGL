@@ -7,7 +7,7 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # End of Source File Header
 
-"""Summarise dEQP/glcts .qpa logs into a conformance pass rate.
+"""Summarize dEQP/glcts .qpa logs into a conformance pass rate.
 
 Handles the two ways a case can end in a .qpa: a normal
 ``#beginTestCaseResult``/``#endTestCaseResult`` pair carrying a

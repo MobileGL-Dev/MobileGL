@@ -249,7 +249,7 @@ namespace MobileGL::MG_Remote {
         if (targets != MG_Backend::kFormatCapabilityTargetCount ||
             formats != MG_Backend::kFormatCapabilityFormatCount) {
             // Not a corrupt stream: a peer whose TextureTarget or TextureInternalFormat enum
-            // is a different size. Reading it anyway shears every cell onto a neighbouring
+            // is a different size. Reading it anyway shears every cell onto a neighboring
             // format, which is exactly the failure the ABI fingerprint exists to make loud.
             MGLOG_E("MG_Remote caps: format-capability blob is %ux%u, this build is %llux%llu", targets, formats,
                     static_cast<unsigned long long>(MG_Backend::kFormatCapabilityTargetCount),

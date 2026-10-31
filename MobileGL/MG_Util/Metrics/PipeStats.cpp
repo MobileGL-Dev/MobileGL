@@ -602,7 +602,7 @@ namespace MobileGL::MG_Util::PipeStats {
         // number, and "0.00" next to a non-zero acc= is the same lie in a smaller font.
         line += " acc/draw=" + FormatFixed2(accessorCalls, draws);
         // "bytes/f[...]" only when there IS a frame to divide by; otherwise the bracket is
-        // labelled "bytes[...]" and carries the window totals verbatim.
+        // labeled "bytes[...]" and carries the window totals verbatim.
         line += perFrame ? " bytes/f[" : " bytes[";
         for (Uint32 i = 0; i < kByteClassCount; ++i) {
             if (i != 0) {

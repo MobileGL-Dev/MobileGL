@@ -13,7 +13,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // GL shader compiler. It is WireDepthMipmap.cpp's pass with the box filter taken out and a
     // sample index put in.
     //
-    // WHY THIS FILE EXISTS. vkCmdResolveImage is COLOUR ONLY. The one way Vulkan resolves a depth
+    // WHY THIS FILE EXISTS. vkCmdResolveImage is COLOR ONLY. The one way Vulkan resolves a depth
     // or stencil aspect without a shader is a render pass with a depth/stencil resolve attachment,
     // which needs VK_KHR_create_renderpass2 and VK_KHR_depth_stencil_resolve - and until this
     // package a device without either killed the session at
@@ -138,7 +138,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
         VK_VERIFY(vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &framebuffer));
 
-        // Each in-flight pass owns its descriptor set, for the colour blit's reason: updating a
+        // Each in-flight pass owns its descriptor set, for the color blit's reason: updating a
         // cached set would rewrite the source view of an older queued pass.
         VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
         VkDescriptorSet descriptorSet = VK_NULL_HANDLE;

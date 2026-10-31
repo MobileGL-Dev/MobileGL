@@ -47,8 +47,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {
-        // Whether images on this format-capability target can back a colour attachment, and so
-        // need a colour-renderable storage format even when the frontend asked for a
+        // Whether images on this format-capability target can back a color attachment, and so
+        // need a color-renderable storage format even when the frontend asked for a
         // three-channel one ES never renders to. Shared by the capability probe (which passes the
         // capabilities it has just queried, before the globals are published) and by the
         // allocation path (which reads the active backend's), so the format the cache was probed
@@ -74,7 +74,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool ShouldUseCaveatTextureFormat(TextureInternalFormat internalFormat, TextureTarget target);
 
         // True when the format the image is actually created with has an alpha channel the
-        // frontend format does not (the three-channel colour-renderable widening). GL reads such
+        // frontend format does not (the three-channel color-renderable widening). GL reads such
         // a channel back as 1.0, so any swizzle source of ALPHA has to be answered with ONE and
         // any readback of the image has to overwrite the alpha the draw happened to leave there.
         Bool BackendTextureFormatAddsAlpha(TextureInternalFormat internalFormat, TextureTarget target);
@@ -105,7 +105,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // The widened triple REPLACES what GenerateTextureFormatInfo chose, including any
         // renderability substitution: an image that cannot be image-bound is useless whatever its
-        // attachment behaviour, so the image constraint wins. In practice that only bites
+        // attachment behavior, so the image constraint wins. In practice that only bites
         // RG8_SNORM/R8_SNORM on a driver without EXT_render_snorm, where the storage stays
         // signed-normalized instead of becoming the half float that fallback would have picked -
         // so an image-bound texture in one of those two formats is no longer attachable, and
@@ -115,11 +115,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // compiled at all, so nothing that works today is being given up.
         //
         // KNOWN GAP, for the same "all three layers move together" reason: a widened texture that
-        // is ALSO an FBO colour attachment gains one to three writable channels, and a draw into
+        // is ALSO an FBO color attachment gains one to three writable channels, and a draw into
         // it can leave values in channels GL says are 0 and 1. Sampling and imageLoad are covered
         // (the swizzle composition in SyncTextureParamsToBackend and the shader-side mask), but a
         // glReadPixels/glGetTexImage that asks for more channels than the frontend format has
-        // would see them. Closing it needs the per-draw-buffer colour mask the three-channel
+        // would see them. Closing it needs the per-draw-buffer color mask the three-channel
         // widening already carries (FramebufferImpl::g_alphaWidenedDrawBufferMask) generalized
         // from "alpha" to a channel count, which is its own change.
         // How the FRONTEND's CPU shadow for a widened format is laid out relative to the carrier's
@@ -319,7 +319,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Exists so BuildPassthroughTessControlEssl can MIRROR the stages it has to sit between
         // rather than guess at them. Whether SPIRV-Cross redeclares the built-in block, and with
         // which members, depends on what the application's shader touched; a synthesized stage
-        // that redeclares a different shape than its neighbours is an ES link error against a
+        // that redeclares a different shape than its neighbors is an ES link error against a
         // program that has no other problem.
         std::optional<String> ExtractPerVertexBlockMembers(const String& essl, Bool input);
         // Moves the clip/cull distance OUTPUTS of a vertex, tessellation evaluation or geometry
@@ -365,15 +365,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // bound in its place, and every draw silently renders nothing.
         //
         // `inPerVertexMembers` / `outPerVertexMembers` are the member lists to redeclare gl_in
-        // and gl_out with - normally taken from the neighbouring stages' own emitted ESSL via
+        // and gl_out with - normally taken from the neighboring stages' own emitted ESSL via
         // ExtractPerVertexBlockMembers, and empty to leave the driver's built-in declaration
-        // alone, which is what matching a neighbour that did not redeclare requires.
+        // alone, which is what matching a neighbor that did not redeclare requires.
         //
         // All four outer levels and both inner levels are written unconditionally: writing a
         // level the evaluation stage's domain does not use is legal and ignored, and it saves
         // this from having to know the domain. They are the GL_PATCH_DEFAULT_OUTER_LEVEL /
         // GL_PATCH_DEFAULT_INNER_LEVEL state, baked in as literals - ES has no such state and no
-        // glPatchParameterfv to forward to, so compiling them in is the only way to honour them.
+        // glPatchParameterfv to forward to, so compiling them in is the only way to honor them.
         // That makes them part of what a built program is stale against, exactly as PATCH_VERTICES
         // is: see the staleness clause in DirectGLES.cpp's SyncCurrentProgram, which compares both.
         //
@@ -524,7 +524,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // suffix is the sampler's own name.
         constexpr const char* MS_SAMPLE_MAX_UNIFORM_PREFIX = "mg_msSampleMax_";
         // The runtime half of ClampMultisampleFetchPass's deferDirectUnsignedFetches. A
-        // usampler2DMS[Array] reads integer colour textures, which the backend may allocate with
+        // usampler2DMS[Array] reads integer color textures, which the backend may allocate with
         // fewer samples than MobileGL advertises, AND the stencil aspect of multisample
         // depth/stencil textures, which it allocates under the (larger) depth ceiling - so no
         // single compile-time bound is right for both. Declares one

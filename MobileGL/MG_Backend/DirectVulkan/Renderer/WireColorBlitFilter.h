@@ -10,28 +10,28 @@
 #include <Includes.h>
 #include "../VkIncludes.h"
 
-// P7 g3-blit (g3det, gate 3): WHICH SAMPLER THE WIRE ARM'S SHADER COLOUR BLIT READS ITS SOURCE
+// P7 g3-blit (g3det, gate 3): WHICH SAMPLER THE WIRE ARM'S SHADER COLOR BLIT READS ITS SOURCE
 // THROUGH.
 //
 // GL applies a blit's `filter` only where the image is STRETCHED (GL 4.6 core 18.3.1). A blit whose
 // source and destination rectangles are the same size is a copy, whatever `filter` says, and so is
 // a mirrored one. The wire arm's shader blit (WireColorBlit.cpp, BlitWireColorImage) draws a quad
 // and samples `textureLod(sourceImage, texCoord, 0)` at interpolated coordinates, and it used the
-// LINEAR sampler for every GL_LINEAR blit. At 1:1 every fragment centre maps to a texel centre, so
+// LINEAR sampler for every GL_LINEAR blit. At 1:1 every fragment center maps to a texel center, so
 // in exact arithmetic linear filtering reads the same single texel. Adreno 830 quantises the
-// coordinate to sub-texel precision: a fragment that lands a fraction off the centre blends in a
-// small weight of a neighbour. minecraft-1.21.1-neoforge-create-instancing-in-world ends with a
+// coordinate to sub-texel precision: a fragment that lands a fraction off the center blends in a
+// small weight of a neighbor. minecraft-1.21.1-neoforge-create-instancing-in-world ends with a
 // 1:1 GL_LINEAR glBlitFramebuffer into FB 0, and on the wire arm 712 high-contrast pixels moved by
-// 1 LSB toward a neighbour. The monolith's vkCmdBlitImage copied them exactly
-// (~/w7/logs/g3det/VERDICT.md section 3). NEAREST within half a texel of the centre is exact, so an
-// unscaled blit takes NEAREST. Lavapipe samples texel centres exactly, so no host picture can see
+// 1 LSB toward a neighbor. The monolith's vkCmdBlitImage copied them exactly
+// (~/w7/logs/g3det/VERDICT.md section 3). NEAREST within half a texel of the center is exact, so an
+// unscaled blit takes NEAREST. Lavapipe samples texel centers exactly, so no host picture can see
 // the difference; this pure half is what the unit test pins
 // (MG_Test/Pipeline/PipelineQuirkTest.cpp, WireColorBlitSamples*).
 //
 // THE SURFACE TRANSFORM DOES NOT TURN A COPY INTO A STRETCH. BlitWireColorImage applies the
 // quarter and half turns in NDC, over a viewport of the native image, and for a quarter turn it
 // takes the logical extent as the native extent swapped. A native pixel then has exactly the pitch
-// of a logical one, and the rotation maps pixel centres onto pixel centres. So the scale test is on
+// of a logical one, and the rotation maps pixel centers onto pixel centers. So the scale test is on
 // GL's own (logical) rectangles for identity and all three rotations. BlitWireColorImage declines
 // any other transform before it chooses a sampler; for one, this answers with the filter's own
 // mapping, as before this package.

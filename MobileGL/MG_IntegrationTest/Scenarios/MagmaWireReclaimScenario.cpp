@@ -138,7 +138,7 @@ void main() { fragColor = color[0]; })";
                 out[i] = quad[i];
         }
 
-        // A colour per strip that no neighbour shares and the clear (all zero) is not.
+        // A color per strip that no neighbor shares and the clear (all zero) is not.
         Rgba8 StripColor(int strip) {
             Rgba8 c;
             c.r = static_cast<std::uint8_t>(40 + (strip * 37) % 200);
@@ -298,7 +298,7 @@ void main() { fragColor = color[0]; })";
         // Every orphan is named by recorded, unsubmitted work; only the watermark's forced sync
         // point can retire it before the frame ends. Before M2: 48 MiB parked against the lane's
         // 8 MiB budget. The strips are the soundness half: a store destroyed while its draw was
-        // still pending does not leave its own colour behind.
+        // still pending does not leave its own color behind.
         TEST_F(MagmaWireReclaimScenario, RespecifyAndDrawEachStoreInOneFrameStaysWithinTheDeferredBudget) {
             if (!Ready() || IsSkipped()) return;
             const PipeStatsWindow::LogMark mark = SetupFrame();
@@ -412,7 +412,7 @@ void main() { fragColor = color[0]; })";
         // Fatal. The fix folds VkBufferManager's wire-store destroy epoch into both memos.
         //
         // THE SHAPE, all in one frame, every step deterministic (no sleep, no fence poll race):
-        //   1. D1 draws with UBO store S1 (256 B, colour A): the memo now maps S1's handle to
+        //   1. D1 draws with UBO store S1 (256 B, color A): the memo now maps S1's handle to
         //      D1's descriptor set.
         //   2. glBufferData(U, 0) orphans S1 - parked, tagged for the batch D1 is recorded in -
         //      and mints nothing in its place, so the handle value stays free once S1 dies.
@@ -426,7 +426,7 @@ void main() { fragColor = color[0]; })";
         //   6. glBufferData(V, 0) parks the vertex store, and THAT park's sweep finds S1's
         //      batch complete and destroys S1: its handle value is free, its memory a 256-byte
         //      hole bounded by the pin store minted right after it.
-        //   7. glBufferData(U, 64 KiB, colour B) mints through the freed handle value; 64 KiB
+        //   7. glBufferData(U, 64 KiB, color B) mints through the freed handle value; 64 KiB
         //      cannot land in the hole, so the dead store's bytes stay where D1's set points.
         //   8. D2 draws with U: it resolves (S1's handle value, 16 bytes) - a memo hit before
         //      the fix, and D1's set reads A off the dead store.
@@ -446,7 +446,7 @@ void main() { fragColor = color[0]; })";
             const Rgba8 colourA{200, 60, 30, 255};
             const Rgba8 colourB{60, 200, 90, 255};
             const auto blockBytes = [](std::size_t size, const Rgba8& c) {
-                // The block's vec4 at offset 0; every other slot holds a colour no step draws, so a
+                // The block's vec4 at offset 0; every other slot holds a color no step draws, so a
                 // read off any other offset is as visible as a read off the dead store.
                 std::vector<std::uint8_t> bytes(size, 0);
                 float* f = reinterpret_cast<float*>(bytes.data());
@@ -510,7 +510,7 @@ void main() { fragColor = color[0]; })";
             const Rgba8 got = image.At(kWidth / 2, kHeight / 2);
             EXPECT_TRUE(Near(got, colourB))
                 << "read " << got << ", wanted " << colourB << " (the live store's bytes). " << colourA
-                << " is the DEAD store's colour: the draw through the re-minted VkBuffer handle reused a "
+                << " is the DEAD store's color: the draw through the re-minted VkBuffer handle reused a "
                    "descriptor set memoized under the first store's handle and read its freed memory "
                    "(ID-P7-43); anything else is that memory already reused";
 

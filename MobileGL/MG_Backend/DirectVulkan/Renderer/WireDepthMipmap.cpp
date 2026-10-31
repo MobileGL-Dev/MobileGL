@@ -218,7 +218,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             depthStencil.depthCompareOp = VK_COMPARE_OP_ALWAYS;
             depthStencil.minDepthBounds = 0.0f;
             depthStencil.maxDepthBounds = 1.0f;
-            // No colour attachment in this render pass, so no attachment states either.
+            // No color attachment in this render pass, so no attachment states either.
             VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
             const VkDynamicState dynamicStates[]{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
             VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
@@ -269,7 +269,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         framebufferInfo.layers = 1;
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
         VK_VERIFY(vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &framebuffer));
-        // Each in-flight pass owns its descriptor set, for the colour blit's reason: updating
+        // Each in-flight pass owns its descriptor set, for the color blit's reason: updating
         // a cached set would rewrite the source view of an older queued pass.
         VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
         VkDescriptorSet descriptorSet = VK_NULL_HANDLE;

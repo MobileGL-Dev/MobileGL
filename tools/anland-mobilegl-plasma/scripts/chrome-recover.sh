@@ -69,7 +69,7 @@ check_battery
 adb_ shell "su -c 'sh $DEV_TOOLS/status.sh'" || true
 cleanup
 
-# The page: WebGL clears that change colour every frame plus a moving block, so a frame that
+# The page: WebGL clears that change color every frame plus a moving block, so a frame that
 # reaches the screen changes the screenshot.
 ct <<IN
 cat > $PAGE <<'HTML'

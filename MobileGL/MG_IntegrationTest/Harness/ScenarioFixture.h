@@ -75,7 +75,7 @@ namespace MGITest {
 
     class ScenarioTest : public ::testing::Test {
     protected:
-        // THE BEHAVIOURAL HALF OF THE SPLIT LANE'S CLAIM, and it is in the DESTRUCTOR rather than
+        // THE BEHAVIORAL HALF OF THE SPLIT LANE'S CLAIM, and it is in the DESTRUCTOR rather than
         // in TearDown() on purpose: gtest calls only the MOST DERIVED TearDown, and every scenario
         // that overrides it would have to remember to chain here. The fixture destructor always
         // runs, and it runs before the test result is finalized, so ADD_FAILURE() is recorded.

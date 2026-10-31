@@ -96,7 +96,7 @@ namespace MobileGL {
             //
             // Every decline is decided BEFORE anything is rewritten - the pass plans the whole
             // edit, and only then applies it - so there is no state in which it has half-converted
-            // a module and then given up. Anything it does not recognise reaching one of these
+            // a module and then given up. Anything it does not recognize reaching one of these
             // images (a gather, an unexpected image opcode) is a decline, not a guess.
             class Lower1DSampledImagesPass final : public spvtools::opt::Pass {
             public:

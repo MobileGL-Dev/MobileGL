@@ -93,7 +93,7 @@ namespace MobileGL::MG_Pipe {
     // THE TARGET IS THE ONLY LEGAL SOURCE AT THE ONE MOMENT THIS MATTERS: resource_create is
     // emitted from TextureObjectBase's constructor (D-D1), where the derived object does not
     // exist yet and GetStorageType() is a PURE virtual - calling it there is undefined
-    // behaviour, not merely a wrong answer. The mapping is exact and total: TextureObjectBuffer
+    // behavior, not merely a wrong answer. The mapping is exact and total: TextureObjectBuffer
     // is the only class that reports Buffer and TextureTarget::TextureBuffer is the only target
     // it is ever constructed with, which MGPipeTextureStorageKindAgreesWithObject below
     // re-checks at the first respecify, where the object IS complete.
@@ -194,7 +194,7 @@ namespace MobileGL::MG_Pipe {
             desc.Samples = static_cast<Uint16>(std::max<Int>(texture.GetSamples(), 0));
             desc.FixedSampleLocations = texture.HasFixedSampleLocations() ? 1 : 0;
             // A real descriptor fact the backend reads (glTexStorage* / a texture view), and
-            // it must NOT be read as "this respecify wants an acknowledgement":
+            // it must NOT be read as "this respecify wants an acknowledgment":
             // MGPipeResourceRespecifyNeedsAck is narrowed to name the buffer target, because
             // texture allocation is lazy in monolith and stays lazy in split.
             desc.Immutable = texture.IsImmutable() ? 1 : 0;
@@ -665,7 +665,7 @@ namespace MobileGL::MG_Pipe {
         // GetTarget(), GetExternalIndex() and GetLifetimeId() are all overridden ON THE BASE,
         // so they dispatch to the base's own bodies here and read members the mem-init list has
         // already written; GetStorageType() and GetUploadTargets() are NOT, so calling either
-        // would be undefined behaviour and the storage kind is derived from the target instead
+        // would be undefined behavior and the storage kind is derived from the target instead
         // (exact, and re-checked at the first respecify where the object IS complete).
         void EmitResourceCreate(ITextureObject& texture) {
             const MGPipeHandle handle = AcquireTexture(texture.GetLifetimeId(), &texture);

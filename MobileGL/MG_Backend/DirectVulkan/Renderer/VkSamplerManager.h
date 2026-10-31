@@ -32,7 +32,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // customBorderColorWithoutFormat; see VulkanRenderer::m_customBorderColorFeatureEnabled.
             Bool customBorderColorSupported = false;
             // VkPhysicalDeviceCustomBorderColorPropertiesEXT::maxCustomBorderColorSamplers. A hard device
-            // limit on how many LIVE samplers may carry a custom border colour, so the cache counts them
+            // limit on how many LIVE samplers may carry a custom border color, so the cache counts them
             // and falls back to the snapped predefined value once it is reached.
             Uint32 maxCustomBorderColorSamplers = 0;
         };
@@ -70,7 +70,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Resolved ONCE per GetOrCreateSampler call and threaded into both the cache key and the
         // create-info, so the two cannot disagree - the same discipline the resolved anisotropy needs,
         // and here it also makes the maxCustomBorderColorSamplers fallback deterministic: whether a
-        // custom colour was affordable is decided before the key is built, not twice with a budget
+        // custom color was affordable is decided before the key is built, not twice with a budget
         // change in between.
         struct ResolvedBorderColor {
             VkBorderColor color = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
@@ -115,7 +115,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Float m_maxSamplerAnisotropy = 1.0f;
         Bool m_customBorderColorSupported = false;
         Uint32 m_maxCustomBorderColorSamplers = 0;
-        // Live cache entries carrying a custom border colour. Kept in step with the entries themselves
+        // Live cache entries carrying a custom border color. Kept in step with the entries themselves
         // in exactly the three places one can appear or disappear: creation, the OnFrameBoundary sweep,
         // and Shutdown.
         Uint32 m_customBorderColorSamplerCount = 0;

@@ -368,7 +368,7 @@ TEST(JobNodeCancel, CancelBeforeAnyDispatchSettlesTheNodeAndSkipsTheBody) {
     EXPECT_TRUE(job->IsTerminal());
     EXPECT_FALSE(job->IsComplete());
 
-    // Posting an already-cancelled node is a no-op, not a second run.
+    // Posting an already-canceled node is a no-op, not a second run.
     pool.Post(job);
     job->Wait();
     EXPECT_EQ(job->ran.load(), 0u);
@@ -425,7 +425,7 @@ TEST(JobNodeCancel, CancelReleasesContinuationsSoDependentsAreNotStranded) {
     job->Cancel();
 
     EXPECT_EQ(fired.load(), 1u);
-    job->Wait(); // must not hang: a cancelled pending node is terminal
+    job->Wait(); // must not hang: a canceled pending node is terminal
     EXPECT_TRUE(job->IsCancelled());
 }
 

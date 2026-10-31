@@ -111,10 +111,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     //      it on the way). ES rejects a depth/stencil blit between differing formats, so
     //      the scratch has to match the source exactly; see DescribeReadDepthStencilSource.
     //   2. Convert. Draw a full-screen triangle that samples the staged texture into a
-    //      scratch R32UI colour target: depth as floatBitsToUint (bit-exact for every depth
-    //      format, and an integer colour target needs no float-renderable extension),
+    //      scratch R32UI color target: depth as floatBitsToUint (bit-exact for every depth
+    //      format, and an integer color target needs no float-renderable extension),
     //      stencil through GL_DEPTH_STENCIL_TEXTURE_MODE = GL_STENCIL_INDEX.
-    //   3. Read. glReadPixels the colour target with GL_RGBA_INTEGER / GL_UNSIGNED_INT -
+    //   3. Read. glReadPixels the color target with GL_RGBA_INTEGER / GL_UNSIGNED_INT -
     //      the pair ES guarantees for an unsigned-integer attachment - and hand the values
     //      to the existing re-encoders, which already own the client-side (format, type)
     //      layout and the PACK pixel-store parameters.
@@ -407,7 +407,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (s_colorTexture == 0) return false;
             g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, s_colorTexture);
             ClearGLErrors();
-            // R32UI is colour-renderable in ES 3.0 core - no float-renderability extension
+            // R32UI is color-renderable in ES 3.0 core - no float-renderability extension
             // needed - and carries a depth bit pattern or a stencil index without loss.
             g_GLESFuncs.glTexStorage2D(GL_TEXTURE_2D, 1, GL_R32UI, s_colorWidth, s_colorHeight);
             const Bool ok = g_GLESFuncs.glGetError() == GL_NO_ERROR;
@@ -458,7 +458,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
-        // Runs one conversion pass over a staged slot and reads its colour target back.
+        // Runs one conversion pass over a staged slot and reads its color target back.
         // Requires the slot's texture bound on the borrowed unit and s_colorFramebuffer
         // bound as DRAW.
         static Bool ConvertAndRead(const StageSlot& slot, Bool stencilAspect, GLsizei width, GLsizei height,
@@ -625,7 +625,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Neither native spelling exists on this driver (which is the ordinary case: ES has
         // no depth readback in core and GL_NV_read_depth is rare), so sample the attachment
         // instead. The scoped pack state above is irrelevant to that path - it reads its own
-        // scratch colour target - but harmless, and leaving it in place keeps the restore in
+        // scratch color target - but harmless, and leaving it in place keeps the restore in
         // one place.
         if (DepthStencilSamplingReadImpl::Read(x, y, width, height, &outDepth, /*outStencil=*/nullptr)) {
             return true;
@@ -636,7 +636,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return false;
     }
 
-    // GL_DEPTH_COMPONENT readback into the client's layout, honouring the PACK pixel-store
+    // GL_DEPTH_COMPONENT readback into the client's layout, honoring the PACK pixel-store
     // parameters. GL 4.6 core 18.2.8 table 8.6: the normalized depth is written as-is for the
     // floating-point client types and scaled into the full range of whichever integer width the
     // client asked for otherwise - 2^n - 1 for an unsigned width, 2^(n-1) - 1 for a signed one.
@@ -764,7 +764,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return false;
     }
 
-    // GL_STENCIL_INDEX readback into the client's integer layout, honouring the PACK
+    // GL_STENCIL_INDEX readback into the client's integer layout, honoring the PACK
     // pixel-store parameters. Handles the widths desktop clients ask for; the stencil
     // values themselves are always 8 bits.
     static Bool ReadPixelsStencilViaNative(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type, void* pixels) {
@@ -964,7 +964,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     // Overwrites the alpha of a 4-channel wide read with the format's implied 1.0. Used for an
-    // attachment the backend widened from three channels to keep it colour-renderable: the storage
+    // attachment the backend widened from three channels to keep it color-renderable: the storage
     // has a real alpha channel holding whatever the draw wrote, but the format the application
     // asked for has none, and GL reads a missing channel back as one.
     static void ForceWideReadAlphaToOne(Vector<Uint8>& data, SizeT pixelCount, GLenum componentType) {
@@ -1033,7 +1033,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // (format, type) layout. Returns false when the combination is not convertible (the caller keeps its
     // "not implemented" skip); returns true when the request was handled, even if it degraded to a logged no-op.
     // `forceOpaqueAlpha`: the source image is a three-channel format the backend widened to four to
-    // keep it colour-renderable, so its alpha channel holds whatever the draw wrote and has to be
+    // keep it color-renderable, so its alpha channel holds whatever the draw wrote and has to be
     // answered with the 1.0 the application's format implies. Passed in rather than derived here:
     // glReadPixels reads the bound READ framebuffer, but glGetTexImage reads a texture through a
     // scratch framebuffer, so the frontend's READ binding describes a different image entirely -
@@ -1230,7 +1230,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ForceWideReadAlphaToOne(wide, static_cast<SizeT>(width) * static_cast<SizeT>(height), wideType);
         }
 
-        // GL clamps a read from a fixed-point colour buffer to [0,1] (GL_CLAMP_READ_COLOR
+        // GL clamps a read from a fixed-point color buffer to [0,1] (GL_CLAMP_READ_COLOR
         // defaults to GL_FIXED_ONLY). Formats the backend substitutes with a floating-point
         // one keep the out-of-range value the app stored, so apply the clamp here - a
         // GL_R16_SNORM target holding -0.125 must still read back as 0.
@@ -1283,13 +1283,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
-    // ---- Bit-exact readback of a 32-bit packed colour level ---------------------------------------
+    // ---- Bit-exact readback of a 32-bit packed color level ---------------------------------------
     //
     // glGetTexImage of a packed format read with its OWN client type owes the application the words
     // the image HOLDS, and neither of the two routes above can promise that once anything other than
     // a glTexImage has written the level:
     //
-    //   * the colour-attachment route reads GL_RGBA/GL_FLOAT and re-encodes, which canonicalizes an
+    //   * the color-attachment route reads GL_RGBA/GL_FLOAT and re-encodes, which canonicalizes an
     //     RGB9_E5 shared exponent (0xf8fc0000 -> 0xe7e00000, same value, different bits) and
     //     collapses an R11F_G11F_B10F NaN to the canonical payload 1
     //     (MG_Util::EncodeFloatToUnsignedSmallFloat) - and a copy-image from RGB9_E5 lands exactly
@@ -1301,7 +1301,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     //     source (which has no shadow to mirror from at all), a cube or 1D-array endpoint, a
     //     self-copy - and the decline is silent, so the stale words are served as truth.
     //
-    // glCopyImageSubData is a raw texel-block move and EXT_copy_image puts every 32-bit colour
+    // glCopyImageSubData is a raw texel-block move and EXT_copy_image puts every 32-bit color
     // format in one compatibility class, so copying the level into a scratch GL_R32UI image and
     // reading THAT back as unsigned integers hands over the stored words themselves, whoever wrote
     // them. This is what lets the shadow stop being the authority for these formats: it is tried
@@ -1387,7 +1387,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         // GL_RGBA_INTEGER/GL_UNSIGNED_INT is the one combination ES guarantees for an integer
-        // colour buffer, so the read lands four words per texel and the red one is compacted out
+        // color buffer, so the read lands four words per texel and the red one is compacted out
         // here. The PACK scope is the tight default rather than the application's, so a row comes
         // back packed at exactly `width * 4` words. One glGetError covers the whole loop: it
         // accumulates, and a failure anywhere means the caller falls back rather than trusting a
@@ -1796,7 +1796,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     // P8-E. MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=<w>x<h>, READ BY THE SERVER:
-    // a colour level of exactly that extent is treated as one the driver refused to attach - what an
+    // a color level of exactly that extent is treated as one the driver refused to attach - what an
     // Adreno does for RGB16 and the 16-bit SNORM formats, and what no host driver can be made to do.
     // Scoped by the extent so the tcp lane's shared supervisor can carry it for the whole lane: only
     // the scenario that builds that extent (CopyImageStoreReadbackScenario) ever meets it.
@@ -1954,7 +1954,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     // The (format, type) pairs the depth/stencil helpers below can service. They are not
-    // covered by the colour tables above - GetReadbackChannelMapping has no entry for any
+    // covered by the color tables above - GetReadbackChannelMapping has no entry for any
     // depth or stencil format, so without this gate a read the helpers CAN serve (a
     // GL_UNSIGNED_SHORT depth, a GL_SHORT stencil) is turned away before it reaches them.
     // The signed widths and GL_HALF_FLOAT belong in it for the same reason: the helpers scale a
@@ -2025,7 +2025,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The read buffer is what glReadPixels reads, so the frontend's READ binding is exactly
         // the right thing to ask here.
         const Bool forceOpaqueAlpha = FramebufferImpl::IsAlphaWidenedFallbackReadAttachment();
-        // An attachment widened from three channels to stay colour-renderable also has to leave
+        // An attachment widened from three channels to stay color-renderable also has to leave
         // the fast pair: only the conversion path knows to answer its alpha with the 1.0 the
         // application's format implies instead of whatever the draw wrote into the added channel.
         const Bool nativeFastPair = !packSwapBytes && !forceOpaqueAlpha &&

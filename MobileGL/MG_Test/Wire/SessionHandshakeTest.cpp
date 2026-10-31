@@ -346,7 +346,7 @@ TEST(SessionHandshakeTest, ForkRefusesDifferentBuildWithIdenticalWire) {
 //
 // Hello.linkTerms carries four byte counts a client may fill in, and nothing on the server reads
 // them for sizing: Accept builds the segments from its own SetSegmentSizes and Welcome states
-// those. That was stated (CONTRACT-P65 LinkTerms) and never pinned, so a refactor that "honoured
+// those. That was stated (CONTRACT-P65 LinkTerms) and never pinned, so a refactor that "honored
 // the client's request" would have handed any peer a 64 GiB allocation per connection. Here a
 // Hello asks for 64 GiB in every window and the Welcome must come back with the server's own
 // 4 KiB terms and 4 KiB segments - the allocation that happened is the one Welcome describes.
@@ -400,7 +400,7 @@ TEST(SessionHandshakeTest, AHelloAskingFor64GiBIsClampedToTheServersTermsAndAllo
     EXPECT_EQ(welcome->linkTerms()->maxReplyBytes(), 4096u / sizes.ReplySlotCount - sizeof(Transport::ReplySlotHeader))
         << "the reply bound echoed the Hello";
     // The segments that EXIST are the server's: each announced size is a few pages at most, never
-    // the ask. A 64 GiB request that had been honoured would show here even if Welcome's terms
+    // the ask. A 64 GiB request that had been honored would show here even if Welcome's terms
     // had been rewritten afterwards.
     for (const auto* segment : {welcome->cmdRing(), welcome->stageRing(), welcome->replyPool(), welcome->eventRing()}) {
         ASSERT_NE(segment, nullptr);

@@ -353,11 +353,11 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeServerBlockNoteIdentity() {
         // D10: THE WIDER PREDICATE, and the narrow one was a latent crash rather than a missing
-        // optimisation. Gated on the REHEARSAL, this early-returned for the whole life of a
+        // optimization. Gated on the REHEARSAL, this early-returned for the whole life of a
         // spawn server - because that knob is off by default and nothing in the spawn shape
         // turns it on - so the server's gPipeInputs->ContextIdentity() stayed nullptr forever.
         // DirectGLES' fb-slot memo compares that identity FIRST and with no generation, so a
-        // nullptr against its own nullptr initialiser reads as a CACHE HIT and hands out a slot
+        // nullptr against its own nullptr initializer reads as a CACHE HIT and hands out a slot
         // that was never filled. `st` lands the named Fatal at that site; this is the gate that
         // stops it being reachable in the first place.
         if (!MGPipeBlocksAreDistinct()) return;
@@ -366,7 +366,7 @@ namespace MobileGL::MG_Pipe {
         // served-context clock: MGPipeApplierContextSerial moves exactly when the served
         // context does (MGPipeApplierReset), which is all the backends' per-context memo keys
         // ask of an identity. The odd-encoding keeps the token non-null at serial 0: a null
-        // identity reads as a hit against DirectGLES' zero-initialised fb-slot memo cache and
+        // identity reads as a hit against DirectGLES' zero-initialized fb-slot memo cache and
         // hands out a null slot - an unnamed crash where the rehearsal exists to produce a
         // named one.
         const Uint64 serial = MGPipeApplierContextSerial();

@@ -451,7 +451,7 @@ namespace MobileGL::MG_Pipe {
     private:
         // P14: what EmitVertexElements / EmitVertexBuffers / EmitIndexBuffer resolve from a VAO,
         // one entry per live VAO keyed on its lifetime id (monotonic, never reused), erased at the
-        // VAO's death and re-initialised after an allocator reset. A direct-mapped table was tried
+        // VAO's death and re-initialized after an allocator reset. A direct-mapped table was tried
         // first and lost most entries to collisions: a Minecraft frame draws ~1,500 chunk arrays
         // whose ids spread well past any fixed table. The handles and entries it keeps change no
         // record; the kept-binding mirror below does decide what is sent, and is only ever

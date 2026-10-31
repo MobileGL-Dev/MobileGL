@@ -755,7 +755,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // P11 B2 (T0): a client's AHardwareBuffer imported as a wire buffer store. Wire arms, on
         // Android, whenever the device advertises the extension - not per session: the device is
         // created once per server and a later session asking T0 must find it able. Enabling it
-        // changes no T2 behaviour; only an import uses it. The 1.0-era dependencies are core at the
+        // changes no T2 behavior; only an import uses it. The 1.0-era dependencies are core at the
         // 1.1 this device is created at, and are enabled too when advertised (the spike's set).
         m_wireAhbImport = false;
         m_wireGetAhbProperties = nullptr;
@@ -943,7 +943,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // an integer border of -1 come back as 0.
         //
         // customBorderColorWithoutFormat is required alongside customBorderColors, not merely
-        // preferred: a GL sampler object carries a border colour with no idea which texture it will
+        // preferred: a GL sampler object carries a border color with no idea which texture it will
         // be paired with, so the VkSamplerCustomBorderColorCreateInfoEXT this backend builds has to
         // leave `format` VK_FORMAT_UNDEFINED.
         m_customBorderColorFeatureEnabled = false;
@@ -987,7 +987,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Native subgroup topology, and VK_EXT_subgroup_size_control's
         // computeFullSubgroups feature. REQUIRE_FULL_SUBGROUPS on a compute stage is what
         // turns the derived gl_NumSubgroups (DeriveNumSubgroupsPass) from
-        // encouraged-but-unspecified driver behaviour into a spec guarantee: with the bit
+        // encouraged-but-unspecified driver behavior into a spec guarantee: with the bit
         // set and local_size_x a multiple of the subgroup size, every subgroup launches
         // full, so the subgroup count is exactly invocations / size ("Full Subgroups",
         // VUID-VkPipelineShaderStageCreateInfo-flags-02759/-02785).

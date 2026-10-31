@@ -503,8 +503,8 @@ namespace MobileGL::MG_State::GLState {
         // PHASE B (joins the SPIR-V job; see EnsureSpirvJoined).
         //
         // BOUNDS-CHECKED, and that is not defensive padding - it is the load-bearing half of
-        // the "linked but not drawable" contract. A phase B that settles CANCELLED rather than
-        // Complete (its body threw, the pool failed to enqueue it, or teardown cancelled it
+        // the "linked but not drawable" contract. A phase B that settles CANCELED rather than
+        // Complete (its body threw, the pool failed to enqueue it, or teardown canceled it
         // while phase A had already published) publishes nothing, so the shadow is a
         // default-constructed SpirvArtifacts with an EMPTY uniformOffsets - while LINK_STATUS
         // stays GL_TRUE, because GL gives no way to retract one, and IsValidUniformLocation()
@@ -735,7 +735,7 @@ namespace MobileGL::MG_State::GLState {
         }
         // PHASE B, all three (see EnsureSpirvJoined): the shadow buffer's layout is decided
         // by the OPTIMIZED SPIR-V, so it does not exist until the SPIR-V job has settled - and
-        // never exists at all for a program whose SPIR-V job settled cancelled. These three
+        // never exists at all for a program whose SPIR-V job settled canceled. These three
         // degrade to nullptr/nullptr/0 in that case, which is exactly the "no backing storage"
         // shape every caller already tests for (see GetUniformOffset's note).
         void* MapUBO() { return Spirv().globalUboScratch.data(); }
@@ -780,7 +780,7 @@ namespace MobileGL::MG_State::GLState {
         Bool IsEsOrigin() const { return Artifacts().esOrigin; }
 
         // Publishes `samples` into the global-UBO shadow. Returns false when there is nowhere to
-        // put it - no shim in this program, no SPIR-V (a cancelled phase B), or the optimizer
+        // put it - no shim in this program, no SPIR-V (a canceled phase B), or the optimizer
         // dropped the member because nothing read it after all - all of which are ordinary states,
         // not errors. A value-identical write is dropped without bumping the content version, so a
         // steady stream of draws into one framebuffer does not force a re-upload per draw.
@@ -870,10 +870,10 @@ namespace MobileGL::MG_State::GLState {
             ++m_backendStateVersion;
             // IMAGE units get their own generation, and it is not redundant with the one
             // above. A sampler unit is re-issued to the driver per draw as a plain
-            // glUniform1i, so a backend can honour a change without rebuilding anything; an
+            // glUniform1i, so a backend can honor a change without rebuilding anything; an
             // image unit cannot be, because ES forbids glUniform1i on image uniforms - Espryt
             // has to BAKE it into the ESSL it generates (RebindImageUniformsToFrontendUnits),
-            // which means the change is only honoured by regenerating the program. That
+            // which means the change is only honored by regenerating the program. That
             // regeneration is gated on link-shaped versions, so without a counter that moves
             // here the new unit would never reach the driver.
             if (GetUniformTypeFacts(location).isImage) {
@@ -1110,7 +1110,7 @@ namespace MobileGL::MG_State::GLState {
         }
 
         // PHASE B (see EnsureSpirvJoined). Empty for a program whose SPIR-V job was
-        // cancelled; GetSpirvStatus() below is how a backend tells that apart from a program
+        // canceled; GetSpirvStatus() below is how a backend tells that apart from a program
         // that never linked.
         Vector<Vector<unsigned>>& GetGeneratedSpirv() { return Spirv().generatedSpirv; }
         const Vector<Vector<unsigned>>& GetGeneratedSpirv() const { return Spirv().generatedSpirv; }
@@ -1228,7 +1228,7 @@ namespace MobileGL::MG_State::GLState {
         // glProgramParameteri) NOR by glAttachShader/glDetachShader. Every one of those is
         // defined by GL to leave the CURRENT link result alone, and the pending link already
         // snapshotted its own inputs at enqueue, so it is computing exactly the answer GL
-        // requires. Cancelling on any of them would make
+        // requires. Canceling on any of them would make
         //   glLinkProgram(p); <setter>; glGetProgramiv(p, GL_LINK_STATUS)
         // report FALSE for a link that succeeded - and for the attach/detach pair it would
         // additionally break glCreateShaderProgramv, which detaches immediately after linking.

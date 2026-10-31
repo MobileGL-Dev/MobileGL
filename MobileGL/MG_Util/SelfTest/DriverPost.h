@@ -18,7 +18,7 @@ namespace MobileGL::MG_Util::SelfTest {
     // EVERY CAPABILITY ROW IS PASS, WARN OR FAIL; INFO IS FOR IDENTITY ONLY.
     //   PASS - the backend supports the capability directly.
     //   WARN - not directly, but a MobileGL quirk substitutes and the application still sees
-    //          correct behaviour; the detail names the substitute and what it costs.
+    //          correct behavior; the detail names the substitute and what it costs.
     //   FAIL - unsupported with no substitute; an application that uses it gets wrong output, a
     //          failed draw, or nothing.
     //   INFO - identity only: renderer name, API version, driver strings, and the strings

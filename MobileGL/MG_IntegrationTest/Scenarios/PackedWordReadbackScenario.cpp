@@ -10,7 +10,7 @@
 // words the image HOLDS, and KHR-GL43.copy_image compares exactly those words. Two routes used to
 // answer, and both are wrong for a level glCopyImageSubData wrote:
 //
-//   * the colour-attachment route reads GL_RGBA/GL_FLOAT and re-encodes, which canonicalizes an
+//   * the color-attachment route reads GL_RGBA/GL_FLOAT and re-encodes, which canonicalizes an
 //     RGB9_E5 shared exponent and collapses an R11F_G11F_B10F NaN payload to 1;
 //   * the CPU shadow only holds what was UPLOADED, and the mirror that replays a copy into it
 //     declines - silently - for a renderbuffer source, which has no shadow to mirror from.
@@ -141,7 +141,7 @@ namespace MGITest {
         };
 
         // The control that has to hold before either regression means anything: a packed word
-        // uploaded and read straight back must be the SAME word, not merely the same colour.
+        // uploaded and read straight back must be the SAME word, not merely the same color.
         TEST_F(PackedWordReadbackScenario, AnUploadedPackedWordReadsBackVerbatim) {
             if (!Ready()) GTEST_SKIP();
 
@@ -160,7 +160,7 @@ namespace MGITest {
         // physically holds the source's word - but the readback decoded it to float and re-encoded,
         // and the destination's blue field is a NaN whose payload float32 does not carry. Every
         // texel came back 0xf87c0000 (payload 1) instead of 0xf8fc0000 (payload 3): the same
-        // "colour", two bits apart.
+        // "color", two bits apart.
         TEST_F(PackedWordReadbackScenario, ACopiedRgb9E5WordSurvivesInAnR11fG11fB10fDestination) {
             if (!Ready()) GTEST_SKIP();
 

@@ -147,10 +147,10 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
 
         const Rgba8 centre = CentreAfter(width, height);
         EXPECT_GT(static_cast<int>(centre.g), 200)
-            << "the client-memory vertex array never reached the draw: the centre is " << centre
-            << ", i.e. still the clear colour. The draw did not consume its owned client-vertex snapshot";
+            << "the client-memory vertex array never reached the draw: the center is " << centre
+            << ", i.e. still the clear color. The draw did not consume its owned client-vertex snapshot";
         EXPECT_LT(static_cast<int>(centre.b), 60)
-            << "the quad drew, but the clear colour is still showing through: " << centre;
+            << "the quad drew, but the clear color is still showing through: " << centre;
 
         quad.Release();
         glUseProgram(0);

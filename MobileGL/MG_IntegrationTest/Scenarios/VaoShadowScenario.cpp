@@ -37,7 +37,7 @@
 namespace MGITest {
     namespace {
 
-        // Position in [0, 1] (+ an x offset per instance), colour from attribute 1.
+        // Position in [0, 1] (+ an x offset per instance), color from attribute 1.
         constexpr const char* kVS = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec4 aColor;

@@ -137,7 +137,7 @@ TEST(SessionTest, SessionSegmentsAreRealSharedMemoryAndNotAHeapAllocation) {
     EXPECT_GE(segments.DescriptorFor(SessionSegmentSlot::Reply), 0);
     EXPECT_GE(segments.DescriptorFor(SessionSegmentSlot::Event), 0);
 #endif
-    // Both control pages start initialised, with the two generations at 1 and every watermark
+    // Both control pages start initialized, with the two generations at 1 and every watermark
     // at 0 - the two conventions are opposite on purpose (Ring.h).
     ASSERT_NE(segments.CmdControl(), nullptr);
     ASSERT_NE(segments.EventControl(), nullptr);
@@ -509,7 +509,7 @@ TEST(SessionTest, RetiredSeqMayTrailTheApplyButCanNeverOvertakeIt) {
 }
 
 // completedFrameSerial: the SERVER's, advanced when a present completes. It trails appliedSeq
-// by the GPU's own depth and must never be conflated with it - recycling and ageing wait on
+// by the GPU's own depth and must never be conflated with it - recycling and aging wait on
 // this one and would free a resource the GPU is still reading if they waited on the other.
 TEST(SessionTest, CompletedFrameSerialIsTheServersAndIsIndependentOfAppliedSeq) {
     SessionFixture session;

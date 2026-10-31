@@ -42,7 +42,7 @@
 #   StageBlocksIntoUnpackRing      Managers.cpp: the unpack-PBO staging repack. It is what makes the
 #                                  ring path issue NO glPixelStorei, and the +6 ms/frame Mali cliff
 #                                  lives on the other side of it
-#   UnpackRingAvailable            Managers.cpp: honours Features.EsprytDisableUnpackRing and
+#   UnpackRingAvailable            Managers.cpp: honors Features.EsprytDisableUnpackRing and
 #                                  self-heals a stale context generation
 #   UnpackRingAllocate             Managers.cpp: on the hot upload route
 #   RecomputeBackendColorSlots     Managers.cpp: the attachment permutation - three passes plus the
@@ -503,7 +503,7 @@ write_spec() {
   done
 }
 
-# Materialise every region source at a git ref into "$2".
+# Materialize every region source at a git ref into "$2".
 checkout_ref() {
   local ref=$1 dir=$2 source
   mkdir -p "$dir" || return 2

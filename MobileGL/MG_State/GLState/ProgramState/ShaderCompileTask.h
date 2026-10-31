@@ -179,7 +179,7 @@ namespace MobileGL::MG_State::GLState {
         //
         // Const because the claim is the node's own synchronization, not a mutation of its
         // published artifacts: a claim that is taken and then abandoned (its link was
-        // cancelled) costs one extra re-parse later and nothing else.
+        // canceled) costs one extra re-parse later and nothing else.
         SharedPtr<glslang::TShader> ClaimParsedShader(String& outReparseLog) const;
 
         // Sticky marker for "a ProgramLinkTask has this node in its input snapshot".
@@ -226,7 +226,7 @@ namespace MobileGL::MG_State::GLState {
         //
         // The CANCEL that the count authorizes still races the worker, and deliberately so -
         // that is the settled cancel-not-join semantics from stage 3: JobNode::Cancel is
-        // cooperative and non-blocking, a node already running settles as Cancelled when its
+        // cooperative and non-blocking, a node already running settles as Canceled when its
         // body returns, and a node that has already gone terminal ignores the request.
         // Nothing about that changes here.
         //

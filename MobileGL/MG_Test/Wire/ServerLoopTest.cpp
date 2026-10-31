@@ -753,17 +753,17 @@ TEST(ServerLoopTest, TheAffinityStringResolvesToAMaskAndTheMaskIsLogged) {
         << "the apply thread did not log its resolved affinity mask; an affinity that silently "
            "did nothing is indistinguishable from one that worked";
     EXPECT_NE(log.find("mgl-srv-apply started"), std::string::npos);
-    // M-4: `off` must be a RECOGNISED string, not fall through to the numeric-parse "not
-    // recognised" arm. Deleting the `off` branch in RequestedAffinityMask makes off unrecognised;
+    // M-4: `off` must be a RECOGNIZED string, not fall through to the numeric-parse "not
+    // recognized" arm. Deleting the `off` branch in RequestedAffinityMask makes off unrecognized;
     // this asserts it did not, so that branch's deletion goes red here (its own reason).
     EXPECT_EQ(log.find("is not `auto`, `off` or a number"), std::string::npos)
-        << "`off` was treated as an unrecognised affinity string; its own branch is gone";
+        << "`off` was treated as an unrecognized affinity string; its own branch is gone";
 
     fixture.Stop();
     MG_Config::Ipc.ServerAffinity = saved;
 }
 
-// M-4, the explicit-mask half: an EXPLICIT mask the box can honour must resolve to itself and be
+// M-4, the explicit-mask half: an EXPLICIT mask the box can honor must resolve to itself and be
 // LOGGED. `off` -> 0 and `0x3` -> 0x3 are two answers that must DIFFER, so the resolver cannot be a
 // constant. This case does NOT gate codex 11's effective-mask read-back - on an unrestricted box the
 // request and the effective set are the same and `return requested` stays green here (review v2
@@ -773,7 +773,7 @@ TEST(ServerLoopTest, TheAffinityStringResolvesToAMaskAndTheMaskIsLogged) {
 TEST(ServerLoopTest, TheExplicitAffinityMaskResolvesToItselfAndIsLogged) {
 #if defined(__linux__) || defined(__ANDROID__)
     if (std::thread::hardware_concurrency() < 2) {
-        GTEST_SKIP() << "needs at least 2 online cpus to honour 0x3";
+        GTEST_SKIP() << "needs at least 2 online cpus to honor 0x3";
     }
     const String saved = MG_Config::Ipc.ServerAffinity;
     MG_Config::Ipc.ServerAffinity = "0x3"; // cpu 0 and cpu 1, both online on any 2+-cpu box
@@ -784,7 +784,7 @@ TEST(ServerLoopTest, TheExplicitAffinityMaskResolvesToItselfAndIsLogged) {
     ASSERT_TRUE(fixture.WaitUntilTrulyParked());
 
     EXPECT_EQ(Server::ServerLoopInstance().ResolvedAffinityMask(), 0x3u)
-        << "an explicit mask the box can honour did not resolve to itself (0x3); the effective "
+        << "an explicit mask the box can honor did not resolve to itself (0x3); the effective "
            "mask read back from the kernel differs from the request, or the resolver is broken";
     const std::string log = ReadLog();
     EXPECT_NE(log.find("RESOLVED mask 0x3"), std::string::npos) << "the logged RESOLVED mask is not the effective 0x3";
@@ -1510,7 +1510,7 @@ TEST(ServerLoopTest, TheSevenFormatCapabilityReadsAnswerFromTheServersBackendNot
         << "the renderbuffer sample clamp answered from the global's probed counts (6), not the server's";
 
     // (B) the null-check reads: global NULL, server present. RGB8_SNORM, not RGB8: the fallback
-    // normalisation's three-channel widening is APPLICABLE to GL_RGB8_SNORM and not to GL_RGB8
+    // normalization's three-channel widening is APPLICABLE to GL_RGB8_SNORM and not to GL_RGB8
     // (TextureFormatProcessor.cpp's applicability table), so it is the format whose answer the
     // "no backend" arm actually changes - the first cut of this case used RGB8 and both arms agreed.
     MG_Backend::pActiveBackendObject.reset();
@@ -1521,7 +1521,7 @@ TEST(ServerLoopTest, TheSevenFormatCapabilityReadsAnswerFromTheServersBackendNot
     TextureImpl::GenerateTextureFormatInfo(TextureInternalFormat::RGB8Snorm, &internalFormat, &format, &type,
                                            TextureTarget::Texture2D);
     EXPECT_EQ(internalFormat, kGlRgb8Snorm)
-        << "the format info followed the global (null, so the fallback normalisation widened RGB8_SNORM) "
+        << "the format info followed the global (null, so the fallback normalization widened RGB8_SNORM) "
            "instead of the server's backend (present, so native RGB8_SNORM); got 0x"
         << std::hex << internalFormat;
     EXPECT_FALSE(TextureImpl::BackendTextureFormatAddsAlpha(TextureInternalFormat::RGB8Snorm, TextureTarget::Texture2D))
@@ -2018,7 +2018,7 @@ namespace {
     }
 
     // THE WINDOW, HELD OPEN. The server acknowledges a record before it looks for the next one, so a
-    // record published right after that acknowledgement can be popped by the SAME drain, past the
+    // record published right after that acknowledgment can be popped by the SAME drain, past the
     // apply loop's per-wake fault poll. The between-records hook makes that happen every time: it
     // holds the drain after the healthy record until GUILTY is in the ring, and the client publishes
     // GUILTY once the hold is entered. The hold is armed by the healthy record's seq: the wait for the

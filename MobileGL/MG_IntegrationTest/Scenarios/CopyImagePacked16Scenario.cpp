@@ -38,7 +38,7 @@
 //
 // This scenario runs in BOTH configurations, and both must hand back identical client words:
 //   * the ambient registrations take the narrow path on a clean driver (llvmpipe has no
-//     mirror, so Auto keeps the native 16-bit storage - the pre-existing behaviour stays
+//     mirror, so Auto keeps the native 16-bit storage - the pre-existing behavior stays
 //     covered);
 //   * the DirectGLES.WidenedPacked16. registration pins MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE=1,
 //     which is the storage every affected device will actually run - without it the repair
@@ -74,7 +74,7 @@ namespace MGITest {
         constexpr int kLayers = 12;
         constexpr int kFlatSize = 7; // the plain-2D / renderbuffer endpoint, level 0
         // Copies cover the whole flat endpoint and land at (8, 8) inside the 15x15 level so
-        // that offsets are honoured, not just texel (0, 0): 8 + 7 == 15 reaches the far edge.
+        // that offsets are honored, not just texel (0, 0): 8 + 7 == 15 reaches the far edge.
         constexpr int kRegion = kFlatSize;
         constexpr int kArrayOffset = 8;
 

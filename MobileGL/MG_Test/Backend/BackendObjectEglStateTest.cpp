@@ -915,7 +915,7 @@ TEST_F(BackendObjectEglRegister, APbufferNeedsADisplayASurfaceAndAPositiveExtent
     EXPECT_TRUE(Trace().empty());
 }
 
-// Re-registering replaces the whole record. A pending destroy is cancelled and
+// Re-registering replaces the whole record. A pending destroy is canceled and
 // Activated is reset (the next real activation re-probes); the active view is left as it was.
 TEST_F(BackendObjectEglRegister, ReRegisteringReplacesTheWholeRecord) {
     ASSERT_TRUE(Init());
@@ -930,7 +930,7 @@ TEST_F(BackendObjectEglRegister, ReRegisteringReplacesTheWholeRecord) {
     EXPECT_TRUE(WindowIs(b->WindowHandleNow(), kWin1));
     EXPECT_TRUE(b->CapsProbed());
     EXPECT_TRUE(Trace().empty());
-    // The cancelled destroy does not complete when the binding goes.
+    // The canceled destroy does not complete when the binding goes.
     EXPECT_TRUE(Release());
     EXPECT_TRUE(b->IsRegistered(kS1));
     EXPECT_TRUE(Trace().empty());

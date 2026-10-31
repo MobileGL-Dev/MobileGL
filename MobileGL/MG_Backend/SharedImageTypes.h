@@ -10,7 +10,7 @@
 #include <Includes.h>
 
 namespace MobileGL::MG_Backend {
-    // SHARED IMAGES: server-allocated colour
+    // SHARED IMAGES: server-allocated color
     // buffers exported to clients as dma-buf descriptors.
     //
     // The server-side view of one image, as a backend sees it: `NativeBuffer` is the image's
@@ -42,7 +42,7 @@ namespace MobileGL::MG_Backend {
     };
 
     // An import of a two-plane (YUV) dma-buf: where its planes are in the one descriptor, and
-    // EGL_EXT_image_dma_buf_import's colour hints (0 = not given).
+    // EGL_EXT_image_dma_buf_import's color hints (0 = not given).
     struct SharedImageImportLayout {
         Uint32 PlaneCount = 1;
         Uint32 Offset[2] = {0, 0};

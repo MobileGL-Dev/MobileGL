@@ -106,7 +106,7 @@ namespace MobileGL {
                     Texel,
                     // Reads a property whose result does not depend on Dim. Safe to leave.
                     DimIndependentQuery,
-                    // Recognised, and refused: rewriting the type would change the shape of what
+                    // Recognized, and refused: rewriting the type would change the shape of what
                     // the shader consumes, or the operation is one this pass has no translation
                     // for.
                     Decline,

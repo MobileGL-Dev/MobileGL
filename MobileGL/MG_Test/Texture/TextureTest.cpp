@@ -621,7 +621,7 @@ TEST_F(TextureTest, EverySamplerEntryPointRejectsAnUnknownNameWithInvalidOperati
 // ===================== GL_TEXTURE_BORDER_COLOR (KHR-GL46.texture_border_clamp) =====================
 
 // GL 4.6 core 8.10 / equation 2.2, and 8.11 / equation 2.3: glTexParameteriv normalizes its integer
-// components into the floating-point border colour and glGetTexParameteriv converts back. The pair is
+// components into the floating-point border color and glGetTexParameteriv converts back. The pair is
 // exact for small integers, which is what the CTS's samplerparameteri_border_color checks with
 // {0,1,2,4}; reading the float back with a truncating cast answered {0,0,0,0}.
 TEST_F(TextureTest, BorderColorIntegerFormNormalizesAndRoundTripsPerEquations22And23) {
@@ -644,7 +644,7 @@ TEST_F(TextureTest, BorderColorIntegerFormNormalizesAndRoundTripsPerEquations22A
     EXPECT_EQ(readBack[3], 4);
 
     // The stored value really is the normalized fraction, not the raw integer - otherwise the round
-    // trip above would pass for the wrong reason (two missing conversions cancelling).
+    // trip above would pass for the wrong reason (two missing conversions canceling).
     GLfloat asFloats[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
     MG_Impl::GLImpl::GetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, asFloats);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
@@ -668,7 +668,7 @@ TEST_F(TextureTest, BorderColorIntegerFormNormalizesAndRoundTripsPerEquations22A
 
 // The sampler-object twin of the test above. It used to pass for the wrong reason: glSamplerParameteriv
 // and glSamplerParameterIiv were literally the same call, so the raw integers went in and came back
-// out unconverted and the two missing conversions cancelled - which also meant a border of 255 set
+// out unconverted and the two missing conversions canceled - which also meant a border of 255 set
 // through glSamplerParameteriv became float 255.0 instead of the spec's ~1.19e-7.
 TEST_F(TextureTest, SamplerBorderColorSeparatesTheIntegerFormFromTheNormalizedForm) {
     GLuint sampler = 0;
@@ -707,10 +707,10 @@ TEST_F(TextureTest, SamplerBorderColorSeparatesTheIntegerFormFromTheNormalizedFo
     DrainPendingGlErrors();
 }
 
-// A border colour's FORM is state in its own right: the three representations are kept numerically in
+// A border color's FORM is state in its own right: the three representations are kept numerically in
 // step, so a float (0,0,0,1) followed by an integer (0,0,0,1) moves no number at all - but it is a
 // real change, and the backends memoise on the version. Swallowing it left DirectGLES forwarding the
-// colour through glTexParameterfv forever, which is what made an integer border of 255 come back from
+// color through glTexParameterfv forever, which is what made an integer border of 255 come back from
 // an isampler2D as 1132396544 (the IEEE-754 bits of 255.0f).
 TEST_F(TextureTest, BorderColorFormChangeBumpsTheVersionEvenWhenTheNumbersDoNotMove) {
     GLuint sampler = 0;
@@ -1089,7 +1089,7 @@ TEST_F(TextureTest, EverySamplerScalarPnameConvertsToTheQueriedType) {
     }
 
     // The unsigned spelling of a NEGATIVE float state: the conversion has to go through GLint, since
-    // a direct float -> GLuint cast of a negative value is undefined behaviour.
+    // a direct float -> GLuint cast of a negative value is undefined behavior.
     GLuint negativeAsUnsigned = 0;
     MG_Impl::GLImpl::GetSamplerParameterIuiv(sampler, GL_TEXTURE_MIN_LOD, &negativeAsUnsigned);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
@@ -1707,12 +1707,12 @@ TEST_F(TextureTest, StencilIndexIsATextureInternalFormatPairedOnlyWithStencilSto
     ASSERT_NE(textureObject, nullptr);
     EXPECT_EQ(textureObject->GetFormat(), TextureInternalFormat::StencilIndex8);
 
-    // A colour transfer format against stencil storage is still INVALID_OPERATION, so the clear
+    // A color transfer format against stencil storage is still INVALID_OPERATION, so the clear
     // the conformance case makes next fails the way it is supposed to.
     MG_Impl::GLImpl::ClearTexImage(texture, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     ExpectSingleGlError(GL_INVALID_OPERATION);
 
-    // ...and the other direction: GL_STENCIL_INDEX against colour storage stays illegal.
+    // ...and the other direction: GL_STENCIL_INDEX against color storage stays illegal.
     MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, nullptr);
     ExpectSingleGlError(GL_INVALID_OPERATION);
 }
@@ -2436,7 +2436,7 @@ TEST_F(TextureTest, CompressedInternalFormatsResolveToTheirUncompressedStorage) 
     }
 }
 
-// Resolving to uncompressed storage is a storage decision, not a licence to answer the level
+// Resolving to uncompressed storage is a storage decision, not a license to answer the level
 // queries as if the application had asked for an uncompressed format. GL 4.6 core 8.5 lets the
 // implementation choose for the GENERIC formats (GL_COMPRESSED_RED and friends), but a SPECIFIC
 // one commits the level: GL_TEXTURE_COMPRESSED is true, GL_TEXTURE_INTERNAL_FORMAT is the token
@@ -2584,7 +2584,7 @@ namespace {
 
 // KHR-GL43.copy_image.non_existent_mipmap. Level 1 of a texture that has only level 0 is
 // not a level: GL 4.6 core 18.3.2 asks for GL_INVALID_VALUE. Until this check existed the
-// level travelled all the way into the backends, and DirectVulkan built a VkImageCopy
+// level traveled all the way into the backends, and DirectVulkan built a VkImageCopy
 // naming mip 1 of a VkImage created with one mip - which Adreno answered with a SIGSEGV
 // inside vkCmdCopyImage, killing the glcts process in the middle of a negative test.
 TEST_F(TextureTest, CopyImageSubDataRejectsALevelTheTextureDoesNotHave) {
@@ -4580,7 +4580,7 @@ TEST(SharedExponentRGB9E5Test, RedundantPackedEncodingIsRGB9E5Only) {
 
     // The other three packed 32-bit layouts round-trip through float32 bit-exactly (each field is
     // either an integer or a unique float encoding), so a GPU readback still serves them - which
-    // matters because RGB10_A2 and R11F_G11F_B10F ARE colour-renderable and their shadow can
+    // matters because RGB10_A2 and R11F_G11F_B10F ARE color-renderable and their shadow can
     // legitimately be stale.
     EXPECT_FALSE(HasRedundantPackedEncoding(TextureInternalFormat::RGB10A2));
     EXPECT_FALSE(HasRedundantPackedEncoding(TextureInternalFormat::RGB10A2UI));
@@ -4895,9 +4895,9 @@ TEST_F(TextureTest, NamedTextureCallKeepsUnitBindingAccountingCoherent) {
     DrainPendingGlErrors();
 }
 
-// ---- Three-channel colour-renderable widening (Complementary Reimagined / Iris) ----------------
+// ---- Three-channel color-renderable widening (Complementary Reimagined / Iris) ----------------
 //
-// No real OpenGL ES driver renders to a three-channel image, so a colour attachment the
+// No real OpenGL ES driver renders to a three-channel image, so a color attachment the
 // application asked for as GL_RGB8_SNORM or GL_RGB16F has to be stored in the four-channel
 // sibling. The bit that says so used to be reachable for multisample storage only, which is why
 // an ordinary GL_TEXTURE_2D attachment in one of those formats had no fallback at all and the
@@ -4911,7 +4911,7 @@ TEST_F(TextureTest, ColorAttachableTargetsRequestTheThreeChannelWidening) {
     capabilities.SupportsRenderSnorm = true;
     capabilities.SupportsNorm16Texture = true;
 
-    // Every image that can be a colour attachment, not just the multisample pair: an ordinary 2D
+    // Every image that can be a color attachment, not just the multisample pair: an ordinary 2D
     // texture is what Iris attaches, and it used to be excluded.
     for (const TextureTarget target :
          {TextureTarget::Texture2D, TextureTarget::Texture3D, TextureTarget::TextureCubeMap,
@@ -4943,7 +4943,7 @@ TEST_F(TextureTest, ColorAttachableTargetsRequestTheThreeChannelWidening) {
                  PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget);
 
     // ...and neither can an 8-bit one. That half of the answer used to be missing entirely, which
-    // is why an R8_SNORM / RG8_SNORM colour attachment got no substitute at all on a driver
+    // is why an R8_SNORM / RG8_SNORM color attachment got no substitute at all on a driver
     // without EXT_render_snorm.
     EXPECT_TRUE(GetRenderTargetNormalizeOptions(noSnormCapabilities, texture2DIndex) &
                 PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget);
@@ -4963,10 +4963,10 @@ TEST_F(TextureTest, ColorAttachableTargetsRequestTheThreeChannelWidening) {
                  PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget);
 }
 
-// ---- Signed-normalized colour-renderable substitution (KHR-GL4x.texture_swizzle on Mali) -------
+// ---- Signed-normalized color-renderable substitution (KHR-GL4x.texture_swizzle on Mali) -------
 //
 // A driver without GL_EXT_render_snorm treats every signed-normalized format as texture-only, so a
-// colour attachment in one of them leaves the ES framebuffer incomplete: the draw lands nowhere and
+// color attachment in one of them leaves the ES framebuffer incomplete: the draw lands nowhere and
 // the readback falls through to the CPU shadow, which for a glTexImage2D(..., nullptr) output
 // texture is all zeroes. The render-target bits used to reach GL_RGB16_SNORM alone, so five of the
 // eight SNORM formats - and in particular the single-channel GL_R8_SNORM / GL_R16_SNORM that
@@ -5305,7 +5305,7 @@ TEST_F(TextureTest, WidenedRenderTargetUploadExpandsThreeChannelDataWithOpaqueAl
     }
 
     // No widening in effect (or nothing to convert): the caller's pointer comes straight back, so
-    // the sub-rect upload fast path still recognises an unconverted level.
+    // the sub-rect upload fast path still recognizes an unconverted level.
     {
         const Float source[] = {1.0f, 2.0f, 3.0f, 4.0f};
         Vector<Uint8> widened;
@@ -5340,7 +5340,7 @@ namespace {
         g_copyTexImage2DCall = {true, target, level, internalformat, width, height};
     }
 
-    // A colour read framebuffer of the requested sized format, bound to GL_READ_FRAMEBUFFER, which
+    // A color read framebuffer of the requested sized format, bound to GL_READ_FRAMEBUFFER, which
     // is what glCopyTexImage2D takes its source base format from.
     void BindReadFramebufferWithColorFormat(GLenum sizedInternalFormat) {
         GLuint framebuffer = 0;
@@ -5368,7 +5368,7 @@ TEST_F(TextureTest, CopyTexImage2DAcceptsEveryComponentSubsetOfTheReadBuffer) {
     ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "read framebuffer setup itself failed";
 
     // GL 4.6 sec. 8.6: internalformat may name a SUBSET of the read buffer's components. This is
-    // exactly the list KHR-GL30.api.coverage walks against an rgba8888 colour buffer, and it is
+    // exactly the list KHR-GL30.api.coverage walks against an rgba8888 color buffer, and it is
     // also what an ordinary GL app does with glCopyTexImage2D(GL_RGB) from an RGBA8 framebuffer.
     for (const GLenum internalFormat : {GL_RED, GL_RG, GL_RGB, GL_RGBA}) {
         BindFreshMutableTexture2D();
@@ -6301,7 +6301,7 @@ TEST_F(TextureTest, CopyImageSubDataDoesNotApplyMipmapCompletenessToMultisampleT
 
 // GL 4.6 core 8.11 makes GL_IMAGE_FORMAT_COMPATIBILITY_TYPE readable through every
 // GetTexParameter form. Three of MobileGL's four getters answered it and glGetTexParameterfv did
-// not, so the float query raised GL_INVALID_ENUM and left the caller's float uninitialised
+// not, so the float query raised GL_INVALID_ENUM and left the caller's float uninitialized
 // (KHR-GL4x.shader_image_load_store.basic-api-texParam reads it with both iv and fv and compares
 // them). Asserted across all four here, because an enum present in three of four parallel
 // switches is the drift shape that comes back.
@@ -7008,8 +7008,8 @@ TEST(EtcDecoder, DecodesTheConformanceSuitesEtc2RgbImage) {
 }
 
 // The EAC half: a block whose multiplier is 0 still moves every texel by the bare modifier, and a
-// base of 128 with modifier index 4 (+2 in table 0) reads 130 in the alpha channel; the colour half
-// is an individual-mode block of one flat colour (all-zero indices: +2 on 0x88 = 138).
+// base of 128 with modifier index 4 (+2 in table 0) reads 130 in the alpha channel; the color half
+// is an individual-mode block of one flat color (all-zero indices: +2 on 0x88 = 138).
 TEST(EtcDecoder, DecodesAnEacAlphaBlockAndAnIndividualModeColourBlock) {
     Uint8 block[16] = {};
     block[0] = 128;  // alpha base
@@ -7018,7 +7018,7 @@ TEST(EtcDecoder, DecodesAnEacAlphaBlockAndAnIndividualModeColourBlock) {
     const Uint64 indices = 0x924924924924ull;
     for (Int i = 0; i < 6; ++i)
         block[2 + i] = static_cast<Uint8>(indices >> (40 - 8 * i));
-    // Colour: individual mode, both subblocks 0x8 per channel, codewords 0, all indices 0.
+    // Color: individual mode, both subblocks 0x8 per channel, codewords 0, all indices 0.
     block[8] = 0x88;
     block[9] = 0x88;
     block[10] = 0x88;
@@ -7055,7 +7055,7 @@ TEST_F(TextureTest, CompressedTexImage2DDecodesEtc2IntoTheTexels) {
         }
     }
 
-    // A sub-image replace decodes too: the top-left block becomes a flat individual-mode colour.
+    // A sub-image replace decodes too: the top-left block becomes a flat individual-mode color.
     const Uint8 flat[8] = {0x88, 0x88, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00};
     MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 4, GL_COMPRESSED_RGB8_ETC2,
                                              static_cast<GLsizei>(sizeof(flat)), flat);

@@ -16,7 +16,7 @@
 //   * GL_MAX_SHADER_COMPILER_THREADS_KHR;
 //   * the extension string itself, which must appear if and only if asynchronous
 //     compilation is enabled - the kill switch has to revert the application-visible
-//     behaviour change, not only the threading.
+//     behavior change, not only the threading.
 //
 // Like the other async suites, every case drives the real GL entry points and flips
 // MG_Config::Features.AsyncShaderCompile itself, so the file behaves identically whether or

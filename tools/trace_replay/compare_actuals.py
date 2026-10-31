@@ -11,7 +11,7 @@
 
 WHY THIS EXISTS. `result.json` carries ONE number per run: this attempt's actual against its
 golden. P7-7 E0 asks a different question - "are three repeats of the same case on the same
-device the same picture?" - and no artefact in the tree answers it, because every repeat
+device the same picture?" - and no artifact in the tree answers it, because every repeat
 overwrites the previous one's `.trace-work/android-retrace-result/<case>-<backend>/`. With the
 repeats archived (`run_android_retrace_local.py --archive-dir`), this script computes the
 missing pair: SSIM(repeat N, repeat 1) beside the recorded SSIM(repeat N, golden).
@@ -19,7 +19,7 @@ missing pair: SSIM(repeat N, repeat 1) beside the recorded SSIM(repeat N, golden
 THE SSIM IS NOT A NEW ONE. It is a transcription of the retrace gate's own comparator,
 `android-plugin/app/src/trace/cpp/trace_replay_core.cpp:630` (`ComputeChannelSsim`) and `:671`
 (`ComputeRgbSsim`) - a single global window per channel, C1 = (0.01*255)^2, C2 = (0.03*255)^2,
-the three colour channels averaged and alpha ignored - and the crop comes from the repeat's own
+the three color channels averaged and alpha ignored - and the crop comes from the repeat's own
 `result.json`, so the window is the one the gate scored. A different SSIM (a gaussian-windowed
 one, say) would produce numbers that could not be read beside the recorded ones at all, which is
 the whole reason this file does not import a library implementation.
@@ -56,7 +56,7 @@ class ImageError(ValueError):
 # PNG decode. Deliberately stdlib-only (zlib): this script has to run in the device window on
 # whatever interpreter is at hand, and an unavailable Pillow would turn "the repeats diverged"
 # into "the tool did not run", which are not the same finding. The accepted subset is what
-# libpng gives trace_replay_core after its own normalisation (ReadPngRgba, :278): 8- and 16-bit
+# libpng gives trace_replay_core after its own normalization (ReadPngRgba, :278): 8- and 16-bit
 # greyscale/RGB/greyscale+alpha/RGBA and 8-bit palette, non-interlaced. Anything else is
 # REFUSED BY NAME rather than guessed at.
 # ---------------------------------------------------------------------------------------------
@@ -166,9 +166,9 @@ def read_png_rgba(path):
     if interlace != 0:
         raise ImageError("interlaced PNG is not supported: " + str(path))
     if color_type not in _CHANNELS:
-        raise ImageError("unsupported PNG colour type %d: %s" % (color_type, path))
+        raise ImageError("unsupported PNG color type %d: %s" % (color_type, path))
     if depth not in (8, 16) or (color_type == 3 and depth != 8):
-        raise ImageError("unsupported PNG bit depth %d (colour type %d): %s"
+        raise ImageError("unsupported PNG bit depth %d (color type %d): %s"
                          % (depth, color_type, path))
     channels = _CHANNELS[color_type]
     sample_bytes = depth // 8
@@ -241,7 +241,7 @@ def channel_ssim(actual, golden, x0, y0, compare_width, compare_height, channel)
 
 
 def rgb_ssim(actual, golden, x0, y0, compare_width, compare_height):
-    """trace_replay_core.cpp:671 ComputeRgbSsim - the three colour channels, alpha ignored."""
+    """trace_replay_core.cpp:671 ComputeRgbSsim - the three color channels, alpha ignored."""
     total = 0.0
     for channel in range(3):
         total += channel_ssim(actual, golden, x0, y0, compare_width, compare_height, channel)
@@ -494,7 +494,7 @@ def self_test():
         expect("inverted halves", compare_files(a, b)["ssim"], -0.9964064683569576)
         if compare_files(a, b)["mismatch_pixels"] != width * height:
             failures.append("inverted halves: every pixel should differ")
-        # The crop is honoured: the left half of `halves` is black and the left half of
+        # The crop is honored: the left half of `halves` is black and the left half of
         # `inverse` is white, so cropping to it reproduces the black/white number.
         cropped = compare_files(a, b, 0, 0, width // 2, height)["ssim"]
         expect("cropped half", cropped, 9.999000099990002e-05)

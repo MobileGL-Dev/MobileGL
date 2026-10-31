@@ -76,9 +76,7 @@ namespace {
             m_previous = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
         }
-        void TearDown() override {
-            MG_State::pGLContext = Move(m_previous);
-        }
+        void TearDown() override { MG_State::pGLContext = Move(m_previous); }
         SharedPtr<GLContext> m_previous;
     };
 
@@ -250,7 +248,7 @@ TEST_F(PipeInputsTest, ReadingAFilledFieldCompletes) {
 // The window before the first verb (P1 brief D6: "<Field>@<none>"). Nothing has filled this
 // process's block, so a backend-style read of a value field is Fatal naming no verb: the
 // serial and every stamp are 0, and 0 == 0 is not fresh. In a verify build the child also
-// sets the lane's knob first, the shape of a read reached from initialisation: the poison
+// sets the lane's knob first, the shape of a read reached from initialization: the poison
 // fires at MGP_INPUT_CHECK, before the read hook (armed only by the first fill) could matter.
 TEST_F(PipeInputsTest, ReadingBeforeAnyFillAbortsNamingNoVerb) {
 #if !MOBILEGL_PIPE_POISON

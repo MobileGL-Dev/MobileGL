@@ -64,7 +64,7 @@ void main()
 )";
 
         // Green when the image the unit currently holds has the size the application last gave
-        // it, red otherwise - the conformance case's own comparison, and its own colours.
+        // it, red otherwise - the conformance case's own comparison, and its own colors.
         constexpr const char* kFS = R"(#version 430 core
 layout(rgba8) readonly uniform image2D g_image;
 uniform ivec2 g_expected_size;
@@ -151,7 +151,7 @@ void main()
                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_color, 0);
             }
 
-            // Draw once with `expected` pushed to the shader and report the centre pixel.
+            // Draw once with `expected` pushed to the shader and report the center pixel.
             void DrawAndReadCentre(int expectedWidth, int expectedHeight, unsigned char (&centre)[4]) {
                 const GLint location = glGetUniformLocation(m_program, "g_expected_size");
                 ASSERT_NE(location, -1) << "the program has no g_expected_size uniform";
@@ -222,7 +222,7 @@ void main()
 
         DrawAndReadCentre(16, 16, centre);
         EXPECT_EQ(static_cast<int>(centre[0]), 0)
-            << "after the re-spec the draw still sees the OLD image size; centre pixel was ("
+            << "after the re-spec the draw still sees the OLD image size; center pixel was ("
             << static_cast<int>(centre[0]) << ", " << static_cast<int>(centre[1]) << ", " << static_cast<int>(centre[2])
             << ")";
         EXPECT_EQ(static_cast<int>(centre[1]), 255);

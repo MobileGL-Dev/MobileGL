@@ -70,7 +70,7 @@ namespace MobileGL {
                 // list forced into far-apart merges was measured at >90% of the union
                 // box's area on exactly that pattern, i.e. worthless. Inserts merge any
                 // touching/overlapping rect (cascading, so the list stays disjoint);
-                // when full, the incoming rect folds into the neighbour whose box grows
+                // when full, the incoming rect folds into the neighbor whose box grows
                 // least and the list degrades gracefully toward the union box.
                 static constexpr SizeT kMaxDirtyRects = 96;
                 // Copies the level's dirty rects into outRects and returns how many were

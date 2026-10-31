@@ -337,7 +337,7 @@ TEST(StagedTextureStoreTest, TwoSessionsHoldTheSameHandleAndOneSessionsDropAllSp
 
     EnterBucket(1, 10);
     ASSERT_TRUE(store.IsLevelDefined(key, kTex2DTarget, 0))
-        << "a neighbour session's teardown dropped this session's declared level";
+        << "a neighbor session's teardown dropped this session's declared level";
     EXPECT_TRUE(store.IsCovered(key, kTex2DTarget, 0));
     EXPECT_NE(store.AdoptRun(key, kTex2DTarget, 0, IntVec3{4, 4, 1}, 0, kwinBytes.data(), kwinBytes.size()), nullptr);
 
@@ -366,7 +366,7 @@ TEST(StagedTextureStoreTest, OneSessionsBufferDropAllSparesTheOthersShadows) {
 
     store.DropAll();
     EXPECT_FALSE(store.HasShadow(&appTwin));
-    EXPECT_TRUE(store.HasShadow(&kwinTwin)) << "a neighbour session's teardown dropped this session's bytes";
+    EXPECT_TRUE(store.HasShadow(&kwinTwin)) << "a neighbor session's teardown dropped this session's bytes";
     EXPECT_TRUE(store.IsCovered(&kwinTwin, 0, bytes.size()));
 
     t_testBucketSet = false;
@@ -991,7 +991,7 @@ TEST(StagedTextureProductionTest, TextureSubDataThroughTheRealOpsTableCopiesAndS
     desc.Resource = res;
     desc.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
     // RGBA8: the 64 bytes below are 4x4 texels of four bytes, and PH-4 bounds the run by the
-    // declared level's w*h*d*bpp (a zero-initialised format is R8, one byte a texel).
+    // declared level's w*h*d*bpp (a zero-initialized format is R8, one byte a texel).
     desc.InternalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8);
     desc.Width = 4;
     desc.Height = 4;

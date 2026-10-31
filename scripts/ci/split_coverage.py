@@ -19,7 +19,7 @@ asked about - and nothing about a green split lane says so. This asserts, per ba
 after the arm and tail segments come off both sides: an entry name is `<Backend>.[<Arm>.][<tail>.]
 <Suite>.<Case>`, and only the last two segments (the gtest name) are compared. `Split.F1.`,
 `Spawn.ForcedDs.`, `Tcp.MultiDrawTierBaseVertex.` and the monolith's
-`ForcedDepthStencilEmulation.` all normalise away.
+`ForcedDepthStencilEmulation.` all normalize away.
 
 WHAT COUNTS AS A SPLIT CASE differs by backend, on purpose:
   * DirectGLES - an entry with an arm segment (Split/Spawn/Tcp/TcpDevice) that carries a GATED
@@ -33,7 +33,7 @@ WHAT COUNTS AS A SPLIT CASE differs by backend, on purpose:
 
 WHAT COUNTS AS A MONOLITH CASE: an entry with no arm segment carrying `integration-gpu` - the label
 the monolith registrations and the monolith-control mechanism entries share. That puts
-`DirectGLES.PushMonolithArm.<case>` (labelled integration-split, but no arm) on the monolith side,
+`DirectGLES.PushMonolithArm.<case>` (labeled integration-split, but no arm) on the monolith side,
 where it belongs, and leaves build-verify's `DirectGLES.VerifySplit.<case>` (no integration-gpu)
 out of both sides.
 
@@ -254,7 +254,7 @@ def self_test():
         if got != rc or any(n not in text for n in needles) or any(n in text for n in absent):
             failures.append(f"{label}: rc {got} (want {rc}); output:\n{text}")
 
-    expect("tails normalise on both sides", _doc(*BASE), "", 0,
+    expect("tails normalize on both sides", _doc(*BASE), "", 0,
            "DirectGLES: monolith 3, on a gated split arm 3", "missing 0")
     expect("a monolith case on no arm reds BY NAME",
            _doc(*BASE, _entry("DirectGLES.CScenario.Five", "integration-gpu")), "", 1,

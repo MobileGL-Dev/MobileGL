@@ -160,7 +160,7 @@ namespace MGITest {
             return Arm::Legacy;
         }
 
-        // Whether the lane named an arm this file knows. A value that is set but unrecognised is a
+        // Whether the lane named an arm this file knows. A value that is set but unrecognized is a
         // FAILURE (SetUp below), never a quiet fall-through to Legacy: a typo in a lane's
         // MGITEST_HANDLE_ARM would otherwise downgrade that lane's Handles or AbaControl assertion
         // to the Legacy one, which passes - a lane reporting green for an arm it never ran. Same
@@ -299,7 +299,7 @@ namespace MGITest {
         // {slot, gen}"; the P3a one answers it for the BUFFER. P4a re-keys six more object classes
         // - texture, renderbuffer, framebuffer, sampler CSO, sampler view and shader CSO - and
         // their four subsystem bits (kMGPipeSubsystem{Framebuffer,TextureResources,Samplers,
-        // Programs}, MGPipe.h) are what a backend has to name to honour MOBILEGL_PIPE_PUSH's
+        // Programs}, MGPipe.h) are what a backend has to name to honor MOBILEGL_PIPE_PUSH's
         // default mask. A P4a case that read either older marker would report the Handles arm as
         // armed on a tree where nothing about a texture is keyed on a handle - green for a re-key
         // that does not exist, which is the one outcome this file exists to prevent. Set by
@@ -384,8 +384,8 @@ void main() { oColor = texture(uTex, vUv); }
             float r, g, b;
         };
 
-        // A full-viewport quad in one colour. Both buffers are the SAME SIZE and the SAME
-        // LAYOUT: only the colour bytes differ, which is what makes a content hash over the
+        // A full-viewport quad in one color. Both buffers are the SAME SIZE and the SAME
+        // LAYOUT: only the color bytes differ, which is what makes a content hash over the
         // vertex-input CONFIGURATION identical between them.
         std::vector<Vertex> Quad(float r, float g, float b) {
             return {
@@ -443,7 +443,7 @@ void main() { oColor = texture(uTex, vUv); }
                 if (!ArmNameIsRecognised()) {
                     const char* raw = std::getenv(kArmMarker);
                     FAIL() << "unknown " << kArmMarker << " value '" << (raw != nullptr ? raw : "")
-                           << "': the arms are handles / legacy / aba. Reading an unrecognised name "
+                           << "': the arms are handles / legacy / aba. Reading an unrecognized name "
                               "as Legacy would make this lane assert the pre-re-key guards while "
                               "claiming to test something else, and it would pass.";
                 }
@@ -583,7 +583,7 @@ void main() { oColor = texture(uTex, vUv); }
                 return wired;
             }
 
-            // A VBO holding one solid-colour quad.
+            // A VBO holding one solid-color quad.
             GLuint MakeQuadBuffer(float r, float g, float b) {
                 const std::vector<Vertex> vertices = Quad(r, g, b);
                 GLuint buffer = 0;
@@ -606,7 +606,7 @@ void main() { oColor = texture(uTex, vUv); }
                                       reinterpret_cast<const void*>(offsetof(Vertex, r)));
             }
 
-            // The same quad, split across TWO buffers - positions in one, colours in the other,
+            // The same quad, split across TWO buffers - positions in one, colors in the other,
             // one MGPVertexBuffer entry each. What travels in a P3a `set_vertex_buffers` is the
             // per-binding BUFFER IDENTITY (D-H3: Res, Offset 0, the resolved stride and
             // divisor); the formats live in the vertex-elements blob and are byte-identical
@@ -653,7 +653,7 @@ void main() { oColor = texture(uTex, vUv); }
                 return image;
             }
 
-            // A 2x2 RGBA8 texture of one colour, with the sampling parameters spelled the same
+            // A 2x2 RGBA8 texture of one color, with the sampling parameters spelled the same
             // way both times so a parameter-shadow key matches too.
             GLuint MakeSolidTexture(std::uint8_t r, std::uint8_t g, std::uint8_t b) {
                 const std::uint8_t texels[16] = {r, g, b, 255, r, g, b, 255, r, g, b, 255, r, g, b, 255};
@@ -907,7 +907,7 @@ void main() { oColor = texture(uTex, vUv); }
             // manager-wide slice-epoch counter, and a moved counter sends the resolved-bindings
             // memo into a revalidation that re-reads every binding from the live VAO. That gate is
             // not an identity gate and it is not what this case is about, so both buffers are
-            // realised up front and the ABA window contains no buffer traffic at all.
+            // realized up front and the ABA window contains no buffer traffic at all.
             const GLuint redBuffer = MakeQuadBuffer(1.0f, 0.0f, 0.0f);
             const GLuint greenBuffer = MakeQuadBuffer(0.0f, 1.0f, 0.0f);
 
@@ -987,10 +987,10 @@ void main() { oColor = texture(uTex, vUv); }
         //     splits that record in two: the formats travel once per configuration, in
         //     `create_vertex_elements`' blob, and the per-binding BUFFER IDENTITIES travel in
         //     `set_vertex_buffers` (D-G2, D-H3). So the replacement here shares its predecessor's
-        //     POSITION buffer and differs in the COLOUR buffer alone: the elements blob is
+        //     POSITION buffer and differs in the COLOR buffer alone: the elements blob is
         //     byte-identical between the two VAOs, exactly one entry of the buffer set moved, and
         //     a replacement that inherited the dead VAO's set draws its own geometry in the dead
-        //     VAO's colour. A single-buffer window cannot produce that picture.
+        //     VAO's color. A single-buffer window cannot produce that picture.
         //
         //     A SEPARATE CASE RATHER THAN A SECOND WINDOW IN THE ONE ABOVE, and the reason is
         //     measured. gtest_discover_tests registers one ctest entry per case, so a case is a
@@ -1015,14 +1015,14 @@ void main() { oColor = texture(uTex, vUv); }
             const GLuint redColorBuffer = MakeColorBuffer(1.0f, 0.0f, 0.0f);
             const GLuint greenColorBuffer = MakeColorBuffer(0.0f, 1.0f, 0.0f);
 
-            // Same rule as the case above: every buffer is realised and DRAWN WITH before the
+            // Same rule as the case above: every buffer is realized and DRAWN WITH before the
             // window, so the window contains no buffer traffic and the slice-epoch gate - which
             // is not an identity gate - is not what decides the verdict.
             GLuint splitPrimerVao = 0;
             glGenVertexArrays(1, &splitPrimerVao);
             ConfigureSplitQuadVao(splitPrimerVao, positionBuffer, greenColorBuffer);
             const Image splitPrimed = DrawQuadAndRead(splitPrimerVao);
-            ExpectWholeViewportIs(splitPrimed, "green", "priming the split replacement's colour buffer");
+            ExpectWholeViewportIs(splitPrimed, "green", "priming the split replacement's color buffer");
 
             GLuint splitRedVao = 0;
             glGenVertexArrays(1, &splitRedVao);
@@ -1102,7 +1102,7 @@ void main() { oColor = texture(uTex, vUv); }
             SkipUnlessTheResourceHandlePathIsAssertableHere();
             if (IsSkipped()) return;
 
-            // Both survivors are realised and drawn with before the window, for the reason the
+            // Both survivors are realized and drawn with before the window, for the reason the
             // vertex-array case gives: a buffer touched for the first time moves the manager-wide
             // slice epoch, and that gate is not an identity gate.
             const GLuint parkingBuffer = MakeQuadBuffer(0.0f, 0.0f, 1.0f);
@@ -1166,7 +1166,7 @@ void main() { oColor = texture(uTex, vUv); }
             // them, VkBufferManager's manager-wide slice epoch, MOVES when the replacement is
             // created and the replacement is created INSIDE this window by construction (a
             // buffer ABA cannot be built without creating a buffer in it). It does not: on the
-            // contract tree both AbaControl lanes read the dead buffer's colour over 100% of
+            // contract tree both AbaControl lanes read the dead buffer's color over 100% of
             // the viewport ("first offender at (2,2) is red rgba(255,0,0,255)"). So the control
             // reaches the buffer path too, and the line below records what was observed on
             // EVERY arm, whether or not the case passes.
@@ -1368,12 +1368,12 @@ void main() { oColor = texture(uTex, vUv); }
                                       << " dead texels are not red).";
             } else {
                 EXPECT_EQ(replacementIsNotGreen, 0)
-                    << "the replacement framebuffer's own attachment is not the colour it was "
+                    << "the replacement framebuffer's own attachment is not the color it was "
                        "cleared to, so the clear reached a framebuffer this one only shares an "
                        "address with (first texel rgba="
                     << static_cast<int>(replacementTexels[0]) << "," << static_cast<int>(replacementTexels[1]) << ","
                     << static_cast<int>(replacementTexels[2]) << "," << static_cast<int>(replacementTexels[3]) << ")";
-                EXPECT_EQ(deadIsNotRed, 0) << "the DEAD framebuffer's attachment changed colour, so the replacement's "
+                EXPECT_EQ(deadIsNotRed, 0) << "the DEAD framebuffer's attachment changed color, so the replacement's "
                                               "clear reached the framebuffer it only shares a name with";
             }
 
@@ -1521,7 +1521,7 @@ void main() { oColor = texture(uTex, vUv); }
         //
         // Two kinds carry a wrinkle the others do not:
         //   * FRAMEBUFFER has a handle and NO wire lifetime (D-I2). There is no framebuffer row in
-        //     the call catalogue at all: the applier learns of one only through
+        //     the call catalog at all: the applier learns of one only through
         //     set_framebuffer_state keyed by Fbo, and the death helper does the notice and the
         //     free and emits nothing. The allocator is therefore the ONLY observable of a
         //     framebuffer's lifetime, which is what the leak case reads.
@@ -1538,7 +1538,7 @@ void main() { oColor = texture(uTex, vUv); }
         //    address-keyed registry the texture uses, and P4a re-keys it on {slot, gen}.
         //
         //    The replacement is deliberately a DIFFERENT SIZE, because a renderbuffer cannot be
-        //    sampled and so has no colour of its own to inherit: what a stale twin gets wrong is
+        //    sampled and so has no color of its own to inherit: what a stale twin gets wrong is
         //    the STORAGE, and the storage's extent is the one property a readback can see. 8x8
         //    green against a dead 4x4 red: fresh reads green everywhere, and a replacement that
         //    inherited the dead 4x4 driver renderbuffer either leaves the outer ring unwritten or
@@ -1632,13 +1632,13 @@ void main() { oColor = texture(uTex, vUv); }
 
         // ------------------------------------------------------------------------------------
         // 5. The sampler object (SamplerCso). P4a content-addresses sampler CSOs at capacity 256
-        //    and hashes them field-wise over a canonical zero-initialised copy (D-F1), so two
+        //    and hashes them field-wise over a canonical zero-initialized copy (D-F1), so two
         //    sampler objects with identical parameters are ONE CSO by design - which is why the
         //    ABA here is built out of two samplers whose parameters DIFFER.
         //
-        //    The observable is the BORDER COLOUR, sampled at a constant UV outside [0,1] with
+        //    The observable is the BORDER COLOR, sampled at a constant UV outside [0,1] with
         //    GL_CLAMP_TO_BORDER, so every fragment reads the border and the whole viewport is one
-        //    colour. That is deliberate: the border colour is the sampler parameter with the
+        //    color. That is deliberate: the border color is the sampler parameter with the
         //    fewest other paths to the driver (it is not in the texture's own parameter set the
         //    way a filter effectively is), and borderColorForm is the very field G7's second
         //    negative control drops.
@@ -1655,7 +1655,7 @@ void main() { oColor = texture(uTex, vUv); }
             glGenVertexArrays(1, &vao);
             ConfigureQuadVao(vao, buffer);
             // The texture is BLUE and is never what the case reads: every fragment samples outside
-            // [0,1], so what comes back is the sampler's border colour and nothing else.
+            // [0,1], so what comes back is the sampler's border color and nothing else.
             const GLuint texture = MakeSolidTexture(0, 0, 255);
 
             const auto makeBorderSampler = [](float r, float g, float b) {
@@ -1669,7 +1669,7 @@ void main() { oColor = texture(uTex, vUv); }
                 glSamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, border);
                 return sampler;
             };
-            // Sampled at a constant UV well outside [0,1]: one colour for the whole viewport.
+            // Sampled at a constant UV well outside [0,1]: one color for the whole viewport.
             static const char* kBorderFS = R"(#version 330 core
 uniform sampler2D uTex;
 out vec4 oColor;
@@ -1835,7 +1835,7 @@ void main() { oColor = texture(uTex, vec2(4.0, 4.0)); }
         //    ProgramObject; P4a re-keys it on the shader CSO's {slot, gen} and gives the program a
         //    create_shader_state / delete_shader_state lifetime of its own.
         //
-        //    A program's colour is BAKED INTO ITS SOURCE here rather than passed as a uniform, so
+        //    A program's color is BAKED INTO ITS SOURCE here rather than passed as a uniform, so
         //    "the draw used the dead program" is the only thing the pixels can mean: a uniform
         //    would be re-set on the replacement and would hide exactly the inheritance the case is
         //    about.

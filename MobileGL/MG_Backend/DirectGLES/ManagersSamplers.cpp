@@ -168,8 +168,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_cacheSamplerParameters.borderColorI != samplerParams.borderColorI ||
                 m_cacheSamplerParameters.borderColorUI != samplerParams.borderColorUI ||
                 m_cacheSamplerParameters.borderColorForm != samplerParams.borderColorForm) {
-                // Same gate as the texture-side border colour above, and the same reason for
-                // branching on the form: an integer border colour must reach the driver through
+                // Same gate as the texture-side border color above, and the same reason for
+                // branching on the form: an integer border color must reach the driver through
                 // glSamplerParameterIiv/Iuiv or an integer sampler reads the float's bit pattern
                 // back instead of the value.
                 if (g_GLESCapabilities.SupportsTextureBorderClamp) {

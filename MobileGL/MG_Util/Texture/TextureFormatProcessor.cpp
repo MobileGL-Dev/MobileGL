@@ -32,7 +32,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             break;
         // The two render-target bits reach EVERY signed-normalized format, one-, two- and
         // four-channel included. They used to be granted to GL_RGB16_SNORM alone, which left the
-        // other seven with no colour-renderable fallback at all on a driver without
+        // other seven with no color-renderable fallback at all on a driver without
         // EXT_render_snorm: an R8_SNORM or R16_SNORM attachment (what KHR-GL4x.texture_swizzle
         // renders into for every SNORM source format) got no substitute, so the ES framebuffer was
         // incomplete, the draw landed nowhere and the readback fell through to the never-written
@@ -94,7 +94,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
 
     namespace {
         // The four-channel sibling a three-channel format is widened to when the target has to
-        // stay colour-renderable, together with the transfer pair that describes client data for
+        // stay color-renderable, together with the transfer pair that describes client data for
         // it. Kept in one place because all three of NormalizePixelFormat's switches have to agree:
         // reporting the widened storage but the original three-channel base format emitted
         // inconsistent triples such as (GL_RGBA16F, GL_RGB, GL_BYTE), which is
@@ -129,7 +129,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                            ? ThreeChannelWidening{GL_RGBA32F, GL_RGBA, GL_FLOAT}
                            : ThreeChannelWidening{GL_RGBA16_SNORM, GL_RGBA, GL_SHORT};
             // Unsigned-normalized 16-bit (and the legacy 10/12-bit formats stored as RGB16):
-            // GL_RGB32F is a legal ES texture format but is not colour-renderable either.
+            // GL_RGB32F is a legal ES texture format but is not color-renderable either.
             case GL_RGB16:
             case GL_RGB10:
             case GL_RGB12:
@@ -143,7 +143,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 // refused outright (KHR-GL4x.texture_view.view_classes). Against GL_RGBA16
                 // the whole class lands on ES's 64-bit class and every channel reinterprets
                 // bit-exactly. EXT_texture_norm16 - the absence of which is what NoNorm16
-                // means - is also what makes GL_RGBA16 colour-renderable, so the two
+                // means - is also what makes GL_RGBA16 color-renderable, so the two
                 // questions have one answer.
                 return (options & PixelFormatNormalizeOptionBit::NoNorm16)
                            ? ThreeChannelWidening{GL_RGBA32F, GL_RGBA, GL_FLOAT}
@@ -153,7 +153,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 return {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT};
             case GL_RGB32F:
                 return {GL_RGBA32F, GL_RGBA, GL_FLOAT};
-            // sRGB: GL_SRGB8_ALPHA8 keeps the sRGB encoding of the colour channels and stores
+            // sRGB: GL_SRGB8_ALPHA8 keeps the sRGB encoding of the color channels and stores
             // the added alpha linearly, which is exactly the three-channel format's semantics.
             case GL_SRGB8:
                 return {GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE};
@@ -556,7 +556,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             // frontend's validator demands (Validators.cpp:
             // "STENCIL_INDEX requires a stencil-only internal format") and the same one the
             // stencil readback path hands the driver. The unsized spelling is here for the same
-            // reason the unsized depth and colour formats are: it resolves to this storage.
+            // reason the unsized depth and color formats are: it resolves to this storage.
             case GL_STENCIL_INDEX8:
             case GL_STENCIL_INDEX:
                 *outFormat = GL_STENCIL_INDEX;
@@ -803,7 +803,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
         }
 
         // Applied last, over whatever the three switches above chose: widening a three-channel
-        // format to keep a colour attachment renderable outranks every other fallback, because
+        // format to keep a color attachment renderable outranks every other fallback, because
         // the others all pick a three-channel storage the driver still refuses to render to
         // (GL_RGB8_SNORM -> GL_RGB16F under NoSnorm8, GL_RGB16 -> GL_RGB32F under NoNorm16).
         // All three outputs move together: reporting the widened storage while leaving the

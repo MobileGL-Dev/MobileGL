@@ -203,7 +203,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         // The barrier belongs in the frame's own recording. Bailing out because
-        // something was already recorded (the previous behaviour) dropped the
+        // something was already recorded (the previous behavior) dropped the
         // transition entirely for every frame that never ran a default-framebuffer
         // render pass - the only other thing that carries the image to
         // PRESENT_SRC_KHR, via that pass's finalLayout - so the swapchain image was

@@ -732,7 +732,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     // TryResolveTextureShapeInfo's answers derived from the wire descriptor instead of the
     // frontend object. The descriptor's Width/Height/Depth are the BASE level's GL extent and
-    // ArrayLayers the layer count the emitter already normalised (MGPipeTextureExtentOf: a 1D
+    // ArrayLayers the layer count the emitter already normalized (MGPipeTextureExtentOf: a 1D
     // array's layers are already out of its height, a cube map reports 6).
     static Bool ResolveWireTextureShapeInfo(const MG_Pipe::MGPResourceDesc& desc, TextureShapeInfo& outShape) {
         using MG_Pipe::MGPipeResourceTarget;
@@ -768,7 +768,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             outShape.arrayLayers = 6;
             return desc.Width > 0 && desc.Width == desc.Height;
         case MGPipeResourceTarget::TexCubeArray:
-            // glTexStorage3D hands 6n through as the depth; the emitter normalised it into
+            // glTexStorage3D hands 6n through as the depth; the emitter normalized it into
             // ArrayLayers. A non-whole cube count has no Vulkan shape - declined like every
             // other unrepresentable target.
             outShape.viewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
@@ -1706,7 +1706,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
         // The RGBA8/RGBX8 buffers the registry allocates have a Vulkan format; an external-only
-        // format would need a YCbCr conversion and is not a colour buffer this path can write.
+        // format would need a YCbCr conversion and is not a color buffer this path can write.
         if (formatProperties.format == VK_FORMAT_UNDEFINED) {
             why = "the buffer has no Vulkan format (external format only)";
             return false;

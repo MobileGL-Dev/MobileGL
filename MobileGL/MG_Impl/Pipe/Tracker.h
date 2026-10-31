@@ -189,7 +189,7 @@ namespace MobileGL::MG_Pipe {
     // can collide and miss a fire; over lifetime ids, versions and generations an application
     // cannot steer, that is about 2^-64 per pair, accepted instead of comparing the whole state
     // on every verb. The mix must avalanche: a hash_combine-style step collides outright on small
-    // neighbouring counters ((1, 64) and (2, 1)), and a missed bit-12 fire then leaves a draw
+    // neighboring counters ((1, 64) and (2, 1)), and a missed bit-12 fire then leaves a draw
     // sampling the previous texture set. Each step is a bijection in either argument with the
     // other fixed, so a change to one input alone always changes the result.
     inline constexpr Uint64 MGPipeShutterAvalanche(Uint64 value) {
@@ -521,7 +521,7 @@ namespace MobileGL::MG_Pipe {
             // fired none of the four and A recorded the stale framebuffer, view and sampler sets.
             // The group keeps a twin of each aggregate, and each bit fires here on exactly the
             // twins of what its own shutter reads above. An exact compare rather than one more
-            // MGPipeMixShutter for vaoChanged's reason: the four are small neighbouring counters.
+            // MGPipeMixShutter for vaoChanged's reason: the four are small neighboring counters.
             // A single-context group skips the clocks behind one relaxed load; the first walk
             // after a second context joins may fire the four once, which is the safe direction.
             // The program bits need nothing of this: a program is a group object too, but its

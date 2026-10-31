@@ -23,7 +23,7 @@
 //
 // Two claims, and neither can be satisfied by ignoring the other:
 //
-//   * a readback issued after a swap, with no draw in between, still sees the colour the
+//   * a readback issued after a swap, with no draw in between, still sees the color the
 //     app drew into the default framebuffer (that is the retrace snapshot's frame);
 //   * the NEXT draw into the default framebuffer does land in the image the readback then
 //     resolves - i.e. the write re-points the default framebuffer at what Present()
@@ -69,8 +69,8 @@ void main() { o_color = vColor; }
         class DefaultFramebufferAcrossSwapScenario : public ScenarioTest {};
 
         // One interleaved VBO: aPos (vec2) then aColor (vec4). CompileProgram pins those two
-        // attribute names to locations 0 and 1. The colours below are fully saturated or fully
-        // off, so the readback lands on a named colour whatever the driver's exact rounding is.
+        // attribute names to locations 0 and 1. The colors below are fully saturated or fully
+        // off, so the readback lands on a named color whatever the driver's exact rounding is.
         void DrawFullViewportQuad(unsigned int program, float red, float green, float blue) {
             const float vertices[] = {
                 -1.0f, -1.0f, red, green, blue, 1.0f, 1.0f, -1.0f, red, green, blue, 1.0f,

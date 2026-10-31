@@ -164,7 +164,7 @@ namespace MobileGL::MG_Config {
         // surface's minimum (the frames-in-flight count still raises the request when it is
         // larger), clamped to the surface's maximum. With more images, the one the display has
         // just released is reused later, by when its release has usually signaled, so fewer
-        // frames start their window pass behind it. Each image costs a full-size colour buffer
+        // frames start their window pass behind it. Each image costs a full-size color buffer
         // plus the default framebuffer's depth/stencil buffer of the same size.
         Uint32 MagmaExtraSwapchainImages = 0;
         // MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER: GL draws and dispatches Magma records into
@@ -316,10 +316,10 @@ namespace MobileGL::MG_Config {
         // keeps the built-in default (MG_Util::Async::kAsyncShaderCompileDefault); falsy
         // forces every glCompileShader/glLinkProgram to run synchronously on the calling
         // thread AND withdraws GL_KHR_parallel_shader_compile, so the single switch reverts
-        // both the threading and the application-visible behaviour change.
+        // both the threading and the application-visible behavior change.
         QuirkOverride AsyncShaderCompile = QuirkOverride::Auto;
         // MOBILEGL_ASYNC_SHADER_COMPILE_THREADS: shader-compile worker count. 0 (unset) means
-        // auto, which is min(4, big cores); an explicit value is honoured as given.
+        // auto, which is min(4, big cores); an explicit value is honored as given.
         Uint32 AsyncShaderCompileThreads = 0;
         // MOBILEGL_DISABLE_SHADER_PREWARM: skip the glslang built-in table prewarm in
         // Initialize(), which moves ~20-100 ms of table building from the first shader compiles
@@ -356,7 +356,7 @@ namespace MobileGL::MG_Config {
         // extension only ever gave the SHADER a compilable name: MobileGL has never
         // programmed a driver's INDEXED viewport state (SyncRenderState pushes index 0
         // and nothing else), so on an extension-capable driver every index rasterized as
-        // index 0 exactly as it did without one. ForceOff returns to that behaviour -
+        // index 0 exactly as it did without one. ForceOff returns to that behavior -
         // the pre-emulation path, extension passthrough where it exists and
         // LowerViewportIndexPass' demote-to-a-plain-global where it does not - and is
         // the negative control the emulation is measured against.
@@ -420,7 +420,7 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_PIPE_PUSH: per-subsystem bitmask selecting which state the frontend
         // PUSHES over MGPipe instead of leaving the backend to pull it out of GLContext.
         // 0 - the only shipped value until the migration lands - is "pull everything",
-        // i.e. exactly today's behaviour, and is the default of a PULL build, where the
+        // i.e. exactly today's behavior, and is the default of a PULL build, where the
         // knob is meaningless anyway. A PUSH build defaults to every subsystem migrated so
         // far (MG_Pipe::kMGPipeSubsystemsMigratedAtP5e = 0x3fff), so MOBILEGL_PIPE_PUSH=0 in
         // the environment is the all-pull control and 0x1fff (kMGPipeSubsystemsMigratedAtP4a)
@@ -447,7 +447,7 @@ namespace MobileGL::MG_Config {
         //         (every MGPBufferRange::Res names a Buffer handle; P5e)
         //   A dependency that is not met is REFUSED with one ERROR naming both bits and the
         //   family runs its legacy arm; it is never half-run.
-        //   1<<63 NOT a subsystem, a BEHAVIOUR: turn OFF client-side content addressing of
+        //   1<<63 NOT a subsystem, a BEHAVIOR: turn OFF client-side content addressing of
         //         CSOs, so every pipeline-version change mints a fresh CSO and the map is
         //         never probed. The negative control the CSO design is measured against.
         //   P13 W3b (ID-P13-3): bits 0-13 are FIXED ON. Their pre-handle arms are gone, so a mask
@@ -489,7 +489,7 @@ namespace MobileGL::MG_Config {
     extern FeaturesTable Features;
 
     // ---------------------------------------------------------------------------------
-    // P5: the transport selector and the MOBILEGL_IPC_* family (ARCHITECTURE.md 16, 附 A)
+    // P5: the transport selector and the MOBILEGL_IPC_* family (ARCHITECTURE.md 16, appendix A)
     // ---------------------------------------------------------------------------------
     //
     // MOBILEGL_TRANSPORT = monolith | inproc | spawn | unix:<path> | pipe:<name>.
@@ -573,7 +573,7 @@ namespace MobileGL::MG_Config {
 
     // The MOBILEGL_IPC_* family. A separate table rather than more FeaturesTable members,
     // for the G1 reason above and because every field here is meaningless without the
-    // transport: a build that cannot reach the MG_Remote code cannot honour one of them.
+    // transport: a build that cannot reach the MG_Remote code cannot honor one of them.
     //
     // P5 lands exactly the knobs P5's own packages read. A later phase's knob is added HERE,
     // through the integrator, and not invented at its call site - ARCHITECTURE.md appendix A holds
@@ -753,7 +753,7 @@ namespace MobileGL::MG_Config {
         // own) and no SetWindowHandle, and take the surface's real geometry back from the server.
         // Meaningful only when this client talks to a remote server (MOBILEGL_TRANSPORT=spawn, the
         // fork or tcp:// control); under monolith / inproc it is parsed, logged as ignored, and
-        // changes nothing. `offscreen` (the default) is today's behaviour byte for byte.
+        // changes nothing. `offscreen` (the default) is today's behavior byte for byte.
         // Pbuffers stay pbuffers in both modes (D4: one mode per session, decided by the first).
         IpcSurface Surface = IpcSurface::Offscreen;
     };

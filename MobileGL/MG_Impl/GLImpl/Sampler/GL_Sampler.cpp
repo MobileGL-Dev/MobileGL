@@ -57,7 +57,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return;
             }
             // Via GLint in both integer spellings: a direct float -> GLuint cast of a negative value
-            // (GL_TEXTURE_MIN_LOD defaults to -1000) is undefined behaviour, while the two-step
+            // (GL_TEXTURE_MIN_LOD defaults to -1000) is undefined behavior, while the two-step
             // conversion is the well-defined modular one, and it is what the texture-side
             // GetTexParameterIuiv fallback does.
             const GLint asInt = static_cast<GLint>(value);
@@ -86,7 +86,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             case GL_TEXTURE_MAX_LOD:
             case GL_TEXTURE_LOD_BIAS:
                 return true;
-            // Four components, and GL puts no range on them - a border colour outside [0,1] is
+            // Four components, and GL puts no range on them - a border color outside [0,1] is
             // clamped when a fixed-point format is sampled, not rejected here. The scalar readers
             // below would look at one component and invent an error.
             case GL_TEXTURE_BORDER_COLOR:
@@ -182,7 +182,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 const auto* values = (const GLfloat*)param;
                 samplerObj->SetBorderColor(FloatVec4(values[0], values[1], values[2], values[3]));
             } else if (!isIntegerCommand) {
-                // glSamplerParameteriv: GL 4.6 core equation 2.2 into the FLOAT border colour.
+                // glSamplerParameteriv: GL 4.6 core equation 2.2 into the FLOAT border color.
                 const auto* values = (const GLint*)param;
                 samplerObj->SetBorderColor(FloatVec4(MG_Util::SignedNormalizedInt32ToFloat(values[0]),
                                                      MG_Util::SignedNormalizedInt32ToFloat(values[1]),

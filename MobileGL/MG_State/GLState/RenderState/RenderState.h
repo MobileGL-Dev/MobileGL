@@ -170,13 +170,13 @@ namespace MobileGL {
 
                 Uint16 m_version = 0;
                 // Only the subset of render state that a backend bakes INTO a pipeline object.
-                // Viewport, scissor, depth range, blend colour, line width, polygon offset, stencil
+                // Viewport, scissor, depth range, blend color, line width, polygon offset, stencil
                 // write mask, the clear values, hints and the point-size family are all either
                 // dynamic pipeline state or not pipeline state at all, so changing one of them must
                 // not evict a cached pipeline. Keeping one counter for both made a glViewport call
                 // knock the next draw off the pipeline memo AND the draw fast path.
                 Uint16 m_pipelineStateVersion = 0;
-                // Value-initialised, PADDING INCLUDED. The MGPipe CSO key is a byte-range
+                // Value-initialized, PADDING INCLUDED. The MGPipe CSO key is a byte-range
                 // hash over RenderStateParameters and the residual block's trip wire is a
                 // byte-level compare, so indeterminate padding would make a CSO handle
                 // reproducible only within one context and would make the trip wire

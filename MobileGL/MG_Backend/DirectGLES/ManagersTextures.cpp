@@ -461,7 +461,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // otherwise still claim those values are in force and SyncTextureParamsToBackend
             // would skip the whole pass on the unchanged params version, leaving the driver
             // texture at defaults for the rest of its life. Latent for swizzle, LOD range and
-            // border colour long before GL_DEPTH_STENCIL_TEXTURE_MODE joined them; the mode
+            // border color long before GL_DEPTH_STENCIL_TEXTURE_MODE joined them; the mode
             // makes it visible because falling back to the default silently samples the wrong
             // aspect rather than merely mis-filtering.
             m_cacheLodRange = {0, 1000};
@@ -835,7 +835,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // NO set_texture_params HAS BEEN APPLIED FOR THIS TEXTURE YET, which is not the same
             // thing as a malformed one and must not be read as one. ParamsSerial is the
             // applier's own "have I ever stored a params record here" (it is bumped on every
-            // set_texture_params and starts at 0), and Params is value-initialised beside it -
+            // set_texture_params and starts at 0), and Params is value-initialized beside it -
             // so on a texture the application has never given a parameter to, BuiltinSampler is
             // null because the record was never written, not because a client wrote a null.
             // There is nothing to push in that state; SyncTextureParamsToBackend's own gate
@@ -912,7 +912,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // P4a (D-E1): the fifteen sampler values are SAMPLER state (GL 4.6 table 23.18) and
             // Espryt pushes them with glTexParameter* onto the TEXTURE rather than with
-            // glBindSampler onto the unit - behaviour P4a preserves exactly. What changes is
+            // glBindSampler onto the unit - behavior P4a preserves exactly. What changes is
             // where the values and the "did they move" answer come from.
             //
             // The whole arm choice is a preprocessor #if/#else rather than a runtime branch
@@ -1055,7 +1055,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // independent of any binding - that is what closes D-E3's gap, where a texture that is
         // only a READ-framebuffer attachment reaches SyncMipmapsToBackend and nothing else. The
         // FORMAT comes from the descriptor beside them, and the BORDER comes from the built-in
-        // sampler's CSO (D-F4), because a border colour is sampler state.
+        // sampler's CSO (D-F4), because a border color is sampler state.
 #define MGB_TEXPARAM_LEVEL_RANGE                                                                                       \
     (pushedRecord != nullptr ? UintVec2{static_cast<Uint>(pushedRecord->Params.BaseLevel),                             \
                                         static_cast<Uint>(pushedRecord->Params.MaxLevel)}                              \
@@ -1117,7 +1117,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool borderColorReadable = true;
             pushedRecord = ResolvePushedTextureParams(stateTextureObject);
             if (pushedRecord == nullptr) return;
-            // D-F4: the border colour is SAMPLER state (GL 4.6 table 23.18) and lives on the
+            // D-F4: the border color is SAMPLER state (GL 4.6 table 23.18) and lives on the
             // built-in sampler's CSO, not on MGPTextureParams - P4a deliberately does not
             // put SamplerParameters on the wire twice. All FOUR comparands (float, int,
             // uint, form) still cross and are still all compared below, because two integer
@@ -1129,7 +1129,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             } else {
                 borderColorReadable = false;
                 MGLOG_E_ONCE("MGPipe: texture %u's built-in sampler CSO {%u, %u} has no applier "
-                             "record, so its border colour cannot be pushed",
+                             "record, so its border color cannot be pushed",
                              TextureDiagName(stateTextureObject, pushedRecord),
                              pushedRecord->Params.BuiltinSampler.Slot, pushedRecord->Params.BuiltinSampler.Gen);
             }
@@ -1185,7 +1185,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("%s(%s:%d) ES error %s", func, file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
 
-            // A three-channel format widened to four to keep the image colour-renderable (see
+            // A three-channel format widened to four to keep the image color-renderable (see
             // NormalizePixelFormat) gains an alpha channel the frontend format does not have, and
             // whatever the draw that filled it wrote there is not what GL would report: a format
             // without alpha reads back as 1.0. Answer the ALPHA swizzle source with ONE so the
@@ -1246,7 +1246,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // GL_TEXTURE_BORDER_COLOR needs ES 3.2 or EXT/OES_texture_border_clamp; on a driver
             // without it every such call is INVALID_ENUM, so the parameter is simply not synced.
             //
-            // The FORM has to be forwarded along with the value. A border colour set through
+            // The FORM has to be forwarded along with the value. A border color set through
             // glTexParameterIiv/Iuiv is an integer one, and an isampler2D/usampler2D fetch of the
             // border returns whatever the driver's integer border register holds - so pushing it
             // through glTexParameterfv handed the driver float 255.0 and the shader read back
@@ -1259,7 +1259,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // leave the driver holding the first value forever.
             // m-3: GATED, because on the handle arm an unreadable border means the CSO record is
             // missing and the block below is skipped with the refusal already named - so v1's
-            // unconditional initialiser was a live frontend read on a switched-over path whose
+            // unconditional initializer was a live frontend read on a switched-over path whose
             // value nothing then used. The value a skipped block sees is the cache's own, which
             // cannot make the condition true.
             const auto borderColorForm = borderColorReadable ? MGB_TEXPARAM_BORDER_FORM : m_cacheBorderColorForm;

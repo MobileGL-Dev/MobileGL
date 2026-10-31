@@ -16,10 +16,10 @@ Commands below use `python3`. On Windows, run `python` instead.
 - **Subject only by default.** Add `- ` detail lines only when a detail really needs to be in the commit message. Leave one blank line after the subject. A detail that wraps continues on at most two lines indented by two spaces. No paragraphs and no trailers.
 - **Content** after `): ` is at most 72 characters of plain English in the imperative mood ("flush once per frame", not "flushes" or "flushed").
 - **Type** is one or more of these, comma-separated (`[Fix, Test]`):
-  - `Feat`: new behaviour.
-  - `Fix`: corrects behaviour.
-  - `Perf`: faster or lighter, same behaviour.
-  - `Refactor`: restructures code, same behaviour.
+  - `Feat`: new behavior.
+  - `Fix`: corrects behavior.
+  - `Perf`: faster or lighter, same behavior.
+  - `Refactor`: restructures code, same behavior.
   - `Test`: tests only.
   - `Docs`: documentation and comments only.
   - `Build`: CMake, Gradle, toolchains.
@@ -43,12 +43,12 @@ Example:
 
 ## Comments, strings and documentation
 
-- Code, comments, log strings and commit messages are in English. Documentation may be in Chinese or English.
+- Code, comments, log strings and commit messages are in English, and documentation may be in English. American spelling is preferred in all of them: documentation, comments, strings and identifiers (color, behavior, center, cancel, initialize, normalize, organize, analyze, license, defense, artifact, modeling, labeled, gray, honor, neighbor, catalog).
 - A comment states what the code does now and why, in a few lines. Rationale longer than about 15 lines belongs in a design document under `docs/`, with a one-line pointer in the code.
 - In code and comments, cite a symbol, file or section, never a line number: `ARCHITECTURE.md §1.3`, `VulkanRenderer::BeginFrame()`. Documents may keep `file:line` citations; the documentation citation check resolves them.
 - State the rule, not its history. No "previously" or "after review", and no planning ids in comments, strings, identifiers or file names.
 - Plain wording, without ALL-CAPS emphasis.
-- In code and comments (C, C++, GLSL, CMake, shell, Python, YAML), do not name external projects such as Mesa, Zink or gallium; describe the technique instead. Naming the driver or hardware where a behaviour was observed (llvmpipe, ANGLE, Adreno, Mali) is fine, and so are file, package and extension names that contain these words (`50_mesa.json`, `GL_MESA_*`).
+- In code and comments (C, C++, GLSL, CMake, shell, Python, YAML), do not name external projects such as Mesa, Zink or gallium; describe the technique instead. Naming the driver or hardware where a behavior was observed (llvmpipe, ANGLE, Adreno, Mali) is fine, and so are file, package and extension names that contain these words (`50_mesa.json`, `GL_MESA_*`).
 
 ## Code
 
@@ -69,7 +69,7 @@ Example:
   5. `MG_Test`, `MG_IntegrationTest` and `MG_Benchmark`.
 - Each backend is isolated. Files under `MG_Backend/DirectGLES/` or `MG_Backend/DirectVulkan/` are included only by the same backend, by the registry files directly in `MG_Backend/`, by the root `.cpp` files and by tests.
 - Platform-specific APIs stay behind an abstraction, never raw in logic code.
-- A fix that restores intended behaviour ships unconditionally. Add a switch only for a real trade-off.
+- A fix that restores intended behavior ships unconditionally. Add a switch only for a real trade-off.
 - A cache keyed on object identity uses a monotonic lifetime id, never a GL name or a pointer, because both are recycled.
 
 ## What goes in the repository

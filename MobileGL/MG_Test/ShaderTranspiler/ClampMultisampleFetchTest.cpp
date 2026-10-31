@@ -191,7 +191,7 @@ void main() {
 }
 )";
 
-    // The colour class, which real devices squeeze to something above 1 rather than to 1.
+    // The color class, which real devices squeeze to something above 1 rather than to 1.
     const char* const kColorMultisampleFetch = R"(#version 410 core
 uniform sampler2DMS colorMs;
 out vec4 fragColor;
@@ -268,7 +268,7 @@ TEST_F(ClampMultisampleFetchTest, TheCombinedProbeAgreesWithThePerGateOnes) {
 
 // The overwhelming majority of modules. Behind the probe they never reach the pass at all, but the
 // pass has to be inert for them on its own, or a future caller that forgets the gate silently
-// re-serialises every shader in the program.
+// re-serializes every shader in the program.
 TEST_F(ClampMultisampleFetchTest, LeavesAModuleWithoutAMultisampledImageUntouched) {
     const Vector<Uint32> input = CompileFragment(kNoMultisampleFetch);
     ASSERT_FALSE(input.empty());
@@ -328,7 +328,7 @@ TEST_F(ClampMultisampleFetchTest, ReplacesAnOutOfRangeIntegerSampleWithZero) {
 }
 
 // The same shader on a device whose integer ceiling really is what MobileGL advertises. Nothing is
-// out of range, so nothing may be rewritten - and the module must not even be re-serialised.
+// out of range, so nothing may be rewritten - and the module must not even be re-serialized.
 TEST_F(ClampMultisampleFetchTest, LeavesTheFetchAloneWhenTheCategoryReachesTheAdvertisedMaximum) {
     const Vector<Uint32> input = CompileFragment(kIntegerMultisampleFetch);
     ASSERT_FALSE(input.empty());
@@ -412,7 +412,7 @@ void main() {
     }
 } // namespace
 
-// Integer colour squeezed to one sample but depth/stencil at four (Adreno): a usampler2DMS fetch
+// Integer color squeezed to one sample but depth/stencil at four (Adreno): a usampler2DMS fetch
 // straight from its uniform is handed to the runtime bound and keeps sample 3 - a stencil texture
 // really has it - while the fetch through a parameter and the signed one still read sample 0.
 TEST_F(ClampMultisampleFetchTest, DefersADirectUnsignedFetchToTheRuntimeBound) {

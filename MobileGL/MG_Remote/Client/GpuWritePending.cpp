@@ -61,7 +61,7 @@ namespace MobileGL::MG_Remote::Client {
     SizeT MGPipeStageChunkBytes() {
         // The server role's own uploads run the monolith adapter (RunsAsTheServerRole's comment
         // in WireTables.h): cutting them would change how many calls the server's own backend
-        // sees for one application call, which is a monolith behaviour change on the apply
+        // sees for one application call, which is a monolith behavior change on the apply
         // thread and not this emitter's to make.
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return 0;
         if (RunsAsTheServerRole()) return 0;

@@ -1,85 +1,85 @@
-# 构建布局、开关与计数器（原 ARCHITECTURE §16、附 A、附 B）
+# Build layout, switches and counters (formerly ARCHITECTURE §16, appendices A and B)
 
-> 设计细节。设计要点与全部章节的索引见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)。章节编号沿用原 `ARCHITECTURE.md`，代码注释里的 `ARCHITECTURE.md §N` 按编号在这里找到。
+> Design details. The design points and the index of all chapters are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Section numbers follow the original `ARCHITECTURE.md`; an `ARCHITECTURE.md §N` in a code comment is found by its number here.
 
-## 16. 构建布局
+## 16. Build layout
 
 ```
-MobileGL/MG_Pipe/            永远进构建：*.def 目录与表、MGPipe*.h payload / 句柄 / 回调、PipeApply、PipeRoute、generated/*.inc
-MobileGL/MG_Impl/Pipe/       Tracker、PipeFill、SlotAllocator、CsoCache、CompositeResolver、ResourceTracker、SetHashSuppressor、*Emit.h
+MobileGL/MG_Pipe/            always in the build: the *.def catalog and tables, MGPipe*.h payloads / handles / callbacks, PipeApply, PipeRoute, generated/*.inc
+MobileGL/MG_Impl/Pipe/       Tracker, PipeFill, SlotAllocator, CsoCache, CompositeResolver, ResourceTracker, SetHashSuppressor, *Emit.h
 MobileGL/MG_Backend/MGPipe/  PipeInputs.{h,cpp}
-MobileGL/MG_Remote/          仅 MOBILEGL_BUILD_DISAGGREGATED：CONTRACT-*.md、CapsCodec、FatalFamilies.def / FatalFunnel、Handshake.h
-  Protocol/   protocol.fbs、generated/、SurfaceOpCodec、mg_protocol_base.h
-  Transport/  ITransport、SocketTransport、InProcessTransport、ILink、ShmLink、StreamLink、Ring、SessionRings、ReplySlot、EventRing、
-              Doorbell、ShmSegment(+Posix/Win32)、FdPassing、Framing、AuthToken、ControlInbox、LinkMetrics、WireLog
-  Wire/       PipeWireCodec（记录编解码、WireVerbSink）
-  Client/     BackendObject_Remote、ClientSession、EmitTables、WireTables、CapsMirror、PersistentMapTracker、GpuWritePending
-  Server/     PipeApplier、ServerLoop、ServerSession、ServerMain / ServerEntry / ServerSpawn、PreAuthGate、StagedShadow、StagedTextureStore、
-              SurfaceControlFrame、ServerDisplay、InProcessServer、DisplayServerJni
+MobileGL/MG_Remote/          only with MOBILEGL_BUILD_DISAGGREGATED: CONTRACT-*.md, CapsCodec, FatalFamilies.def / FatalFunnel, Handshake.h
+  Protocol/   protocol.fbs, generated/, SurfaceOpCodec, mg_protocol_base.h
+  Transport/  ITransport, SocketTransport, InProcessTransport, ILink, ShmLink, StreamLink, Ring, SessionRings, ReplySlot, EventRing,
+              Doorbell, ShmSegment(+Posix/Win32), FdPassing, Framing, AuthToken, ControlInbox, LinkMetrics, WireLog
+  Wire/       PipeWireCodec (record codec, WireVerbSink)
+  Client/     BackendObject_Remote, ClientSession, EmitTables, WireTables, CapsMirror, PersistentMapTracker, GpuWritePending
+  Server/     PipeApplier, ServerLoop, ServerSession, ServerMain / ServerEntry / ServerSpawn, PreAuthGate, StagedShadow, StagedTextureStore,
+              SurfaceControlFrame, ServerDisplay, InProcessServer, DisplayServerJni
 ```
 
-- `MOBILEGL_BUILD_DISAGGREGATED`（默认 OFF）追加 `MG_Remote/**`；OFF 时 `MG_Config::Transport` 是 `constexpr Monolith`。`MOBILEGL_BUILD_DISAGGREGATED_INPROC` 隐含前者并加角色隔离：两个角色靠 apply 线程与控制邮箱分开，而不是给 1494 个 `pGLContext->` 读点加 TLS。
-- `MOBILEGL_TRANSPORT = monolith | inproc | spawn` 是**拓扑**（G1 相关）；控制面与数据面由 §11.9 的两个变量选。**split build 不设 `MOBILEGL_TRANSPORT` 时是 monolith 对照臂**。
-- 三个构建 flavour（P13 起）：默认（单进程记录臂，不编 `MG_Remote`，出货形态）、verify、split；Android 两份 APK flavour（单进程 / split）。pull 构建与 `MOBILEGL_PIPE_PUSH` CMake 选项在 P13 删除。
-- 模块（P13 W7）：`SOURCE_FILES` 按 link ratchet 的 PARTITION 拆成七个 OBJECT 库，`MobileGL` / `MobileGL_s` 由它们拼成；split 构建的 `MobileGL_server_linkcheck` 只链 SERVER 与 SHARED 模块并 `--no-undefined`，基线外的前端引用在构建时就失败（`scripts/ci/server_link_check.py`）。记录臂的 server 端代码在 `MG_Backend/Record/`（`RecordVerbSink`、`StagedShadow`、`StagedTextureStore`），客户端 verb 发射在 `MG_Impl/Pipe/Verb/`，不再依赖 `MG_Remote`。
-- 测试接线：ctest `ENVIRONMENT` 用 `mgl_itest_join_environment(...)` 构造；每条 split / spawn / tcp 条目带独立日志路径，日志按角色分文件（`<base>.client.log` / `<base>.server.log`）；spawn、tcp 车道与 split 名集合一致（`scripts/ci/spawn_lane_parity.py`），每条目记 arm 证明。
-- CI（`.github/workflows/test.yml`、`apk.yml`）：`pipe-gates`（G1–G8、生成器 self-test、符号报告、dirty-surface、字段归属、G5、文档引用 lint）、`flatc-check`、include 闭包、各 flavour 的 build / integration / retrace 车道、APK + AVD。两份 workflow 里的 `feat/disaggregated` 触发器是临时的，合入 `dev` 前移除。
+- `MOBILEGL_BUILD_DISAGGREGATED` (default OFF) adds `MG_Remote/**`; when OFF, `MG_Config::Transport` is a `constexpr Monolith`. `MOBILEGL_BUILD_DISAGGREGATED_INPROC` implies the former and adds role isolation: the two roles are separated by the apply thread and the control mailbox, rather than by adding TLS to the 1494 `pGLContext->` read points.
+- `MOBILEGL_TRANSPORT = monolith | inproc | spawn` is the **topology** (G1-relevant); the control plane and data plane are selected by the two variables in §11.9. **A split build with `MOBILEGL_TRANSPORT` unset is the monolith control arm**.
+- Three build flavors (since P13): default (the monolith record arm, with `MG_Remote` not compiled, the shipping shape), verify, and split; Android has two APK flavors (monolith / split). The pull build and the `MOBILEGL_PIPE_PUSH` CMake option are deleted in P13.
+- Modules (P13 W7): `SOURCE_FILES` is split into seven OBJECT libraries according to the link ratchet's PARTITION, and `MobileGL` / `MobileGL_s` are assembled from them; in a split build `MobileGL_server_linkcheck` links only the SERVER and SHARED modules with `--no-undefined`, so a frontend reference outside the baseline fails at build time (`scripts/ci/server_link_check.py`). The record arm's server-side code is in `MG_Backend/Record/` (`RecordVerbSink`, `StagedShadow`, `StagedTextureStore`), and client verb emission is in `MG_Impl/Pipe/Verb/`, no longer depending on `MG_Remote`.
+- Test wiring: the ctest `ENVIRONMENT` is built with `mgl_itest_join_environment(...)`; every split / spawn / tcp entry has its own log path, and logs are split per role (`<base>.client.log` / `<base>.server.log`); the spawn and tcp lanes match the split name set (`scripts/ci/spawn_lane_parity.py`), and each entry records its arm proof.
+- CI (`.github/workflows/test.yml`, `apk.yml`): `pipe-gates` (G1–G8, the generator self-test, the symbol report, dirty-surface, field ownership, G5, the documentation-reference lint), `flatc-check`, the include closure, the build / integration / retrace lanes of each flavor, APK + AVD. The `feat/disaggregated` triggers in both workflows are temporary and are removed before merging into `dev`.
 
-### 16.1 集成测试车道的接线规则
+### 16.1 Wiring rules for the integration test lanes
 
-`MG_IntegrationTest/CMakeLists.txt` 的每条车道都要能因它存在的理由变红（§13.2），接线规则：
-- 读库日志的用例必须独占日志：库以 `fopen(path, "w")` 打开日志，同一路径上的每个进程启动时都截断它，`ctest -j` 下读者会读到邻居截断后的文件，症状与「计数从未发出」相同。条目因此带私有 `MOBILEGL_LOG_FILE_PATH`，过滤器只选这一个用例；车道必须跑整个 scenario（重新过滤会改测试名）时，加以日志命名的 `RESOURCE_LOCK`，ctest 不会同时运行持同一把锁的条目。
-- 选臂的每个变量都写成条目自己的 ctest `ENVIRONMENT` 属性：属性只覆盖它写出的变量，其余从 job 环境漏进来（job 级 `MOBILEGL_TRANSPORT=inproc` 会把没钉 `monolith` 的 monolith 条目悄悄变成又一条 split）。
-- ctest 不把 SKIP 算失败，跳光的车道和全过的车道一样绿：必须真跑的车道钉 `MOBILEGL_ITEST_REQUIRE_GPU=1`，让不可用的 harness 变成失败；功能 opt-in（如 `MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1`）必须到达每个臂里读它的进程，tcp 臂的 server 由 `TcpServer.Start` fixture 预先启动、不继承 client 条目的环境，所以也要设在 fixture 上。
-- `ctest -L` 按正则子串匹配：新标签不得包含任何被不加锚点选择的已有标签，所以限定词放在中间（`integration-magma-all-spawn` 不含 `integration-magma-spawn`，`integration-magma-spawn-buffers` 不含 `integration-magma-buffers`）；只选一个标签时写 `'^label$'`。
-- 门控车道带一个私有的第二标签并以 `--no-tests=error` 运行：构建缺少该选项时匹配为空即失败，而不是零条目的绿。
-- 三条传输臂：`Split.` 为 inproc，server 是测试进程里的 apply 线程；`Spawn.` 的 server 子进程继承 `::environ`（`ServerSpawn.cpp` 只去掉 `MOBILEGL_TRANSPORT` 与非 server 自有的 `MOBILEGL_IPC_*`）；`Tcp.` 的 server 是整条车道共享的 `TcpServer.Start` fixture，由 `scripts/ci/tcp_server_fixture.py` 以它自己的环境启动一次，每个 Hello fork 一个 session 子进程。
-- 条目 ctest `ENVIRONMENT` 里由 server 读取的旋钮只到达 inproc 与 spawn 的 server；tcp 副本会以默认臂运行却顶着声称旋钮的名字，永远不会红。这类条目只注册 split + spawn（Magma 的列入 `scripts/ci/spawn_lane_parity.py` 的 `MAGMA_SERVER_ENV_KNOB_NO_TCP`），旋钮取默认值的孪生条目保留三条臂；要 tcp 臂就得让 fixture 带上旋钮：对整条车道无害的追加到 `TcpServer.Start` 的 `ENVIRONMENT`，否则另起一个带旋钮的 supervisor（`P8Coverage.cmake`）。只能在本进程读取的探针（描述符池普查、server loop 挂钩、server 缓存窥视、验证层输出）只注册 inproc（`MAGMA_INPROC_ONLY`）。
-- Magma 分三层：门控的 `integration-magma-{split,spawn,tcp}` 是手工布置、各带 flavour（strict + 双块、adopt 档、run-ahead credit、cache 钉定）的车道，测绿后才进 CI 门；`integration-magma-all-*` 重放每次 `mgl_itest_register_split_arms` 调用；`integration-magma-full-*` 跑整个集成二进制减去 `MGL_ITEST_MONOLITH_MECHANISM_FILTER` 与 `DualBlockScenario`。后两层不进任何 CI 门，用例随修复其阻塞点的提交升入门控层。
-- `MGITEST_SPLIT_LANE=1` 武装 `ScenarioFixture` 的析构断言：case 必须推进 client 编码器的记录序号，tcp 臂还要证明没有本地 server 子进程。它只适合每条都绘制的精选车道；整二进制集合（`integration-magma-full-*`、`integration-verify-split`）不设它，因为纯查询 case 由 `CapsMirror` 回答、不产生记录，代价是这些集合不证明记录过了线。
+Every lane in `MG_IntegrationTest/CMakeLists.txt` must be able to go red for the reason it exists (§13.2); the wiring rules:
+- A case that reads the library log must own the log exclusively: the library opens the log with `fopen(path, "w")`, and every process starting on the same path truncates it, so under `ctest -j` a reader sees a neighbor's truncated file, with the same symptom as "the counter was never emitted". An entry therefore carries a private `MOBILEGL_LOG_FILE_PATH`, and the filter selects only that case; when a lane must run a whole scenario (re-filtering would change the test names), it adds a `RESOURCE_LOCK` named after the log, and ctest will not run entries holding the same lock at the same time.
+- Every variable that selects an arm is written as the entry's own ctest `ENVIRONMENT` property: the property overrides only the variables it states, and the rest leak in from the job environment (a job-level `MOBILEGL_TRANSPORT=inproc` quietly turns a monolith entry that does not pin `monolith` into another split).
+- ctest does not count SKIP as a failure, so a lane that skips everything is as green as a lane that passes everything: a lane that must really run pins `MOBILEGL_ITEST_REQUIRE_GPU=1`, so an unavailable harness becomes a failure; a feature opt-in (such as `MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1`) must reach the process that reads it in each arm, and the tcp arm's server is started ahead of time by the `TcpServer.Start` fixture and does not inherit the client entry's environment, so it must be set on the fixture as well.
+- `ctest -L` matches by regular-expression substring: a new label must not contain any existing label that is selected without anchors, so the qualifier goes in the middle (`integration-magma-all-spawn` does not contain `integration-magma-spawn`, and `integration-magma-spawn-buffers` does not contain `integration-magma-buffers`); selecting a single label is written `'^label$'`.
+- A gated lane carries a private second label and runs with `--no-tests=error`: when the build lacks the option the match is empty and fails, rather than a zero-entry green.
+- Three transport arms: `Split.` is inproc, and the server is the apply thread in the test process; `Spawn.`'s server child inherits `::environ` (`ServerSpawn.cpp` removes only `MOBILEGL_TRANSPORT` and the `MOBILEGL_IPC_*` that are not server-owned); `Tcp.`'s server is the `TcpServer.Start` fixture shared by the whole lane, started once by `scripts/ci/tcp_server_fixture.py` with its own environment, forking one session child per Hello.
+- A knob read by the server in an entry's ctest `ENVIRONMENT` reaches only the inproc and spawn servers; a tcp copy would run the default arm under a name claiming the knob and would never go red. Such entries register split + spawn only (for Magma they are listed in `MAGMA_SERVER_ENV_KNOB_NO_TCP` in `scripts/ci/spawn_lane_parity.py`), and the twin entry with the knob at its default keeps all three arms; a tcp arm requires the fixture to carry the knob: append it to `TcpServer.Start`'s `ENVIRONMENT` when it is harmless to the whole lane, otherwise start a separate supervisor that carries it (`P8Coverage.cmake`). Probes that can only be read in this process (the descriptor-pool census, the server loop hooks, the server cache peeking, validation-layer output) register for inproc only (`MAGMA_INPROC_ONLY`).
+- Magma has three layers: the gated `integration-magma-{split,spawn,tcp}` lanes are hand-arranged, each with its flavor (strict + dual block, adoption tier, run-ahead credit, cache pinning), and enter the CI gate only after passing; `integration-magma-all-*` replays every `mgl_itest_register_split_arms` call; `integration-magma-full-*` runs the whole integration binary minus `MGL_ITEST_MONOLITH_MECHANISM_FILTER` and `DualBlockScenario`. The last two layers enter no CI gate, and a case is promoted to the gated layer by the commit that fixes its blocking point.
+- `MGITEST_SPLIT_LANE=1` arms the `ScenarioFixture` destructor assertion: the case must advance the client encoder's record sequence number, and the tcp arm must also prove there is no local server child process. It suits only curated lanes where every case draws; the whole-binary sets (`integration-magma-full-*`, `integration-verify-split`) do not set it, because pure query cases are answered by `CapsMirror` and produce no records, at the cost that these sets do not prove records crossed the wire.
 
-## 附 A：开关
+## Appendix A: switches
 
-CMake：`MOBILEGL_BUILD_DISAGGREGATED`（OFF）、`MOBILEGL_BUILD_DISAGGREGATED_INPROC`（OFF，隐含前者）、`MOBILEGL_PIPE_VERIFY`（OFF，永不出货）、`MOBILEGL_BUILD_SERVER_SPIKE`（仅 Android spike）、`MOBILEGL_FLATC_EXECUTABLE`（只服务 `flatc-check`）。`MOBILEGL_PIPE_PUSH` 与 `MOBILEGL_PIPE_LEGACY_MEMOS` 在 P13 删除（旧缓存里的 OFF 只告警并忽略）。
+CMake: `MOBILEGL_BUILD_DISAGGREGATED` (OFF), `MOBILEGL_BUILD_DISAGGREGATED_INPROC` (OFF, implies the former), `MOBILEGL_PIPE_VERIFY` (OFF, never ships), `MOBILEGL_BUILD_SERVER_SPIKE` (Android spike only), `MOBILEGL_FLATC_EXECUTABLE` (serves `flatc-check` only). `MOBILEGL_PIPE_PUSH` and `MOBILEGL_PIPE_LEGACY_MEMOS` are deleted in P13 (an OFF in an old cache only warns and is ignored).
 
-运行时，MGPipe（`MobileGL/Config.h`、`ConfigLoader.cpp`）：
+At runtime, MGPipe (`MobileGL/Config.h`, `ConfigLoader.cpp`):
 
-| 变量 | 默认 | 说明 |
+| Variable | Default | Description |
 |---|---|---|
-| `MOBILEGL_PIPE_PUSH` | `0x3fff` | 子系统位图（`MG_Pipe/MGPipe.h`，位永不复用）；P13 起位 0–13 固定开，清任何一位都在启动时具名拒绝；只剩位 63（"关 CSO 内容寻址"的行为对照）可设 |
-| `MOBILEGL_PIPE_VERIFY` / `_VERIFY_FATAL` / `_VERIFY_CORRUPT` | 0 / 1 / 空 | 影子比对与它的阴性对照。比对器只编进 verify 构建，其他构建里 `MOBILEGL_PIPE_VERIFY=1` 只告警；`_VERIFY_CORRUPT` 不进 `Config.h`，只有 verify 构建在比对器武装时读它（`PipeFill.cpp` 的 `ArmVerify`，同样经环境与系统配置文件）。poison 的阴性对照没有运行时开关：集成测试的 harness 标记 `MGITEST_POISON_OMIT` 由重新 exec 的子进程经 verify 构建才有的 `MGPipeSetPoisonOmission` 武装（`Harness/PoisonOmissionArm.h`） |
-| `MOBILEGL_PIPE_STATS` / `_STATS_PERIOD` / `_STATS_FILE` | 0 / 120 / 空 | 边界计数器（附 B）；dump 按角色写 `<base>.client.json` / `<base>.server.json` |
-| `MOBILEGL_PIPE_INDEX_MIRROR_MB` | 64 | 索引镜像预算（P8）；`_LEGACY_MEMOS`、`_TEXEL_RETAIN_MB`、`_HANDLE_ABA_CONTROL` 随各自的臂在 P13 删除 |
+| `MOBILEGL_PIPE_PUSH` | `0x3fff` | subsystem bitmap (`MG_Pipe/MGPipe.h`, bits are never reused); since P13 bits 0–13 are fixed on, and clearing any of them is refused by name at startup; only bit 63 ("the behavior control for turning off CSO content addressing") can still be set |
+| `MOBILEGL_PIPE_VERIFY` / `_VERIFY_FATAL` / `_VERIFY_CORRUPT` | 0 / 1 / empty | the shadow comparison and its negative controls. The comparator is compiled only into the verify build; in other builds `MOBILEGL_PIPE_VERIFY=1` only warns; `_VERIFY_CORRUPT` is not in `Config.h`, and only the verify build reads it when the comparator is armed (`ArmVerify` in `PipeFill.cpp`, likewise through the environment and the system configuration file). The poison negative control has no runtime switch: the integration test's harness flag `MGITEST_POISON_OMIT` is armed by a re-exec'd child process through `MGPipeSetPoisonOmission`, which only the verify build has (`Harness/PoisonOmissionArm.h`) |
+| `MOBILEGL_PIPE_STATS` / `_STATS_PERIOD` / `_STATS_FILE` | 0 / 120 / empty | boundary counters (Appendix B); the dump is written per role as `<base>.client.json` / `<base>.server.json` |
+| `MOBILEGL_PIPE_INDEX_MIRROR_MB` | 64 | the index mirror budget (P8); `_LEGACY_MEMOS`, `_TEXEL_RETAIN_MB` and `_HANDLE_ABA_CONTROL` are deleted with their arms in P13 |
 
-运行时，传输与 IPC：
+At runtime, transport and IPC:
 
-| 变量 | 默认 | 说明 |
+| Variable | Default | Description |
 |---|---|---|
-| `MOBILEGL_TRANSPORT` | `monolith` | 拓扑：`monolith` / `inproc` / `spawn` |
-| `MOBILEGL_IPC_CONTROL` / `MOBILEGL_IPC_DATA` | `fork` / `auto` | 控制面端点与数据面（§11.9）；`MOBILEGL_IPC_SERVER_PATH` 定位 fork 出的 server |
-| `MOBILEGL_IPC_TOKEN` / `MOBILEGL_IPC_REQUIRE_SAME_BUILD` | 空 / 0 | 令牌（≥16 字节；无令牌只允许 loopback）；要求两端同一构建（车道纪律） |
-| `MOBILEGL_IPC_PREAUTH_*` / `MOBILEGL_IPC_AUTH_BACKOFF_*` | — | server 预认证的上限与失败退避（Ph） |
-| `MOBILEGL_IPC_CONTROL_TIMEOUT_MS` / `MOBILEGL_IPC_COLD_START_MS` | 5000 / 20000 | 控制回复的稳态上限与冷启动预算 |
-| `MOBILEGL_IPC_LOG_FORWARD` | 远端时开 | server 日志经控制连接前送，client 写进自己的 `<base>.server.log` |
-| `MOBILEGL_IPC_SURFACE` | `offscreen` | `server` = 使用 server 自有窗口，client 无头（P12） |
-| `MOBILEGL_IPC_RING_MB` / `MOBILEGL_IPC_STAGE_MB` | 8 / 32 | `SEG_CMD` / `SEG_STAGE`；stage 的 1/4 是内容分块预算 |
-| `MOBILEGL_IPC_RUN_AHEAD` | 1 | P5e run-ahead；只是合取式的一半（server 须发布 `kCapRunAheadApply`）；`0` 是 A/B 对照 |
-| `MOBILEGL_FRAMES_IN_FLIGHT` | 3 | 1..64，两个后端共用（旧名 `MOBILEGL_MAGMA_FRAMESINFLIGHT` 为弃用别名）：Magma 的帧上下文数；Espryt 在 present S 后等待帧 S+1-N 完成；split 的 present credit 由它导出为 max(1, N-2)（P15） |
-| `MOBILEGL_IPC_PRESENT_CREDIT` | 由 `MOBILEGL_FRAMES_IN_FLIGHT` 导出（默认 1） | 1..8，§14；显式设置覆盖导出值，仅供实验 |
-| `MOBILEGL_IPC_POLL_ESCALATE` | 64 | 未报告 fence 的零超时轮询本地答"未完成"，同一 fence 连续第 N 次才往返（P10，`CONTRACT-P10.md` §1）；`0` = 每次轮询都往返，是 A/B 对照 |
-| `MOBILEGL_IPC_BATCH_WAITS` | 1 | lockstep 下值类记录发布即返回；verify 构建里 `MOBILEGL_PIPE_VERIFY=1` 强制 0（`RUN_AHEAD` 同样强制 0，`ROLE_SPLIT_STATE` 强制关；其他构建不改它们） |
-| `MOBILEGL_IPC_EVENT_WAIT_MS` | 2000 | 反向事件遇满环时 server 等 client 排空的整笔预算（§11.7） |
-| `MOBILEGL_IPC_WIRE_DEFERRED_MB` | 64 | Magma wire 臂延迟回收的水位线；`0` 是 M2 阴性对照 |
-| `MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS` | 1 | persistent-map 推送只推变化的块（粒度固定 64 KiB，`PersistentMapTracker::BlockBytes()`）；`0` 是整段推送的 A/B 对照 |
-| `MOBILEGL_IPC_ADOPT_TIER` | 未设 = T0 | 未设（用户 2026-09-29 定为缺省）= 能用就 T0，不能用（stream、无 AHB、POST 失败、server 不允许）安静回退 T2：只 MGLOG_D、照样计数；`0` = 点名要 T0，回退有具名行（A1 的 `Refuse{AdoptTierOnStream}` 等）；`1` = T1 已关，具名拒绝后 T2；`2` = T2（P11 前的缺省）。`CONTRACT-P11.md` B2 |
-| `MOBILEGL_IPC_ALLOW_ADOPT_T0` | 1 | server 自有：`0` = 永不批准 T0（会话走 T2），经 `ServerSpawn` 保留 |
-| `MOBILEGL_IPC_STRICT_ERRORS` / `MOBILEGL_IPC_AUDIT` / `MOBILEGL_IPC_ROLE_SPLIT_STATE` | 0 / 0 / 1 | 残余输入读升级为 Fatal / 退休 staging 填 `0xDD` / 双块（P5f；P15 起默认开，`0` 关闭，阴性对照显式设 0；双块下 barriered fill 写 client 块，不再 quiesce applier） |
-| `MOBILEGL_IPC_SPIN_US` / `MOBILEGL_IPC_SERVER_AFFINITY` | 50 / `auto` | park 前自旋预算 / apply 线程亲和（Redmi 内核忽略） |
-| `MOBILEGL_IPC_RECOVER` | 1 | session 因 device loss 结束后，应用下一次 `eglCreateContext` / `eglCreate*Surface` / `eglInitialize` 重新拨号得到新 session（旧 context 保持丢失，surface 在新 session 重建）；`0` = 丢失对整个进程永久 |
-| `MOBILEGL_IPC_RESPAWN` | — | 具名拒绝：没有阶段实现 server 重启后的全量重推 |
+| `MOBILEGL_TRANSPORT` | `monolith` | topology: `monolith` / `inproc` / `spawn` |
+| `MOBILEGL_IPC_CONTROL` / `MOBILEGL_IPC_DATA` | `fork` / `auto` | the control-plane endpoint and the data plane (§11.9); `MOBILEGL_IPC_SERVER_PATH` locates the forked server |
+| `MOBILEGL_IPC_TOKEN` / `MOBILEGL_IPC_REQUIRE_SAME_BUILD` | empty / 0 | the token (≥16 bytes; without a token only loopback is allowed); require the same build on both ends (lane discipline) |
+| `MOBILEGL_IPC_PREAUTH_*` / `MOBILEGL_IPC_AUTH_BACKOFF_*` | — | the server pre-authentication limits and the failure backoff (Ph) |
+| `MOBILEGL_IPC_CONTROL_TIMEOUT_MS` / `MOBILEGL_IPC_COLD_START_MS` | 5000 / 20000 | the steady-state cap on control replies and the cold-start budget |
+| `MOBILEGL_IPC_LOG_FORWARD` | on when remote | server logs are forwarded over the control connection, and the client writes them into its own `<base>.server.log` |
+| `MOBILEGL_IPC_SURFACE` | `offscreen` | `server` = use the server's own window, with the client headless (P12) |
+| `MOBILEGL_IPC_RING_MB` / `MOBILEGL_IPC_STAGE_MB` | 8 / 32 | `SEG_CMD` / `SEG_STAGE`; a quarter of stage is the content chunking budget |
+| `MOBILEGL_IPC_RUN_AHEAD` | 1 | P5e run-ahead; only one half of the conjunction (the server must publish `kCapRunAheadApply`); `0` is the A/B control |
+| `MOBILEGL_FRAMES_IN_FLIGHT` | 3 | 1..64, shared by both backends (the old name `MOBILEGL_MAGMA_FRAMESINFLIGHT` is a deprecated alias): the number of Magma frame contexts; Espryt waits for frame S+1-N to complete after presenting S; the split derives the present credit from it as max(1, N-2) (P15) |
+| `MOBILEGL_IPC_PRESENT_CREDIT` | derived from `MOBILEGL_FRAMES_IN_FLIGHT` (default 1) | 1..8, §14; an explicit setting overrides the derived value, for experiments only |
+| `MOBILEGL_IPC_POLL_ESCALATE` | 64 | a zero-timeout poll for an unreported fence answers "not complete" locally, and only the Nth consecutive poll of the same fence makes a roundtrip (P10, `CONTRACT-P10.md` §1); `0` = a roundtrip on every poll, the A/B control |
+| `MOBILEGL_IPC_BATCH_WAITS` | 1 | under lockstep, value-class records return as soon as they publish; in the verify build `MOBILEGL_PIPE_VERIFY=1` forces 0 (`RUN_AHEAD` likewise forces 0, `ROLE_SPLIT_STATE` forces it off; other builds do not change them) |
+| `MOBILEGL_IPC_EVENT_WAIT_MS` | 2000 | the whole budget for the server to wait for the client to drain when a reverse event meets a full ring (§11.7) |
+| `MOBILEGL_IPC_WIRE_DEFERRED_MB` | 64 | the watermark for deferred reclamation on the Magma wire arm; `0` is the M2 negative control |
+| `MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS` | 1 | persistent-map pushes send only the changed blocks (fixed 64 KiB granularity, `PersistentMapTracker::BlockBytes()`); `0` is the A/B control that pushes the whole range |
+| `MOBILEGL_IPC_ADOPT_TIER` | unset = T0 | unset (the user made this the default on 2026-09-29) = T0 when it can be used, with a quiet fallback to T2 when it cannot (stream, no AHB, POST failure, server does not allow it): only MGLOG_D, counted as usual; `0` = ask for T0 by name, and the fallback has a named line (A1's `Refuse{AdoptTierOnStream}` and so on); `1` = T1 is off, a named refusal and then T2; `2` = T2 (the pre-P11 default). `CONTRACT-P11.md` B2 |
+| `MOBILEGL_IPC_ALLOW_ADOPT_T0` | 1 | server-owned: `0` = never approve T0 (the session goes T2), preserved through `ServerSpawn` |
+| `MOBILEGL_IPC_STRICT_ERRORS` / `MOBILEGL_IPC_AUDIT` / `MOBILEGL_IPC_ROLE_SPLIT_STATE` | 0 / 0 / 1 | residual input reads escalate to Fatal / retired staging is filled with `0xDD` / dual block (P5f; on by default since P15, `0` turns it off, and the negative control sets 0 explicitly; under dual block the barriered fill writes the client block and no longer quiesces the applier) |
+| `MOBILEGL_IPC_SPIN_US` / `MOBILEGL_IPC_SERVER_AFFINITY` | 50 / `auto` | pre-park spin budget / apply-thread affinity (ignored by the Redmi kernel) |
+| `MOBILEGL_IPC_RECOVER` | 1 | after a session ends from device loss, the application's next `eglCreateContext` / `eglCreate*Surface` / `eglInitialize` dials again for a new session (old contexts stay lost, surfaces are rebuilt in the new session); `0` = the loss is permanent for the whole process |
+| `MOBILEGL_IPC_RESPAWN` | — | refused by name: no phase implements a full re-push after a server restart |
 
-显式不设立：`MOBILEGL_IPC_PROGRAM`（没有 relink 档）、`MOBILEGL_IPC_VALIDATE_SERVER`。计划中未接线：`MOBILEGL_IPC_IDLE_EXIT_S`（未解析）。
+Explicitly not introduced: `MOBILEGL_IPC_PROGRAM` (there is no relink tier), `MOBILEGL_IPC_VALIDATE_SERVER`. Planned but not wired: `MOBILEGL_IPC_IDLE_EXIT_S` (unresolved).
 
-## 附 B：边界计数器（`MobileGL/MG_Util/Metrics/PipeStats.h`）
+## Appendix B: boundary counters (`MobileGL/MG_Util/Metrics/PipeStats.h`)
 
-关闭时每站点一次全局 load + 一条永不命中的分支。字节类（stage buffer / texture / UBO / client 数组、`pmap`、`resid`、`csob-blob`、`seg` = 写进 `SEG_STAGE` 的字节）、调用类（`draws`、`accessor-calls`、纹理上传 emit / box / rect / jobs、`csom` / `csob`、`mpr`、`trp`、`rsp`、`wrec`、server 应用的控制记录 `ar`（applier_reset）/ `od`（object_death）、`maxrec` / `ringwraps` / `ringpads` / `ringwaits`、门铃 `srv` / `srvpark` / `cli` / `clipark`）与六个 memo 门的 hit/miss。每 `MOBILEGL_PIPE_STATS_PERIOD` 帧一条 `MGPipe stats:` 汇总行，按角色写日志。读法陷阱：`accessor-calls` 是静态下界，判性能只看 CPU 时间；spawn 下 client 不推进帧窗口（`frames=0`），窗口化字段在 spawn client 上无效，run total 仍有效（见 git 历史 §12.1）。站点清单（哪些路径**没有**接线）写在 `PipeStats.cpp` 头部，那份清单是契约。
+When off, each site costs one global load + one branch that never hits. The byte kinds (stage buffer / texture / UBO / client arrays, `pmap`, `resid`, `csob-blob`, `seg` = bytes written into `SEG_STAGE`), the call kinds (`draws`, `accessor-calls`, texture upload emit / box / rect / jobs, `csom` / `csob`, `mpr`, `trp`, `rsp`, `wrec`, server-applied control records `ar` (applier_reset) / `od` (object_death), `maxrec` / `ringwraps` / `ringpads` / `ringwaits`, the doorbells `srv` / `srvpark` / `cli` / `clipark`), and the hit/miss of the six memo gates. Every `MOBILEGL_PIPE_STATS_PERIOD` frames there is one `MGPipe stats:` summary line, written to the log per role. Reading traps: `accessor-calls` is a static lower bound, and judging performance looks only at CPU time; under spawn the client does not advance the frame window (`frames=0`), so windowed fields are invalid on a spawn client while the run total stays valid (see git history §12.1). The site list (which paths are **not** wired) is at the top of `PipeStats.cpp`, and that list is a contract.

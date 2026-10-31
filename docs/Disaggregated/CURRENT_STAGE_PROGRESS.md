@@ -1,26 +1,26 @@
-# 当前阶段：P13 已收官（2026-10-07）；下一阶段 P14
+# Current phase: P13 closed (2026-10-07); next phase P14
 
-> **更新 2026-10-07**。这一页只有摘要；计划与裁定见 git 历史。上一阶段 P8 于 09-30 收官。
+> **Update 2026-10-07**. This page holds only a summary; plans and rulings are in git history. The previous phase P8 closed on 09-30.
 
-## 目标
+## Goal
 
-退役 pull 路径：单进程（FCL 内嵌库）也走 P8 修好的记录臂，删掉旧的「后端直接读前端」路径与它的全部编译期 / 运行期开关。
+Retire the pull path: the monolith (the library embedded in FCL) also runs on the record arm fixed in P8, and the old "backend reads the frontend directly" path and all its compile-time / run-time switches are deleted.
 
-## 完成情况
+## Completion
 
-| 项 | 状态 |
+| Item | Status |
 |---|---|
-| W1 CI 地基（skip 普查、零 `MG_Remote` 符号检查、运行期形态证明） | ✅ |
-| W2–W3 默认翻转与去宏（`MOBILEGL_PIPE_PUSH` / `LEGACY_MEMOS` 删除，位 0–13 固定开） | ✅ |
-| W4–W5 单进程换到记录臂，记录臂移出 `MG_Remote` | ✅ |
-| W6 删后端的前端对象臂（Espryt / Magma），`# P13` 债务清零 | ✅ |
-| W7 七个 OBJECT 模块 + server-only 链接检查 | ✅ |
-| W8 recorder 金标（首跑抓到并修掉两个单进程推送内容缺陷） | ✅ |
-| W9 缓存容量重调 | 移到 P13 之后的性能轮（用户 10-07） |
-| W10 文档与收官 | ✅；FCL 真机两后端冒烟通过 |
+| W1 CI foundation (skip census, zero `MG_Remote` symbol check, runtime shape proof) | ✅ |
+| W2–W3 default flip and macro removal (`MOBILEGL_PIPE_PUSH` / `LEGACY_MEMOS` deleted, bits 0–13 fixed on) | ✅ |
+| W4–W5 the monolith switches to the record arm, the record arm moves out of `MG_Remote` | ✅ |
+| W6 delete the backend's frontend-object arm (Espryt / Magma), `# P13` debts zeroed | ✅ |
+| W7 seven OBJECT modules + server-only link check | ✅ |
+| W8 recorder golden (the first run caught and fixed two monolith push-content defects) | ✅ |
+| W9 cache capacity re-tuning | moved to the performance round after P13 (user 10-07) |
+| W10 documentation and close-out | ✅; FCL on-device smoke passes on both backends |
 
-## 下一步
+## Next steps
 
-**P14**：状态归属（同进程多 session / 多 context / share group），设计见 [`design/11-state-ownership.md`](design/11-state-ownership.md)。性能轮（基线 `dev` 构建，定频，FCL MC + anland glmark2，两后端）也排在 P13 之后。
+**P14**: state ownership (multiple sessions / multiple contexts / share groups in one process), design in [`design/11-state-ownership.md`](design/11-state-ownership.md). The performance round (baseline `dev` build, pinned clocks, FCL MC + anland glmark2, both backends) is also queued after P13.
 
-**待用户决策**：[`DEBTS.md`](DEBTS.md) 中「需裁定」各项；FCL 无声死亡留给用户（细节见 git 历史）。
+**Awaiting user decisions**: the "needs a ruling" entries in [`DEBTS.md`](DEBTS.md); FCL's silent death is left to the user (details in git history).

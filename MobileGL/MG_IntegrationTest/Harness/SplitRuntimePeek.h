@@ -39,7 +39,7 @@
 //      job of making "a table that silently lost an emitter" distinguishable from "a table that
 //      never had one" (EmitTables.h). Zero means there is no emitter to test.
 //
-// And one BEHAVIOURAL fact, which is the half that says the run went through the wire rather than
+// And one BEHAVIORAL fact, which is the half that says the run went through the wire rather than
 // merely that it could have: `ClientSession::Active()->Encoder().EmitSeq()`, the highest record
 // ordinal this client has produced. A scenario that armed, drew, and emitted nothing has a
 // sequence that did not move, and that is the shape of an emit table that resolves the transport

@@ -252,7 +252,7 @@ TEST(FixIterationRPSubgroupScratchPass, GrowsTheExposureScratchForNarrowSubgroup
     ASSERT_EQ(WorkgroupArrayLengths(input), (std::vector<Uint32>{4u, 32u}));
 
     // lavapipe: 8-lane subgroups over 512 invocations need 64 entries; the
-    // plainly indexed neighbour must keep its 4.
+    // plainly indexed neighbor must keep its 4.
     Vector<Uint32> output;
     ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(input, output, 8u, 32768u, true));
     EXPECT_EQ(WorkgroupArrayLengths(output), (std::vector<Uint32>{4u, 64u}));

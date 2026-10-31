@@ -45,7 +45,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler::NarrowIntegerRuntimeWidths {
     Bool MaterializeTypes(spvtools::opt::IRContext* context, Ids& ids);
     ShiftType MaterializeShiftType(spvtools::opt::IRContext* context, const Ids& ids, Uint32 elementTypeId);
 
-    // The two named Private globals, initialised to 0 so an unset width reads as "as fetched".
+    // The two named Private globals, initialized to 0 so an unset width reads as "as fetched".
     Bool DeclareGlobals(spvtools::opt::IRContext* context, Ids& ids, const std::function<Uint32()>& nextId);
 
     // Instructions go in before `insertPoint`, which then points past them.

@@ -48,7 +48,7 @@
     X(UnsizedReadback,               ProtocolCorruption, "a readback arrived with no declared size") \
     X(BlobMissing,                   ProtocolCorruption, "a record named a blob that was never staged") \
     X(BlobNotStaged,                 ProtocolCorruption, "a blob was referenced before its staging completed") \
-    X(ArtefactsMissing,              ProtocolCorruption, "a program create arrived with no artefacts") \
+    X(ArtefactsMissing,              ProtocolCorruption, "a program create arrived with no artifacts") \
     X(ArchiveEmpty,                  ProtocolCorruption, "a create_*_state archive carried no payload") \
     X(BarrierViolation,             ProtocolCorruption, "a field was pulled across a verb boundary the barrier forbids") \
     X(UnimplementedAdoptTier,        ProtocolCorruption, "MOBILEGL_IPC_ADOPT_TIER named a tier P5 does not implement") \

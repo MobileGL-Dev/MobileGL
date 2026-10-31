@@ -11,13 +11,13 @@
 //
 // THIS SUITE IS A NAMED GATE (`ctest -R 'SamplerEmit\.'`), and its negative control is a
 // script that stops the conversion copying SamplerParameters::borderColorForm and expects this
-// suite to go red NAMING that field - which it must, because all three border-colour
+// suite to go red NAMING that field - which it must, because all three border-color
 // representations are always numerically populated and the value alone cannot say which driver
 // entry point to use.
 //
 // THE ONE CASE THAT LOOKS LIKE PARANOIA AND IS NOT: SamplerParameters is 100 bytes with THREE
 // BYTES OF TRAILING PADDING, so a cache that hashes or memcmps the object's own bytes reads
-// uninitialised memory and mints a fresh CSO per call - a 256-entry cache with a hit rate of
+// uninitialized memory and mints a fresh CSO per call - a 256-entry cache with a hit rate of
 // zero, and nobody notices, because the pixels are right. The case that writes garbage into
 // the padding through a byte pointer is what turns that into a red gate.
 //
@@ -202,7 +202,7 @@ TEST(SamplerEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
 // =========================================================================================
 // The APPLIER's half of the sampler family (the wire commits'): the CSO record, the
 // identity-addressed view record and its back-pointer, and the two unit sets. The emitter's
-// half - the content-addressed 256-entry cache, the canonical zero-initialised copy the hash
+// half - the content-addressed 256-entry cache, the canonical zero-initialized copy the hash
 // and the memcmp run over, the padding that cannot change the hash, borderColorForm crossing -
 // is the client package's and lands beside these.
 // =========================================================================================
@@ -531,7 +531,7 @@ namespace {
     // gtest refuses to mix TEST and TEST_F under one suite name.
     //
     // UNLIKE VertexInputEmitTest's, this scope does NOT replace pGLContext: half these cases
-    // need a really linked program, so the process is initialised once in main() and the cases
+    // need a really linked program, so the process is initialized once in main() and the cases
     // share that context, each using GL names of its own. What the scope does is put the
     // emitter, its counters and the suppressor back to a known state.
     struct EmitterScope {
@@ -660,7 +660,7 @@ namespace {
         Uint64 payload = 0;
         const MGPipeHandle first = Cache().Acquire(clean, payload);
         const MGPipeHandle second = Cache().Acquire(dirty, payload);
-        EXPECT_EQ(first, second) << "uninitialised padding must not mint a second CSO";
+        EXPECT_EQ(first, second) << "uninitialized padding must not mint a second CSO";
         EXPECT_EQ(Cache().GetCounters().Mints, 1u);
         EXPECT_EQ(Cache().GetCounters().Hits, 1u);
     }
@@ -689,7 +689,7 @@ namespace {
         params.borderColorForm = BorderColorForm::Uint;
         const MGPipeHandle asUint = Cache().Acquire(params, payload);
         EXPECT_NE(asInt, asUint) << "the form is the only thing that says which driver entry "
-                                    "point applies; the three colour values did not move";
+                                    "point applies; the three color values did not move";
         EXPECT_EQ(Cache().GetCounters().Mints, 2u);
     }
 

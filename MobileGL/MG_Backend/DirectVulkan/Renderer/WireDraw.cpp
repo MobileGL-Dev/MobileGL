@@ -1175,7 +1175,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // Every write goes through the pass's attachment views (the UNORM twin of an sRGB image while
     // GL_FRAMEBUFFER_SRGB is off, exactly GL's raw clear - no pre-compensation), and wire attachments
     // live in GENERAL. What none of this expresses goes back to the standalone path, per GL buffer
-    // bit: a partial colour or stencil write mask (that path warns and skips, as before), an
+    // bit: a partial color or stencil write mask (that path warns and skips, as before), an
     // attachment whose extent or layer count differs from the pass's (the pass covers the common area
     // only), and a stencil clear the pass's depth attachment does not carry.
     GLbitfield VulkanRenderer::ClearWireFramebufferInPass(const MG_Pipe::MGPFramebufferState& fbo,
@@ -1185,7 +1185,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Nested inside a draw's preparation the scratch and the pass belong to that draw.
         if (m_wirePreparationDepth != 0) return remaining;
         // NOT THE DEFAULT FRAMEBUFFER (measured, not understood): on Adreno 750 the openra retrace
-        // loses its palette-sampled sprites (SSIM 0.956) when a colour+depth clear of the default
+        // loses its palette-sampled sprites (SSIM 0.956) when a color+depth clear of the default
         // framebuffer becomes part of its draw pass - with LOAD_OP_CLEAR as well as with
         // vkCmdClearAttachments - while the same clear split across the two paths, or left
         // standalone, renders correctly. Default-framebuffer clears keep the standalone path until
@@ -1354,7 +1354,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     // The draw pass `begun` with LOAD_OP_CLEAR for the attachments `variantKey` names (bit 2a:
-    // attachment a's colour or depth, bit 2a+1: its stencil). Built once per key and kept on the
+    // attachment a's color or depth, bit 2a+1: its stencil). Built once per key and kept on the
     // pass, like the pass itself.
     VkRenderPass VulkanRenderer::WireClearVariant(RenderPassEntry& begun, Uint64 variantKey) {
         for (const auto& entry : begun.clearVariants)

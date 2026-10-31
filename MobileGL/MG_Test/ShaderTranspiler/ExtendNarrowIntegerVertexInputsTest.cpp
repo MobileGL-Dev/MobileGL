@@ -227,7 +227,7 @@ TEST(ExtendNarrowIntegerVertexInputs, LeavesEverythingElseUnchanged) {
 }
 
 // From SPIR-V 1.4 an entry point lists every global it uses, so the Private copies have to join
-// the new Inputs in the interface. Checked by re-labelling the module 1.4 and validating it for an
+// the new Inputs in the interface. Checked by re-labeling the module 1.4 and validating it for an
 // environment that accepts 1.4.
 TEST(ExtendNarrowIntegerVertexInputs, ListsPrivateCopiesInASpirv14Interface) {
     MobileGL::Initialize();

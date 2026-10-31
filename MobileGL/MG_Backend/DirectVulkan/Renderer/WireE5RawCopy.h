@@ -25,7 +25,7 @@
 // level return every non-canonical word canonicalized, while a 16x16 or 64x64 level reads back verbatim.
 // The stored words are intact - a shader reading the same image through an R32_UINT view sees
 // every one of them - and so are transfer WRITES into it. Measured with format lists, without
-// the colour-attachment usage and with storage usage: none of them changes the answer, and the
+// the color-attachment usage and with storage usage: none of them changes the answer, and the
 // device has no VK_EXT_image_compression_control to ask with.
 //
 // The route therefore reads through a shader: a compute pass fetches the source through an
@@ -109,7 +109,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // comparison or the route itself is what failed, and nothing is concluded.
         Uint32 controlMismatches = 0;
         // Reported, not judged: the same words in a 16x16 level read back by plain transfer. Clean
-        // on the device this was characterised on (power-of-two extents read back verbatim, 28, 30
+        // on the device this was characterized on (power-of-two extents read back verbatim, 28, 30
         // and 31 do not), which is why the subject is 30x30.
         Uint32 smallTexels = 0;
         Uint32 smallMismatches = 0;

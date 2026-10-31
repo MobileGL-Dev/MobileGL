@@ -200,7 +200,7 @@ namespace MobileGL {
                     EGLint Pitch = 0;
                     Bool HasModifier = false;
                     Uint64 Modifier = 0;
-                    // YUV (two planes): the second plane, and the colour hints (0 = not given).
+                    // YUV (two planes): the second plane, and the color hints (0 = not given).
                     Uint32 PlaneCount = 1;
                     int Plane1Fd = -1;
                     EGLint Plane1Offset = 0;

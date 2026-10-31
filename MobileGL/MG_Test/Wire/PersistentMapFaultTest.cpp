@@ -20,7 +20,7 @@
 //      DEVICE produced (docs/archive/notes/p7/device-window-1,
 //      improved-transparency-minecraft-26.3 under inproc: x0 b4000073ac9a5000 against
 //      "fault addr 0x00000073ac9a5000"). That works on any host only because the
-//      normalisation is written without an architecture guard - masking bits 56-63 is the
+//      normalization is written without an architecture guard - masking bits 56-63 is the
 //      identity for every valid userspace address off arm64 - and that was a deliberate
 //      choice: an `#if defined(__aarch64__)` would have put the only gate that can catch
 //      this defect on the one platform CI never runs, which is how it reached the phone.
@@ -89,7 +89,7 @@ namespace {
 // =====================================================================================
 
 // THE CASE THAT WOULD HAVE CAUGHT THE DEVICE CRASH ON A HOST, and it runs on every host:
-// both addresses are the device's literal ones and the normalisation they need is written
+// both addresses are the device's literal ones and the normalization they need is written
 // without an architecture guard precisely so this can be a gate rather than a phone-only
 // hope. The predicate must say the kernel's untagged fault address belongs to the slot a
 // bionic-tagged shadow pointer published.
@@ -103,7 +103,7 @@ TEST(PersistentMapFaultOwnership, AKernelsUntaggedFaultAddressIsOwnedByATaggedSh
 }
 
 // The same row without needing the host to ignore a top byte at all: the predicate is fed a
-// composed slot, so it runs everywhere and goes red everywhere the normalisation is dropped.
+// composed slot, so it runs everywhere and goes red everywhere the normalization is dropped.
 // This is the case the gate rests on; the one above is the device's literal reproduction.
 TEST(PersistentMapFaultOwnership, TheOwnershipRowNormalisesBothSidesBeforeItCompares) {
     SizeT pageIndex = ~static_cast<SizeT>(0);
@@ -131,7 +131,7 @@ TEST(PersistentMapFaultOwnership, UntagAddressClearsTheTopByteAndNothingBelowIt)
     EXPECT_EQ(PersistentMapTracker::UntagAddressForTest(kDeviceTaggedShadowBase), kDeviceKernelFaultAddress)
         << "bionic's 0xb4 heap tag must come off, or the table and the kernel disagree";
     EXPECT_EQ(PersistentMapTracker::UntagAddressForTest(kDeviceKernelFaultAddress), kDeviceKernelFaultAddress)
-        << "normalising an already-normal address is the identity, or the handler would move "
+        << "normalizing an already-normal address is the identity, or the handler would move "
            "a legitimate fault out of its own slot";
     // Bit 55 is ADDRESS, not tag: userspace lives in TTBR0 on arm64 and below TASK_SIZE_MAX
     // on x86-64, and both keep every bit under 56 meaningful.

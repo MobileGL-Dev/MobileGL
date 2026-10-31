@@ -129,7 +129,7 @@ namespace MobileGL::MG_Pipe {
             desc.BaseCso = kMGPipeNullHandle;
             // A brand-new CSO names every pipeline chunk; the incremental form against a
             // BaseCso is what the applier's assertion allows and P3 will use once a CSO is
-            // minted from a neighbour rather than from nothing.
+            // minted from a neighbor rather than from nothing.
             desc.ChunkMask = kAllPipelineChunks;
             desc.Blob.Size = kMGPipePipelineChunkBytes;
             MGPipeRouteCreateRenderState(desc, bytes.data());

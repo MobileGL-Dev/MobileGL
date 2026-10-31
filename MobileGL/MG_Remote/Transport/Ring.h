@@ -159,7 +159,7 @@ namespace MobileGL::MG_Remote::Transport {
                   "the doorbell flags are shared across processes: they must be lock-free");
 
     // Per-record header. Prefix-identical to the plan's RecHeader so the
-    // generated record catalogue drops straight in.
+    // generated record catalog drops straight in.
     struct RingRecordHeader {
         std::uint16_t kind;
         std::uint16_t flags;
@@ -193,7 +193,7 @@ namespace MobileGL::MG_Remote::Transport {
         kRecNoReply = 1u << 5,
     };
 
-    // Reserved kind for the wrap filler. The catalogue starts at 1.
+    // Reserved kind for the wrap filler. The catalog starts at 1.
     inline constexpr std::uint16_t kRingPadRecordKind = 0;
 
     inline constexpr std::uint64_t kRingRecordAlignment = 8;

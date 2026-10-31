@@ -60,7 +60,7 @@ namespace MobileGL::MG_Pipe {
     // signature because the monolith arm passes what the wire record does not carry:
     // ResourceRespecify's `initialBytes` and ResourceFlushRange's `bytes` (sent as resource_subdata
     // records instead), MapPersistent's `size`, `seedBytes` and void* result, CreateShaderState's
-    // seven SPIR-V/reflection blobs (monolith never serialises them), SetProgramBindings' tails.
+    // seven SPIR-V/reflection blobs (monolith never serializes them), SetProgramBindings' tails.
     struct MGPipeRouteEscapes {
         Bool (*ResourceRespecify)(const MGPResourceDesc* desc, const void* initialBytes,
                                   const MGPRespecifiedLevel* level);
@@ -108,7 +108,7 @@ namespace MobileGL::MG_Pipe {
 
     namespace detail {
         // Installs the monolith tables before main in every binary that includes this header.
-        // A static initialiser in PipeRoute.cpp is not enough: a test binary linking the static
+        // A static initializer in PipeRoute.cpp is not enough: a test binary linking the static
         // archive may drop PipeRoute.o (CsoCache.h reaches the tables only through an inline
         // thunk), leaving the tables null. This inline variable is emitted in each including
         // translation unit, and its call to MGPipeInstallMonolithTables pulls PipeRoute.o in.
@@ -201,7 +201,7 @@ namespace MobileGL::MG_Pipe {
         MGPReplySlot reply = MGPipeMintReplySlot();
         MGP_ResourceSubData(&record, bytes, byteCount, regions, record.RegionCount, &reply);
         const Bool accepted = MGPipeTakeReplyBool(reply, "resource_subdata");
-        // A cancelled wire upload is declined even when no server reply was requested.
+        // A canceled wire upload is declined even when no server reply was requested.
         if (MGPipeInstalledArm() == MGPipeRouteArm::kClientWire) return accepted;
         return MGPipeSubDataWantsItsReply(record) ? accepted : true;
     }
@@ -243,7 +243,7 @@ namespace MobileGL::MG_Pipe {
     // gates on it); under monolith the row is never produced and the fields keep coming
     // through the residual fill (G1). The row IS an ordinary routed set_* otherwise - the
     // monolith adapter exists so the wire emitter's server-role arm has something defined to
-    // forward to, and the catalogue's null-row accounting (PipeCatalogueTest) counts it.
+    // forward to, and the catalog's null-row accounting (PipeCatalogueTest) counts it.
     inline void MGPipeRouteSetContextValues(const MGPContextValues& values) {
         MGP_SetContextValues(&values);
     }

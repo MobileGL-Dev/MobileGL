@@ -97,7 +97,7 @@ namespace MobileGL::MG_State::GLState {
     // glslang's list, in TProgram index order, carrying uniform blocks, storage blocks and the
     // synthesized atomic-counter blocks together, one entry per ARRAY ELEMENT. DirectVulkan's
     // resource queries speak a different index space entirely - the one its SPIRV-Reflect walk
-    // produces: storage descriptors only, normalised block name with the array subscript
+    // produces: storage descriptors only, normalized block name with the array subscript
     // stripped, deduplicated across stages. `GetShaderStorageBlockIndex(name)` hands that index
     // out and `GetShaderStorageBlockBinding(index)` reads it back, so the two have to agree
     // with each other and with the names ProgramFactory::ReflectLayout looks up (which come
@@ -119,7 +119,7 @@ namespace MobileGL::MG_State::GLState {
     // type too, and one more Vector member would change its size, its implicit destructor and
     // its move constructor in a build whose .text must stay byte-identical.
     struct StorageBlockReflection {
-        // The NORMALISED name: the SPIR-V block type name with a trailing array subscript
+        // The NORMALIZED name: the SPIR-V block type name with a trailing array subscript
         // stripped, which is what SpvReflectDescriptorBinding's type_name answers and what
         // ProgramFactory::ReflectLayout looks blocks up by.
         String name;
@@ -415,7 +415,7 @@ namespace MobileGL::MG_State::GLState {
         // uniformOffsets, because the member has no GL location at all: the link task keeps
         // it out of the GL-visible uniform index space so no application can see or write it.
         Uint reservedNumSamplesOffset = kInvalidUniformOffset;
-        // False for a program whose SPIR-V was never produced (phase B cancelled at
+        // False for a program whose SPIR-V was never produced (phase B canceled at
         // teardown or by a relink) or whose optimizer run failed. GL has no way to
         // retract a LINK_STATUS it already reported true, so such a program stays
         // "linked" and every reflection answer it has given stays correct - it is simply

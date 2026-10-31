@@ -101,7 +101,7 @@ namespace MobileGL::MG_Record {
         // The push's block size (THE GRANULARITY above).
         static constexpr Uint64 BlockBytes() { return 64ull * 1024ull; }
         // Transport != Monolith. The whole module is inert on the monolith path: an extra
-        // resource_subdata record there would be new behaviour, which D-J forbids.
+        // resource_subdata record there would be new behavior, which D-J forbids.
         static Bool PushIsArmed();
 
         // r1 (P5-close codex finding 1, ID-52): true on the SERVER role's thread - the apply thread
@@ -175,8 +175,8 @@ namespace MobileGL::MG_Record {
         static Uint64 FaultEpochForTest();
         // Unit tests only, and the ONE row that carries the arm64 tagged-pointer defect: the
         // kernel reports si_addr untagged while every base this table publishes comes from a
-        // bionic-tagged heap pointer, so the ownership test has to normalise both sides.
-        // UntagAddressForTest is that normalisation and OwnershipProbeForTest is the row
+        // bionic-tagged heap pointer, so the ownership test has to normalize both sides.
+        // UntagAddressForTest is that normalization and OwnershipProbeForTest is the row
         // itself, run against a slot the caller composes rather than a live one. Both are
         // architecture-independent on purpose - the mask is the identity for every valid
         // userspace address off arm64 - so a host CI lane can drive them with the device's

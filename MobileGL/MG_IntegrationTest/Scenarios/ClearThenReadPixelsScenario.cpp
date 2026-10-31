@@ -12,7 +12,7 @@
 // loadOp. When nothing is drawn after the clear there is no render pass, and the readback path
 // used to materialize pending clears only for USER framebuffers - so a readback right after a
 // clear of the DEFAULT framebuffer blitted the untouched swapchain image and handed back the
-// previous frame's colour.
+// previous frame's color.
 //
 // That is the whole of KHR-GL40.draw_indirect.negative-* (12 Magma failures): each case clears,
 // issues a draw that correctly raises INVALID_OPERATION and therefore never executes, then reads
@@ -49,7 +49,7 @@ in vec2 aPos;
 void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
 )";
 
-        // The colour KHR-GL40.draw_indirect's fshSimple paints, so a stale readback shows up as
+        // The color KHR-GL40.draw_indirect's fshSimple paints, so a stale readback shows up as
         // the same value the conformance log reports.
         constexpr const char* kFS = R"(#version 330 core
 out vec4 o_color;
@@ -208,7 +208,7 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
         DrawFullViewportQuad(program);
 
         // Clear the DEFAULT framebuffer, then blit the source over it. The clear is white so a
-        // frame that lost the blit is unmistakable, and the blit's colour is fshSimple's.
+        // frame that lost the blit is unmistakable, and the blit's color is fshSimple's.
         BindDefaultFramebuffer();
         glViewport(0, 0, width, height);
         ClearTo(1.0f, 1.0f, 1.0f, 1.0f);

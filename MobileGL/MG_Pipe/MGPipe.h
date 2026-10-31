@@ -78,7 +78,7 @@ namespace MobileGL::MG_Pipe {
     // ---- MOBILEGL_PIPE_PUSH's runtime bitmask (Config.h Features.PipePush) ----
     //
     // One bit per SUBSYSTEM, so an A/B is per subsystem rather than all-or-nothing, and
-    // bit 63 for the one BEHAVIOUR the design has to be measured against. Bits are
+    // bit 63 for the one BEHAVIOR the design has to be measured against. Bits are
     // allocated in ROADMAP order and never reused: an operator's recorded 0x7f has to keep
     // meaning what it meant.
     //
@@ -120,7 +120,7 @@ namespace MobileGL::MG_Pipe {
     // which is how "THREE OF THEM" above stayed wrong through two phases.
     inline constexpr Uint64 kMGPipeSubsystemBufferBindings = 1ull << 13;
     // bits 14..62 reserved for the later phases, allocated in ROADMAP order.
-    // NOT a subsystem, a BEHAVIOUR: turn OFF client-side content addressing of CSOs, so
+    // NOT a subsystem, a BEHAVIOR: turn OFF client-side content addressing of CSOs, so
     // every pipeline-version change mints a fresh CSO and the map is never probed. This is
     // the negative control the whole CSO design is measured against (ROADMAP.md P2).
     inline constexpr Uint64 kMGPipeBehaviourNoCsoContentAddressing = 1ull << 63;
@@ -197,7 +197,7 @@ namespace MobileGL::MG_Pipe {
         return "";
     }
 
-    // Rows 1 and 6 became live behaviour when D3 made every reader read the table (before that
+    // Rows 1 and 6 became live behavior when D3 made every reader read the table (before that
     // the bit-7 tests were hard-coded in Managers.cpp and DirectGLES.cpp and these rows were
     // dead data). An edit that drops either row now makes BOTH readers agree, so nothing
     // downstream can catch it; these two lines can.
@@ -215,7 +215,7 @@ namespace MobileGL::MG_Pipe {
     static_assert(MGPipeSubsystemDependenciesAreSet(kMGPipeSubsystemTextureResources, 0x1fffull),
                   "0x1fff is P4a's own arm and every row of it must be satisfied");
 
-    // The catalogue itself. Only macros, so it is safe to expand inside the namespace, and
+    // The catalog itself. Only macros, so it is safe to expand inside the namespace, and
     // consumers (the unit test, later the transport) get MGP_CALL_LIST from this header.
 #include "PipeCalls.def"
 

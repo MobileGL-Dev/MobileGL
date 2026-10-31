@@ -231,7 +231,7 @@ namespace MobileGL::MG_Util::BackendLoader {
             supportedFeatures.shaderTessellationAndGeometryPointSize == VK_TRUE;
         caps.SupportsImageCubeArray = supportedFeatures.imageCubeArray == VK_TRUE;
         {
-            // Probe the formats a colour render target actually uses. A driver that refuses the flag
+            // Probe the formats a color render target actually uses. A driver that refuses the flag
             // for one of them refuses per-slice attachment for that format only, which
             // VkTextureManager detects and records at image creation; this field just says whether
             // the capability is worth offering at all.

@@ -314,7 +314,7 @@ namespace MobileGL {
                 // The entry point's first block, past the leading OpVariable run SPIR-V
                 // requires to stay at the top of a function. Resolved BEFORE anything is
                 // mutated: a decline after the rewrite has started would leave a half-converted
-                // module behind, and the optimizer serialises whatever the module holds
+                // module behind, and the optimizer serializes whatever the module holds
                 // regardless of the status this returns.
                 const Uint32 entryFunctionId = entryPoint->GetSingleWordInOperand(1);
                 spvtools::opt::Function* entryFunction = nullptr;

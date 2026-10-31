@@ -86,7 +86,7 @@ namespace MobileGL::MG_Pipe {
     // `res` is handed in because resolving it needs the slot allocator and this function stays
     // pure; `internalFormat` is INLINE in the record on purpose, so the four cross-object masks
     // fall out at push time with no lookup on the far side.
-    // THE EMPTY POINT IS THE ZERO-INITIALISED RECORD EXCEPT FOR ITS TWO TARGET FIELDS. Both
+    // THE EMPTY POINT IS THE ZERO-INITIALIZED RECORD EXCEPT FOR ITS TWO TARGET FIELDS. Both
     // are Uint16 enumerations whose zero is a REAL value - TextureTarget::Texture1D and
     // TextureUploadTarget::Texture1D - so a reader that forgot to gate on Kind would read a
     // plausible wrong answer rather than a nonsense one. Unknown (0xFFFF) is what the contract
@@ -134,7 +134,7 @@ namespace MobileGL::MG_Pipe {
     // -1 for NONE, which is the field's documented convention read literally.
     //
     // THE FOUR DEFAULT-FRAMEBUFFER TOKENS map to 0, and that is a deliberate narrowing rather
-    // than an oversight: a default framebuffer has one colour surface, this record carries it
+    // than an oversight: a default framebuffer has one color surface, this record carries it
     // in Color[0] (see MGPipeBuildFramebufferState), and IsDefault is what tells the server
     // which framebuffer it is looking at. The distinction the narrowing loses is FRONT versus
     // BACK and LEFT versus RIGHT, which MobileGL's frontend never gives a default framebuffer
@@ -149,7 +149,7 @@ namespace MobileGL::MG_Pipe {
         return 0;
     }
 
-    // m2: A DRAW-BUFFER TOKEN CAN NAME A COLOUR POINT THE RECORD CANNOT CARRY, and D-C3's
+    // m2: A DRAW-BUFFER TOKEN CAN NAME A COLOR POINT THE RECORD CANNOT CARRY, and D-C3's
     // refusal loop only ever scanned ATTACHMENTS. `glDrawBuffers(1, {GL_COLOR_ATTACHMENT10})`
     // with nothing attached at 10 is legal state - draw-incomplete, but legal - and the index
     // above would have written 10 into a record whose Color[] is 8 wide, so the server would
@@ -240,7 +240,7 @@ namespace MobileGL::MG_Pipe {
             if (!drawFbo && !readFbo) return 0;
 
             // ONE OBJECT BOUND TO BOTH TARGETS IS ONE RECORD WITH Target = Both, and that is
-            // not an optimisation: Espryt's "same FBO as draw" skip is the habitat of the
+            // not an optimization: Espryt's "same FBO as draw" skip is the habitat of the
             // read-buffer defect class, and a record that says which target it describes turns
             // "apply the draw buffers only for the draw target" from call-site discipline into
             // a one-line test on the far side.
@@ -458,7 +458,7 @@ namespace MobileGL::MG_Pipe {
                      static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(kMGPipeMaxColorAttachments);
                  point <= static_cast<Int>(FramebufferAttachmentType::ColorMax); ++point) {
                 if (fbo.GetAttachment(static_cast<FramebufferAttachmentType>(point)).IsEmpty()) continue;
-                MGLOG_E_ONCE("MGPipe: framebuffer %u has an attachment at colour point %d, which is at or "
+                MGLOG_E_ONCE("MGPipe: framebuffer %u has an attachment at color point %d, which is at or "
                              "above the wire width of %u - set_framebuffer_state is refused rather than "
                              "truncated and the legacy arm runs",
                              fbo.GetExternalIndex(), point - static_cast<Int>(FramebufferAttachmentType::Color0),
@@ -467,14 +467,14 @@ namespace MobileGL::MG_Pipe {
                 return false;
             }
 
-            // m2, THE SAME REFUSAL ONE FIELD OVER. A draw-buffer token may name a colour point
+            // m2, THE SAME REFUSAL ONE FIELD OVER. A draw-buffer token may name a color point
             // at or above the wire width with nothing attached there, which the loop above
             // cannot see; MGPipeDrawBufferIndex would then write 8..31 into an 8-wide array.
             {
                 const auto& tokens = fbo.GetDrawBuffers();
                 for (SizeT i = 0; i < kMGPipeMaxColorAttachments; ++i) {
                     if (MGPipeDrawBufferIsInsideTheWireWidth(tokens[i])) continue;
-                    MGLOG_E_ONCE("MGPipe: framebuffer %u names colour point %d in draw buffer %u, which is "
+                    MGLOG_E_ONCE("MGPipe: framebuffer %u names color point %d in draw buffer %u, which is "
                                  "at or above the wire width of %u - set_framebuffer_state is refused "
                                  "rather than truncated and the legacy arm runs",
                                  fbo.GetExternalIndex(),
@@ -591,7 +591,7 @@ namespace MobileGL::MG_Pipe {
             MGPipeTextureEmitter& textures = MGPipeTextureEmitterInstance();
             // D-A4's two producers: an attachment point is what sets RENDER_TARGET and
             // DEPTH_STENCIL, the two sticky bind bits nothing set before P4a. Sticky and ORed,
-            // so a texture that was ever a colour attachment keeps saying so, and the mask is
+            // so a texture that was ever a color attachment keeps saying so, and the mask is
             // republished on the resource's next respecify.
             const Uint16 bit = (type == FramebufferAttachmentType::Depth || type == FramebufferAttachmentType::Stencil)
                                    ? static_cast<Uint16>(kMGPipeBindDepthStencil)

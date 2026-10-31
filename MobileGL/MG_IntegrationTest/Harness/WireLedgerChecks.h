@@ -16,7 +16,7 @@
 // Half of that proof is already a Fatal - PipeWireCodec.cpp aborts Fatal{RingOverrun} on a
 // record ABOVE the cap - and it is the loud half. The quiet half is the one this assertion
 // covers: the phase has to publish the MAXIMUM ACTUALLY SEEN on a real workload, so that a
-// record creeping towards the cap is visible before the day it crosses. Until this landed the
+// record creeping toward the cap is visible before the day it crosses. Until this landed the
 // only readers of PipeWireEncoder::MaxRecordBytesSeen() were codec unit cases over synthetic
 // records, and the joint gate recorded BRIEF 8 item 3 as "Maximum record bytes: NO MEASUREMENT"
 // (joint-v1.md 5).
@@ -24,7 +24,7 @@
 // R-9 / exit gate E3(e) (ExpectSmallRingWrappedAtLeastOnce). The SmallRing lane exists to run
 // the reduced path over a ring small enough to force the wrap path - the kRecPad filler that
 // both sides must SKIP WITHOUT ADVANCING seq, which is R-9's last clause and the one piece of
-// ring behaviour no other lane reaches. It ran green from the day it was registered and proved
+// ring behavior no other lane reaches. It ran green from the day it was registered and proved
 // nothing, because nobody counted: measured on the joint head, a whole split scenario writes
 // about 40 KiB into SEG_CMD (emitseq 22-71, maxrec 784 bytes), so a 1 MiB "small" ring is 25
 // times larger than the traffic and the head never comes near its wrap boundary. The lane and
@@ -45,7 +45,7 @@
 // trips round the ring and ZERO pads. The reason is arithmetic, not a defect - a workload whose
 // records repeat at a uniform stride that divides a power-of-two capacity lands on the boundary
 // exactly, every time - so a gate written against the pad count would have been red for the
-// sizes in the record catalogue and green the day one of them changed. The pad count is
+// sizes in the record catalog and green the day one of them changed. The pad count is
 // RECORDED beside the wrap count (ringpads= on the stats line, in the JUnit properties, and in
 // the session's teardown ledger) so the number is available without being load-bearing.
 

@@ -17,7 +17,7 @@ namespace MobileGL {
         namespace ShaderTranspiler {
             // Geometry outputs keep their last written value across EmitVertex(), as on every
             // desktop GL driver. GLSL leaves them undefined after an emit, but shaders rely on the
-            // desktop behaviour: iterationT's terrain stage writes `flat out float
+            // desktop behavior: iterationT's terrain stage writes `flat out float
             // textureResolution` once and then emits three vertices, and the flat value is taken
             // from the LAST one (GL's default provoking vertex), which a driver that drops the
             // value after the first emit renders as random black triangles.

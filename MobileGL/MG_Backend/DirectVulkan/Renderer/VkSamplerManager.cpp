@@ -139,7 +139,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Unsigned packed floats: no sign bit at all. 65024 is the largest 11-bit float; the
             // 10-bit blue channel tops out lower (64512) and RGB9E5 higher (65408), but the bound
             // that matters for correctness is the lower one, and a single conservative upper bound
-            // costs nothing a real border colour will ever notice.
+            // costs nothing a real border color will ever notice.
             case TextureInternalFormat::R11FG11FB10F:
                 return {true, 0.0f, 64512.0f};
             case TextureInternalFormat::RGB9E5:
@@ -152,7 +152,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Per-component representable range of an integer texture format, as Int64 so that the whole
         // signed and unsigned 32-bit ranges are expressible in one type and the clamp can be written
         // once for both domains. Alpha is carried separately because RGB10_A2UI is the one format
-        // whose alpha is narrower than its colour channels.
+        // whose alpha is narrower than its color channels.
         struct IntegerBorderRange {
             Int64 rgbMin = 0;
             Int64 rgbMax = 0;
@@ -360,7 +360,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto compareFunc = sampler.GetSamplerCompareFunc();
         XXHASH_VERIFY(XXH64_update(hashState, &compareFunc, sizeof(compareFunc)));
         // The resolved enum AND, when it is one of the *_CUSTOM_EXT values, the sixteen bytes of the
-        // colour itself: two samplers that differ only in a custom border colour carry the same enum
+        // color itself: two samplers that differ only in a custom border color carry the same enum
         // and would otherwise collide onto whichever one was created first.
         XXHASH_VERIFY(XXH64_update(hashState, &borderColor.color, sizeof(borderColor.color)));
         if (borderColor.isCustom) {
@@ -512,14 +512,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return resolved; // FLOAT_TRANSPARENT_BLACK, never sampled
         }
 
-        // Border colour is sampler state: a bound sampler object supplies its own, and a texture
+        // Border color is sampler state: a bound sampler object supplies its own, and a texture
         // with none reaches the very same value through the sampler object it owns.
         const auto domain = ResolveBorderColorDomain(format);
         const Bool canUseCustom = m_customBorderColorSupported && m_maxCustomBorderColorSamplers > 0 &&
                                   m_customBorderColorSamplerCount < m_maxCustomBorderColorSamplers;
 
         if (domain != BorderColorDomain::Float) {
-            // An integer image view REQUIRES an integer border colour, whatever the value is - even
+            // An integer image view REQUIRES an integer border color, whatever the value is - even
             // (0,0,0,1). The value itself is whichever integer form the application wrote; a float
             // border on an integer texture is nonsense GL leaves undefined, so the derived integer
             // representation (a plain cast) is as good an answer as any.
@@ -528,7 +528,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // through Int64 so the whole signed and unsigned 32-bit ranges are expressible at once.
             //
             // Which representation to start from is the TEXTURE's domain, not the entry-point form
-            // the application used. GL 4.6 core 8.10 stores an "I"-form border colour unmodified with
+            // the application used. GL 4.6 core 8.10 stores an "I"-form border color unmodified with
             // an integer internal data type and does not define a sign conversion between the two
             // integer forms, so the stored bits are reinterpreted in the sampled format's own
             // signedness. Measured, not assumed: a border of -1 written with glTexParameterIiv
@@ -578,7 +578,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
                 return resolved;
             }
-            // No custom colour available: pick the nearest of the three integer palette entries
+            // No custom color available: pick the nearest of the three integer palette entries
             // rather than always answering transparent black, which is what turned an integer border
             // of (-1,-1,-1,-1) into 0 and broke the CTS's clamped-texel detection outright.
             const Bool opaque = clamped[3] != 0;
@@ -588,7 +588,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return resolved;
         }
 
-        // Float domain. GL 4.6 core 8.14.2/8.23: the border colour is interpreted in the texture's
+        // Float domain. GL 4.6 core 8.14.2/8.23: the border color is interpreted in the texture's
         // format, so it is clamped to that format's representable range first. Without the clamp the
         // CTS's border of (255,255,255,255) on a GL_RGBA8 texture matched none of the palette entries
         // and fell through to transparent black - every border texel sampled 0 where the test wanted

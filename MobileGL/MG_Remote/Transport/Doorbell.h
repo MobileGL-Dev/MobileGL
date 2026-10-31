@@ -63,7 +63,7 @@ namespace MobileGL::MG_Remote::Transport {
         extern std::atomic<std::uint32_t> g_spinItersPerUs;
         // Measures, clamps, stores and returns. Two threads that race here both
         // store a legitimate reading and neither is wrong; there is nothing to
-        // serialise, so nothing does.
+        // serialize, so nothing does.
         std::uint32_t CalibrateSpinItersPerUs();
     } // namespace Detail
 

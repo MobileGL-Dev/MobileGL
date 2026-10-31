@@ -611,9 +611,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             SamplerImpl::UnbindSampler(TextureImpl::TempTextureUnit);
 
             // The neutral baseline every emulation pass wants: nothing culled, nothing
-            // clipped, nothing tested, no coverage games, and colour writes open. Callers
+            // clipped, nothing tested, no coverage games, and color writes open. Callers
             // turn back on only what they need (the replicate pass wants the depth and
-            // stencil tests, and masks colour off because it writes neither).
+            // stencil tests, and masks color off because it writes neither).
             for (Uint i = 0; i < m_capabilityCount; ++i) {
                 g_GLESFuncs.glDisable(m_capabilities[i].cap);
             }
@@ -652,7 +652,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_GLESFuncs.glDisable(m_capabilities[i].cap);
                 }
             }
-            // The per-draw-buffer colour masks are not covered by the non-indexed
+            // The per-draw-buffer color masks are not covered by the non-indexed
             // glColorMask above. Restore what the SYNC actually pushed, not the raw
             // application masks: a widened attachment's alpha write is forced off by
             // SyncRenderState and memoized in g_syncedColorMaskAlphaWidenMask, and the
@@ -886,7 +886,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     // DirectGLESReadback.cpp defines it: E's extent-scoped stand-in for a
-    // driver that refuses to read a colour level back, asked here too so a host reaches the store
+    // driver that refuses to read a color level back, asked here too so a host reaches the store
     // route below (P8-SE).
     Bool WireTextureReadbackRefusedForTesting(const IntVec3& extent);
     using FramebufferImpl::SubstituteWidenedClearAlpha;

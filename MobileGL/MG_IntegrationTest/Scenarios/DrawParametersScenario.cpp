@@ -24,7 +24,7 @@
 //     gl_BaseInstance read an unbound storage buffer on a plain glDrawArrays.
 //
 // The shader paints the three values, so a draw that carries the wrong ones
-// paints the wrong colour rather than merely disagreeing with an expectation
+// paints the wrong color rather than merely disagreeing with an expectation
 // somewhere. The framebuffer is cleared to WHITE and no case expects 255 in any
 // channel, so "the draw did not happen" can never be mistaken for a pass.
 

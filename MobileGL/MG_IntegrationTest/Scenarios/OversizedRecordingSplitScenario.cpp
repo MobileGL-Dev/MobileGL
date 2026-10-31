@@ -85,7 +85,7 @@ void main() {
 )";
 
         // The state cases: the unit-square vertices (or a triangle of them) stretched over an
-        // NDC rectangle at a given depth, in a uniform colour. A zero rectangle makes a
+        // NDC rectangle at a given depth, in a uniform color. A zero rectangle makes a
         // zero-area primitive - a draw that reaches the renderer and rasterizes nothing.
         constexpr const char* kRectVS = R"(#version 330 core
 in vec2 aPos;
@@ -174,9 +174,9 @@ void main() { o_color = vec4(1.0); }
                 return ::testing::AssertionSuccess();
             }
             return ::testing::AssertionFailure()
-                   << wrong << " of " << kDraws << " pixels do not hold their own draw's colour. First: (" << firstX
+                   << wrong << " of " << kDraws << " pixels do not hold their own draw's color. First: (" << firstX
                    << ", " << firstY << ") = " << firstSeen << ", drawn by draw " << (firstY * kSide + firstX)
-                   << " (a pixel no draw reached still holds the clear colour 0,0,0,0)";
+                   << " (a pixel no draw reached still holds the clear color 0,0,0,0)";
         }
 
         // Every pixel of columns [x0, x1] (all rows) is `expected`, each channel within `tolerance`.
@@ -353,7 +353,7 @@ void main() { o_color = vec4(1.0); }
     } // namespace
 
     // kDraws single-pixel quads into a fresh target, one uniform value per draw, with no
-    // readback, flush or rebind in between. Every pixel must hold its own draw's colour.
+    // readback, flush or rebind in between. Every pixel must hold its own draw's color.
     TEST_F(OversizedRecordingSplitScenario, EveryDrawOfTheFrameLandsAcrossCommandBufferSplits) {
         if (!Ready()) return;
 

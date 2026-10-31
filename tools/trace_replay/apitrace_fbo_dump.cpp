@@ -22,7 +22,7 @@
 #endif
 #include <vector>
 
-// Dumps every colour attachment (and the depth attachment) of every live framebuffer
+// Dumps every color attachment (and the depth attachment) of every live framebuffer
 // object at a chosen call boundary, on both sides of a driver comparison. The intent is
 // to name the first attachment whose contents diverge between two stacks; the manifest is
 // formatted so that `diff` over two dump directories points straight at it.
@@ -350,7 +350,7 @@ namespace mobilegl_trace_dump {
             return DrainErrors() == 0;
         }
 
-        // Reads the attachment as floats regardless of its storage: normalised and float targets
+        // Reads the attachment as floats regardless of its storage: normalized and float targets
         // convert on the way out, integer targets are read as integers and widened. The float view
         // keeps out-of-[0,1] accumulation buffers legible in the statistics even though the PNG
         // itself has to clamp.

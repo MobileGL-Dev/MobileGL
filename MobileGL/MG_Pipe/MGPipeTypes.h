@@ -62,7 +62,7 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPBox, 24);
 
-    // Where an asynchronous answer lands. Every server query in this catalogue is
+    // Where an asynchronous answer lands. Every server query in this catalog is
     // async-with-handle; none of them blocks (section 4.4.6, "the total rule").
     struct MGPReplySlot {
         Uint64 Id;
@@ -281,7 +281,7 @@ namespace MobileGL::MG_Pipe {
     static_assert(MGPipeEveryTextureTargetIsMapped(),
                   "a TextureTarget enumerator has no MGPResourceDesc::Target row: add it to "
                   "MGPipeResourceTargetForTextureTarget, and give it an enumerator of its own "
-                  "rather than folding it onto a neighbour (D-A3)");
+                  "rather than folding it onto a neighbor (D-A3)");
     static_assert(MGPipeResourceTargetForTextureTarget(MobileGL::TextureTarget::Texture2D) !=
                       MGPipeResourceTargetForTextureTarget(MobileGL::TextureTarget::TextureRectangle),
                   "a rectangle texture is not a 2D texture on the wire; both backends switch on "
@@ -503,7 +503,7 @@ namespace MobileGL::MG_Pipe {
     MGP_ASSERT_POD(MGPBindRenderState, 12);
 
     // The half of the render state that must NOT mint a CSO: viewport, scissor, depth
-    // range, blend colour, line width, polygon offset, stencil ref/write mask, clear
+    // range, blend color, line width, polygon offset, stencil ref/write mask, clear
     // values, hints, the point-size family and the primitive-restart index. This is what
     // keeps glViewport from evicting Magma's pipeline memo (D-B1).
     //
@@ -574,7 +574,7 @@ namespace MobileGL::MG_Pipe {
     // (TextureState/TextureObject.h's m_sampler, constructed by TextureObjectBase's
     // constructor). GL 4.6 core table 23.18 makes filter/wrap/compare/border SAMPLER state,
     // and Espryt pushes it with glTexParameter* onto the TEXTURE rather than with
-    // glBindSampler onto the unit - behaviour P4a preserves exactly. Naming the CSO rather
+    // glBindSampler onto the unit - behavior P4a preserves exactly. Naming the CSO rather
     // than widening this payload with a filter/wrap/border block is what keeps ONE authority
     // for one value: SyncTextureParamsToBackend reads this record, SyncBuiltinSamplerToBackend
     // reads that CSO's SamplerParameters, and the two pushes stay two pushes.
@@ -630,7 +630,7 @@ namespace MobileGL::MG_Pipe {
         // GetLinkVersion, and a FAILED relink of a bound program moves it too. The server's
         // clean condition needs the difference spelled, because a draw on a program the
         // frontend reports unlinked DECLINES (the frontend raises INVALID_OPERATION) and a
-        // record that cannot say so leaves the twin rebuilding from empty artefacts.
+        // record that cannot say so leaves the twin rebuilding from empty artifacts.
         //
         // THE DESCRIPTOR GREW 192 -> 200 AND THE DRAFT'S "in the descriptor's existing pad"
         // WAS WRONG: the four bytes above end at offset 24 and MGPBlobRef is 8-aligned, so
@@ -651,7 +651,7 @@ namespace MobileGL::MG_Pipe {
 
     // MGPSurface::Kind's three values (P4a, ID-12 / esprytobj DV-4). MGPipeKind is REUSED
     // rather than a second three-value enum minted beside it: it already spells Texture and
-    // Renderbuffer, its None is 0, and a zero-initialised MGPSurface is therefore ALREADY the
+    // Renderbuffer, its None is 0, and a zero-initialized MGPSurface is therefore ALREADY the
     // empty attachment point this record describes - {Res = kMGPipeNullHandle, Kind = None}
     // and every other field zero. The static_assert is what keeps that true if MGPipeKind is
     // ever reordered.
@@ -659,7 +659,7 @@ namespace MobileGL::MG_Pipe {
     inline constexpr Uint8 kMGPipeSurfaceKindTexture = static_cast<Uint8>(MGPipeKind::Texture);
     inline constexpr Uint8 kMGPipeSurfaceKindRenderbuffer = static_cast<Uint8>(MGPipeKind::Renderbuffer);
     static_assert(kMGPipeSurfaceKindNone == 0,
-                  "a zero-initialised MGPSurface must already be the empty attachment point");
+                  "a zero-initialized MGPSurface must already be the empty attachment point");
 
     // MGPSurface::TextureTarget for a point that names no texture: the renderbuffer point and
     // the empty point both carry it. It is MobileGL::TextureTarget::Unknown, which is -1 and
@@ -913,7 +913,7 @@ namespace MobileGL::MG_Pipe {
     //
     // XFB IS NOT ONE OF THEM: set_stream_output_targets carries a Generation this payload has
     // no field for and its capture points are span-scoped state latched at Begin, so the
-    // catalogue's split between the two rows stays (§5.7).
+    // catalog's split between the two rows stays (§5.7).
     inline constexpr Uint32 kMGPipeShaderBufferClassUniform = 0;
     inline constexpr Uint32 kMGPipeShaderBufferClassShaderStorage = 1;
     inline constexpr Uint32 kMGPipeShaderBufferClassAtomicCounter = 2;
@@ -1046,7 +1046,7 @@ namespace MobileGL::MG_Pipe {
     // record now carries all three views VERBATIM, as the frontend computed them, and the
     // applier writes each view from its own array; ValueClass stays as the record of which
     // view the application wrote directly (the verify comparator covers it, and the
-    // emission-side suppressor compares the three views, not it). This is the catalogue's
+    // emission-side suppressor compares the three views, not it). This is the catalog's
     // second payload-size amendment after P5b's MGPCopyRegion 64 -> 72 (CONTRACT-P5C.md §7.6):
     // 24 -> 56 bytes, and PipeCatalogueTest pins the new size.
     struct MGPAttribValue {
@@ -1090,10 +1090,10 @@ namespace MobileGL::MG_Pipe {
     // libraries: the applier that installs it, and (in a verify build) the compare-at-read hook in
     // MG_Impl/Pipe/PipeFill.cpp, whose oracle for the pack half inside that window IS this value.
     // Two hand-typed copies would drift silently in the ONE direction that matters - the hook
-    // would stop recognising the window and start reporting a divergence that is not one - so
+    // would stop recognizing the window and start reporting a divergence that is not one - so
     // MG_Pipe, which owns MGPPixelPackState, owns the constant as well.
     //
-    // Value-initialised and then the five fields the applier sets: RowLength / SkipRows /
+    // Value-initialized and then the five fields the applier sets: RowLength / SkipRows /
     // SkipPixels / SkipImages are already 0 by PixelStoreParameters' own defaults and are spelled
     // out anyway, because "neutral" is a statement about every member rather than about the ones
     // whose default happens to be right.
@@ -1237,7 +1237,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     // The per-record half of resource_respecify's kNeedsAck: the call flag says a record may
-    // need an acknowledgement, and this decides. Only an immutable buffer (glBufferStorage) is a
+    // need an acknowledgment, and this decides. Only an immutable buffer (glBufferStorage) is a
     // synchronous allocation; glBufferData is not. glTexStorage* also sets Immutable, but texture
     // and renderbuffer storage is allocated lazily at sync time, so neither may ack
     // (ARCHITECTURE.md §8.3). PipeCatalogue.ResourceRespecifyAcksOnlyImmutableStorage
@@ -1459,7 +1459,7 @@ namespace MobileGL::MG_Pipe {
     //                              GL_PARAMETER_BUFFER, ParameterOffset = drawcount (a byte
     //                              offset); the backend reads the real count from that buffer
     //   Buffer / Offset / Stride   the bound GL_DRAW_INDIRECT_BUFFER, the `indirect` byte offset
-    //                              and the stride (0 = tightly packed; the backend normalises).
+    //                              and the stride (0 = tightly packed; the backend normalizes).
     struct MGPDrawIndirect {
         MGPipeHandle Buffer;
         MGPipeHandle ParameterBuffer;
@@ -1683,7 +1683,7 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPBindContext, 8);
 
-    // shared_image: colour buffers the server allocates and exports as dma-buf descriptors, so
+    // shared_image: color buffers the server allocates and exports as dma-buf descriptors, so
     // one client's frames reach another client's textures without leaving GPU memory. Every op
     // answers through the reply slot with an MGPSharedImageReply; a descriptor (Allocate,
     // NativeFence) reaches the client on the aux socket before the reply is posted. Damage holds
@@ -1704,7 +1704,7 @@ namespace MobileGL::MG_Pipe {
     inline constexpr Uint32 kMGPBufferAgeDamageRegionFollows = 1u;
     inline constexpr Uint32 kMGPNativeFenceFdFollows = 1u;
 
-    // An Import of a YUV fourcc (NV12, P010) carries its planes and colour hints in Damage, with
+    // An Import of a YUV fourcc (NV12, P010) carries its planes and color hints in Damage, with
     // DamageCount = kMGPImportPlaneWords (the field is a Present's otherwise, and 0 on an RGBA
     // Import): both planes live in the one descriptor the Import sends, at these byte offsets and
     // row pitches. The hints are EGL_EXT_image_dma_buf_import's values, 0 where not given.

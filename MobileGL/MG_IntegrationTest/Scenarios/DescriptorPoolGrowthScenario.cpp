@@ -22,7 +22,7 @@
 // Each of kDraws draws paints its own pixel of a 64x64 target and samples one of kTextures
 // textures, a different one from each of the previous draws' so neither the renderer's per-draw
 // descriptor reuse memo (four entries) nor its dynamic-offset-only rebind can let two draws share
-// a set: one frame needs kDraws sets. Every pixel must hold its own draw's texture colour, on both
+// a set: one frame needs kDraws sets. Every pixel must hold its own draw's texture color, on both
 // backends. On DirectVulkan the cases also read the pools through GetDescriptorPoolCensus - which
 // only the desktop build can reach, since the integration harness links the static library there
 // and the hidden-visibility shipping library on Android.

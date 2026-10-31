@@ -39,7 +39,7 @@ namespace MobileGL::MG_Remote::Server {
         case ServerWindowAcquire::NoWindow:
             return "NoWindow";
         case ServerWindowAcquire::Cancelled:
-            return "Cancelled";
+            return "Canceled";
         case ServerWindowAcquire::Interrupted:
             return "Interrupted";
         case ServerWindowAcquire::LeasedElsewhere:

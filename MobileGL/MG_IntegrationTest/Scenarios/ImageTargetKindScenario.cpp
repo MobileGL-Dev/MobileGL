@@ -32,7 +32,7 @@
 //     frontend could plausibly mishandle it. Mirroring it means a green scenario cannot be green
 //     for a reason the conformance case excludes;
 //   * glBindImageTexture with layered = GL_TRUE, which is what glBindImageTextures is specified
-//     to pass, and which is where a target kind whose layeredness a backend does not recognise
+//     to pass, and which is where a target kind whose layeredness a backend does not recognize
 //     goes wrong.
 //
 // MULTISAMPLE is the one kind that is not merely an emulation problem, and the conformance case
@@ -436,7 +436,7 @@ namespace MGITest {
             // clamped, and not an error - so every one of the four rows has to read the same texel
             // out of a target that has no layers, including the two rows that name layer 1 on a
             // texture whose only layer is 0. DirectGLES used to normalize `layered` and forward
-            // `layer` verbatim; Adreno honours the bogus layer by leaving the image unit reading
+            // `layer` verbatim; Adreno honors the bogus layer by leaving the image unit reading
             // zero, which is exactly the two rows KHR-GL42.bind_image_texture.single_layer failed.
             //
             // The bindings are checked back as well, because the fix depends on WHERE the
@@ -596,7 +596,7 @@ namespace MGITest {
     //
     // KHR-GL42.bind_image_texture.single_layer's sweep, on the kinds whose backend target has
     // neither layers nor faces. Two of its four rows name layer 1 on a single-layer texture,
-    // which the spec says is to be ignored outright rather than honoured or rejected - and
+    // which the spec says is to be ignored outright rather than honored or rejected - and
     // which DirectGLES used to forward to the ES driver as written.
 
 #define MGL_DEFINE_LAYER_SWEEP_CASE(CaseName, Kind)                                                                    \

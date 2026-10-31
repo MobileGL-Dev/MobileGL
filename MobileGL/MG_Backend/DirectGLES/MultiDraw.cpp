@@ -87,7 +87,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // The flattening dispatch is one invocation per output index. ES 3.1 only
         // guarantees 65535 work groups per dimension, and exceeding it makes
         // glDispatchCompute an INVALID_VALUE no-op - which would leave the draw reading an
-        // uninitialised index buffer rather than failing visibly. Cap the tier there
+        // uninitialized index buffer rather than failing visibly. Cap the tier there
         // instead of querying: 4.19M indices is far past any real multi-draw batch, and
         // beyond it the per-sub-draw tiers are the better answer anyway.
         constexpr SizeT kComputeWorkGroupSize = 64;
@@ -239,7 +239,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // ---- P5e (ra2), ID-136: THE SEAT THIS FILE'S OWN RULE HAD MISSED -------------------
         //
         // This was the LAST unguarded frontend read on the multi-draw apply path, and it sat
-        // twenty lines above the function that retired its neighbour. It asked
+        // twenty lines above the function that retired its neighbor. It asked
         // `gPipeInputs->GetBufferBindingSlot(BufferTarget::DrawIndirect)` and then
         // `EnsureBufferResource(<frontend object>)` - a registry lookup keyed by the client's
         // identity, which is §4.4's rule and not only the allocator's. Under run-ahead that is
@@ -524,7 +524,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
                     std::memcpy(&value, source + i * 4, sizeof(value));
                     break;
                 }
-                // Unsigned wraparound is the defined behaviour for a negative base vertex.
+                // Unsigned wraparound is the defined behavior for a negative base vertex.
                 out[i] = (restartActive && value == restartSentinel) ? 0xFFFFFFFFu : value + baseVertexBits;
             }
         }
@@ -789,7 +789,7 @@ void main() {
     }
 
     uint localIndex = outIndex - (low == 0u ? 0u : drawInfo[(low - 1u) * 3u + 2u]);
-    // Unsigned wraparound is the defined behaviour for a negative base vertex. No
+    // Unsigned wraparound is the defined behavior for a negative base vertex. No
     // restart sentinel handling: the tier declines outright while restart is enabled.
     flatIndices[outIndex] = ReadSourceIndex(localIndex + drawInfo[low * 3u]) + drawInfo[low * 3u + 1u];
 }
@@ -1072,7 +1072,7 @@ void main() {
                            GLsizei drawcount, const GLint* basevertex) {
         if (drawcount <= 0 || !count || !indices) return;
         // Read before any GL work, because it decides the tier below: a desktop restart index
-        // the driver does not know about can only be honoured by the tier that rewrites the
+        // the driver does not know about can only be honored by the tier that rewrites the
         // index stream (see ResolveTierForBatch). A restart index this index type cannot hold
         // needs no rewrite at all - nothing can match it - but it does need the driver's own
         // fixed-index restart held off for the batch, which is what the scope below does.

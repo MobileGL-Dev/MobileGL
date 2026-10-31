@@ -7,7 +7,7 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # End of Source File Header
 
-"""Render the perf-compare report tables from summary.json + per-run artefacts.
+"""Render the perf-compare report tables from summary.json + per-run artifacts.
 
 Usage: make_report.py [results_dir]
 Defaults to <repo>/.trace-work/perf-compare (run_matrix.sh's output root).

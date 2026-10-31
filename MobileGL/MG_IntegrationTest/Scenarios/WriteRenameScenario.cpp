@@ -38,7 +38,7 @@
 namespace MGITest {
     namespace {
 
-        // Position in [0, 1] and a per-vertex colour.
+        // Position in [0, 1] and a per-vertex color.
         constexpr const char* kVS = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec4 aColor;
@@ -87,7 +87,7 @@ void main() { o0 = vColor * uTint; }
             GLuint program = 0, fbo = 0, color = 0, vao = 0, vbo = 0, ibo = 0, ubo = 0;
         };
 
-        // A target, the program, a VAO over `vertices` (float2 position + ubyte4 colour), a
+        // A target, the program, a VAO over `vertices` (float2 position + ubyte4 color), a
         // four-index strip index buffer and a white tint.
         Scene MakeScene(const std::vector<Vertex>& vertices, std::string* error) {
             Scene s;

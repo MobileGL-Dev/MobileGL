@@ -8,7 +8,7 @@
 
 // A CLIENT OUTLIVES ITS LOST SESSION. A GPU device loss ends exactly one session on the server
 // (MultiSessionTest.ADeviceLossEndsOnlyItsOwnSession); this suite is the client's half. A real
-// MobileGL client - the EGL and GL entry points, MobileGL's own initialisation, a unix spawn
+// MobileGL client - the EGL and GL entry points, MobileGL's own initialization, a unix spawn
 // session - against the in-process display server, whose debug knob makes the second device check
 // in the server process (this client's second read-back) report the device lost.
 //

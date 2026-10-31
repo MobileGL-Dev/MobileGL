@@ -1342,7 +1342,7 @@ TEST(RemoteClientControls, ABufferRespecifyTakesNoReplyWhileATextureOneStillDoes
 // assertion the device cannot make: set the knob as high as it goes and the row must STILL take the
 // blocking path on a link that cannot retain.
 //
-// THE WINDOW'S OWN BEHAVIOUR IS PINNED ELSEWHERE, ON THE ARM IT SHIPS ON: StreamLinkTest's
+// THE WINDOW'S OWN BEHAVIOR IS PINNED ELSEWHERE, ON THE ARM IT SHIPS ON: StreamLinkTest's
 // declared-answer cases for the store, and the stream-arm window case for the row. That split is
 // not tidiness - three rounds of this feature were green here while being inert on the device,
 // because these gates and the device run on different transports.
@@ -1468,7 +1468,7 @@ TEST(RemoteClientControls, ARefusedCreateUnlatchesItsObjectAndItsNextCreateBlock
         std::memset(pixels, 0x21, sizeof(pixels));
         Srv::ServerSessionInstance().SetConsumedSubsystems(
             kMGPipeSubsystemsMigratedAtP4a & ~kMGPipeSubsystemTextureResources);
-        // ---- one object we can name, then enough neighbours to fill and drain the window ----
+        // ---- one object we can name, then enough neighbors to fill and drain the window ----
         // The drain is what READS a deferred answer, so the refusal of the first create is only
         // discovered once later creates have pushed the ring past its ceiling.
         const auto defineStorage = [&](GLuint name, Int32 extent) {

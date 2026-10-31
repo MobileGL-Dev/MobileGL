@@ -139,7 +139,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     // P7 wave 2-B (CONTRACT-P7 §3.2, `default-color-blit-shape`). The shader blit below can only
     // SAMPLE its source: sampler2D, a float result, and one of two 2D view types. A framebuffer
-    // whose colour attachment is RGBA8UI, or a layer of a 3D texture, is none of those, and on a
+    // whose color attachment is RGBA8UI, or a layer of a 3D texture, is none of those, and on a
     // rotated Android surface there is no other arm - an axis-aligned vkCmdBlitImage cannot
     // express a quarter turn. So the source region becomes an owned 2D image first, through
     // vkCmdCopyImage, which cares about the texel BLOCK SIZE and not about how the block is
@@ -163,7 +163,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             static_cast<Uint64>(std::max(sx0, sx1)) > source.extent.width ||
             static_cast<Uint64>(std::max(sy0, sy1)) > source.extent.height)
             return false;
-        // A compressed source cannot be a colour attachment, so it cannot be a framebuffer blit's
+        // A compressed source cannot be a color attachment, so it cannot be a framebuffer blit's
         // source either - but the block arithmetic below would silently produce nonsense for one,
         // and "cannot happen" is the reason the guards this package retires were written as
         // asserts. The size-compatibility classes are Vulkan's own (VkFormat texel block size);

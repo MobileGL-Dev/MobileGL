@@ -34,7 +34,7 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
 
     // THE MIT-SHM FALLBACK: frames read back into a shared segment (a memfd passed with
     // ShmAttachFd, so no SysV memory has to be shared with the X server) and put with ShmPutImage -
-    // the pixels reach the X server without travelling down its socket. Two segments, alternating;
+    // the pixels reach the X server without traveling down its socket. Two segments, alternating;
     // a segment is written again only after a round trip queued behind its last put has come back.
     class ShmPresenter {
     public:

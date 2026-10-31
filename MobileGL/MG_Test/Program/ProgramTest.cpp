@@ -428,7 +428,7 @@ void main() {
 //
 // THE REFERENCE IS COMPUTED HERE, not copied as a constant, and it is computed with the same
 // algorithm the old consumer used: per module in linked-stage order, STORAGE_BUFFER
-// descriptors only, sorted by (normalised name, binding), deduplicated across modules by name.
+// descriptors only, sorted by (normalized name, binding), deduplicated across modules by name.
 // Comparing against a hand-written expected list would only pin what the author believed.
 //
 // THE PROGRAM IS THE ONE THE CONTRACT ASKS FOR: multi-stage (vertex + fragment), with an
@@ -605,7 +605,7 @@ void main() {
 
     // The arrayed block must appear ONCE, under its stripped name: glslang reflects it per
     // element and SPIR-V carries one descriptor, and collapsing the two is the whole reason
-    // the archive normalises.
+    // the archive normalizes.
     EXPECT_EQ(std::count(archived.begin(), archived.end(), String("Blocks")), 1)
         << "the arrayed SSBO must collapse to one entry named without its subscript";
     // The atomic counter is in the BACKEND's space even though GL's own enumeration excludes it.
@@ -2866,7 +2866,7 @@ TEST_F(ProgramTest, UniformBlockListExcludesStorageAndAtomicCounterBlocks) {
     GetActiveUniformBlockiv(program, blk2, GL_UNIFORM_BLOCK_BINDING, &binding);
     EXPECT_EQ(binding, 7);
     GetActiveUniformBlockiv(program, blk, GL_UNIFORM_BLOCK_BINDING, &binding);
-    EXPECT_NE(binding, 7) << "the rebind must not have leaked onto the neighbouring block";
+    EXPECT_NE(binding, 7) << "the rebind must not have leaked onto the neighboring block";
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 
     // An index past the end of the (now shorter) list is GL_INVALID_VALUE, not a silently
@@ -3679,11 +3679,11 @@ TEST_F(ProgramTest, TwoShaderObjectsWithIdenticalSourceLinkIndependently) {
     //     single parse - made safe by ClaimParsedShader's CAS, exactly as it already was for
     //     one shader object attached to two programs. ShaderCompileAdoptionTest pins that
     //     down by linking both objects and comparing the generated SPIR-V.
-    //   * The translation memo's compile half (L1c) recognises the second object's source and
+    //   * The translation memo's compile half (L1c) recognizes the second object's source and
     //     publishes its verdict WITHOUT parsing, so that object legitimately holds no TShader
     //     at all until a link asks ClaimParsedShader for one. Asserting a non-null parse here
     //     would be asserting that the parse had NOT been skipped - i.e. testing the absence
-    //     of the optimisation rather than the invariant.
+    //     of the optimization rather than the invariant.
     //
     // So the pointer assertion applies only where the two objects are genuinely INDEPENDENT,
     // i.e. where job adoption is not in play. What every mode has to agree on is the two
@@ -3694,7 +3694,7 @@ TEST_F(ProgramTest, TwoShaderObjectsWithIdenticalSourceLinkIndependently) {
         // Either may legitimately hold NO parse: that is an L1c hit, where the AST is made on
         // demand at link instead. So this asserts they are not the SAME non-null parse, and
         // deliberately not that both have one - the latter would be asserting that the
-        // optimisation had not happened.
+        // optimization had not happened.
         if (shaderA != nullptr && shaderB != nullptr) {
             EXPECT_NE(shaderA, shaderB) << "two independent shader objects share one consume-once parse";
         }
@@ -3771,7 +3771,7 @@ TEST_F(ProgramTest, PreprocessCacheOverflowKeepsCompilingCorrectly) {
 
 // glUniformMatrix{2x3,2x4,3x2,3x4,4x2,4x3}fv and their twelve glProgramUniformMatrix* twins were
 // validate-only no-ops: they never took the value pointer at all. They upload column-at-a-time at
-// the std140 16-byte column stride, honouring `transpose`, and glGetUniformfv undoes that padding.
+// the std140 16-byte column stride, honoring `transpose`, and glGetUniformfv undoes that padding.
 TEST_F(ProgramTest, NonSquareMatrixUniformsRoundTripThroughTheGlobalUbo) {
     const char* vsSource = R"(#version 430 core
 uniform mat2x3 uM2x3;
@@ -3889,7 +3889,7 @@ void main() { fragColor = vec4(1.0); }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 
-// GL 4.6 core 7.1: shaderType is an enum, so an unrecognised one is INVALID_ENUM - it used to be
+// GL 4.6 core 7.1: shaderType is an enum, so an unrecognized one is INVALID_ENUM - it used to be
 // reported as INVALID_VALUE. glCreateShaderProgramv adds a count < 0 gate ahead of everything.
 TEST_F(ProgramTest, CreateShaderAndCreateShaderProgramvReportTheRightErrorClasses) {
     while (GetError() != GL_NO_ERROR) {}
@@ -4366,10 +4366,10 @@ void main() { mgColor = vec4(1.0); }
 )";
 } // namespace
 
-// Two fragment outputs on ONE location with DIFFERENT colour indices is not an aliasing error -
+// Two fragment outputs on ONE location with DIFFERENT color indices is not an aliasing error -
 // it is dual-source blending (GL 4.6 core 11.1.3 / ARB_blend_func_extended, core since 3.3), and
 // the GL_SRC1_* blend factors have nothing to read without it. The link-time aliasing check keyed
-// on the colour number alone, so every such program failed to link with "alias color number 0"
+// on the color number alone, so every such program failed to link with "alias color number 0"
 // and the whole feature was unreachable from shader-side GLSL.
 TEST_F(ProgramTest, FragmentOutputsMayShareALocationWhenTheirColorIndexDiffers) {
     constexpr const char* dualSourceFs = R"(#version 460 core
@@ -4385,7 +4385,7 @@ void main() { fragColor0 = vec4(1.0); fragColor1 = vec4(0.5); }
         GetProgramInfoLog(program, sizeof(log), nullptr, log);
         return std::string(log);
     }();
-    // Both outputs are active and both sit on colour number 0 - which is the shape that used to be
+    // Both outputs are active and both sit on color number 0 - which is the shape that used to be
     // refused. (glGetFragDataIndex still answers 0 for the index-1 output: it reports only what
     // glBindFragDataLocationIndexed bound, and reflecting the shader-side qualifier is a separate
     // gap, so it is deliberately not asserted here.)
@@ -4394,7 +4394,7 @@ void main() { fragColor0 = vec4(1.0); fragColor1 = vec4(0.5); }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 
-// The check it must NOT stop making: two outputs on the same colour number AND the same index
+// The check it must NOT stop making: two outputs on the same color number AND the same index
 // really do alias, and that link has to fail. Aliased through glBindFragDataLocation rather than
 // through two `layout(location = 0)` qualifiers on purpose - the qualifier form is caught by
 // glslang at COMPILE time, so it would never reach the link-time rule this pins.
@@ -4426,7 +4426,7 @@ void main() { fragColorA = vec4(1.0); fragColorB = vec4(0.5); }
     GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
     EXPECT_NE(std::string(infoLog).find("alias color number"), std::string::npos) << infoLog;
 
-    // ...and the same pair separated by the colour INDEX links, which is the whole point of the
+    // ...and the same pair separated by the color INDEX links, which is the whole point of the
     // key being a pair.
     BindFragDataLocationIndexed(program, 0, 1, "fragColorB");
     LinkProgram(program);
@@ -4439,7 +4439,7 @@ void main() { fragColorA = vec4(1.0); fragColorB = vec4(0.5); }
     for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {}
 }
 
-// An API colour index of ZERO is "no override", not "index 0". glBindFragDataLocation is
+// An API color index of ZERO is "no override", not "index 0". glBindFragDataLocation is
 // glBindFragDataLocationIndexed with index 0 (GL_Program.cpp), so the blanket-bind pattern -
 // portable code that binds every output name it knows about, without caring about dual-source -
 // writes a real 0 into the frag-data index map for an output whose shader qualifier says 1.
@@ -4468,7 +4468,7 @@ void main() { fragColor0 = vec4(1.0); fragColor1 = vec4(0.5); }
     AttachShader(program, fs);
     DeleteShader(fs);
 
-    // The blanket bind: colour number 0, index 0, on the output the shader put at index 1.
+    // The blanket bind: color number 0, index 0, on the output the shader put at index 1.
     BindFragDataLocation(program, 0, "fragColor0");
     BindFragDataLocation(program, 0, "fragColor1");
     LinkProgram(program);

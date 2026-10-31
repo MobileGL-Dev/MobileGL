@@ -56,7 +56,7 @@ namespace MobileGL {
 
                 // The interface-block struct an Input/Output variable declares, or 0 when the
                 // variable is not one. Tessellation and geometry interfaces are arrays of the
-                // block struct, so array levels are unwrapped before the struct is recognised.
+                // block struct, so array levels are unwrapped before the struct is recognized.
                 uint32_t GetInterfaceBlockStructId(IRContext* irContext, Instruction& variable,
                                                    const std::unordered_set<uint32_t>& blockStructIds,
                                                    spv::StorageClass& outStorageClass) {

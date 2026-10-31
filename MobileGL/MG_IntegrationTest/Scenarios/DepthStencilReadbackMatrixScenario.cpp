@@ -111,7 +111,7 @@ namespace MGITest {
                    internalFormat == GL_STENCIL_INDEX8;
         }
 
-        // A framebuffer whose depth/stencil lives in a TEXTURE. The colour attachment is
+        // A framebuffer whose depth/stencil lives in a TEXTURE. The color attachment is
         // there so a stencil-only or depth-only framebuffer still has something to size it.
         DepthSource MakeTextureSource(GLenum internalFormat) {
             DepthSource source;
@@ -203,7 +203,7 @@ namespace MGITest {
 
             // "every value in the region is `expected`" rather than "the middle pixel is":
             // a staging blit that lands the wrong rectangle, or a conversion pass with a
-            // half-texel offset, still gets the centre right.
+            // half-texel offset, still gets the center right.
             static void ExpectAllDepth(const std::vector<float>& values, float expected, const char* what) {
                 size_t bad = 0;
                 float worst = expected;
@@ -532,14 +532,14 @@ namespace MGITest {
     // on both: `Magma:multisample-depth-resolve-region` covered the reversed rectangle and the
     // scaled one under one Fatal.
     //
-    // COLOUR AND DEPTH IN ONE CALL, because that is the shape that made this visible: the colour
+    // COLOR AND DEPTH IN ONE CALL, because that is the shape that made this visible: the color
     // arm has handled a flip since P5f and handles a scale as of this package, so
-    // GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT resolved its colour correctly and then died on its
+    // GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT resolved its color correctly and then died on its
     // depth. Asserting both aspects of the same blit is what pins them together.
     //
     // THE BANDS ARE UNEQUAL ON PURPOSE (0.25 bottom / 0.75 top): a flip that did not happen
     // returns the bands the right way up, and a "flip" that merely reordered the readback would
-    // move the colour too - so colour and depth are checked to agree about which way up they are.
+    // move the color too - so color and depth are checked to agree about which way up they are.
     //
     // THE CASE IS ARMED ON THE MAGMA WIRE ARM ONLY, and the two gates below say which of the
     // other arms that discover it (the suite is registered whole on the monolith DirectVulkan
@@ -635,11 +635,11 @@ namespace MGITest {
         const std::vector<float> top = ReadDepthFloat(0, kHeight - kHeight / 4, kWidth, kHeight / 4);
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectAllDepth(top, 0.25f, "flipped resolve: the destination's top band");
-        // Colour went the same way up, through the arm that could already do this.
+        // Color went the same way up, through the arm that could already do this.
         std::array<GLubyte, 4> colour{};
         glReadPixels(kWidth / 2, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, colour.data());
         EXPECT_EQ(colour, (std::array<GLubyte, 4>{0, 255, 0, 255}))
-            << "flipped resolve: colour and depth must agree about which way up the blit landed";
+            << "flipped resolve: color and depth must agree about which way up the blit landed";
 
         // THE STENCIL ASPECT, NARROW AND OFFSET ON BOTH SIDES. The copy-out moves one aspect
         // through a buffer one row per region, and a depth/stencil buffer<->image copy wants
@@ -704,10 +704,10 @@ namespace MGITest {
                        "the declined scale must have left the destination alone");
         EXPECT_EQ(FirstGLError(), 0u) << "the session survived the decline";
 
-        // THE SAME SCALE WITH COLOUR IN THE MASK. An erroring blit writes nothing (18.3.1), so
-        // the colour attachment must come through untouched too. The colour arm CAN scale a
+        // THE SAME SCALE WITH COLOR IN THE MASK. An erroring blit writes nothing (18.3.1), so
+        // the color attachment must come through untouched too. The color arm CAN scale a
         // multisample resolve on its own, and it runs before the depth arm - so a decline
-        // decided per aspect scaled and wrote the colour and then raised the error on the
+        // decided per aspect scaled and wrote the color and then raised the error on the
         // depth. The shape is decided once, before any aspect, and this is what pins it.
         glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
         ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.5f, kPrimeStencil);
@@ -725,7 +725,7 @@ namespace MGITest {
         std::array<GLubyte, 4> untouched{};
         glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, untouched.data());
         EXPECT_EQ(untouched, (std::array<GLubyte, 4>{0, 0, 255, 255}))
-            << "the declined COLOR|DEPTH scale must not have written its colour either";
+            << "the declined COLOR|DEPTH scale must not have written its color either";
         ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.5f,
                        "the declined COLOR|DEPTH scale must have left the depth alone");
         EXPECT_EQ(FirstGLError(), 0u) << "the session survived the combined decline";
@@ -747,7 +747,7 @@ namespace MGITest {
         // destination the round-2 pre-pass left to the per-aspect lambdas, on the belief that a
         // default draw framebuffer behind a multisample read was the resolve arm's region Fatal
         // whatever the shape - but that arm asks the shape question BEFORE its region check, so
-        // a scaled COLOR|DEPTH resolve onto the window scaled and wrote its colour through the
+        // a scaled COLOR|DEPTH resolve onto the window scaled and wrote its color through the
         // swapchain blit and then recorded INVALID_OPERATION on its depth: the partial effect
         // the previous leg pins for a user framebuffer, reproduced on the only other kind of
         // destination there is. The window is primed MAGENTA at depth 0.625 - values no other
@@ -758,7 +758,7 @@ namespace MGITest {
         // surface, read the same priming and passed for nothing; pointing the probes at the
         // user framebuffer now fails on both aspects, shown once and restored. The source (red
         // below, green above) is blown up over the whole of the window, and three probes - a
-        // corner, the centre, the far corner - must all still read the priming on both
+        // corner, the center, the far corner - must all still read the priming on both
         // aspects. The harness's pbuffer default framebuffer has no other way of being looked
         // at than glReadPixels, which is what both probes use.
         {
@@ -791,7 +791,7 @@ namespace MGITest {
                 std::array<GLubyte, 4> window{};
                 glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, window.data());
                 EXPECT_EQ(window, (std::array<GLubyte, 4>{255, 0, 255, 255}))
-                    << "the declined COLOR|DEPTH scale onto the window must not have written its colour at (" << x
+                    << "the declined COLOR|DEPTH scale onto the window must not have written its color at (" << x
                     << ", " << y << ")";
                 float depth = kDepthPoison;
                 glReadPixels(x, y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
@@ -1278,7 +1278,7 @@ namespace MGITest {
         Gl().EndFrame();
     }
 
-    // The PACK pixel-store parameters apply to a depth read exactly as they do to a colour
+    // The PACK pixel-store parameters apply to a depth read exactly as they do to a color
     // one, and the gap regions they create must be left alone.
     TEST_F(DepthStencilReadbackMatrixScenario, DepthReadbackHonoursThePackPixelStoreParameters) {
         if (!Ready()) return;

@@ -532,7 +532,7 @@ def main(argv=None):
                     # ledgers; otherwise the wrapper sees rc=124 but no
                     # results.json and cannot distinguish cancellation from a
                     # driver that never wrote evidence.
-                    row.update(status="cancelled", returncode=130,
+                    row.update(status="canceled", returncode=130,
                                completed_at_ns=time.time_ns())
                     row.setdefault("seconds", round((row["completed_at_ns"] - row["started_at_ns"]) / 1e9, 3))
                     atomic_json(checkpoint_path, checkpoint)

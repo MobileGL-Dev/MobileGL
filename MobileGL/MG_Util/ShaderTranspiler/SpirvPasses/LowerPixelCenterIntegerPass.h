@@ -19,7 +19,7 @@ namespace MobileGL {
             // environment, which forbids the PixelCenterInteger execution mode
             // (VUID-StandaloneSpirv-PixelCenterInteger-04654) - a module carrying it fails
             // validation and DirectVulkan refuses every draw of the program. The mode only moves
-            // the pixel centre from (n + 0.5) to n, so the pass drops it and subtracts 0.5 from
+            // the pixel center from (n + 0.5) to n, so the pass drops it and subtracts 0.5 from
             // x and y of every gl_FragCoord read: whole-vector loads get vec4(0.5, 0.5, 0, 0),
             // component loads through a constant-index access chain get 0.5 for x and y.
             //

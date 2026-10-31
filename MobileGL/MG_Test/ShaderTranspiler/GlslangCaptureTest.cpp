@@ -352,7 +352,7 @@ void main() { gl_Position = vec4(two_d[1][2] + three_d[1][1][3] + one_d[2]); }
     EXPECT_EQ(locations.count("one_d[0]"), 0u);
 }
 
-// A DELIBERATE BEHAVIOUR CHANGE, recorded here because it is the one place the migration does
+// A DELIBERATE BEHAVIOR CHANGE, recorded here because it is the one place the migration does
 // not reproduce the old answer.
 //
 // The lexical extractor advanced the location across the declarators of one statement, so
@@ -471,7 +471,7 @@ void main() { realBlock.u = atomicCounterIncrement(counterA) + atomicCounterIncr
     ASSERT_TRUE(capture.linked) << capture.log;
 
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("RealBlock"), 1u)
-        << "the application's own unqualified block is still recognised";
+        << "the application's own unqualified block is still recognized";
     for (const String& name : capture.storageBlocksWithoutBinding) {
         EXPECT_FALSE(name.starts_with(MG_Util::ShaderTranspiler::ATOMIC_COUNTER_BLOCK_PREFIX))
             << "a synthesized atomic-counter block reached the storage-block capture: " << name;
@@ -557,7 +557,7 @@ void main() {
     ASSERT_TRUE(capture.linked) << capture.log;
 
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("OutputBuffer"), 1u)
-        << "the block the test binds at 0 with glBindBufferBase must be recognised";
+        << "the block the test binds at 0 with glBindBufferBase must be recognized";
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("BoundBlock"), 0u)
         << "a declared binding must never be defaulted away";
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("BoundFirst"), 0u)
@@ -683,7 +683,7 @@ void main() {
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("PlainLayout"), 1u)
         << "std430/row_major are layout identifiers, not bindings";
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("ReallyUnqualified"), 1u)
-        << "a block that truly declares no binding is still recognised in the same shader";
+        << "a block that truly declares no binding is still recognized in the same shader";
 }
 
 // THE NEGATIVE CONTROL for the storage-block capture.
@@ -714,8 +714,8 @@ void main() { gl_Position = vec4(float(sharedInstance.u + vertexOnly.v)); }
     const String fragment = R"(#version 430 core
 layout(std430) buffer SharedBlock { uint u; } sharedInstance;
 layout(std430, binding = 4) buffer FragmentBound { uint f; } fragmentBound;
-out vec4 colour;
-void main() { colour = vec4(float(sharedInstance.u + fragmentBound.f)); }
+out vec4 color;
+void main() { color = vec4(float(sharedInstance.u + fragmentBound.f)); }
 )";
 
     const LinkCapture capture = CaptureFromLink({{GL_VERTEX_SHADER, vertex}, {GL_FRAGMENT_SHADER, fragment}});

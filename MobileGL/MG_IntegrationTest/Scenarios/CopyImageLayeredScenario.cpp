@@ -113,7 +113,7 @@ namespace MGITest {
             }
 
             // A trivial 1x1x1 array-to-array copy: it exercises the entry point without depending
-            // on any of the behaviour under test, so a driver (or a backend function table) that
+            // on any of the behavior under test, so a driver (or a backend function table) that
             // simply does not have the call skips instead of failing every case below.
             bool CopyImageSubDataUsable() {
                 GLuint probe[2] = {0, 0};

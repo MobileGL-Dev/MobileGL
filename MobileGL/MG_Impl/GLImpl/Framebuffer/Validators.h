@@ -16,7 +16,7 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
     Bool ValidateFramebufferAttachmentType(FramebufferAttachmentType attachment);
     // GL_COLOR_ATTACHMENTn is a token per n up to 31, but only the first GL_MAX_COLOR_ATTACHMENTS of
     // them name an attachment point of a framebuffer object; the rest are INVALID_OPERATION for the
-    // attaching entry points (GL 4.6 core 9.2.7). Non-colour attachments pass through unchanged.
+    // attaching entry points (GL 4.6 core 9.2.7). Non-color attachments pass through unchanged.
     Bool ValidateColorAttachmentInRange(FramebufferAttachmentType attachment, const char* caller);
     Bool ValidateRenderbufferTarget(RenderbufferTarget target);
     Bool ValidateRenderbufferName(Uint index, Bool allowZero = true);

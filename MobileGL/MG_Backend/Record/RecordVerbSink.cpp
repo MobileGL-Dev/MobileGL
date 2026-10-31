@@ -98,9 +98,9 @@ namespace MobileGL::MG_Record {
                 break;
             default:
                 // A value class outside the three is a wire fault, not a fallback: all three
-                // representations of a clear colour are numerically populated by the frontend
+                // representations of a clear color are numerically populated by the frontend
                 // and only this field says which one the backend must use, so guessing renders
-                // a plausible wrong colour.
+                // a plausible wrong color.
                 MG_Pipe::MGPipeProtocolFatalAt("MGPClear::ValueClass", clear.ValueClass, 3);
             }
             break;
@@ -227,7 +227,7 @@ namespace MobileGL::MG_Record {
         // scatters it per its own GL_PACK_* state, so a DstSize that disagrees with the tight
         // extent (a client that sized its destination with pack padding) is logged and the tight
         // extent this side owns is read and posted - never the client's number, so a wrong
-        // DstSize cannot make this a short read into uninitialised scratch. F2's first PH-3 draft
+        // DstSize cannot make this a short read into uninitialized scratch. F2's first PH-3 draft
         // refused the mismatch instead, which broke the ID-49 control
         // (ServerLoopEglTest.AReadPixelsReplyIsTheTightExtentWhateverDstSizeTheClientSent); the
         // bound above is what PH-3 needs and it does not depend on DstSize.

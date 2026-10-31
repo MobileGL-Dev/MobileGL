@@ -81,7 +81,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // which std::swap(pair&, pair&) requires. That was invisible while UnorderedMap
         // only ever move-CONSTRUCTED an element into a fresh slot. ska::flat_hash_map
         // probes robin-hood: inserting swaps the entry being placed against the one
-        // already sitting in the slot whenever it has travelled further from its desired
+        // already sitting in the slot whenever it has traveled further from its desired
         // position, so the mapped type has to be swappable or the table fails to
         // instantiate at all.
         //

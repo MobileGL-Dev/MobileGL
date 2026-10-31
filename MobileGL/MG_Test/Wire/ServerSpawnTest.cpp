@@ -981,7 +981,7 @@ TEST(ServerSpawnTest, AnEglControlOpCrossesToTheOtherProcessAndAnswers) {
     const bool ok = Server::ServerInitializeEGLDisplay(EGL_NO_DISPLAY, &major, &minor);
 
     // WHAT IS ASSERTED IS THE ROUND TRIP, not the EGL result. A headless CI
-    // machine has no display to initialise, so `ok` is expected to be false -
+    // machine has no display to initialize, so `ok` is expected to be false -
     // and that is fine, because `cp` is done when the op reaches the other
     // process and an answer comes back.
     //
@@ -1274,7 +1274,7 @@ TEST(ServerSpawnTest, AnOrderlyStopIsNotADeviceLoss) {
 TEST(ServerSpawnTest, ADeadBellIsNotAlwaysAHungUpPeer) {
     // THE ASSERTION THAT MAKES `dl`'s CAUSE/FACT SPLIT LOAD-BEARING, and it exists because the
     // session-level control above turned out not to. Park() latches m_dead for several reasons
-    // that are NOT a peer death - POLLERR, POLLNVAL, an unrecognised revents - and each of them
+    // that are NOT a peer death - POLLERR, POLLNVAL, an unrecognized revents - and each of them
     // is a fault in THIS process's descriptor. A latch armed from Dead() would report a lost
     // GPU for a bug in our own fd handling.
     //

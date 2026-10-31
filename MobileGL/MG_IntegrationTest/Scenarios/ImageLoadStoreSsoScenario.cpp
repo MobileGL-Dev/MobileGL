@@ -277,7 +277,7 @@ void main()
     // the SPIR-V binding remap load-bearing.
     //
     // The remap (ProgramFactory::RemapDescriptorBindingsForVulkan) is what unifies bindings
-    // across stages and normalises every descriptor onto set 0; glslang hands it per-stage
+    // across stages and normalizes every descriptor onto set 0; glslang hands it per-stage
     // numbering that starts at 0 in EACH stage. It used to refuse any descriptor array that was
     // not a UBO, and its only complaint was an assert that compiles out above DEBUG - so a
     // release build carried on with the un-remapped numbering and a program holding an image
@@ -288,7 +288,7 @@ void main()
     // to collide with and skipping the remap is indistinguishable from running it. Hence this
     // one - an image array AND a uniform block in the same fragment program, with the block
     // supplying the value that gets stored, so a mis-assigned binding shows up as the wrong
-    // colour rather than as nothing at all.
+    // color rather than as nothing at all.
     TEST_F(ImageLoadStoreSsoScenario, AnImageArrayAlongsideAnotherDescriptorKeepsBothBindings) {
         if (!Ready()) return;
         if (!ImagesAreUsable()) GTEST_SKIP() << "fewer than 8 image units";

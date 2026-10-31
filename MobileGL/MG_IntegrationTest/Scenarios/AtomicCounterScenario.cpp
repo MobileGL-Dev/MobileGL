@@ -49,7 +49,7 @@ namespace MGITest {
         // Two counters share binding 0 at DIFFERENT offsets and a third sits alone on binding 1.
         // The offsets are what separates "the buffer arrived" from "the buffer arrived and the
         // block is laid out the way GL says": a lowering that packed the members in declaration
-        // order without honouring `offset` would still pass a single-counter check.
+        // order without honoring `offset` would still pass a single-counter check.
         constexpr const char* kCounterComputeSource = R"(#version 430 core
 layout(local_size_x = 4) in;
 layout(binding = 0, offset = 0) uniform atomic_uint g_first;
@@ -294,7 +294,7 @@ void main() {
             << "offset 0 read back " << values[0] << "; the SubData did not reach the second dispatch";
         EXPECT_EQ(values[1], 4 * kInvocations)
             << "offset 4 read back " << values[1] << "; " << 2 * kInvocations
-            << " means the drain before the second dispatch rewrote the shader-written neighbour from the "
+            << " means the drain before the second dispatch rewrote the shader-written neighbor from the "
             << "stale host copy";
     }
 

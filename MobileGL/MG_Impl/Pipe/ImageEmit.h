@@ -10,7 +10,7 @@
 #include <Includes.h>
 
 // Client side of set_shader_images, under SamplerEmit.h's subsystem bit (one family, one A/B).
-// Two invariants an optimisation must keep. An image window of 0 emits nothing before any hash,
+// Two invariants an optimization must keep. An image window of 0 emits nothing before any hash,
 // so a draw that uses no images pays one integer test. The shutter gating the sweep mixes only
 // frontend counters (texture content and params, program image units, texture binds), never a
 // backend re-mint counter: a texture bound only to an image unit is re-minted inside the sweep,

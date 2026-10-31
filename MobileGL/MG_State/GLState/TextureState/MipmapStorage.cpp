@@ -526,7 +526,7 @@ namespace MobileGL {
                     return;
                 }
                 EnterFootprintLog(level, incoming);
-                // Full: fold the incoming rect into the neighbour whose box grows least
+                // Full: fold the incoming rect into the neighbor whose box grows least
                 // (least new area dragged into the upload), then re-insert the grown
                 // box - it may now touch others. The removal above guarantees the
                 // recursion appends on the second pass at the latest.

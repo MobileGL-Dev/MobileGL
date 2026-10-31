@@ -75,7 +75,7 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl/FramebufferImpl", caller,
-                    std::format("Colour attachment {} is beyond GL_MAX_COLOR_ATTACHMENTS ({}).", colorIndex, limit)));
+                    std::format("Color attachment {} is beyond GL_MAX_COLOR_ATTACHMENTS ({}).", colorIndex, limit)));
             return false;
         }
         return true;

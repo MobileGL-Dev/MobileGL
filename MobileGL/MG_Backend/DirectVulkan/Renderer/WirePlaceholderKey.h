@@ -37,7 +37,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     // Every private placeholder is its own vkCreateImage + vkAllocateMemory, freed only at Shutdown.
     // (shape, unit) bounds them by shapes x kMGPipeMaxImageUnits, and a peer rotating formats and
-    // targets across the units could still walk that towards maxMemoryAllocationCount (4096 is the
+    // targets across the units could still walk that toward maxMemoryAllocationCount (4096 is the
     // spec minimum). So past this many, a NEW (shape, unit) takes its shape's SHARED placeholder - the
     // pre-fix aliasing, logged once by the caller - instead of another allocation; a unit that already
     // has its private placeholder keeps it. Two per unit is far past any real program.

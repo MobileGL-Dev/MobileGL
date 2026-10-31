@@ -12,8 +12,8 @@
 // MGPipe object identity (plan B section 4.2).
 //
 // A handle is a {slot, gen} pair minted by the CLIENT and never by the server: no create_*
-// call in the catalogue returns a server-cast handle, which is the deliberate deviation
-// from driver-minted handles (D1) that lets the whole catalogue be remoted with ZERO creation round
+// call in the catalog returns a server-cast handle, which is the deliberate deviation
+// from driver-minted handles (D1) that lets the whole catalog be remoted with ZERO creation round
 // trips.
 //
 // Slots are dense and allocated PER KIND, so the server's object table is an array rather

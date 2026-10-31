@@ -173,7 +173,7 @@ namespace MobileGL {
             // vertex, tessellation control, tessellation evaluation and geometry at 0, and only
             // fragment (8 in GL, 4 in ES) and compute are guaranteed to have any. Every real ARM
             // GLES driver takes that allowance - a Mali-G925 reports 0 for all four - so a
-            // backend that cannot honour a graphics-stage storage block MUST report 0 here
+            // backend that cannot honor a graphics-stage storage block MUST report 0 here
             // rather than a hopeful number. Advertising a non-zero count the driver will refuse
             // does not make the block work; it only moves the failure from an honest
             // "unsupported" at query time to a backend link error the frontend never surfaces,
@@ -242,7 +242,7 @@ namespace MobileGL {
             // GL_LAYER_PROVOKING_VERTEX / GL_VIEWPORT_INDEX_PROVOKING_VERTEX: which vertex of a
             // primitive supplies gl_Layer and gl_ViewportIndex. GL 4.6 table 23.65 makes
             // GL_UNDEFINED_VERTEX a legal answer for both, and it is the honest default - naming
-            // a convention is a statement about behaviour, so a backend that does not pin one
+            // a convention is a statement about behavior, so a backend that does not pin one
             // must not claim it does. DirectGLES fills the layer one from the ES 3.2 query and
             // the viewport one from GL_OES_viewport_array, and leaves UNDEFINED where the
             // capability is absent: without the viewport array extension only viewport 0 is ever
@@ -271,7 +271,7 @@ namespace MobileGL {
             // same image and lets an implementation answer GL_FRAMEBUFFER_UNSUPPORTED
             // otherwise, which is what DirectVulkan (one combined attachment) and the
             // real ES drivers behind DirectGLES both do. Defaults to true so a backend
-            // that never sets it keeps the permissive behaviour.
+            // that never sets it keeps the permissive behavior.
             Bool SupportsDistinctDepthStencilAttachments = true;
             // Whether attaching a single layer of a 3D or array texture to a framebuffer actually
             // renders to that layer. DirectGLES hands the layer straight to
@@ -312,9 +312,9 @@ namespace MobileGL {
             //     profile") and the demotion there is mathematically mandatory, always.
             // Defaults to false so a backend that never sets it - and the no-backend case, which
             // is what standalone shader compiles and the unit tests run under - keeps the
-            // demotion, which is the behaviour that works everywhere.
+            // demotion, which is the behavior that works everywhere.
             Bool SupportsShaderFloat64 = false;
-            // Whether glVertexAttribLFormat / glVertexArrayAttribLFormat can be honoured, i.e.
+            // Whether glVertexAttribLFormat / glVertexArrayAttribLFormat can be honored, i.e.
             // whether a 64-bit vertex attribute can actually reach a shader unconverted. Detected,
             // never assumed: DirectVulkan needs VkPhysicalDeviceFeatures::shaderFloat64 (the
             // attribute travels as its 32-bit word pair, so no VK_FORMAT_R64* is required, but the
@@ -382,7 +382,7 @@ namespace MobileGL {
             Bool FragmentShadingRateAttachmentWithDefaultFramebuffer = false;
             // What glGetFragmentShadingRatesEXT answers, one mask per sample count 1, 2, 4 .. 64
             // (index = log2(samples)): bit (log2(w) << 2 | log2(h)) is set when that rate is
-            // honoured exactly at that sample count, i.e. gl_ShadingRateEXT reads it back
+            // honored exactly at that sample count, i.e. gl_ShadingRateEXT reads it back
             // unclamped. Zero masks mean no rate at all, which is what a sample count the device
             // cannot shade coarsely answers.
             Uint16 FragmentShadingRateMasks[7] = {};

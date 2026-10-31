@@ -182,7 +182,7 @@ set(MGL_P8A_KNOB_FILTER_PointSizeDemotion "PointSizeDemotionScenario.*")
 set(MGL_P8A_KNOB_ENV_PointSizeDemotion "MOBILEGL_POINT_SIZE_DEMOTION=1")
 set(MGL_P8A_KNOB_FILTER_UnlocatedIoBlocks "UnlocatedIoBlockScenario.*")
 set(MGL_P8A_KNOB_ENV_UnlocatedIoBlocks "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS=1")
-# One case, as on monolith: the three positive cases describe behaviour the backend does not
+# One case, as on monolith: the three positive cases describe behavior the backend does not
 # have with the emulation off.
 set(MGL_P8A_KNOB_FILTER_NoViewportArrayEmulation
     "ViewportArrayScenario.WithoutTheEmulationEveryIndexCollapsesOntoViewportZero")

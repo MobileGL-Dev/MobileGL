@@ -11,7 +11,7 @@
 //
 // The conformance suite exposed a whole family of transform feedback failures that no
 // existing scenario could reproduce, because every one of them ran ONE capture, from a
-// VERTEX stage, in a freshly initialised process. What the suite actually does is
+// VERTEX stage, in a freshly initialized process. What the suite actually does is
 // different in three ways at once, and each of them turned out to matter:
 //
 //   * it runs case after case in ONE GL context, resetting state between them - and the

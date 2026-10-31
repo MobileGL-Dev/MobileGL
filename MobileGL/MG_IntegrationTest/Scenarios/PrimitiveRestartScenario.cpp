@@ -16,7 +16,7 @@
 //
 // So the first thing this asserts is simply that the process is still here. The second is that
 // the restart actually happened: the substitution rewrites the index data so the driver restarts
-// where the application asked, and the difference between "restart honoured" and "restart
+// where the application asked, and the difference between "restart honored" and "restart
 // silently dropped" is a triangle strip that welds its two halves together across the gap.
 //
 // Needs a real context on purpose. The GPU-free suite cannot reach a backend at all, and this is
@@ -64,7 +64,7 @@ void main()
         //
         // The spares exist so the restart index is a LEGAL vertex index: if the restart were
         // dropped the driver would still fetch a real vertex rather than read out of bounds, so
-        // the negative case is defined behaviour and the test measures the restart rather than
+        // the negative case is defined behavior and the test measures the restart rather than
         // whatever robust-buffer-access does.
         constexpr GLfloat kVertices[] = {
             -0.9f, -0.9f, // 0 - left triangle
@@ -78,7 +78,7 @@ void main()
         };
         constexpr GLuint kRestartIndex = 7;
 
-        // A triangle STRIP, restarted in the middle: honoured, it is exactly the two triangles
+        // A triangle STRIP, restarted in the middle: honored, it is exactly the two triangles
         // above. Dropped, the strip welds vertices 2, 7 and 3 into extra triangles that spill
         // across the gap - which is what the middle probe below catches.
         constexpr GLuint kIndices[] = {0, 1, 2, kRestartIndex, 3, 4, 5};
@@ -116,7 +116,7 @@ void main()
                 glViewport(0, 0, kSurface, kSurface);
 
                 m_program = BuildProgram();
-                ASSERT_NE(m_program, 0u) << "the flat-colour program did not build: " << m_buildLog;
+                ASSERT_NE(m_program, 0u) << "the flat-color program did not build: " << m_buildLog;
                 glUseProgram(m_program);
                 DrainErrors();
             }

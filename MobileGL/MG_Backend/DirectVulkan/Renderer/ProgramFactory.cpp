@@ -452,7 +452,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // call was DEBUG-or-env gated and only logged, so an invalid module produced by a backend
         // transform went straight to vkCreateShaderModule. That is not a survivable outcome on
         // this hardware - Mali r54 SIGSEGVs building the pipeline instead of returning an error,
-        // the same "not a validating entry point" behaviour PipelineFactory already documents for
+        // the same "not a validating entry point" behavior PipelineFactory already documents for
         // vkCreateGraphicsPipelines - so the callers that feed the driver now act on it.
         //
         // This function does NOT log the failure at E any more. It used to, unlatched, on the
@@ -972,7 +972,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         //
         // Deliberately conservative - it answers "assume yes" for every shape it cannot read
         // exactly, because a false "no" would silently drop the clip-space fixup from a shader
-        // that does write gl_Position, while a false "yes" only reinstates the behaviour this
+        // that does write gl_Position, while a false "yes" only reinstates the behavior this
         // pass has always had. Scans every function rather than just the entry point's: a shader
         // that assigns gl_Position inside a helper is still a shader that writes it, and passing
         // the pointer to a call is a write as far as this can tell.
@@ -1089,7 +1089,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (!FindPositionTarget(context(), &target)) return Status::SuccessWithoutChange;
 
                 // Nothing to remap in a Position the shader never writes. Declining is not just
-                // an optimisation: the fixup is load-modify-store, so on an unwritten Position it
+                // an optimization: the fixup is load-modify-store, so on an unwritten Position it
                 // converts "undefined, never written" into "written with whatever the load
                 // returned", and the store is a reference to a variable the link-time sanitize
                 // chain has already delisted from the entry-point interface. glslang emits the
@@ -1165,7 +1165,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // ivec2(gl_FragCoord.xy)) into an image exactly the size of that viewport, so every
         // store fell outside the image and the test read back zeroes.
         //
-        // The rewrite redirects every read of the builtin to a Private copy initialised once at
+        // The rewrite redirects every read of the builtin to a Private copy initialized once at
         // entry, which is exact for all access forms (whole-vector loads, `.y` access chains,
         // OpCopyMemory) and leaves the builtin itself - and its decorations - untouched.
         class GlFragCoordYFlipPass final : public spvtools::opt::Pass {
@@ -1233,7 +1233,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<Uint32>(spv::StorageClass::Private)}}});
                 context()->AddGlobalValue(std::move(copyVar));
 
-                // Redirect the reads BEFORE emitting the initialiser, so the initialiser's own
+                // Redirect the reads BEFORE emitting the initializer, so the initializer's own
                 // load of the builtin is not rewritten into a load of the (still empty) copy.
                 if (!RedirectReads(builtinVarId, copyVarId)) return Status::SuccessWithoutChange;
 
@@ -1688,7 +1688,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         // Adreno 650 (driver 512.502) faults the GPU on an implicit-LOD sample of a full-screen
-        // colour render target: the texture unit's derivative path reads outside the image's
+        // color render target: the texture unit's derivative path reads outside the image's
         // allocation even though the sampler clamps LOD to 0 and the mapping is 1:1. MobileGL's
         // own default-framebuffer blit shader works around it with textureLod, but an
         // application's shader (Minecraft's blit.fsh is `texture(InSampler, texCoord)`) cannot be
@@ -2146,7 +2146,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // GetOrCreateProgram's MOBILEGL_ASSERT(remapOk) as the only complaint, and
                     // that assert compiles out above DEBUG - so a release build SILENTLY kept
                     // glslang's per-stage auto-mapped binding numbers, skipping the cross-stage
-                    // unification and the set->0 normalisation this function exists to do. A
+                    // unification and the set->0 normalization this function exists to do. A
                     // program with an image array plus any second descriptor got aliased
                     // bindings out of that, and a DEBUG build trapped on the same program.
                     // The refusal below is MGLOG_E and per-program-compile, so it reports every
@@ -2989,7 +2989,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_D("ProgramFactory::ReflectLayout: %s array '%s' at binding %u spans %u descriptors but the "
                     "reflection reserved fewer uniform locations for it (base=%d) - a multi-dimensional array "
                     "is the usual cause, and MobileGL declines it rather than resolve elements onto a "
-                    "neighbouring uniform",
+                    "neighboring uniform",
                     kindLabel, uniformName.c_str(), binding, count, baseLocation);
             outDeclined = true;
         }
@@ -3530,7 +3530,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                   "ProgramFactory::ReflectLayout, vkCreatePipelineLayout");
 
         // Built here rather than where bindingKinds is sized: at that point the vector is only
-        // zero-initialised and the kinds are assigned further down, so a list built there would be
+        // zero-initialized and the kinds are assigned further down, so a list built there would be
         // empty. Ascending by construction because the index walks upward.
         entry.activeBindings.clear();
         for (Uint32 binding = 0; binding < static_cast<Uint32>(entry.bindingKinds.size()); ++binding) {
@@ -4128,7 +4128,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ReflectPassthroughTessControlNeed(stages, moduleSpirvs, entry);
         ReflectLayout(program, moduleSpirvs, entry);
         // A failed remap means the modules kept glslang's per-stage auto-mapped binding numbers -
-        // no cross-stage unification, no set->0 normalisation - so the bindings this layout
+        // no cross-stage unification, no set->0 normalization - so the bindings this layout
         // describes are not the bindings the shader reads. That has to stop the program from
         // drawing, and until now nothing did: the MOBILEGL_ASSERT above compiles out of every
         // build past DEBUG, and RemapDescriptorBindingsForVulkan's own refusal message said so at
@@ -4328,7 +4328,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL state.
         //
         // Those two levels are baked in as literals - Vulkan has no equivalent dynamic state, so
-        // compiling them in is the only way to honour glPatchParameterfv. That makes them part of
+        // compiling them in is the only way to honor glPatchParameterfv. That makes them part of
         // this module's identity: GetOrCreatePassthroughTessControlStage keys its cache on them,
         // and PipelineFactory hashes them into the pipeline key. The three must move together.
         //
@@ -4344,7 +4344,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // this from having to know the domain.
         String source = "#version 450 core\n";
         source += "layout(vertices = " + std::to_string(patchVertices) + ") out;\n";
-        // gl_in and gl_out are redeclared to the exact gl_PerVertex the NEIGHBOURING EVALUATION
+        // gl_in and gl_out are redeclared to the exact gl_PerVertex the NEIGHBORING EVALUATION
         // STAGE carries, because Vulkan matches built-in interface blocks by their whole shape,
         // and the two obvious spellings are both wrong:
         //   * narrowing the block to gl_Position alone makes the evaluation stage read a patch of

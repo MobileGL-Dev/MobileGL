@@ -152,7 +152,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // glGetSubroutineIndex / glUniformSubroutinesuiv, only the program-interface enum
         // plumbing. These are answered - with the GL 4.5 core minimums - because the conformance
         // suite queries them before it checks for the feature and an INVALID_ENUM both leaves the
-        // caller reading its own uninitialised stack slot and strands an error for the next
+        // caller reading its own uninitialized stack slot and strands an error for the next
         // unrelated call to trip over. The extension is deliberately NOT advertised, so the
         // numbers are a table entry, not a capability claim.
         constexpr GLint kFrontendMaxSubroutines = 256;
@@ -1542,7 +1542,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 //
                 // The POINTER-valued macro, so the init-statement below is unchanged in a pull
                 // build and G1 cannot see this edit: the Bool-valued spelling moved this
-                // function by -150 bytes for no behavioural reason at all.
+                // function by -150 bytes for no behavioral reason at all.
                 if (const auto getGpuTimestampNs =
                         MGL_BACKEND_SLOT_PTR_CAP(GetGpuTimestampNs, MG_Pipe::kCapTimerQuery)) {
                     MGP_FILL(GetGpuTimestampNs);
@@ -2584,7 +2584,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 //
                 // The POINTER-valued macro, so the init-statement below is unchanged in a pull
                 // build and G1 cannot see this edit: the Bool-valued spelling moved this
-                // function by -150 bytes for no behavioural reason at all.
+                // function by -150 bytes for no behavioral reason at all.
                 if (const auto getGpuTimestampNs =
                         MGL_BACKEND_SLOT_PTR_CAP(GetGpuTimestampNs, MG_Pipe::kCapTimerQuery)) {
                     MGP_FILL(GetGpuTimestampNs);

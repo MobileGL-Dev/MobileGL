@@ -176,10 +176,10 @@ void main()
     // The whole point of the scenario: this sequence used to be a process kill on any device
     // without the capability, and it has to be a picture either way.
     //
-    // dst is black, src0 is white and src1 is mid-grey, with SRC1_COLOR / ONE_MINUS_SRC1_COLOR.
+    // dst is black, src0 is white and src1 is mid-gray, with SRC1_COLOR / ONE_MINUS_SRC1_COLOR.
     //   blended  = 1.0 * 0.5 + 0.0 * 0.5 = 0.5  -> ~128
     //   declined = 1.0                          ->  255
-    // Anything else means the factors were mistranslated rather than either honoured or declined.
+    // Anything else means the factors were mistranslated rather than either honored or declined.
     TEST_F(DualSourceBlendScenario, DualSourceBlendDrawProducesOneOfTheTwoDefinedResults) {
         if (!Ready()) GTEST_SKIP();
         if (const std::string reason = WhyTheProgramCannotRun(); !reason.empty()) GTEST_SKIP() << reason;

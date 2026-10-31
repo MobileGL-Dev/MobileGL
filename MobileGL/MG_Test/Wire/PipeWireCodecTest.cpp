@@ -881,7 +881,7 @@ TEST_F(PipeWireCodecTest, SetShaderBuffersCarriesBothTailsWhenTheSpanTailIsPrese
 }
 
 TEST_F(PipeWireCodecTest, ResourceSubDataCarriesABlobAndARegionTailTogether) {
-    // The only row in the catalogue that is BOTH kHasBlob and kVarTail, and the one rule A
+    // The only row in the catalog that is BOTH kHasBlob and kVarTail, and the one rule A
     // changes most: the texture half declared Size 0 in monolith "because the byte count is
     // the server's to compute", which cannot be a bounds check.
     Wire2 wire;
@@ -1403,7 +1403,7 @@ TEST_F(PipeWireCodecTest, ObjectDeathReachesTheSinkWithItsHandleAndKind) {
 //
 // Not a sink row: the decoder's arm runs the REAL applier (MGPipeApplySetContextValues), so
 // the round trip is read back out of gPipeInputs - under a server stamp, because a
-// RECORD-SUPPLIED read outside one is the pre-stamp behaviour this build still tests
+// RECORD-SUPPLIED read outside one is the pre-stamp behavior this build still tests
 // elsewhere, and the fields' own poison would otherwise (correctly) refuse the read.
 
 TEST_F(PipeWireCodecTest, SetContextValuesRoundTripsIntoPipeInputs) {
@@ -1678,7 +1678,7 @@ TEST_F(PipeWireCodecTest, CreateShaderStateCrossesAsOneArchiveAndSixUndeclaredRu
     desc.SpirvStatus = 1;
     // The ruling: Reflection names the WHOLE archive - which already carries every stage's
     // modules - and Spirv[0..5] stay all-zero. Shipping the modules twice would double the
-    // biggest record in the catalogue for a reader that does not exist.
+    // biggest record in the catalog for a reader that does not exist.
     desc.Reflection = wire.Encoder().StageBytes(archive.data(), archive.size());
     for (Uint32 i = 0; i < 6; ++i) {
         EXPECT_EQ(desc.Spirv[i].Size, 0u);
@@ -1878,7 +1878,7 @@ TEST_F(PipeWireCodecTest, MaxRecordBytesSeenStaysFarBelowHalfTheRing) {
     EXPECT_GT(largest, 0u);
     EXPECT_EQ(largest, 8u + sizeof(MGPDrawInfo) + 64u * sizeof(MGPDrawRange));
     EXPECT_LT(largest, wire.Cmd().MaxRecordBytes());
-    // The biggest fixed payload in the whole catalogue is MGPProgramDesc at 192 bytes plus
+    // The biggest fixed payload in the whole catalog is MGPProgramDesc at 192 bytes plus
     // MGPFramebufferState at 304, so a record only ever grows through its TAIL - which is why
     // the counter is on the encoder and not a constant.
     EXPECT_LT(8u + sizeof(MGPFramebufferState), wire.Cmd().MaxRecordBytes());
@@ -1928,7 +1928,7 @@ TEST_F(PipeWireCodecTest, TheCommandRingWrapCountIsWhatTheHeadActuallyDid) {
     // One trip round and a little more, draining after every record so the producer never meets
     // its own tail. This is the same shape the split lane has under the verb barrier: one
     // record in flight at a time, the ring recycled behind it - so a wrap here is a wrap
-    // there, and not an artefact of a backed-up queue.
+    // there, and not an artifact of a backed-up queue.
     const Uint64 records = (Wire2::kCmdBytes / stride) + 3;
     for (Uint64 i = 1; i < records; ++i) {
         ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)), kInvalidSeq)
@@ -1945,7 +1945,7 @@ TEST_F(PipeWireCodecTest, TheCommandRingWrapCountIsWhatTheHeadActuallyDid) {
     // DIVIDES the capacity and the same trip produces no pad at all - measured in the split
     // lane, where 1310824 bytes of clears and draws through a 1 MiB SEG_CMD reported
     // ringwraps=1 ringpads=0. That is why exit gate E3(e) asserts the WRAP and only records
-    // the pad: a gate on the pad count would be a gate on the sizes in the record catalogue.
+    // the pad: a gate on the pad count would be a gate on the sizes in the record catalog.
     EXPECT_EQ(Wire2::kCmdBytes % stride, 16u) << "stride " << stride;
     EXPECT_EQ(wire.Encoder().CmdWrapPads(), 1u);
 }
@@ -1954,7 +1954,7 @@ TEST_F(PipeWireCodecTest, ABigProgramArchiveDoesNotGrowItsRecordAtAll) {
     // THE POINT OF R-10's "every blob goes through SEG_STAGE": create_shader_state's RECORD is
     // 8 + sizeof(MGPProgramDesc) == 200 bytes whether the archive is one kilobyte or one
     // megabyte, because the record carries {Seg, Offset, Size} and nothing else. So
-    // create_shader_state is one of the SMALLEST records in the catalogue, not the one most
+    // create_shader_state is one of the SMALLEST records in the catalog, not the one most
     // likely to approach MaxRecordBytes(); what approaches that cap is a var-tail, and the
     // archive's own bound is MOBILEGL_IPC_STAGE_MB with a Fatal of its own.
     Wire2 wire;
@@ -2105,10 +2105,10 @@ TEST_F(PipeWireCodecTest, NoReplyIsWrittenForARowTheCatalogueGivesNoReplySlot) {
     // this case still asserts.
     //
     // WHAT CHANGED IS THE ROW IT ASSERTS IT ABOUT (ID-31 fallout, closed by c1 round 2). It
-    // used to name ResourceCreate and SetTextureParams as rows "the catalogue gives no reply
+    // used to name ResourceCreate and SetTextureParams as rows "the catalog gives no reply
     // slot", which ID-31 made false - it gave ResourceCreate the flag, and all four Bool
     // acceptance rows carry it now. A case that names a kReplySlot row while asserting a row
-    // has no slot is not testing the rule, it is testing a stale catalogue, so the row moved
+    // has no slot is not testing the rule, it is testing a stale catalog, so the row moved
     // to one that genuinely carries kNone and the rule stayed exactly where it was.
     Wire2 wire;
     ASSERT_EQ(MGPipeCallFlagsFor(MGPWireOp::ResourceDestroy) & static_cast<Uint32>(kReplySlot), 0u)
@@ -2157,7 +2157,7 @@ TEST_F(PipeWireCodecTest, EveryRowThatDoesWriteAReplyCarriesKReplySlot) {
 
 TEST_F(PipeWireCodecTest, TheFourAcceptanceRowsAnswerThroughTheSlotAndNotOnlyThroughTheTally) {
     // R-17's server half, and the reason c1 could not simply write thirty-seven emitters: the
-    // client asks the CATALOGUE whether a row owns a slot (ClientSession::EmitAndWait), so the
+    // client asks the CATALOG whether a row owns a slot (ClientSession::EmitAndWait), so the
     // moment ID-31 gave these rows kReplySlot, a decoder that answered only into
     // LastAcceptance() left the client parked in the barrier until Fatal{ReplyMissing}.
     //
@@ -2403,7 +2403,7 @@ TEST_F(PipeWireCodecTest, ARecordLargerThanHalfTheRingIsFatalRingOverrun) {
     // producing side, rather than becoming a nullptr from Reserve that some caller reads as
     // "the ring is full, wait" - which on an EMPTY ring would be a wait that never ends.
     //
-    // The oversized record is a REAL one from the catalogue with a long var-tail, not a forged
+    // The oversized record is a REAL one from the catalog with a long var-tail, not a forged
     // header: MGPDrawInfo declares NumDraws and the encoder cross-checks the tail against the
     // layout that number implies, so this is the shape a genuine emitter bug would take.
     const ChildResult r = RunInChild([] {
@@ -2810,7 +2810,7 @@ TEST_F(PipeWireCodecTest, AnIndirectDrawThatDeclaresRangesIsFatal) {
 }
 
 TEST_F(PipeWireCodecTest, BufferSubDataResidentMayNotDeclareRegions) {
-    // Its catalogue row has no kVarTail and its applier takes no regions, so a non-zero
+    // Its catalog row has no kVarTail and its applier takes no regions, so a non-zero
     // RegionCount is a fault rather than a tail. The layout used to share ResourceSubData's
     // arm, which REQUIRED 80 bytes of tail the arm then dropped.
     const ChildResult r = RunInChild([] {

@@ -108,7 +108,7 @@ TEST(FatalFamily, TheAnchorFamiliesProjectWhereTheirMeaningSays) {
     // The liveness families are what a WAITING peer attributes to the other side being gone.
     EXPECT_EQ(FatalCodeForFamily(MGFatalFamily::BarrierTimeout), FatalCode::ServerCrashed);
     EXPECT_EQ(FatalCodeForFamily(MGFatalFamily::ApplyThreadNotRunning), FatalCode::ServerCrashed);
-    // An unmigrated verb is a protocol-level "cannot honour this", not a crash.
+    // An unmigrated verb is a protocol-level "cannot honor this", not a crash.
     EXPECT_EQ(FatalCodeForFamily(MGFatalFamily::UnmigratedVerb), FatalCode::ProtocolCorruption);
 }
 

@@ -431,7 +431,7 @@ namespace MGITest {
                 return out.str();
             }
             if (!WIFEXITED(status)) {
-                return "the EGL bring-up pre-flight child neither exited nor was signalled";
+                return "the EGL bring-up pre-flight child neither exited nor was signaled";
             }
             const int exitStatus = WEXITSTATUS(status);
             if (exitStatus != 0) {
@@ -499,7 +499,7 @@ namespace MGITest {
 
     std::string Image::QuadrantSignature() const {
         if (m_width < 2 || m_height < 2) return "<empty>";
-        // Quadrant CENTRES, so a one-pixel rounding difference at a quadrant edge
+        // Quadrant CENTERS, so a one-pixel rounding difference at a quadrant edge
         // never decides the answer. Order is fixed and load-bearing: bottom-left,
         // bottom-right, top-left, top-right.
         const int leftX = m_width / 4;

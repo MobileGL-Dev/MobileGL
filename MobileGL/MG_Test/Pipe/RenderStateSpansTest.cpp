@@ -165,7 +165,7 @@ namespace {
             EXPECT_EQ(gotSrcA, wantSrcA) << "blend func " << i;
             EXPECT_EQ(gotDstA, wantDstA) << "blend func " << i;
 
-            EXPECT_EQ(gPipeInputs->GetColorMaskIndexed(i), ctx.GetColorMaskIndexed(i)) << "colour mask " << i;
+            EXPECT_EQ(gPipeInputs->GetColorMaskIndexed(i), ctx.GetColorMaskIndexed(i)) << "color mask " << i;
             EXPECT_EQ(gPipeInputs->IsCapabilityEnabledIndexed(CapabilityInput::Blend, i),
                       ctx.IsCapabilityEnabledIndexed(CapabilityInput::Blend, i))
                 << "indexed blend enable " << i;
@@ -503,7 +503,7 @@ namespace {
                            StencilOperation::IncrementWrap);
         });
 
-        // ---- Colour mask, clear state, sampling ----
+        // ---- Color mask, clear state, sampling ----
         check("SetColorMask", [](RenderState& s) { s.SetColorMask(BoolVec4(true, false, true, false)); });
         check("SetColorMaskIndexed",
               [](RenderState& s) { s.SetColorMaskIndexed(6, BoolVec4(false, false, true, true)); });
@@ -867,7 +867,7 @@ namespace {
                                 BlendFactor::SrcAlpha);
         ctx.SetBlendEquationIndexed(5, BlendEquation::ReverseSubtract, BlendEquation::Max);
         ctx.SetColorMaskIndexed(0, BoolVec4(false, true, false, true));
-        push("step 3: blend and colour mask (pipeline chunk P1)");
+        push("step 3: blend and color mask (pipeline chunk P1)");
 
         ctx.SetCapabilityIndexed(CapabilityInput::Blend, 0, true);
         push("step 4: indexed blend enable at index 0");

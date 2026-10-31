@@ -84,7 +84,7 @@ namespace MobileGL::MG_Util::SelfTest {
         //
         //   PASS - the backend supports the capability directly.
         //   WARN - the backend does NOT support it directly, but a MobileGL quirk substitutes
-        //          and the application still sees correct behaviour. The detail names the
+        //          and the application still sees correct behavior. The detail names the
         //          substitute and whatever it costs.
         //   FAIL - unsupported, with no substitute: an application that uses it gets wrong
         //          output, a failed draw, or nothing at all. The detail says what breaks.
@@ -374,7 +374,7 @@ namespace MobileGL::MG_Util::SelfTest {
                              "per-draw-buffer glColorMaski available (ES 3.2 core or draw_buffers_indexed)");
             } else {
                 builder.FailOptional("Indexed color mask",
-                                     "no indexed glColorMaski; every per-draw-buffer colour mask collapses "
+                                     "no indexed glColorMaski; every per-draw-buffer color mask collapses "
                                      "onto draw buffer 0's, so an MRT pass that masks its attachments "
                                      "differently writes the wrong channels to all but one of them, with "
                                      "nothing to substitute");
@@ -515,13 +515,13 @@ namespace MobileGL::MG_Util::SelfTest {
             }
             if (caps.SupportsTextureBorderClamp) {
                 builder.Pass("Texture border clamp", "supported (GL_TEXTURE_BORDER_COLOR reaches the driver, so "
-                                                     "GL_CLAMP_TO_BORDER samples the colour the application set)");
+                                                     "GL_CLAMP_TO_BORDER samples the color the application set)");
             } else {
                 builder.FailOptional("Texture border clamp",
                                      "not supported (pre-ES 3.2 without GL_EXT/OES_texture_border_clamp); "
                                      "GL_TEXTURE_BORDER_COLOR is not synced to the driver at all, so anything "
                                      "sampling outside a GL_CLAMP_TO_BORDER texture reads the driver's default "
-                                     "border instead of the requested colour, and no wrap mode substitutes for it");
+                                     "border instead of the requested color, and no wrap mode substitutes for it");
             }
             if (caps.SupportsTextureCubeMapArray) {
                 builder.Pass("Texture cube map array",
@@ -588,7 +588,7 @@ namespace MobileGL::MG_Util::SelfTest {
                                                 "and any shader declaring a samplerBuffer fails to compile and "
                                                 "leaves its program unlinked - every draw using it is a silent "
                                                 "no-op. MobileGL still reports GL_MAX_TEXTURE_BUFFER_SIZE = {}: "
-                                                "the value is a floor it cannot honour, kept because an OpenGL "
+                                                "the value is a floor it cannot honor, kept because an OpenGL "
                                                 "4.x context may not answer 0 and GL has no way to say that a "
                                                 "core feature is missing",
                                                 advertisedLimit));
@@ -647,7 +647,7 @@ namespace MobileGL::MG_Util::SelfTest {
             }
             if (caps.SupportsRenderSnorm) {
                 builder.Pass("GL_EXT_render_snorm",
-                             "supported (signed-normalized formats are colour-renderable, so an "
+                             "supported (signed-normalized formats are color-renderable, so an "
                              "SNORM render target keeps its own encoding instead of a float substitute)");
             } else {
                 builder.Warn("GL_EXT_render_snorm",
@@ -663,7 +663,7 @@ namespace MobileGL::MG_Util::SelfTest {
             if (caps.SupportsColorBufferFloat) {
                 builder.Pass("GL_EXT_color_buffer_float",
                              "supported (GL_R11F_G11F_B10F / GL_RGBA16F / GL_RGBA32F are "
-                             "colour-renderable, which is what every shaderpack renders into)");
+                             "color-renderable, which is what every shaderpack renders into)");
             } else if (caps.SupportsColorBufferHalfFloat) {
                 builder.Warn("GL_EXT_color_buffer_float",
                              "not supported, but GL_EXT_color_buffer_half_float is; 16-bit float render "
@@ -672,7 +672,7 @@ namespace MobileGL::MG_Util::SelfTest {
             } else {
                 builder.Fail("GL_EXT_color_buffer_float",
                              "not supported, and neither is GL_EXT_color_buffer_half_float; no floating-point "
-                             "format is colour-renderable on this driver, so no shaderpack can create its "
+                             "format is color-renderable on this driver, so no shaderpack can create its "
                              "render targets (Iris reports GL_FRAMEBUFFER_UNSUPPORTED and refuses to load)");
             }
 
@@ -849,8 +849,8 @@ namespace MobileGL::MG_Util::SelfTest {
 
         // "noperspective interpolation" row - a real correctness render, not just a compile. A viewport-
         // filling quad is drawn with strong perspective (left clip-w 1, right clip-w 8) and a varying that
-        // runs 0..1 across it. At the screen centre screen-linear interpolation gives 0.5 while perspective-
-        // correct gives 1/(w+1) ~= 0.11, so reading the centre texel tells the two apart. The varying is
+        // runs 0..1 across it. At the screen center screen-linear interpolation gives 0.5 while perspective-
+        // correct gives 1/(w+1) ~= 0.11, so reading the center texel tells the two apart. The varying is
         // carried either through the native `noperspective` qualifier (extension present) or through the
         // exact gl_Position.w / gl_FragCoord.w rewrite MobileGL applies when it is absent. Verdict:
         //   PASS  - extension present and the native noperspective result is screen-linear;
@@ -928,7 +928,7 @@ namespace MobileGL::MG_Util::SelfTest {
             }
             const ScopeGuard delProg([&]() { g.glDeleteProgram(prog); });
 
-            // 9x9 so the centre texel (4,4) sits exactly at NDC (0,0).
+            // 9x9 so the center texel (4,4) sits exactly at NDC (0,0).
             constexpr GLsizei kDim = 9;
             GLuint rbo = 0, fbo = 0, vbo = 0;
             g.glGenRenderbuffers(1, &rbo);
@@ -1000,13 +1000,13 @@ namespace MobileGL::MG_Util::SelfTest {
                 return;
             }
 
-            // At the centre: screen-linear -> 0.5 (~128); perspective-correct -> 1/(8+1) ~= 0.111 (~28).
+            // At the center: screen-linear -> 0.5 (~128); perspective-correct -> 1/(8+1) ~= 0.111 (~28).
             const float observed = static_cast<float>(center[0]) / 255.0f;
             const int observedByte = center[0];
             constexpr float kScreenLinear = 0.5f;
             const bool screenLinear = observed > 0.5f * (kScreenLinear + 1.0f / 9.0f); // midpoint ~= 0.306
             if (!screenLinear) {
-                fail(format("the centre texel read {} (~{:.3f}); expected the screen-linear ~0.5 - "
+                fail(format("the center texel read {} (~{:.3f}); expected the screen-linear ~0.5 - "
                             "interpolation came out perspective-correct, so noperspective does not work here",
                             observedByte, observed));
                 return;
@@ -1014,10 +1014,10 @@ namespace MobileGL::MG_Util::SelfTest {
             if (native) {
                 builder.Pass(
                     "noperspective interpolation",
-                    pathNote + format("; native noperspective renders screen-linear (centre {} ~= 0.5)", observedByte));
+                    pathNote + format("; native noperspective renders screen-linear (center {} ~= 0.5)", observedByte));
             } else {
                 builder.Warn("noperspective interpolation",
-                             pathNote + format("; the emulation renders screen-linear correctly (centre {} ~= 0.5), "
+                             pathNote + format("; the emulation renders screen-linear correctly (center {} ~= 0.5), "
                                                "but this is the fallback path with less driver coverage",
                                                observedByte));
             }
@@ -1047,7 +1047,7 @@ namespace MobileGL::MG_Util::SelfTest {
             String nativeList;
             String widenedList;
             String unusableList;
-            // GL_RGB8 is colour-renderable in ES 3.0 CORE. A driver that answers no to it is
+            // GL_RGB8 is color-renderable in ES 3.0 CORE. A driver that answers no to it is
             // broken (or the probe itself is), and that is the ONLY three-channel verdict that
             // deserves a FAIL on its own - see the verdict block below.
             Bool controlFormatBroken = false;
@@ -1092,7 +1092,7 @@ namespace MobileGL::MG_Util::SelfTest {
 
             // The verdict deliberately does NOT track "every probed format came out usable".
             //
-            // GL_RGB32F widens to GL_RGBA32F, and GL_RGBA32F is colour-renderable only under
+            // GL_RGB32F widens to GL_RGBA32F, and GL_RGBA32F is color-renderable only under
             // GL_EXT_color_buffer_float. A perfectly healthy half-float-only driver (the common
             // mobile shape: EXT_color_buffer_half_float and nothing more) therefore reports
             // GL_RGB32F as unusable while every format a shaderpack actually renders into works.
@@ -1109,28 +1109,28 @@ namespace MobileGL::MG_Util::SelfTest {
             // row is for. The "no float render targets at all" case is already a FAIL of its own
             // on the GL_EXT_color_buffer_float row above; repeating it here would only double-count.
             if (controlFormatBroken) {
-                builder.Fail("Three-channel colour attachments",
-                             detail + " - GL_RGB8 is colour-renderable in OpenGL ES 3.0 core, so a driver "
+                builder.Fail("Three-channel color attachments",
+                             detail + " - GL_RGB8 is color-renderable in OpenGL ES 3.0 core, so a driver "
                                       "that refuses it cannot render to ANY three-channel attachment and the "
                                       "capability probe itself is suspect");
             } else if (!unusableList.empty() && caps.SupportsColorBufferFloat) {
-                builder.Fail("Three-channel colour attachments",
+                builder.Fail("Three-channel color attachments",
                              detail + " - GL_EXT_color_buffer_float is supported, so the widened "
                                       "four-channel float targets are required to be renderable; a framebuffer "
                                       "using one of the formats above still reports GL_FRAMEBUFFER_UNSUPPORTED, "
                                       "which Iris turns into a hard load failure");
             } else if (!unusableList.empty()) {
-                builder.Warn("Three-channel colour attachments",
+                builder.Warn("Three-channel color attachments",
                              detail + " - without GL_EXT_color_buffer_float the 32-bit float widening has no "
                                       "renderable target left, so a shaderpack asking for one of the formats "
                                       "above gets GL_FRAMEBUFFER_UNSUPPORTED; the half-float and fixed-point "
                                       "ones above still work");
             } else if (!widenedList.empty()) {
-                builder.Warn("Three-channel colour attachments",
+                builder.Warn("Three-channel color attachments",
                              detail + " - the substitution costs the extra alpha channel's memory and is "
                                       "hidden from the application by an ALPHA->ONE swizzle");
             } else {
-                builder.Pass("Three-channel colour attachments", detail);
+                builder.Pass("Three-channel color attachments", detail);
             }
         }
 
@@ -2766,7 +2766,7 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.Pass("independentBlend", "per-draw-buffer glColorMaski and indexed blend state supported");
         } else {
             builder.FailOptional("independentBlend",
-                                 "unsupported; every attachment takes draw buffer 0's colour mask and "
+                                 "unsupported; every attachment takes draw buffer 0's color mask and "
                                  "blend state, so an MRT pass that configures them separately writes the "
                                  "wrong channels to all but one attachment");
         }
@@ -2809,13 +2809,13 @@ namespace MobileGL::MG_Util::SelfTest {
                     VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT, &sliceProbe) == VK_SUCCESS;
             if (sliceCapable) {
                 builder.Pass("2D-array-compatible 3D images",
-                             "supported for the common colour attachment formats (one z slice of a "
+                             "supported for the common color attachment formats (one z slice of a "
                              "GL_TEXTURE_3D texture can be attached to a framebuffer and cleared and read "
                              "back on its own; a format that refuses the flag is detected at image "
                              "creation and declines per-slice attachment)");
             } else {
                 builder.FailOptional("2D-array-compatible 3D images",
-                                     "VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT unavailable for colour "
+                                     "VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT unavailable for color "
                                      "attachments; glFramebufferTextureLayer on a GL_TEXTURE_3D texture "
                                      "is declined for every slice past the first, and a 3D slice cannot "
                                      "be rendered into any other way");

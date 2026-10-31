@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// SHARED IMAGES: colour buffers the server allocates and hands to clients as dma-buf descriptors,
+// SHARED IMAGES: color buffers the server allocates and hands to clients as dma-buf descriptors,
 // so a frame one client renders can be sampled by another (a Wayland window by its compositor)
 // without leaving GPU memory.
 //
@@ -94,7 +94,7 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         Uint64 IdentityDev = 0;
         Uint64 IdentityIno = 0;
 
-        // SYNCHRONISATION, as sync_file descriptors (-1 = nothing pending). An image has one
+        // SYNCHRONIZATION, as sync_file descriptors (-1 = nothing pending). An image has one
         // writer at a time (the client session presenting into it) and any number of readers (a
         // compositor session sampling it). Guarded by SyncMutex; reached only through the
         // functions below, which is why these are mutable on an otherwise immutable record.
@@ -164,7 +164,7 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
     // image that is not foreign: there is nothing to do.
     Bool RefreshForeign(const Image& image, std::string& why);
 
-    // The colour hints a YUV image is converted with.
+    // The color hints a YUV image is converted with.
     void SetYuvHints(const Image& image, const Yuv::Hints& hints);
     Yuv::Hints GetYuvHints(const Image& image);
 
@@ -174,7 +174,7 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
     // Live images, for tests and diagnostics.
     SizeT LiveCount();
 
-    // ---- synchronisation ---------------
+    // ---- synchronization ---------------
     //
     // THE SERVER ORDERS THE IMAGE BETWEEN ITS SESSIONS, the way a kernel's implicit sync would:
     // a writer publishes the fence of its write and moves on; a reader that finds the generation

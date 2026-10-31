@@ -12,7 +12,7 @@
 // arm is measured against. Three kinds of row do one thing more: rows whose call site waits for
 // an answer post a reply, the create_shader_state escape builds the record's archive, and the
 // retired set_residual_value_state row aborts. The tables are installed before main by
-// detail::gMonolithTablesInstalled in PipeRoute.h, not by a static initialiser here (a
+// detail::gMonolithTablesInstalled in PipeRoute.h, not by a static initializer here (a
 // static-archive link can drop this object), so no MGP_* thunk needs a null check.
 
 #include "PipeRoute.h"
@@ -228,7 +228,7 @@ namespace MobileGL::MG_Pipe {
         MGP_MONO_TAIL(SetSamplerViews, MGPSamplerViews, MGPBoundView)
         MGP_MONO_TAIL(BindSamplerStates, MGPSamplerStates, MGPipeHandle)
         MGP_MONO_TAIL(SetShaderImages, MGPShaderImages, MGPImageView)
-        // P5e (sb, CONTRACT-P5E.md §5.6). Catalogued since P4a with no producer and no
+        // P5e (sb, CONTRACT-P5E.md §5.6). Cataloged since P4a with no producer and no
         // consumer; the adapter lands with the applier's body. The generic tail shape fits
         // because the SECOND tail is absent on every Espryt configuration (HostSpanCount is 0
         // while kCapNeedsHostUboBytes is 0, which is the whole of P5).
@@ -314,7 +314,7 @@ namespace MobileGL::MG_Pipe {
             // P13 W4c: MONOLITH'S RECORD ARM READS THE RECORD'S ARCHIVE (ProgramHandleArm), so it
             // gets one: the link's snapshot, taken here, once per link - the same thing the wire
             // decodes into the record, without the codec. A copy rather than a borrow, because the
-            // record is a snapshot of THIS link and the frontend object's artefacts are replaced
+            // record is a snapshot of THIS link and the frontend object's artifacts are replaced
             // by the next one while the record may still be in use.
             if (MG_Config::RecordArmAliasesFrontend() && link != nullptr && spirv != nullptr) {
                 auto archive = MakeShared<MG_State::GLState::ProgramArchive>();
@@ -330,7 +330,7 @@ namespace MobileGL::MG_Pipe {
             // P5e (pg): NO ARCHIVE ON THIS ARM, and the null is the arm selection rather than a
             // hole. Under monolith the two companion pointers ARE the frontend's own archive,
             // the backend twin reads it through its frontend overload (ruling 1 keeps that arm
-            // token for token), and serialising here to deserialise into the record would put
+            // token for token), and serializing here to deserialise into the record would put
             // EncodeProgramArtifacts on the monolith path - which PipeRoute.h's escape note
             // and PipeApply.h both promise it is not.
             MGPipeApplyCreateShaderState(*desc, link, spirv, nullptr);

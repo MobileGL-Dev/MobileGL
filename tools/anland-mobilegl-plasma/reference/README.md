@@ -1,11 +1,12 @@
 # Reference material
 
-Frozen copies of MobileGL planning documents this skill depends on. They lived in the MobileGL
-repository under `docs/archive/notes/anland/` and were removed from the tree during the
+Frozen MobileGL planning documents this skill depends on, translated to English. They lived in the
+MobileGL repository under `docs/archive/notes/anland/` and were removed from the tree during the
 `feat/disaggregated` cleanup, so the skill carries them here.
 
-Source: MobileGL `feat/disaggregated`, commit `b5d64175` (2026-10-19). These are background
-reading, not operational instructions; do not edit them here.
+Source: MobileGL `feat/disaggregated`, commit `b5d64175` (2026-10-19). The text was translated from
+the originals; technical names and paths are preserved. These are background reading, not
+operational instructions; do not edit them here.
 
 | File | Original path |
 |---|---|

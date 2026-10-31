@@ -95,7 +95,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (result != VK_SUCCESS) return result;
         // THE STENCIL MODULE IS ONLY CREATED WHERE IT CAN RUN: its SPIR-V declares the
         // StencilExportEXT capability, and handing a module with an unsupported capability to
-        // vkCreateShaderModule is undefined behaviour - not an error this could catch.
+        // vkCreateShaderModule is undefined behavior - not an error this could catch.
         if (shaderStencilExport) {
             result = shader(kWireMultisampleStencilResolveFragmentSpirv,
                             sizeof(kWireMultisampleStencilResolveFragmentSpirv), kit.stencilFragment);
@@ -206,7 +206,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             op.reference = 0;
             depthStencilState.front = depthStencilState.back = op;
         }
-        // No colour attachment in this render pass, so no attachment states either.
+        // No color attachment in this render pass, so no attachment states either.
         VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
         const VkDynamicState dynamicStates[]{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};

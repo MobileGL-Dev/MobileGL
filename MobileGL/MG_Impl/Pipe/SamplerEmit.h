@@ -74,7 +74,7 @@ namespace MobileGL::MG_Pipe {
         canon.borderColor = src.borderColor;
         canon.borderColorI = src.borderColorI;
         canon.borderColorUI = src.borderColorUI;
-        // ALL FOUR BORDER-COLOUR MEMBERS CROSS, the form included. All three representations
+        // ALL FOUR BORDER-COLOR MEMBERS CROSS, the form included. All three representations
         // are always numerically populated, so the value alone cannot say which driver entry
         // point applies (glSamplerParameterIiv vs fv, or which VkBorderColor family), and both
         // of Espryt's redundancy filters compare all four. Dropping this one line is G7's
@@ -662,7 +662,7 @@ namespace MobileGL::MG_Pipe {
     // XXH64 over the tail entries, with Start and Count mixed in through MGPipeMixShutter -
     // the VertexInputEmit shape, and for its reason: the hash must cover EVERY input the
     // record carries, or a record whose one changed field is outside the tail gets suppressed.
-    // Both tails are built into zero-initialised staging arrays, so no padding byte enters
+    // Both tails are built into zero-initialized staging arrays, so no padding byte enters
     // either hash.
     inline Uint64 MGPipeSamplerViewSetContentHash(const MGPBoundView* entries, Uint32 start, Uint32 count) {
         Uint64 hash = XXH64(entries, static_cast<SizeT>(count) * sizeof(MGPBoundView), 0);

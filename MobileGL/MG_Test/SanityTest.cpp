@@ -102,8 +102,8 @@ namespace {
     // ctest -R Sanity` is the legacy-arm run of the same binary and the A/B is one env var.
     //
     // It runs as a gtest Environment rather than a static initializer on purpose:
-    // MG_Config::Features has a String member, so it is dynamically initialised, and writing
-    // to it from another TU's static initializer would be an initialisation-order race.
+    // MG_Config::Features has a String member, so it is dynamically initialized, and writing
+    // to it from another TU's static initializer would be an initialization-order race.
     // SetUp() runs inside RUN_ALL_TESTS, long after every static initializer, and before the
     // first test - hence before anything can latch EsprytSlotTablesEnabled().
     class EsprytSlotArmEnvironment final : public ::testing::Environment {
@@ -542,7 +542,7 @@ TEST(DirectVulkanSanity, SampledViewAspectFollowsDepthStencilTextureMode) {
               static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT));
     EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(kPacked, GL_STENCIL_INDEX),
               static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_STENCIL_BIT));
-    // The default argument is the pre-existing behaviour, for the call sites with no texture.
+    // The default argument is the pre-existing behavior, for the call sites with no texture.
     EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(kPacked),
               static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT));
 
@@ -1531,7 +1531,7 @@ TEST(GetterSanity, MaxElementIndexIsTheFull32BitIndexCeiling) {
 // GL 4.6 core table 23.53 gives GL_MAX_SAMPLES a minimum of four and the three per-category
 // ceilings a minimum of ONE. Flooring the latter at four is the advertised-caps lie that made
 // KHR-GL46.sample_variables.mask.rgba8i run at all: the frontend promised four integer samples,
-// the backend clamped the realised allocation to the one the driver can back, and the application
+// the backend clamped the realized allocation to the one the driver can back, and the application
 // wrote per-sample data it could never read.
 TEST(GetterSanity, PerCategoryMultisampleCeilingsAreProbedRatherThanFlooredAtFour) {
     using namespace MobileGL;
@@ -2971,7 +2971,7 @@ TEST(DirectGLESStateGuards, DefaultFramebufferBindGoesThroughShadow) {
 // first mass eviction during world load - the failure FastSTL's double-advancing
 // erase actually produced before it was fixed).
 //
-// These pin the behaviour the call sites rely on, not one map's implementation, so
+// These pin the behavior the call sites rely on, not one map's implementation, so
 // they are written against MobileGL::UnorderedMap and survive changing what it
 // names. Under ska::flat_hash_map the mechanism is different - erase backward-shifts
 // the rest of the probe cluster into the hole and hands back the same slot, which
@@ -3806,7 +3806,7 @@ TEST(DirectGLESSlotTable, EveryReKeyedObjectClassAnnouncesItsOwnDeath) {
         expected.emplace_back(MG_Pipe::MGPipeKind::VertexElementsCso, vertexArray->GetLifetimeId());
 
         // P3a, and it is DELIBERATELY NOT in `expected`: the buffer is the seventh re-keyed
-        // class and the only one whose death does not travel on this notice. The catalogue
+        // class and the only one whose death does not travel on this notice. The catalog
         // has a call for it - resource_destroy - so no seventh NotifyStateObjectDestroyed
         // raiser was added (D-L). StateObjectDeathNotice.h exists for kinds that have NO
         // such call, and a buffer raising one too would be two death signals for one object,

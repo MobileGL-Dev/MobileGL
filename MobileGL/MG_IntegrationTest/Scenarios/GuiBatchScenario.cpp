@@ -28,8 +28,8 @@
 // quad came out degenerate. Items were unaffected because item geometry DOES come from cached
 // meshes, which is what made the bug look like "only the backgrounds disappear".
 //
-// The assertions are whole-region, not centre-pixel: a quad that survives with three stale
-// vertices still paints its centre.
+// The assertions are whole-region, not center-pixel: a quad that survives with three stale
+// vertices still paints its center.
 //
 // Reproduces on DirectVulkan only. DirectGLES forwards the unbound binding to the GLES driver,
 // which does what GL says, so it is the control - every test here must stay green on both.
@@ -421,7 +421,7 @@ void main() {
                         glMapNamedBufferRange(m_inVaryings[b], 0, 4 * (GLsizeiptr)sizeof(VaryingData), persistent);
                 }
 
-                // Two SharingData entries: builder 0 lands left of centre, builder 1 right.
+                // Two SharingData entries: builder 0 lands left of center, builder 1 right.
                 float sharing[56] = {};
                 const float tx[2] = {-0.9f, 0.1f};
                 for (int b = 0; b < 2; ++b) {
@@ -710,7 +710,7 @@ void main() {
         // an unbound SSBO did. The mod reaches this with its INDIRECT draw method, whose culling
         // shaders carry a counter the BASEVERTEX default never binds.
         //
-        // The counter is INCREMENTED, not merely declared: an unreferenced one is optimised out
+        // The counter is INCREMENTED, not merely declared: an unreferenced one is optimized out
         // before it ever reaches a descriptor, so a shader that only declares it proves nothing.
         constexpr const char* kCounterComputeSource = R"(#version 430 core
 layout(local_size_x = 1) in;

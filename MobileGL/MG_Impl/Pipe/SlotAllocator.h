@@ -109,7 +109,7 @@ namespace MobileGL::MG_Pipe {
             Vector<Uint32> FreeList;
             // P4a: the ShaderCso COMPOSITE band, indexed by (slot - the band's base) and
             // EMPTY for every other kind. A SECOND VECTOR RATHER THAN MORE OF THE FIRST, and
-            // it is not a micro-optimisation: the band starts at 983040, so minting one
+            // it is not a micro-optimization: the band starts at 983040, so minting one
             // composite into the slot-indexed vector above would allocate ~983k SlotStates -
             // ~23 MB - for a single program pipeline, and a consumer that sized a table off
             // HighWater would pay the same shape again with a far bigger record. Both spaces

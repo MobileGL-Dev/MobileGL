@@ -82,7 +82,7 @@ void main() {
         // Set by the MapPersistentRoundtrips. ctest entry and by nothing else; a harness marker,
         // never read by the library. Its absence means an ambient entry, where neither the stats
         // channel nor a private log path is configured - and where the shared log makes a read
-        // race a neighbour's bring-up.
+        // race a neighbor's bring-up.
         constexpr const char* kLaneMarker = "MGITEST_MPR_LANE";
 
         bool BuildMarkerIsSet(const char* name) {
@@ -173,7 +173,7 @@ void main() {
                                     "MOBILEGL_PIPE_STATS=1, MOBILEGL_PIPE_STATS_PERIOD=1 and a private "
                                     "MOBILEGL_LOG_FILE_PATH. None of that is configured in the ambient "
                                     "entries, and the ambient log is shared, so a read here would race a "
-                                    "neighbour's bring-up.";
+                                    "neighbor's bring-up.";
                     return;
                 }
                 if (!BuildMarkerIsSet("MGITEST_PIPE_PUSH_BUILD")) {

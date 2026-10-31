@@ -1,76 +1,76 @@
-# 调用目录与记录格式（原 ARCHITECTURE §3–§4）
+# Call Catalog and Record Format (formerly ARCHITECTURE §3–§4)
 
-> 设计细节。设计要点与全部章节的索引见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)。章节编号沿用原 `ARCHITECTURE.md`，代码注释里的 `ARCHITECTURE.md §N` 按编号在这里找到。
+> Design details. The design highlights and an index of all sections are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Section numbers follow the original `ARCHITECTURE.md`; `ARCHITECTURE.md §N` in code comments resolves by number here.
 
-## 3. 调用目录
+## 3. Call catalog
 
-### 3.1 单一真相源
+### 3.1 Single source of truth
 
-`MobileGL/MG_Pipe/PipeCalls.def`：一行一个 `X(Name, Payload, Class, Flags, WaitClass)`。**线上 opcode 就是行序**，只能追加、退役保留槽位；行数由 `MGP_CALL_LIST_DOCUMENTED_COUNT`（今天 81）与 `PipeCatalogueTest` 钉住。生成器产物提交进树，CI `pipe-gates` 重生成并 `git diff --exit-code`：
+`MobileGL/MG_Pipe/PipeCalls.def`: one `X(Name, Payload, Class, Flags, WaitClass)` per line. **The on-wire opcode is the line order**; you can only append, and retired lines keep their slot; the line count is pinned by `MGP_CALL_LIST_DOCUMENTED_COUNT` (81 today) and `PipeCatalogueTest`. Generator outputs are committed to the tree; CI `pipe-gates` regenerates them and runs `git diff --exit-code`:
 
-| | 产物 | 内容 |
+| | Output | Content |
 |---|---|---|
-| G1 | `PipeTables.inc` | 两张函数指针表 |
-| G2 | `PipeThunks.inc` | monolith 直调 thunk |
-| G3 | `PipeWire.inc` | wire 记录、尺寸 `static_assert`、applier 边界检查 |
-| G4 | `PipeVerify.inc` | `MOBILEGL_PIPE_VERIFY` 逐字段比对器（`PipeFields.def`） |
-| G5 | `PipeFilled.inc` | `PipeInputs` 字段 id 与逐 verb 世代 poison |
-| G6 | `PipeCoverage.inc` | 后端读点 → 调用映射（`Coverage.def`），0 UNMAPPED 是门 |
-| G7 | `PipeSpanTable.inc` | render-state pipeline 子集成员表 |
-| G8 | `PipeFieldOwnership.inc` | 每个 `PipeInputs` 字段恰属 `RECORD-SUPPLIED / APPLIER-DERIVED / BARRIER-PULLED / FATAL` 之一（P5f 起 0 BARRIER-PULLED） |
+| G1 | `PipeTables.inc` | the two function pointer tables |
+| G2 | `PipeThunks.inc` | monolith direct-call thunks |
+| G3 | `PipeWire.inc` | wire records, size `static_assert`s, applier bounds checks |
+| G4 | `PipeVerify.inc` | `MOBILEGL_PIPE_VERIFY` field-by-field comparator (`PipeFields.def`) |
+| G5 | `PipeFilled.inc` | `PipeInputs` field ids and per-verb generation poison |
+| G6 | `PipeCoverage.inc` | backend read sites → call mapping (`Coverage.def`); 0 UNMAPPED is the gate |
+| G7 | `PipeSpanTable.inc` | render-state pipeline subset membership table |
+| G8 | `PipeFieldOwnership.inc` | each `PipeInputs` field belongs to exactly one of `RECORD-SUPPLIED / APPLIER-DERIVED / BARRIER-PULLED / FATAL` (0 BARRIER-PULLED since P5f) |
 
-另有 `FillPoints.def`（填充点）与 `DirtySurface.def`（§5.2）。G1 codegen 规则：capability gate 替换指针表达式时保留**表达式形状**，否则 pull `.text` 漂移。
+There are also `FillPoints.def` (fill points) and `DirtySurface.def` (§5.2). G1 codegen rule: when the capability gate replaces a pointer expression, preserve the **expression shape**, otherwise the pull `.text` drifts.
 
-### 3.2 分组与 flag
+### 3.2 Groups and flags
 
-- Class：`kScreen`（caps、resource、persistent map、fence、`ApplierReset`）、`kCtxQuery`、`kCtxCso`（create/bind/delete × 五种 CSO）、`kCtxState`（`Set*` 状态、`SetContextValues`、`SetProgramBindings`、迁移期的 `SetResidualValueState`）、`kCtxObject`（subdata、readback、mip、`ObjectDeath` …）、`kCtxVerb`（blit、clear、`DrawVbo`、dispatch、XFB、`Present` …）。
-- Flags：`kNeedsAck`、`kHasBlob`、`kVarTail`、`kHostSpan`、`kReplySlot`、`kOptional`。第五列 `WaitClass`（P5e）决定 run-ahead 下 client 等不等（§11.6）。
-- 20 个 draw 入口塌成 `DrawVbo` 一条；`Clear` 一条判别式；sampler 集合**没有 stage 维度**（192 单元合并空间）；`SetTextureParams` 按资源寻址、与 sampler view 分开（D10）；`SetIndexBuffer` 独立于 VAO 配置（D5）。
-- 显式不移植：`GetIntegeri_v` / `GetInteger64i_v` / `GetProgramiv`、`set_pixel_unpack_state`（前端已解析）、压缩格式概念、`pipe_transfer`。
+- Class: `kScreen` (caps, resource, persistent map, fence, `ApplierReset`), `kCtxQuery`, `kCtxCso` (create/bind/delete × five kinds of CSO), `kCtxState` (`Set*` state, `SetContextValues`, `SetProgramBindings`, `SetResidualValueState` during migration), `kCtxObject` (subdata, readback, mip, `ObjectDeath` …), `kCtxVerb` (blit, clear, `DrawVbo`, dispatch, XFB, `Present` …).
+- Flags: `kNeedsAck`, `kHasBlob`, `kVarTail`, `kHostSpan`, `kReplySlot`, `kOptional`. The fifth column, `WaitClass` (P5e), decides whether the client waits under run-ahead (§11.6).
+- The 20 draw entry points collapse into the single `DrawVbo`; `Clear` is a single discriminative call; the sampler set **has no stage dimension** (a merged 192-unit space); `SetTextureParams` is resource-addressed and separate from sampler views (D10); `SetIndexBuffer` is independent of VAO configuration (D5).
+- Deliberately not ported: `GetIntegeri_v` / `GetInteger64i_v` / `GetProgramiv`, `set_pixel_unpack_state` (the frontend already resolves it), the compressed format concept, `pipe_transfer`.
 
-#### 3.2.1 flag 与 WaitClass 的含义
+#### 3.2.1 Meaning of the flags and WaitClass
 
-- `kHasBlob` 严格表示 payload 拥有一个 `MGPBlobRef` 成员，而不是"这条调用带字节"：解码器信任它就必须有成员可读。`ResourceRespecify` 的初始内容与 `ResourceFlushRange` 的字节不走 blobref，而以相邻的 `resource_subdata` 记录过线。
-- `kNeedsAck` 只表示这条调用的记录**可能**要 ack，由逐记录谓词决定（`MGPipeResourceRespecifyNeedsAck`，§8.3）。
-- `kReplySlot`：applier 返回 client 会据以动作的答案（清 level 脏标、闩参数）。flag 只导出一份 `kMGPipeCallFlags[]`（`generated/PipeWire.inc`），消费者不另抄。
-- 第五列 `WaitClass` 是值不是 opcode，生成为 `MGPipeWaitClassFor(op)`，是 `MGPipeBarriered`（§11.6）的静态一项；client 只在 run-ahead 武装（server 发布 `kCapRunAheadApply`）时据它决定等不等，否则走 lockstep：
-  - `kWaitReply`：答案不可推导且 client 要用，阻塞在 reply slot。与 `kReplySlot` 同在同缺，`gen_pipe.py` 拒绝不一致的行：不等的 reply 行会让 client 读一个没人填的 slot，没有 slot 的等待行会等一个没人发的答案。逐记录 route 谓词可再放宽（如 `MGPipeSubDataWantsItsReply`）。
-  - `kWaitPresent`：节奏由 encode 之前取的 present credit 决定，publish 之后不再等。
-  - `kWaitApplied`：client 停到记录 apply 完（今天只有 `applier_reset`）。
-  - `kWaitNone`：apply 不读 client 内存，发布即走。
+- `kHasBlob` strictly means the payload owns an `MGPBlobRef` member, not "this call carries bytes": if the decoder trusts it, there must be a member to read. The initial contents of `ResourceRespecify` and the bytes of `ResourceFlushRange` do not go through a blobref; they cross the wire as an adjacent `resource_subdata` record.
+- `kNeedsAck` only means this call's record **may** need an ack, decided by a per-record predicate (`MGPipeResourceRespecifyNeedsAck`, §8.3).
+- `kReplySlot`: the applier returns an answer the client will act on (clearing level dirty bits, latching parameters). The flag exports only one `kMGPipeCallFlags[]` (`generated/PipeWire.inc`); consumers do not copy it.
+- The fifth column, `WaitClass`, is a value rather than an opcode, generated as `MGPipeWaitClassFor(op)`, one static entry of `MGPipeBarriered` (§11.6); the client uses it to decide whether to wait only when run-ahead is armed (the server publishes `kCapRunAheadApply`); otherwise it goes lockstep:
+  - `kWaitReply`: the answer is not derivable and the client needs it, so block on the reply slot. It is present and absent together with `kReplySlot`, and `gen_pipe.py` rejects inconsistent lines: a reply line that does not wait would make the client read a slot nobody fills; a waiting line with no slot would wait for an answer nobody sends. A per-record route predicate can relax this further (e.g. `MGPipeSubDataWantsItsReply`).
+  - `kWaitPresent`: the pace is decided by the present credit taken before encoding, and there is no waiting after publish.
+  - `kWaitApplied`: the client stops until the record has been applied (today only `applier_reset`).
+  - `kWaitNone`: apply does not read client memory, so publish and go.
 
-### 3.3 能力位（`MGPCapBit`）
+### 3.3 Capability bits (`MGPCapBit`)
 
-`CallMask` 取代"槽位是否为 null"这一隐式能力探测；`MGPCaps` = `DynamicBackendParameters` + `CallMask` + 格式能力表与 renderer 字符串两个 blob，握手后快照、`MakeCurrent` / `InitCapabilities` 后按 generation 重发布。位包括 viewport array、fp64 顶点、`kCapResidentSubData`、XFB / query 家族、`kCapNeedsHostIndexBytes`、`kCapNeedsHostUboBytes`、`kCapBackendOwnsXfbCapture`、`kCapRunAheadApply`（`MGPipeRunAheadCapBitsFor`：Espryt 自 P5e、Magma 自 P5f 之后的 Magma run-ahead 起发布，后者契约见 git 历史）。**不存在"归属开关"（D-B7）**：multi-draw 分档与 restart 重写永远由 server 拥有，client 只在 caps 要求时提供索引字节。
+`CallMask` replaces the implicit capability probe of "is the slot null"; `MGPCaps` = `DynamicBackendParameters` + `CallMask` + two blobs, the format capability table and the renderer string; snapshotted after the handshake, republished per generation after `MakeCurrent` / `InitCapabilities`. The bits include viewport array, fp64 vertices, `kCapResidentSubData`, the XFB / query family, `kCapNeedsHostIndexBytes`, `kCapNeedsHostUboBytes`, `kCapBackendOwnsXfbCapture`, `kCapRunAheadApply` (`MGPipeRunAheadCapBitsFor`: Espryt since P5e, and Magma run-ahead since P5f, whose contract is in the git history). **There is no "ownership switch" (D-B7)**: multi-draw tiering and restart rewriting always belong to the server, and the client supplies index bytes only when the caps ask for them.
 
-## 4. 记录与 payload 约定（`MG_Pipe/MGPipeTypes.h`）
+## 4. Record and payload conventions (`MG_Pipe/MGPipeTypes.h`)
 
-- 每个 payload 是平坦 POD、显式 padding、`static_assert` 精确尺寸；**永不含指针**。
-- `MGPBlobRef{Offset, Size, Seg}` 指向 blob 区；`MGHostSpan` 是唯一随传输而变的形状（monolith 下是指针，split 下字节在 `SEG_STAGE`），只进变长尾。
-- wire 记录头 `MGPWireRecHeader{Op, Flags, Size}`（8 B）；**没有逐记录序号**，seq 就是记录序数。
-- 单条记录上界 = ring 一半，**记录本身永不分块**（R-10）；**内容侧分块**：会超出 `SEG_STAGE` 的 blob 按 `MGPipeStageChunkBytes()`（默认 segment/4 = 8 MiB）切成多条记录（buffer 范围走查、纹理整宽 slab，server 拼回整级）。
+- Each payload is a flat POD with explicit padding and a `static_assert` on the exact size; **it never contains pointers**.
+- `MGPBlobRef{Offset, Size, Seg}` points into the blob area; `MGHostSpan` is the only shape that changes with the transport (a pointer under monolith, bytes in `SEG_STAGE` under split), and it only goes into the variable-length tail.
+- The wire record header `MGPWireRecHeader{Op, Flags, Size}` (8 B); **there is no per-record sequence number**, the seq is the record ordinal.
+- The upper bound of a single record is half the ring, and **a record itself is never chunked** (R-10); **content is chunked**: a blob that would exceed `SEG_STAGE` is split by `MGPipeStageChunkBytes()` (default segment/4 = 8 MiB) into several records (buffer range walks, full-width texture slabs; the server reassembles the whole level).
 
-### 4.1 关键 payload
+### 4.1 Key payloads
 
-| payload | 要点 |
+| payload | Key points |
 |---|---|
-| `MGPResourceDesc` | buffer / 纹理 / renderbuffer 一个判别式 create/respecify 形状；`ImageBindableHint`、`ViewOf`（视图的存储属主）、`HasDefinedContent` |
+| `MGPResourceDesc` | one discriminative create/respecify shape for buffer / texture / renderbuffer; `ImageBindableHint`, `ViewOf` (the storage owner of a view), `HasDefinedContent` |
 | `MGPRenderStateDesc` / `MGPBindRenderState` / `MGPDynamicState` | §5.3 |
-| `MGPVertexElements` | blob 同时带解析后的属性与绑定点视图（记录自洽） |
-| `MGPSamplerView` / `MGPTextureParams` | view 只带视图限制；纹理参数挂纹理对象，`BuiltinSampler` 句柄不许为空（D-E1） |
-| `MGPProgramDesc` | 逐 stage SPIR-V + 反射归档（§7） |
-| `MGPFramebufferState` | 8 color + depth + stencil + client 解析后的 read surface；`ContentHash` 同时是 render-pass memo 键与发射抑制器；`Target` 含 `Named = 3`，applier 按 framebuffer 句柄存 |
+| `MGPVertexElements` | the blob carries both the parsed attributes and the binding-point views (the record is self-consistent) |
+| `MGPSamplerView` / `MGPTextureParams` | a view carries only view restrictions; texture parameters hang off the texture object, and the `BuiltinSampler` handle must not be null (D-E1) |
+| `MGPProgramDesc` | per-stage SPIR-V + reflection archive (§7) |
+| `MGPFramebufferState` | 8 color + depth + stencil + the client-resolved read surface; `ContentHash` is both the render-pass memo key and the emission suppressor; `Target` includes `Named = 3`, and the applier stores by framebuffer handle |
 | `MGPSubData` / `MGPSubRegion` | §6 |
-| `MGPDrawInfo` / `MGPDrawRange` | `DrawVbo`；multi-draw 范围与用户索引在变长尾，indirect 的 `DrawCount` 由 client 解析 |
+| `MGPDrawInfo` / `MGPDrawRange` | `DrawVbo`; multi-draw ranges and user indices in the variable-length tail, indirect's `DrawCount` resolved by the client |
 
-每条 `kVarTail` 的 `set_*` 带 `ContentHash`，hash 未变就不发（§5.4）。
+Every `kVarTail` `set_*` carries a `ContentHash`; if the hash is unchanged, nothing is sent (§5.4).
 
-### 4.2 split 下的诚实规则
+### 4.2 Honesty rules under split
 
-同一地址空间里 host 指针能解引用、以 host 地址为 `Offset` 的 blobref 能解析、persistent map 返回的地址能直接用；`inproc` 若借这些捷径变绿，`spawn` 无法复现。所以 split 下编解码一律按跨进程规则执行，`inproc` 也不例外（`MG_Remote/Wire/PipeWireCodec.h`）：
+In one address space a host pointer can be dereferenced, a blobref with a host address as `Offset` can be resolved, and an address returned by persistent map can be used directly; if `inproc` turns green by borrowing these shortcuts, `spawn` cannot reproduce it. So under split, encoding and decoding always follow cross-process rules, `inproc` included (`MG_Remote/Wire/PipeWireCodec.h`):
 
-1. encoder 把 `MGHostSpan::Ptr` 恒写 `nullptr`，字节放进 `SEG_STAGE`，由 `Seg` / `Offset` 指名。
-2. `MGPBlobRef` 要么完整声明（真实 `Seg`、段内 `Offset`、非零 `Size`），要么三个字段全零。`Seg` 或 `Offset` 非零而 `Size == 0` 正是 monolith emitter 的形状（`Offset` 是 host 地址），split 下按损坏拒绝，不能读成"无 blob"，否则未改造 emitter 的字节会被静默丢弃。
-3. decoder 对 `Ptr != nullptr`、内容记录的 `Size == 0`、`Size != 0` 而 `Seg == kSegNone`、`Offset + Size` 越过段尾一律报 `ProtocolCorruption`（`CheckBlobIsHonest`、`RequireDeclaredBlob`、`CheckHostSpanIsHonest`）。记录是否带内容由 payload 的其他字段决定，所以"内容记录须有 blob"由 decoder 的逐 op 分支调用 `RequireDeclaredBlob` 检查。
-4. T2 档下 `MGPipeApplyMapPersistent` 在 split 下恒返回 `nullptr`（§12），client 不拿 server 的地址。
-5. `MOBILEGL_IPC_AUDIT=1` 时 server 把已退休记录的 `SEG_STAGE` 字节填成 `0xDD`，apply 之后仍持有指针的实现下一帧会读到 `0xDD`。
+1. The encoder always writes `nullptr` for `MGHostSpan::Ptr`, puts the bytes in `SEG_STAGE`, and names them by `Seg` / `Offset`.
+2. `MGPBlobRef` either fully declares itself (real `Seg`, an in-segment `Offset`, nonzero `Size`), or all three fields are zero. `Seg` or `Offset` nonzero with `Size == 0` is exactly the shape of a monolith emitter (`Offset` is a host address); under split it is rejected as corruption and must not be read as "no blob", otherwise the bytes of an unmigrated emitter would be silently dropped.
+3. The decoder reports `ProtocolCorruption` for `Ptr != nullptr`, for `Size == 0` on a content record, for `Size != 0` with `Seg == kSegNone`, and for `Offset + Size` running past the end of the segment (`CheckBlobIsHonest`, `RequireDeclaredBlob`, `CheckHostSpanIsHonest`). Whether a record carries content is decided by other fields of the payload, so "a content record must have a blob" is checked by each per-op branch of the decoder calling `RequireDeclaredBlob`.
+4. In the T2 tier, `MGPipeApplyMapPersistent` always returns `nullptr` under split (§12); the client does not take the server's address.
+5. With `MOBILEGL_IPC_AUDIT=1` the server fills the `SEG_STAGE` bytes of retired records with `0xDD`; an implementation that still holds a pointer after apply reads `0xDD` on the next frame.

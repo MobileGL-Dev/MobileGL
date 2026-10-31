@@ -143,7 +143,7 @@ namespace MobileGL::MG_Remote::Server {
         // MOBILEGL_IPC_RING_MB / MOBILEGL_IPC_STAGE_MB, actually applied.
         //
         // The first version of this file called this only `if (m_sizes.CmdBytes == 0)`, and
-        // SessionSegmentSizes has a default member initialiser of 8 MiB, so the condition was
+        // SessionSegmentSizes has a default member initializer of 8 MiB, so the condition was
         // never true and the whole function was dead: ConfigLoader parsed both knobs, echoed
         // them into the config line, and the session mapped 8/32 MiB regardless. Config.h's
         // own comment four lines above the declaration is the statement of that bug - "an

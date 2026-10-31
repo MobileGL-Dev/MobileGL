@@ -114,9 +114,9 @@ inline constexpr SizeT kMGPipeCallCount = 85;
 // A table that is not exactly its call count of function pointers has grown a
 // member that no generator knows about.
 static_assert(sizeof(MGPipeScreen) == kMGPipeScreenCallCount * sizeof(void (*)()),
-              "MGPipeScreen is not exactly its catalogue's function pointers");
+              "MGPipeScreen is not exactly its catalog's function pointers");
 static_assert(sizeof(MGPipeContext) == kMGPipeContextCallCount * sizeof(void (*)()),
-              "MGPipeContext is not exactly its catalogue's function pointers");
+              "MGPipeContext is not exactly its catalog's function pointers");
 static_assert(kMGPipeScreenCallCount + kMGPipeContextCallCount == kMGPipeCallCount);
 static_assert(kMGPipeCallCount == MGP_CALL_LIST_DOCUMENTED_COUNT,
-              "the catalogue and its documented count disagree");
+              "the catalog and its documented count disagree");

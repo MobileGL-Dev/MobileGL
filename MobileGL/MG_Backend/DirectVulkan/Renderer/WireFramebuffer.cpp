@@ -615,7 +615,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     // THE HOST GATE CANNOT REACH THE SHADER MIP ARM ON ITS OWN. lavapipe reports
-    // BLIT_SRC|BLIT_DST for every colour format this lane can create, so `nativeBlit` is
+    // BLIT_SRC|BLIT_DST for every color format this lane can create, so `nativeBlit` is
     // always true there and both shader shapes below would only ever run on the phone -
     // which is how the Adreno refusal reached a release in the first place. The knob makes
     // them reachable from a host lane and is read exactly once:
@@ -789,7 +789,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // ---- P15: WIRE DEFERRED CLEARS -------------------------------------------------------------
     //
     // Minecraft (1.21.5) clears its targets through framebuffers of their own - a depth-only one
-    // for the shared depth texture, a colour+depth one per target - and then draws through the
+    // for the shared depth texture, a color+depth one per target - and then draws through the
     // main framebuffer. A clear that begins a LOAD_OP_CLEAR pass of its own made every such clear a
     // pass that did nothing but clear, closed by the very next draw: 11.5 passes a frame against
     // dev's 4.1 (whose clear manager folded the same clears into the next pass's load op), each
@@ -805,7 +805,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // ClearWireFramebufferInPass), and it is presented, not sampled.
 
     // Whether `image` can carry a deferred clear: a plain single-sample 2D(-array) image of this
-    // session with a float colour or a depth/stencil format, clearable by a transfer command.
+    // session with a float color or a depth/stencil format, clearable by a transfer command.
     Bool VulkanRenderer::WireImageCanDeferClear(const WireImage& image) {
         const auto* resource = image.resource;
         if (resource == nullptr || image.isDefault || image.is3D || image.samples != VK_SAMPLE_COUNT_1_BIT)
@@ -1328,7 +1328,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             !m_swapchainObject.IsImageContentDefined(source.swapchainImageIndex)) {
             // Named rather than silent: the readback hands back whatever the image holds. The
             // ordinary cause is a readback of the default framebuffer applied after the Present
-            // that consumed it, where the app's own colour is still what is expected (see
+            // that consumed it, where the app's own color is still what is expected (see
             // m_defaultFramebufferImageIndex).
             MGLOG_W_ONCE("DirectVulkan::ReadPixels: no write is recorded for swapchain image %u of the "
                          "default framebuffer; the readback returns its raw pixels",
@@ -1416,7 +1416,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Int64 dstHeight = dstSpanY < 0 ? -dstSpanY : dstSpanY;
         // A SCALE has no arm here and is not supposed to: 18.3.1 makes a multisample blit whose
         // rectangles differ in size INVALID_OPERATION. Rule I (a), the same three lines the
-        // colour arm's multisample-destination decline uses. A ZERO span on one side only is a
+        // color arm's multisample-destination decline uses. A ZERO span on one side only is a
         // size mismatch too (review round 2): it used to return silently with the other side
         // non-empty, where GL raises the error. Only when BOTH sides are empty on an axis is
         // there nothing to do and nothing to say - that is the caller's early return.
@@ -1602,7 +1602,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // P7 wave 2-B2 (review round): A REVERSED RECTANGLE IS NOT A MALFORMED ONE. This guard
         // used to require `sx1 > sx0` and `sy1 > sy0` and take the session with a named Fatal
         // otherwise - so `glBlitFramebuffer(0, h, w, 0, 0, 0, w, h, COLOR|DEPTH)` out of a
-        // multisample framebuffer blitted its COLOUR correctly (the colour arm has handled a
+        // multisample framebuffer blitted its COLOR correctly (the color arm has handled a
         // flip since P5f and now handles a scale too) and then died on its DEPTH. GL 4.6 core
         // 18.3.1 asks for identical DIMENSIONS, not identical corners - a conforming check compares absolute
         // spans - so a flip is a legal blit that has to produce a mirrored picture.
@@ -1610,10 +1610,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Spans are therefore signed and everything downstream works off the min corner.
         //
         // THE SHAPE DECLINES ARE DECIDED ONCE PER CALL (review round 2). BlitWireFramebuffers
-        // asks DeclineWireDepthStencilResolveShape before ANY aspect runs, because the colour
+        // asks DeclineWireDepthStencilResolveShape before ANY aspect runs, because the color
         // lambda runs first: asked only here, a scaled COLOR|DEPTH blit scaled and wrote its
-        // colour and THEN recorded INVALID_OPERATION on its depth - a partial effect GL 18.3.1
-        // forbids (the whole call errors) - and an X-mirrored one mirrored its colour and left
+        // color and THEN recorded INVALID_OPERATION on its depth - a partial effect GL 18.3.1
+        // forbids (the whole call errors) - and an X-mirrored one mirrored its color and left
         // its depth alone. The call below is the same question for a caller that did not ask;
         // on the BlitWireFramebuffers path it has already answered false.
         if (DeclineWireDepthStencilResolveShape(source, destination, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1)) return;
@@ -1874,8 +1874,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!read || !draw) MagmaWireFatal("blit-framebuffer-record");
         state.VerbBlitNamedConsumed = named;
         // P7 wave 2-B2 (review round 2): ONE ANSWER FOR THE WHOLE CALL. The aspects below run
-        // colour first, so a multisample depth/stencil shape that declines (a scale, an X
-        // mirror, a Y mirror across two formats) used to be discovered only after the colour
+        // color first, so a multisample depth/stencil shape that declines (a scale, an X
+        // mirror, a Y mirror across two formats) used to be discovered only after the color
         // attachment had already been scaled or mirrored and written - the call then recorded
         // INVALID_OPERATION with half its effect in place, which GL 18.3.1 does not allow (an
         // erroring blit writes nothing). The shape is a fact about the rectangles and the two
@@ -1887,7 +1887,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // on the belief that a default draw behind a multisample read was ResolveWireDepthStencil's
         // region Fatal whatever the shape, but that arm asks DeclineWireDepthStencilResolveShape
         // BEFORE its region check - so a scaled (or X-mirrored) COLOR|DEPTH blit out of a
-        // multisample framebuffer onto the window scaled and wrote its colour through
+        // multisample framebuffer onto the window scaled and wrote its color through
         // BlitWireColorToDefault and then recorded INVALID_OPERATION on its depth, the very
         // partial effect this block exists to close. Both sides are resolved as READS
         // (isWriteTarget=false): only their format and samples are consulted here, and a write
@@ -2005,7 +2005,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // The filter only started MATTERING with the scale above: at 1:1 LINEAR and
                     // NEAREST read the same texel, so nothing here ever asked whether the format
                     // could be filtered. VK_FILTER_LINEAR on a source whose optimalTilingFeatures
-                    // lack SAMPLED_IMAGE_FILTER_LINEAR is undefined behaviour, and GL says filter
+                    // lack SAMPLED_IMAGE_FILTER_LINEAR is undefined behavior, and GL says filter
                     // is ignored for a multisample resolve in the first place - so a format that
                     // cannot be filtered takes NEAREST rather than the command being illegal.
                     VkFormatProperties scratchProperties{};
@@ -2077,7 +2077,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // express a quarter turn. It is still TAKEN FIRST on every transform it can
                 // express, identity included. That has been the routing since 38919d453: every
                 // host lane (all identity) and the Redmi pbuffer run their default-framebuffer
-                // colour blits through it, F1WireScenario.ColorBlitToDefaultHonorsScissorAndReversedRect
+                // color blits through it, F1WireScenario.ColorBlitToDefaultHonorsScissorAndReversedRect
                 // among them. The ordinary vkCmdBlitImage arm below is reached on identity only
                 // when this pass declines the source. Because identity blits run here, the pass
                 // must copy exactly wherever GL says the blit is a copy: an unscaled blit samples
@@ -2179,7 +2179,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // P7 wave 2-B2, CONTRACT-P7 §3.2: WHAT IS LEFT HERE IS A MULTISAMPLE DESTINATION.
                 // Every blit that resolves a multisample SOURCE into a single-sample destination
                 // returned above - the depth/stencil arm at the top of this lambda through
-                // ResolveWireDepthStencil, the colour arm below it through its resolve scratch -
+                // ResolveWireDepthStencil, the color arm below it through its resolve scratch -
                 // and both of those now carry their own scale and flip. So the samples of the two
                 // sides can only differ here by the DESTINATION being multisampled, which is the
                 // shape this arm declines rather than the one it performs.
@@ -2423,7 +2423,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
         const Bool depthArmTakesShape =
             planar && layersInRange && (props.optimalTilingFeatures & depthPassFeatures) == depthPassFeatures;
-        // The colour arm's shape (the two shader shapes are explained at the colour arm below).
+        // The color arm's shape (the two shader shapes are explained at the color arm below).
         const Bool colour = resource->aspect == VK_IMAGE_ASPECT_COLOR_BIT;
         // The shader arm samples through a sampler2D and writes a vec4, which is what
         // BlitWireColorImage's own float check enforces; naming it here rather than letting the
@@ -2459,7 +2459,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // P7 wave 2-B, CONTRACT-P7 §5.1 (A): THE DEPTH ARM, and it is first because a
             // depth format without BLIT_DST is the ordinary case, not the exotic one -
             // VK_FORMAT_FEATURE_BLIT_DST is optional for depth and plenty of devices decline
-            // it. Before this package the whole branch below was colour-only, so such a
+            // it. Before this package the whole branch below was color-only, so such a
             // texture reached `mipmap-shader-format-or-shape` on its very first disjunction
             // while the monolith arm quietly generated the chain with a shader.
             //
@@ -2511,7 +2511,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // TWO SHADER SHAPES, not one. The arm that was here rendered STRAIGHT INTO the
             // next level, which needs the image to have been created with
             // COLOR_ATTACHMENT usage - and a texture whose format the device refuses as a
-            // colour attachment never gets that bit (VkTextureManager.cpp:2156-2160), so
+            // color attachment never gets that bit (VkTextureManager.cpp:2156-2160), so
             // every sampled-only texture without BLIT support fell into the refusal rather
             // than into a fallback. When the FORMAT can be rendered and only the IMAGE
             // cannot, an owned scratch attachment of the destination level's size renders

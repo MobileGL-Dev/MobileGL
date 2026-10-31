@@ -8,7 +8,7 @@
 //
 // FlattenFloat64StorageBlockPass, over the module the production chain actually hands it:
 // ShaderCompiler::SanitizeAndOptimizeBinary, where the pass sits immediately before the fp64
-// demotion. The behavioural half - that a block copied through the flattened words comes back
+// demotion. The behavioral half - that a block copied through the flattened words comes back
 // byte for byte - is DoublePrecisionScenario's; what only a module walk can say is WHICH blocks
 // were flattened, how wide, and that the ones this pass must not touch came through unchanged.
 
@@ -401,7 +401,7 @@ TEST_F(FlattenFloat64StorageBlockTest, TheNativePathLeavesTheBlockAndItsDoublesA
 
 // And the control: the SAME module through the SAME entry point with the bit clear is flattened
 // exactly as it always was. This is the pair that pins "capability-false is byte-for-byte the old
-// behaviour" at the level the device A/B checks.
+// behavior" at the level the device A/B checks.
 TEST_F(FlattenFloat64StorageBlockTest, TheDemotedPathIsUnchangedByTheCapabilityArgument) {
     const Vector<Uint32> input = CompileToSpirv(GL_COMPUTE_SHADER, kStd140BlockSource);
     ASSERT_FALSE(input.empty());

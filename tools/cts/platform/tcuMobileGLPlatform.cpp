@@ -17,7 +17,7 @@
  * \file
  * \brief MobileGL platform.
  *
- * Modelled on the surfaceless platform, but adapted to MobileGL, which ships
+ * Modeled on the surfaceless platform, but adapted to MobileGL, which ships
  * its own EGL implementation inside libMobileGL.so:
  *
  *  - Every EGL call goes through the dynamically loaded library. The

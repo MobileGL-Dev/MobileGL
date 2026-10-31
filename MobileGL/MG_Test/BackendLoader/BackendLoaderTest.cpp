@@ -38,7 +38,7 @@ namespace {
         // Behavior knobs, configured per test before running the probe.
         GLint maxVertexSsboBlocks = 4;
         // GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE per axis, answered through glGetIntegeri_v.
-        // Above the GL minimums and distinct per axis, so a loader that left an initialiser in
+        // Above the GL minimums and distinct per axis, so a loader that left an initializer in
         // place or copied one axis into another is caught.
         GLint maxComputeWorkGroupCount[3] = {70001, 70002, 70003};
         GLint maxComputeWorkGroupSize[3] = {1500, 1501, 100};
@@ -463,7 +463,7 @@ namespace {
         // ---- what the located-interface-block probe draws with -------------------------
         // Enough of a rasterizer for ProbeLocatedIoBlocksLosePayload to reach a verdict: it
         // builds three programs, draws each to a 1x1 target and reads the pixel back, and the
-        // fake decides what each read returns. Default behaviour is a CONFORMING driver, so
+        // fake decides what each read returns. Default behavior is a CONFORMING driver, so
         // every test that predates this one sees the probe reach "not affected" and no
         // capability it asserts on moves.
         funcs.glCheckFramebufferStatus = [](GLenum) -> GLenum { return GL_FRAMEBUFFER_COMPLETE; };
@@ -1724,7 +1724,7 @@ TEST(LocatedIoBlockProbe, ReportsTheDefectOnlyWhenTheUnlocatedControlCarriesTheP
 
 // The six per-axis compute limits are the backend-owned answers that cross the MGPipe boundary
 // inside MGPCaps (DynamicBackendParameters::MaxComputeWorkGroupCount/Size), so the loader has
-// to take EACH axis from glGetIntegeri_v rather than leave an initialiser - or one axis's
+// to take EACH axis from glGetIntegeri_v rather than leave an initializer - or one axis's
 // answer - in the other slots. The integration side (AdvertisedLimitsScenario) pins the copy
 // against the live getter on both backends; this pins the driver-to-caps step on its own.
 TEST(ComputeWorkGroupCapabilities, TakesEveryAxisFromTheIndexedQuery) {
@@ -1736,8 +1736,8 @@ TEST(ComputeWorkGroupCapabilities, TakesEveryAxisFromTheIndexedQuery) {
         EXPECT_EQ(caps.MaxComputeWorkGroupCount[axis], g_fake.maxComputeWorkGroupCount[axis]) << "axis " << axis;
         EXPECT_EQ(caps.MaxComputeWorkGroupSize[axis], g_fake.maxComputeWorkGroupSize[axis]) << "axis " << axis;
     }
-    // The initialisers are the GL 4.3 minimums and every fake answer is above them, so a
-    // value equal to its initialiser here would mean the query never ran.
+    // The initializers are the GL 4.3 minimums and every fake answer is above them, so a
+    // value equal to its initializer here would mean the query never ran.
     EXPECT_GT(caps.MaxComputeWorkGroupCount[0], 65535);
     EXPECT_GT(caps.MaxComputeWorkGroupSize[2], 64);
 }

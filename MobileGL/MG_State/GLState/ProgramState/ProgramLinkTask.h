@@ -67,7 +67,7 @@ namespace MobileGL::MG_State::GLState {
             Bool separable = false;
             // The four "takes effect at the next link" request maps. Snapshotted rather than
             // referenced, which is precisely what makes glBindAttribLocation and friends
-            // legal to call over a pending link without cancelling it: the pending link keeps
+            // legal to call over a pending link without canceling it: the pending link keeps
             // linking the inputs it was given.
             UnorderedMap<String, Uint> explicitAttribLocations;  // glBindAttribLocation
             UnorderedMap<String, Uint> explicitFragDataLocation; // glBindFragDataLocation
@@ -153,7 +153,7 @@ namespace MobileGL::MG_State::GLState {
             SharedPtr<const ProgramObject::LinkArtifacts> linkArtifactsForCache;
 
             // The one flag phase B tests before doing anything: false means this link never
-            // reached the tail of RunBody (it failed, or was cancelled mid-body).
+            // reached the tail of RunBody (it failed, or was canceled mid-body).
             Bool ready = false;
         } spirvHandoff;
 

@@ -272,7 +272,7 @@ class Archive(unittest.TestCase):
         self.assertEqual({row["arm"] for row in report["rows"]}, {self.arm})
 
     def test_a_repeat_that_produced_nothing_leaves_an_empty_directory_not_the_previous_one(self):
-        """A failed repeat must not inherit the previous repeat's artefacts.
+        """A failed repeat must not inherit the previous repeat's artifacts.
 
         This is the concrete shape tools/device_bench/p6/README.md records for benchmark.json:
         the result root is not cleared between runs, so a run that produced nothing leaves the
@@ -288,7 +288,7 @@ class Archive(unittest.TestCase):
         kept = retrace.archive_repeat(archive, self.case, "DirectVulkan", 2)
         self.assertFalse((kept / "result.json").exists())
         report = ca.summarize(archive)
-        # Both artefacts are gone; the first missing one is the one named.
+        # Both artifacts are gone; the first missing one is the one named.
         self.assertEqual(report["rows"][1]["error"], "no result.json")
         self.assertNotIn("ssim_vs_first", report["rows"][1])
         self.assertNotIn("actual_sha256", report["rows"][1])

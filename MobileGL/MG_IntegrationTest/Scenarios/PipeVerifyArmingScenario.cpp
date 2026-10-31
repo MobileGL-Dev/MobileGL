@@ -44,7 +44,7 @@
 // fopen(path, "w") at the first log write of a process (MG_Util/Debug/Log.cpp, InitFile), so each
 // process TRUNCATES it. That is fine for one process and false for many: in the ambient Verify.
 // lane, 400-odd sibling entries share the one MOBILEGL_LOG_FILE_PATH, and CI runs that lane with
-// `ctest -j 4`, so a neighbour's bring-up can truncate the file between this case's draw and its
+// `ctest -j 4`, so a neighbor's bring-up can truncate the file between this case's draw and its
 // read. Every existing scenario in this suite that reads the library log (UnlocatedIoBlockScenario,
 // the primgen reroute, the point-size demotion) is registered in a FILTERED lane with a log path of
 // its own for exactly that reason, and this case now follows them: it runs in the VerifyArming.
@@ -210,7 +210,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                                 "lane, which owns a log path no other entry writes to. In the ambient "
                                 "Verify. lane 400-odd entries share one path and each truncates it "
                                 "(Log.cpp opens it \"w\"), so a whole-file read here would race a "
-                                "neighbour under ctest -j 4. Set by the ctest entry, never by hand.";
+                                "neighbor under ctest -j 4. Set by the ctest entry, never by hand.";
             }
             if (AmbientQuirkFromEnvironment("MOBILEGL_PIPE_VERIFY") != AmbientQuirk::On) {
                 GTEST_SKIP() << "this case needs MOBILEGL_PIPE_VERIFY=1 for the whole process, which is "

@@ -29,7 +29,7 @@ namespace MobileGL::MG_Pipe {
     // funnels use today, and a third one costs a row here and an arm in the adapter - which is
     // the point, because that arm is where the choice gets argued.
     enum class MGPipeFatalFamily : unsigned {
-        // The Magma wire arms' refusal to honour a verb/shape the split path does not implement.
+        // The Magma wire arms' refusal to honor a verb/shape the split path does not implement.
         // Deliberately the SAME word the sites already print: `Magma:` in the detail is what
         // separates them from the GLES `UnmigratedVerb` deaths, and renaming the family would
         // invalidate every census number recorded against it since P5b.
@@ -109,7 +109,7 @@ namespace MobileGL::MG_Pipe {
 
     // ---- THE LATCH TWIN: A LOST GPU DEVICE ENDS ITS SESSION, NOT THE PROCESS ----------------
     //
-    // MGPipeSessionFail is for a verb the backend cannot honour, and it does not return. A device
+    // MGPipeSessionFail is for a verb the backend cannot honor, and it does not return. A device
     // loss is different in kind: nothing about the peer's bytes was wrong, the GPU faulted or hung
     // and the driver reset it, and every session the process serves except the one whose device
     // went is still healthy. The display server runs every session in ONE process, so dying here
@@ -126,7 +126,7 @@ namespace MobileGL::MG_Pipe {
     // Whether the calling thread's session HAS a latch to raise. A backend that notices its
     // device lost outside a site that would die anyway (a submit whose failure it used to only
     // log) latches at once when this is true - so the session stops at its next record however
-    // the current verb unwinds - and keeps its old behaviour when it is false.
+    // the current verb unwinds - and keeps its old behavior when it is false.
     using MGPipeSessionLatchArmedHook = bool (*)();
     void MGPipeInstallSessionLatchHook(MGPipeSessionLatchHook hook, MGPipeSessionLatchArmedHook armed);
     MGPipeSessionLatchHook MGPipeSessionLatchHookInstalled();

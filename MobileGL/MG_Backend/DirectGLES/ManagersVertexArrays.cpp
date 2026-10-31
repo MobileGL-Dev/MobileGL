@@ -597,7 +597,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // already returned. A buffers-only walk leaves the flags as they are (above).
                 if (!buffersOnly) HostSetEnabled(attribIndex, attrib.Enabled != 0);
 
-                // The fp64 narrowing, verbatim in behaviour including the Adreno workaround:
+                // The fp64 narrowing, verbatim in behavior including the Adreno workaround:
                 // when no float32 stream can be built the array is DISABLED rather than left
                 // enabled with no pointer, which is what the driver turns into a SIGSEGV inside
                 // the next draw (KHR-GL43.vertex_attrib_binding.basic-input-case4). IsLong is
@@ -981,7 +981,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // object - that absence is the design, not a gap in it (ARCHITECTURE.md 4.2). The
             // two ways to keep the site here would each break something D-N or D-J protects: a
             // handle -> object map is the very thing the split removes, and pulling the bytes
-            // eagerly on the client at every draw is new behaviour and new cost.
+            // eagerly on the client at every draw is new behavior and new cost.
             //
             // SO THE DEVIATION IS DECLARED, WITH ITS BLAST RADIUS. Under the default mask a
             // 64-bit vertex array whose SOURCE buffer was written by a shader and not yet pulled
@@ -1104,7 +1104,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // source type and `normalized` (GL accepts BGRA only normalized, and a packed type's
             // signedness is the type's own). The narrowed stream is float32, and `normalized` is
             // deliberately GL_FALSE there rather than attrib.Normalized: GL ignores it for
-            // floating-point array types, and honouring it would scale the fetched values.
+            // floating-point array types, and honoring it would scale the fetched values.
             const GLint convertedSize = bgra ? 4 : static_cast<GLint>(attrib.Size);
             const GLenum convertedType = bgra ? MG_Util::ConvertDataTypeToGLEnum(sourceType) : GL_FLOAT;
             const GLboolean convertedNormalized = (bgra && attrib.Normalized) ? GL_TRUE : GL_FALSE;

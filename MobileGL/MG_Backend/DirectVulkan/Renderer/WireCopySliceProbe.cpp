@@ -129,7 +129,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkPhysicalDeviceMemoryProperties memoryProperties{};
         vkGetPhysicalDeviceMemoryProperties(context.physicalDevice, &memoryProperties);
-        // The wire's images (VkTextureManager): MUTABLE_FORMAT (a storage-compatible colour class),
+        // The wire's images (VkTextureManager): MUTABLE_FORMAT (a storage-compatible color class),
         // SAMPLED | TRANSFER_SRC | TRANSFER_DST | COLOR_ATTACHMENT, a 3D one 2D_ARRAY_COMPATIBLE.
         const auto makeImage = [&](Bool volume, VkFormat format, VkImage& out) -> Bool {
             VkFormatProperties formatProperties{};

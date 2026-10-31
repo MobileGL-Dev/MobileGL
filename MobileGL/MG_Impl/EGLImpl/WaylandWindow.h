@@ -50,7 +50,7 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
     inline constexpr EGLenum kPlatformWayland = 0x31D8;
 
     // Whether a display is a Wayland one: asked for as EGL_PLATFORM_WAYLAND, or (eglGetDisplay with
-    // no platform) a native display that is a wl_display - recognised the way EGL loaders usually do, by its
+    // no platform) a native display that is a wl_display - recognized the way EGL loaders usually do, by its
     // first word being libwayland-client's wl_display_interface (or, for an application with its
     // own copy of libwayland, an interface named "wl_display").
     Bool IsWaylandDisplay(Uint64 nativeDisplay, EGLenum platform);

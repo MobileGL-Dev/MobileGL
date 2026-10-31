@@ -467,7 +467,7 @@ namespace MobileGL {
                 // by every stage, and picks it from each shader's own #version: the 460 /
                 // ECoreProfile that ParseShaderSource passes is only the default for a source
                 // without one. So these parses build two tables, 460 core and 330 core, which
-                // the legacy #version 110-150 shaders normalise to; a shader declaring any
+                // the legacy #version 110-150 shaders normalize to; a shader declaring any
                 // other version builds its own on first use.
                 static constexpr const char* kPrewarmVertexSource =
                     "#version 460\nvoid main() { gl_Position = vec4(0.0); }\n";

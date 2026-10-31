@@ -63,7 +63,7 @@
 // These cases therefore stay as what they honestly are: end-to-end regression
 // tests for resident index-buffer freshness across frame boundaries, and the
 // standing tripwire for change (1). The moment anyone memoises the streamed or
-// promoted index path - the natural next step for the same optimisation - these
+// promoted index path - the natural next step for the same optimization - these
 // stop being redundant and start failing. Each case says below what it covers.
 
 #include <cstdio>

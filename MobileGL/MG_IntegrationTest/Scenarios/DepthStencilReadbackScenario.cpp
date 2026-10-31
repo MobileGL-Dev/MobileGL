@@ -16,7 +16,7 @@
 //
 // That silence is what the framebuffer_blit family trips over. Every one of its cases begins by
 // clearing the default framebuffer's depth and stencil and reading them straight back as a
-// sanity check, into a local pre-initialised to 0.2 (depth) and 50 (stencil); an untouched
+// sanity check, into a local pre-initialized to 0.2 (depth) and 50 (stencil); an untouched
 // buffer therefore reports "expected DEPTH[0.25] but got DEPTH[0.2]" and "expected STENCIL[1] but
 // got STENCIL[50]" - the exact strings in the 15 Magma failures - long before any blit happens.
 // A test that only checked "no GL error" would pass against the broken path, so every case here
@@ -24,7 +24,7 @@
 //
 // The orientation case is the second half. This renderer stores the default framebuffer
 // display-side-up and converts GL rects on their way in, so the depth copy needs the same rect
-// mapping and row re-ordering the colour readback got in the M-1 fix; without them a
+// mapping and row re-ordering the color readback got in the M-1 fix; without them a
 // vertically-varying depth buffer reads back mirrored, which no full-extent uniform-value test
 // can see.
 //
@@ -61,7 +61,7 @@ namespace MGITest {
             // Both backends now answer these reads. DirectGLES has no native ES path for
             // either aspect (GL_NV_read_depth / GL_NV_read_stencil are optional and absent on
             // both the Adreno device and llvmpipe's ES), so it stages the attachment into a
-            // scratch depth texture and samples it into a colour target; the assertions below
+            // scratch depth texture and samples it into a color target; the assertions below
             // are the same either way, which is the point.
             bool BackendReadsDepthStencil() const { return true; }
 
@@ -80,7 +80,7 @@ namespace MGITest {
 
         // A depth buffer whose value depends on the row: bottom half `bottom`, top half `top`.
         // Built with a scissored clear rather than a draw so the test stays independent of
-        // depth-test and shader behaviour.
+        // depth-test and shader behavior.
         void ClearDepthInBands(int width, int height, float bottom, float top) {
             glEnable(GL_SCISSOR_TEST);
             glScissor(0, 0, width, height / 2);
@@ -180,7 +180,7 @@ namespace MGITest {
     }
 
     // A depth blit INTO the default framebuffer has to convert its rect out of GL's bottom-origin
-    // space, exactly as the colour blit does. The colour path had that conversion and the
+    // space, exactly as the color blit does. The color path had that conversion and the
     // depth path did not, so a scissored depth blit landed in the mirrored band - which is the
     // whole of KHR-GL*.framebuffer_blit.scissor_blit once the readback above works well enough to
     // see it (before that the test died on the poison values and never reached the blit).

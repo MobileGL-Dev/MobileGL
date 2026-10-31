@@ -20,7 +20,7 @@
 // came back with someone else's pixels - which is what made ~1,500 otherwise-correct cases fail
 // depending only on how much ran before them. The unit-level pin for the missing destructors is
 // MG_Test/SanityTest.cpp (DirectGLESBackendFramebuffer/Renderbuffer/Sampler); this file pins the
-// end-to-end behaviour they protect.
+// end-to-end behavior they protect.
 //
 // The mode sweep is the second half of the same story: 46 modes are set and reset per case, so a
 // mode that fails to restore is indistinguishable from the leak in a full-batch CTS run. The
@@ -76,7 +76,7 @@ namespace MGITest {
 
         // The CTS table verbatim (glcPackedPixelsTests.cpp VariedRectangleTest::iterate): 32
         // common cases plus the 14 core-only ones ES has no equivalent for and MobileGL therefore
-        // honours on the CPU. IMAGE_WIDTH_1/2 and IMAGE_HEIGHT_1/2 are the CTS's 10 and 15.
+        // honors on the CPU. IMAGE_WIDTH_1/2 and IMAGE_HEIGHT_1/2 are the CTS's 10 and 15.
         struct SweepCase {
             GLenum mode;
             GLint value;
@@ -332,7 +332,7 @@ namespace MGITest {
         static_assert(kStride == 24, "the alignment round-up must actually round");
         static_assert(kFirst == 48, "the skips and the buffer offset must all move the first pixel");
 
-        // Four distinct opaque colours, so a row or a pixel landing in the wrong place is a
+        // Four distinct opaque colors, so a row or a pixel landing in the wrong place is a
         // wrong VALUE and not just a wrong offset.
         const std::uint8_t texels[kW * kH * kBpp] = {
             0x11, 0x22, 0x33, 0xFF, 0x44, 0x55, 0x66, 0xFF, 0x77, 0x88, 0x99, 0xFF, 0xAA, 0xBB, 0xCC, 0xFF,

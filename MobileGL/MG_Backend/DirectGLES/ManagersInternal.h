@@ -237,7 +237,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
 // The four hostBytes sites read the same in both builds. The non-split expansion is the
 // ORIGINAL EXPRESSION, character for character - `raw - offset` - so a push or verify build
-// compiles exactly what it compiled before R-11 and the split arm is the only new behaviour.
+// compiles exactly what it compiled before R-11 and the split arm is the only new behavior.
 #define MGL_SERVER_STAGED_ADOPT(res, width, bytes, offset, size)                                                       \
     ServerStaged().Adopt(&(res), (width), (bytes), (offset), (size))
 #define MGL_SERVER_STAGED_REQUIRE_PENDING(res, base, frontendSize, site)                                               \
@@ -476,7 +476,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace {
         // One shape for all five, so a kind cannot grow a different liveness rule than its
-        // neighbours: index the applier's own dense table, refuse a slot it has not grown to,
+        // neighbors: index the applier's own dense table, refuse a slot it has not grown to,
         // refuse a record that is not Live, and refuse a generation that has moved on under
         // the caller. The last of the three is the one that matters: a stale handle resolving
         // to its successor's record is how a twin ends up describing another object's storage.

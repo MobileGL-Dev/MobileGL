@@ -48,7 +48,7 @@ void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
 )";
 
         // gl_NumSamples scaled so each count lands on its own well-separated 8-bit value: 1 -> 16,
-        // 2 -> 32, 4 -> 64. Every sample of the fragment gets the same colour, so the resolve blit
+        // 2 -> 32, 4 -> 64. Every sample of the fragment gets the same color, so the resolve blit
         // averages identical values and the readback is exact rather than approximate.
         constexpr const char* kFS = R"(#version 400 core
 out vec4 o_color;

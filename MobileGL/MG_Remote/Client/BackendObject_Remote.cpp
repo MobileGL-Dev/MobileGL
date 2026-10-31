@@ -79,9 +79,9 @@ namespace MobileGL::MG_Remote::Client {
     // ---- the eight pure virtuals ----------------------------------------------------------
 
     void BackendObject_Remote::Initialize() {
-        // NOT FORWARDED. The server's own BackendObject_DirectGLES is created and initialised
+        // NOT FORWARDED. The server's own BackendObject_DirectGLES is created and initialized
         // by v1's ServerLoop, on the apply thread, before this object exists; forwarding here
-        // would be a second Initialize() on an already-initialised backend. What this call
+        // would be a second Initialize() on an already-initialized backend. What this call
         // does is drain whatever the handshake left and take the caps that came with it.
         if (ClientSession* session = ClientSession::Active()) {
             session->PumpControlPlane();
@@ -184,7 +184,7 @@ namespace MobileGL::MG_Remote::Client {
     // ---- the nine EGL lifecycle virtuals ---------------------------------------------------
     //
     // FORWARD FIRST, THEN RUN THE BASE. The server has to own the context before the client's
-    // base class latches "the surface is initialised" and calls InitCapabilities, because
+    // base class latches "the surface is initialized" and calls InitCapabilities, because
     // InitCapabilities' answer comes from a snapshot the server can only publish once its own
     // InitCapabilities has run.
 
@@ -388,7 +388,7 @@ namespace MobileGL::MG_Remote::Client {
 
     Bool BackendObject_Remote::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
         // FORWARD FIRST, THEN RUN THE BASE. The server has to own the context before the base
-        // class latches "the surface is initialised" and calls InitCapabilities, because
+        // class latches "the surface is initialized" and calls InitCapabilities, because
         // InitCapabilities' answer comes from a snapshot the server can only publish once its
         // own InitCapabilities has run - and ServerMakeEGLCurrent is what publishes it.
         WaitForApplyBeforeEglForwarder("MakeEGLCurrent");
@@ -415,7 +415,7 @@ namespace MobileGL::MG_Remote::Client {
         // republishes the caps snapshot on every call (ServerLoop.cpp:613-628), but the base
         // class only runs InitCapabilities - the one place that pumps and refreshes - on the
         // FIRST make-current per surface (EGLSurfaceRegistry::MakeCurrent). A repeated make-current
-        // onto an already-initialised surface therefore left the client mirror one generation
+        // onto an already-initialized surface therefore left the client mirror one generation
         // behind while unpumped snapshots accumulated, so a cap getter or a shader compile before
         // the next Present read the prior mirror. Adopting here closes that: "a second snapshot
         // arrival IS the invalidation" (R-12) now holds AT the make-current that caused it. It is

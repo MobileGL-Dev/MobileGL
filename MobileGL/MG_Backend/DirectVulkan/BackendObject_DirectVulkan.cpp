@@ -878,7 +878,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             E_GL_ARB_texture_rg,
             // GL_DEPTH_COMPONENT32F and GL_DEPTH32F_STENCIL8.
             E_GL_ARB_depth_buffer_float,
-            // The floating-point colour formats. Unlike the rest of this block this string DOES
+            // The floating-point color formats. Unlike the rest of this block this string DOES
             // gate CTS cases - KHR-GL4*.internalformat.texture2d.*{16f,32f} is keyed on it with no
             // core-version fallback, so eight cases per version list were NotSupported on formats
             // the backend has always had.
@@ -895,7 +895,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             //  - multiple capture buffers per stream, gl_SkipComponents / gl_NextBuffer, the
             //    indexed queries and glDrawTransformFeedbackStream (4.0);
             E_GL_ARB_transform_feedback3,
-            //  - GL_RGB10_A2UI (3.3), GL_RGB9_E5 (3.0) and the integer colour formats (3.0);
+            //  - GL_RGB10_A2UI (3.3), GL_RGB9_E5 (3.0) and the integer color formats (3.0);
             E_GL_ARB_texture_rgb10_a2ui, E_GL_EXT_texture_shared_exponent, E_GL_EXT_texture_integer,
             //  - the eleven pipeline-statistics query targets (4.6). Accepted by glBeginQuery and
             //    answered with GL_QUERY_COUNTER_BITS = 0, the spec's own "this counter is not
@@ -941,7 +941,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // recorded trace can never cover: Iris and Sodium change their SUBMISSION SCHEDULE
         // the moment they see it - they enqueue whole pipeline batches and poll
         // GL_COMPLETION_STATUS_KHR instead of compiling one program at a time - so
-        // MOBILEGL_ASYNC_SHADER_COMPILE=0 has to withdraw the application-visible behaviour
+        // MOBILEGL_ASYNC_SHADER_COMPILE=0 has to withdraw the application-visible behavior
         // change as well as the threading, or the kill switch would only be half a switch.
         if (MG_Util::Async::AsyncShaderCompileEnabled()) {
             extensions.push_back(E_GL_KHR_parallel_shader_compile);

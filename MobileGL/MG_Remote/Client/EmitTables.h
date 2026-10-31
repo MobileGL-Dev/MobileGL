@@ -20,7 +20,7 @@
 
 #include <MG_Backend/BackendFunctions.h>
 // P5b: the clear discriminants below alias MGPipeTypes.h's (CONTRACT-P5B.md f1). The header
-// was already in this file's closure through BackendObject.h's neighbours; naming it makes
+// was already in this file's closure through BackendObject.h's neighbors; naming it makes
 // the dependency the aliases have explicit.
 #include <MG_Pipe/MGPipeTypes.h>
 #include <MG_Pipe/MGPipeValueTypes.h>
@@ -77,7 +77,7 @@ namespace MobileGL::MG_Remote::Client {
     // The other two thirds of the census, so a case can assert the WHOLE partition rather than
     // only the half that emits. CONTRACT-P5.md §7's three classes are 2 + 5 + 64, and
     // EmitTables.cpp static_asserts that they sum to kRemoteEmitSlotCount: a slot that quietly
-    // changes class shows up as a build break in the sum, not as a silent behaviour change.
+    // changes class shows up as a build break in the sum, not as a silent behavior change.
     Uint32 LocallyAnsweredSlotCount(); // class A - answered from the caps mirror, R-15
     Uint32 UnmigratedSlotCount();      // class C - Fatal{UnmigratedVerb}
 

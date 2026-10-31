@@ -36,7 +36,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
         "EGL_MESA_platform_surfaceless" MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS;
     // The display list again, with the dma-buf import a backend with shared images has (a split
     // client: the server allocates the images and names the descriptors that come back). A
-    // monolith has no allocator to recognise a dma-buf with, so it never advertises these. The
+    // monolith has no allocator to recognize a dma-buf with, so it never advertises these. The
     // same server answers the buffer age of its surfaces and takes swap damage to its presents.
     inline constexpr const char* kDisplayExtensionStringWithSharedImages =
         "EGL_KHR_create_context EGL_KHR_surfaceless_context EGL_KHR_no_config_context EGL_EXT_platform_base "

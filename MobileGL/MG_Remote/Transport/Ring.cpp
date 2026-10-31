@@ -129,7 +129,7 @@ namespace MobileGL::MG_Remote::Transport {
         const std::uint64_t total = Align8(sizeof(RingRecordHeader) + payloadBytes);
         if (total > MaxRecordBytes()) {
             // A single record larger than HALF the ring is a caller bug: the
-            // record catalogue has to chunk oversized payloads (large subdata
+            // record catalog has to chunk oversized payloads (large subdata
             // becomes several records) rather than emit one giant record.
             //
             // Half, not the whole ring, because a record has to be placeable at
@@ -260,7 +260,7 @@ namespace MobileGL::MG_Remote::Transport {
             // skipped HERE, silently, with the record lost and nothing logged on
             // either side. A genuine filler is always kind kRingPadRecordKind -
             // Reserve writes it two dozen lines above - and a call record always
-            // carries a real opcode, because the catalogue starts at 1. Requiring
+            // carries a real opcode, because the catalog starts at 1. Requiring
             // the pair costs one comparison and turns that collision from a lost
             // record into a record the decoder gets and can reject by name.
             if ((header.flags & kRecPad) != 0 && header.kind == kRingPadRecordKind) {
@@ -271,7 +271,7 @@ namespace MobileGL::MG_Remote::Transport {
             out.kind = header.kind;
             out.flags = header.flags;
             out.payload = m_base + offset + sizeof(RingRecordHeader);
-            // Includes the alignment tail; the record catalogue knows the real
+            // Includes the alignment tail; the record catalog knows the real
             // payload length.
             out.payloadSize = size - sizeof(RingRecordHeader);
             out.cursor = m_localTail;

@@ -9,7 +9,7 @@
 // Shared images: the server's registry, a
 // session's references, and the aux-socket inbox that carries an import's descriptor beside T0's
 // Offers. On a host the image memory is a memfd, which is enough for everything here: what is
-// under test is that a descriptor which travelled through SCM_RIGHTS still names its image.
+// under test is that a descriptor which traveled through SCM_RIGHTS still names its image.
 
 #include <MG_Pipe/MGPipeTypes.h>
 #include <MG_Remote/Server/AdoptInbox.h>
@@ -167,7 +167,7 @@ TEST(SharedImage, TheInboxKeepsSharedImageAndT0DescriptorsApart) {
     EXPECT_EQ(inbox.TakeSharedImageFd(7, 20, &fd, why), Server::AdoptInbox::Outcome::TimedOut);
 }
 
-// ---- synchronisation. A pipe stands in for a sync_file: its read end polls readable (signaled)
+// ---- synchronization. A pipe stands in for a sync_file: its read end polls readable (signaled)
 // once something is written to it, which is all the registry asks of a fence.
 namespace {
     struct FakeFence {
@@ -502,8 +502,8 @@ TEST(SharedImageYuv, ThePlaneCopyFillsEveryDestinationLayout) {
             EXPECT_EQ(chroma16[r * 16 + c], c16[r][c]);
 }
 
-// The conversion an import's hints select: BT.709 narrow-range codes of saturated colours decode
-// to those colours, and the defaults are BT.601 narrow.
+// The conversion an import's hints select: BT.709 narrow-range codes of saturated colors decode
+// to those colors, and the defaults are BT.601 narrow.
 TEST(SharedImageYuv, TheConversionDecodesTheHintedColourSpace) {
     const auto decode = [](const SI::Yuv::Conversion& c, double y, double cb, double cr, double max) {
         const double in[3] = {y / max - c.Offset[0], cb / max - c.Offset[1], cr / max - c.Offset[2]};
@@ -523,7 +523,7 @@ TEST(SharedImageYuv, TheConversionDecodesTheHintedColourSpace) {
     for (int i = 0; i < 4; ++i) {
         const auto rgb = decode(c709, codes[i][0], codes[i][1], codes[i][2], 255.0);
         for (int k = 0; k < 3; ++k)
-            EXPECT_NEAR(rgb[k], want[i][k], 0.02) << "colour " << i << " channel " << k;
+            EXPECT_NEAR(rgb[k], want[i][k], 0.02) << "color " << i << " channel " << k;
     }
     // Full range: Y passes through.
     SI::Yuv::Hints full;

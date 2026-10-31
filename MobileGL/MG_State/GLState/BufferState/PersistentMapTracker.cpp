@@ -154,12 +154,12 @@ namespace MobileGL::MG_Record {
         // has no top-byte tag, which is why every host lane stayed green while all three
         // heavy-persistent-map traces died on the phone (device window #1, E0a/E1/E4a/E4b).
         //
-        // So the table stores NORMALISED addresses and the handler normalises si_addr before
+        // So the table stores NORMALIZED addresses and the handler normalizes si_addr before
         // it compares: one space, fixed at the two doors into this file. Protecting through a
-        // normalised base is exactly what protecting through the tagged one did - mprotect
+        // normalized base is exactly what protecting through the tagged one did - mprotect
         // untags its own address argument (do_mprotect_pkey's untagged_addr) - and every
         // other use of base/end here is either an mprotect or a difference against a shadow
-        // base normalised the same way, so nothing else has to change. Pointer DEREFERENCES
+        // base normalized the same way, so nothing else has to change. Pointer DEREFERENCES
         // keep the tagged pointer they came from (PushBlocksFor's two edge hashes), because
         // under a future MTE tagging level the tag is load-bearing for the access itself.
         // THE MASK IS NOT GUARDED BY THE ARCHITECTURE, deliberately, and that is what makes
@@ -400,7 +400,7 @@ namespace MobileGL::MG_Record {
                 // A SEGV_ACCERR this handler does not own. Legitimate (the JVM's implicit
                 // null checks land here every time), so it is recorded and chained, never
                 // refused - but recorded, because the ONE case where it is not legitimate
-                // is a page this module protected and then failed to recognise, and that
+                // is a page this module protected and then failed to recognize, and that
                 // case is otherwise a tombstone with no mention of the tracker at all.
                 g_declinedFaults.fetch_add(1, std::memory_order_relaxed);
                 g_declinedFaultAddress.store(address, std::memory_order_relaxed);
@@ -415,7 +415,7 @@ namespace MobileGL::MG_Record {
         // above all "a protected page holds only this shadow's bytes" - is made at
         // kPageBytes granularity, and mprotect protects at the KERNEL's. On a 16 KB-page
         // kernel (Android 15 admits them) a kPageBytes mprotect would silently cover
-        // three neighbouring 4 KB quarters that may be foreign memory, which is exactly
+        // three neighboring 4 KB quarters that may be foreign memory, which is exactly
         // the process-killer the page-granular shadow exists to keep out. So on such a
         // kernel the arm is not installed at all and every persistent write map takes
         // the hash arm: slower, never unsafe. Said once, not per map - and decided BEFORE
@@ -509,11 +509,11 @@ namespace MobileGL::MG_Record {
             //   arm, where as an "untracked" member it would veto the epoch skip for every
             //   tracked buffer in the process (measured on device); end is clamped up to
             //   base so the [base, end) arithmetic never underflows.
-            // NORMALISED AT THE DOOR (UntagAddress): everything this function publishes is
+            // NORMALIZED AT THE DOOR (UntagAddress): everything this function publishes is
             // compared against si_addr one day, and si_addr is the kernel's untagged
             // address. Nothing below may reconstruct a pointer from these - the only
             // consumers are mprotect, which untags its own argument, and differences
-            // against a shadow base PushBlocksFor normalises the same way.
+            // against a shadow base PushBlocksFor normalizes the same way.
             const uintptr_t shadowBase = UntagAddress(reinterpret_cast<uintptr_t>(shadow));
             const uintptr_t rawBegin = shadowBase + rangeBegin;
             const uintptr_t rawEnd = shadowBase + rangeEnd;
@@ -532,7 +532,7 @@ namespace MobileGL::MG_Record {
                 if (end > shadowBase + shadowExtent) end = shadowBase + shadowExtent;
                 // WIDENING NEVER DEMOTES A MAP THE INWARD ARM COULD HOLD. Outward covers up
                 // to one page more than inward does for the same range (both ends rounded
-                // away instead of towards), so a map sitting on the bitmap's capacity that
+                // away instead of toward), so a map sitting on the bitmap's capacity that
                 // was tracked inward before this round would otherwise fall off the tracker
                 // altogether - onto the hash arm, where as an untracked member it vetoes the
                 // epoch skip for every buffer in the process. It keeps the inward arm and
@@ -626,7 +626,7 @@ namespace MobileGL::MG_Record {
                 // once" would then be true only of the read-only verbs' whole push.
                 g_faultEpoch.fetch_add(1, std::memory_order_release);
                 // NAME THE FIRST MAPPING, ONCE PER PROCESS. This module's whole failure mode
-                // is silent - a range it protected, a fault it did not recognise, a tombstone
+                // is silent - a range it protected, a fault it did not recognize, a tombstone
                 // that names the application's memcpy - and the device run that found it had
                 // no line anywhere saying a mapping had even been registered, let alone at
                 // what address, in whose allocation, or with which top byte. One line at the
@@ -927,7 +927,7 @@ namespace MobileGL::MG_Record {
         if (tracked != nullptr) {
             const uintptr_t trackedBase = tracked->base.load(std::memory_order_acquire);
             const uintptr_t trackedEnd = tracked->end.load(std::memory_order_acquire);
-            // THE SAME NORMALISATION TrackWriteMap PUBLISHED WITH (UntagAddress), because
+            // THE SAME NORMALIZATION TrackWriteMap PUBLISHED WITH (UntagAddress), because
             // every use of shadowBase below is a DIFFERENCE against trackedBase and the two
             // must live in one address space. The bytes are read through `shadowBytes`, the
             // tagged pointer as the allocator handed it out, and never by rebuilding a

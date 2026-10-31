@@ -814,7 +814,7 @@ void main()
     EXPECT_FALSE(Contains(out, "g_image[")) << out;
 }
 
-// ...and the suffix is not a licence to accept anything else that ends in one: `iu` is not a
+// ...and the suffix is not a license to accept anything else that ends in one: `iu` is not a
 // literal, and neither is a bare `u`.
 TEST(RemapImageArrayElementUnitsTest, ASuffixAloneDoesNotMakeAnExpressionALiteral) {
     const String source = R"(#version 320 es
@@ -919,7 +919,7 @@ void main()
 // image ARRAY, and the regression it caused was in the SCALAR images sitting next to one. A
 // scalar with an explicit binding has to come out of the whole chain still on ITS OWN unit,
 // still spelled once, and named the same thing every stage would name it - it is the array that
-// needs repairing, not its neighbour.
+// needs repairing, not its neighbor.
 TEST(RemapImageArrayElementUnitsTest, AScalarImageWithItsOwnBindingIsUntouchedByTheArrayRepair) {
     const String source = R"(#version 320 es
 layout(rgba8, binding = 7) uniform highp image2D goku;
@@ -1226,7 +1226,7 @@ void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
 }
 
 // Never speculatively: `#extension` naming an extension the driver does not advertise is itself a
-// compile error, so the caller's "not needed" answer has to be honoured exactly.
+// compile error, so the caller's "not needed" answer has to be honored exactly.
 TEST(RequestExtendedImageFormatsTest, NotNeededMeansNotEmitted) {
     const String source = R"(#version 320 es
 layout(rgba8ui, binding = 1) uniform writeonly highp uimage2D uni_image;
@@ -1262,7 +1262,7 @@ void main() { gl_ViewportIndex = gl_InvocationID; EmitVertex(); }
 }
 
 // Never speculatively: ARM's compiler hard-errors on an `#extension` naming a string the driver
-// does not advertise, so the caller's "not needed" answer has to be honoured exactly. A driver
+// does not advertise, so the caller's "not needed" answer has to be honored exactly. A driver
 // without the extension gets the LowerViewportIndexPass fallback instead.
 TEST(RequestViewportArrayExtensionTest, NotNeededMeansNotEmitted) {
     const String source = R"(#version 320 es
@@ -1377,7 +1377,7 @@ void main() { gl_ViewportIndex = 1; gl_PointSize = 2.0; EmitVertex(); }
 // Desktop GL makes the tessellation control stage optional and takes the levels from
 // PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL; ES 3.2 has neither, and rejects a
 // program that has an evaluation stage without a control stage - with an EMPTY info log. The
-// synthesized stage is what stands in, and it has to MIRROR its two neighbours' gl_PerVertex
+// synthesized stage is what stands in, and it has to MIRROR its two neighbors' gl_PerVertex
 // rather than pick a shape, because a redeclaration that disagrees with the stage it feeds is an
 // ES link error against a program that has nothing else wrong with it.
 
@@ -1386,7 +1386,7 @@ namespace {
     const FloatVec2 kDefaultInner(1.0f, 1.0f);
 } // namespace
 
-// The synthesized stage mirrors its neighbours' gl_PerVertex, so it can be the thing that
+// The synthesized stage mirrors its neighbors' gl_PerVertex, so it can be the thing that
 // declares gl_PointSize - and in ESSL a redeclaration is exactly as illegal as a reference
 // without the extension. The directive has to survive being applied to its output.
 TEST(RequestPointSizeExtensionTest, CoversAMirroredPassthroughControlStage) {
@@ -1411,7 +1411,7 @@ TEST(PassthroughTessControlEsslTest, DeclaresThePatchSizeAndWritesEveryTessLevel
                               "gl_TessLevelOuter[3]", "gl_TessLevelInner[0]", "gl_TessLevelInner[1]"}) {
         EXPECT_TRUE(Contains(out, String(level) + " = 1.0;")) << level << "\n" << out;
     }
-    // Nothing redeclared when the neighbours redeclared nothing - the driver's own built-in
+    // Nothing redeclared when the neighbors redeclared nothing - the driver's own built-in
     // gl_in/gl_out is then what both sides agree on, and redeclaring is what would break it.
     EXPECT_FALSE(Contains(out, "gl_PerVertex")) << out;
 }

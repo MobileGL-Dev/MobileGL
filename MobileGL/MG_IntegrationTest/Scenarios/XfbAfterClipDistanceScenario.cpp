@@ -36,7 +36,7 @@
 //   * the workload is glcClipDistance.cpp FunctionalTest's inner loop (a program
 //     per (redeclaration, clip count), glEnable(GL_CLIP_DISTANCEi), an FBO per
 //     primitive type, a draw and a readback), including its early-return
-//     behaviour: on failure the test returns WITHOUT running its "clip clean"
+//     behavior: on failure the test returns WITHOUT running its "clip clean"
 //     loop, so GL_CLIP_DISTANCE0..N-1 stay enabled for the rest of the process.
 //     That leftover enable state is NOT the carrier (one of the cases below pins
 //     that); the object churn is.
@@ -681,7 +681,7 @@ void main (void)
         // is a hole rather than a courtesy: the defect it pins is DirectVulkan's
         // alone, and DirectVulkan now comes up headless on any machine at all - a
         // surfaceless EGL platform over a software ICD (lavapipe) is enough. So
-        // "DirectVulkan did not initialise" here means the run is MISCONFIGURED,
+        // "DirectVulkan did not initialize" here means the run is MISCONFIGURED,
         // not that the machine has no GPU, and it must not report green.
         //
         // Local on purpose: the harness-wide skip semantics are deliberate
@@ -723,7 +723,7 @@ void main (void)
         // partial one asked the staged-coverage assertion for a range wider than anything staged
         // and died on Fatal{StageSnapshotTooNarrow, "xfb_scatter_pre_capture"}.
         //
-        // The monolith arm has always been right here: `staged` is a value-initialised
+        // The monolith arm has always been right here: `staged` is a value-initialized
         // Vector<Uint8>, so an unreadable source means the scatter runs over zeroes and uploads
         // them - which is byte for byte what it gets from a fresh MappedData(). Skipping the COPY
         // is the whole of the difference between the two arms; skipping the TARGET was the bug.

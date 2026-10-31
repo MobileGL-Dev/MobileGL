@@ -29,7 +29,7 @@ namespace MobileGL::MG_Util::Async {
 
     // MOBILEGL_ASYNC_SHADER_COMPILE forces the answer either way; unset keeps the built-in
     // default above. Falsy is a complete kill switch: it reverts the threading *and*
-    // withdraws GL_KHR_parallel_shader_compile, so the application behaviour change goes
+    // withdraws GL_KHR_parallel_shader_compile, so the application behavior change goes
     // with it.
     //
     // This is the pure CONFIGURATION answer, and it is deliberately not affected by
@@ -120,7 +120,7 @@ namespace MobileGL::MG_Util::Async {
         Uint GetMaxConcurrency() const;
 
         // Bounded concurrency doubles as the memory bound, and is how
-        // glMaxShaderCompilerThreadsKHR(n) is honoured: a 300-program pack load cannot put
+        // glMaxShaderCompilerThreadsKHR(n) is honored: a 300-program pack load cannot put
         // 300 glslang arenas in flight at once. Clamped to [1, thread count].
         void SetMaxConcurrency(Uint n);
 

@@ -320,7 +320,7 @@ namespace MobileGL {
                 // it the pass has to work with the one instruction that exists.
                 //
                 // That instruction is not always in a usable place. GetDefiningInstruction only
-                // honours `position` when it MINTS the constant; when the module already has one
+                // honors `position` when it MINTS the constant; when the module already has one
                 // it hands back the existing instruction wherever it happens to sit, and glslang
                 // emits constants in first-use order, so a shader whose first use of the value is
                 // below the counter block declares it below the block. The flattened array would

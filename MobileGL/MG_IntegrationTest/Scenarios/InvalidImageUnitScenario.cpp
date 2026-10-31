@@ -8,7 +8,7 @@
 //
 // Scenario - AN IMAGE UNIT NAMES A TEXTURE, BUT NOT A TEXEL THE TEXTURE HAS.
 //
-// UnboundImageDescriptorScenario's neighbour, one step further in: there the unit holds nothing,
+// UnboundImageDescriptorScenario's neighbor, one step further in: there the unit holds nothing,
 // here it holds a real texture at a (level, layer) that texture does not have. GL 4.6 core 8.26
 // makes every such access INVALID, and an invalid access is not an error at draw time: a load
 // returns zero in R, G and B, a store has no effect. It is the same observable an empty unit has.

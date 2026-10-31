@@ -18,8 +18,8 @@
 //   * TwoSessionsInOneProcessAreServedAtOnce - both clients are live AT THE SAME TIME and every
 //     Welcome names the SAME server process (red once by restoring the one-at-a-time supervisor:
 //     the second Hello is Refuse{Busy} and `started` is 0). With headless EGL, each session clears
-//     its own colour and reads it back - the clear's colour travels in that session's records, so a
-//     read-back that came from the other session's state would be the other colour.
+//     its own color and reads it back - the clear's color travels in that session's records, so a
+//     read-back that came from the other session's state would be the other color.
 //   * SameNamesInTwoSessionsDoNotCollide - the two sessions mint the SAME names: the same client
 //     context token (the session's {token -> ContextRuntime} table) and the same allocatable render
 //     state handle and generation (the session's applier table). Both must be accepted, because a
@@ -59,7 +59,7 @@ namespace {
     // ---- a peer this test drives STEP BY STEP, so a case can interleave two sessions: everything
     // the peer does is decided by the parent over a pipe, and every step answers with a report.
 
-    // The two clear colours, packed the way the read-back hands them back (A<<24|B<<16|G<<8|R,
+    // The two clear colors, packed the way the read-back hands them back (A<<24|B<<16|G<<8|R,
     // the little-endian bytes of a GL_RGBA/GL_UNSIGNED_BYTE texel).
     constexpr Uint32 kGreen = 0xFF00FF00u;
     constexpr Uint32 kRed = 0xFF0000FFu;
@@ -67,7 +67,7 @@ namespace {
     enum PeerOp : Uint32 {
         kOpApplyRecord = 1,    // one record through the applier (no GL)
         kOpCreateContext = 2,  // ServerCreateEGLContext(arg) - the session's context token table
-        kOpHealthySession = 3, // the rig's whole healthy session, `arg` = the clear colour
+        kOpHealthySession = 3, // the rig's whole healthy session, `arg` = the clear color
         kOpStop = 4,           // ClientSession::Stop, then the child leaves
         // P14 S5: mint context `arg` in share group `aux` (a real frontend share-group token, so
         // two contexts that pass different ones are a NON-shared pair and two that pass the same
@@ -286,8 +286,8 @@ TEST_F(MultiSessionFixture, TwoShmSessionsInOneProcessAreServedAtOnce) {
         << server.Log();
     EXPECT_EQ(Count(server.Log(), "SessionLatch{"), 0u) << "a session latched a fault: " << server.Log();
 
-    // THE RENDER HALF, one session at a time, BOTH STILL LIVE: each session's clear colour travels
-    // in its own records and its read-back must be that colour. (The two sessions' native state is
+    // THE RENDER HALF, one session at a time, BOTH STILL LIVE: each session's clear color travels
+    // in its own records and its read-back must be that color. (The two sessions' native state is
     // P14b's; see this file's header for why the halves are sequential.)
     const StepReport aGl = a.Step(kOpHealthySession, kGreen);
     const StepReport bGl = b.Step(kOpHealthySession, kRed);
@@ -298,11 +298,11 @@ TEST_F(MultiSessionFixture, TwoShmSessionsInOneProcessAreServedAtOnce) {
     EXPECT_EQ(aGl.session.applied, 1) << aGl.session.note;
     EXPECT_EQ(aGl.session.status, Remote::Wire::ReplySink::kStatusOk) << aGl.session.note;
     EXPECT_EQ(aGl.session.pixel, kGreen) << "session A read back " << std::hex << aGl.session.pixel
-                                         << ", not its own clear colour";
+                                         << ", not its own clear color";
     EXPECT_EQ(bGl.session.applied, 1) << bGl.session.note;
     EXPECT_EQ(bGl.session.status, Remote::Wire::ReplySink::kStatusOk) << bGl.session.note;
     EXPECT_EQ(bGl.session.pixel, kRed) << "session B read back " << std::hex << bGl.session.pixel
-                                       << ", not its own clear colour";
+                                       << ", not its own clear color";
 
     b.Close();
     a.Close();
@@ -404,8 +404,8 @@ TEST_F(MultiSessionFixture, ClosingOneSessionLeavesTheOtherServing) {
 // client emits on a real eglMakeCurrent) and then runs a whole clear-and-read-back through that
 // context. The two peers alternate, so every round crosses a context switch AND a session.
 //
-// THE COLOUR IS THE WITNESS. Green and red are read back only through the applier the record was
-// attributed to, so a session that read the other's working state would read the other's colour;
+// THE COLOR IS THE WITNESS. Green and red are read back only through the applier the record was
+// attributed to, so a session that read the other's working state would read the other's color;
 // a context that inherited its sibling's cleared inputs would fail the read-back's own
 // completeness check. Red once by making MGPipeApplier() ignore the resolver: the two contexts of
 // one session share one applier and one of the two clears lands on top of the other.
@@ -472,7 +472,7 @@ TEST_F(MultiSessionFixture, TwoSessionsInterleaveTwoContextsEachWithoutCrossTalk
 // one session's apply thread and died (Magma's wire funnels did: a failed submit took
 // Fatal{UnmigratedVerb, "Magma:wire-verb-flush"} and SIGABRT) took the compositor and every other
 // client down with it. A backend now hands a loss to MGPipeSessionLatch: that session latches
-// Fatal{BackendDeviceLost}, declines what it was doing and closes (exit 75), and its neighbours
+// Fatal{BackendDeviceLost}, declines what it was doing and closes (exit 75), and its neighbors
 // keep applying. The loss is the debug knob's (MGPipeDebugDeviceLossDue) - the same device check
 // the backends make at their readbacks and frame boundaries - because no GPU here faults on
 // demand: the 2nd check in the process (session A's read-back, after B's) reports "lost".

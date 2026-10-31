@@ -169,7 +169,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     String PromoteNarrowIntegerWidthGlobals(String source) {
         for (const char* name : {kNarrowIntegerWidths8GlobalName, kNarrowIntegerWidths16GlobalName}) {
-            // The zero-initialised Private global is printed with or without a precision qualifier;
+            // The zero-initialized Private global is printed with or without a precision qualifier;
             // only a declaration starting its own line is the global itself.
             for (const char* prefix : {"highp uint ", "mediump uint ", "lowp uint ", "uint "}) {
                 Bool promoted = false;

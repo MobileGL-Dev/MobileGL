@@ -9,7 +9,7 @@
 // The two-level shader translation memo (MG_Util/ShaderTranspiler/TranslationCache.h).
 //
 // A wrong hit here is a silently miscompiled shader, so the cases below are weighted
-// heavily towards the KEY rather than towards the plumbing: for each level there is one
+// heavily toward the KEY rather than toward the plumbing: for each level there is one
 // case per input that can change the output, asserting that moving that input alone moves
 // the key. That is the test that catches an under-specified key, which is the only way
 // this feature can produce a wrong answer.
@@ -481,7 +481,7 @@ TEST_F(TranslationCacheTest, L1KeyMovesWithEveryInputThatMovesTheSpirv) {
     // map is an OUTPUT of mapIO (TMglGlslIoResolver writes it and never reads it), so it is a
     // pure function of the stage sources this key already carries in full. It was dropped from
     // SpirvTranslationKeyInputs with the glslang-capture migration; kKeyLayoutVersion moved to
-    // 4 so no blob written under the old shape can be honoured.
+    // 4 so no blob written under the old shape can be honored.
     { // ShaderCompileBits (0 on both production parse paths; keyed so a future value
         // cannot alias a module parsed without it)
         SpirvTranslationKeyInputs v = base;
@@ -1328,7 +1328,7 @@ namespace {
     }
 
     // A source no other case in this file uses, so the process-global L1c cache cannot be
-    // pre-warmed by a neighbour and turn a "must miss" assertion green by accident.
+    // pre-warmed by a neighbor and turn a "must miss" assertion green by accident.
     String UniqueFragment(const String& tag) {
         return "#version 460\n"
                "in vec3 vPos;\n"
@@ -1403,11 +1403,11 @@ TEST_F(TranslationCacheTest, TheParseVerdictKeyIgnoresBackendOnlyDifferences) {
     EXPECT_TRUE(BuildShaderParseVerdictKey(onA) == BuildShaderParseVerdictKey(onB));
 }
 
-// The headline behaviour: a second shader object handed the same source does not parse.
+// The headline behavior: a second shader object handed the same source does not parse.
 //
 // Synchronous, deliberately. Under async, ShaderCompileAdoptionMap would hand the second
 // object the FIRST one whole compile node and no second compile would run at all - a
-// different (and older) optimisation, which would make this case pass without L1c existing.
+// different (and older) optimization, which would make this case pass without L1c existing.
 TEST_F(TranslationCacheTest, ASecondCompileOfTheSameSourceSkipsTheParse) {
     const SyncCompileScope sync;
     const CacheModeScope cacheOn(true);
@@ -1524,7 +1524,7 @@ TEST_F(TranslationCacheTest, TheEscapeHatchDisablesL1c) {
     EXPECT_EQ(after.hits - before.hits, 0u);
     EXPECT_EQ(after.misses - before.misses, 0u) << "the cache was consulted with the escape hatch set";
     EXPECT_EQ(after.inserts - before.inserts, 0u);
-    // With the level off, BOTH compiles parse - which is the pre-L1c behaviour exactly.
+    // With the level off, BOTH compiles parse - which is the pre-L1c behavior exactly.
     EXPECT_TRUE(ShaderHasParse(first));
     EXPECT_TRUE(ShaderHasParse(second));
 }

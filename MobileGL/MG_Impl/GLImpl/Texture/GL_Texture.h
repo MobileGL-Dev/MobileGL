@@ -19,7 +19,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     //
     // It answers a NARROWER contract than glGetTexImage's, and refuses what it cannot do rather than
     // answering wrongly. The copy is verbatim: it performs no format or type conversion, and it packs
-    // rows tightly, honouring only GL_PACK_SWAP_BYTES and the bitmap GL_PACK_LSB_FIRST path. A
+    // rows tightly, honoring only GL_PACK_SWAP_BYTES and the bitmap GL_PACK_LSB_FIRST path. A
     // request whose (format, type) texel size differs from the texture's own, or a pixel-store state
     // that adds row padding / a row-length override / a skip offset, is rejected with
     // GL_INVALID_OPERATION (see ValidateShadowReadbackLayout, which spells out why each is unsafe).

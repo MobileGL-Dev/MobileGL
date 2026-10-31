@@ -2213,7 +2213,7 @@ TEST(TextureEmit, ARespecifyOfOneLevelKeepsThePendingUploadsOfTheOthers) {
     EXPECT_EQ(TextureRecordOf(10).PendingUploads[1].UploadTarget, secondFace);
 
     // And the key it DOES name goes, because that level's coordinate system has been replaced.
-    // The redefinition modelled here is glTexImage2D(level 1) with a NEW internal format - a
+    // The redefinition modeled here is glTexImage2D(level 1) with a NEW internal format - a
     // legal thing to do to a mutable texture, and a real redefinition of that level's storage,
     // so the descriptor moves and the metadata arm does not claim it.
     ASSERT_TRUE(MGPipeApplyResourceSubData(TextureUpload(texture, 1, MGPBox{0, 0, 0, 32, 32, 1}, 0), texels));
@@ -2393,7 +2393,7 @@ TEST(TextureEmit, ASubDataRecordWhoseResourceTargetNamesNoTextureIsRefusedRather
                         "to upload into",
                         [&renderbuffer, &texels]() { MGPipeApplyResourceSubData(renderbuffer, texels); });
 
-    // And so is a value at or above the catalogue, and so is the buffer target arriving with a
+    // And so is a value at or above the catalog, and so is the buffer target arriving with a
     // non-zero upload-target half - which the whole-field buffer test above cannot see.
     MGPSubData pastTheCatalogue = renderbuffer;
     pastTheCatalogue.Target = static_cast<Uint16>(MGPipeResourceTarget::Count);
@@ -2479,7 +2479,7 @@ TEST(TextureEmit, ARespecifyThatRedefinesNoStorageCarriesTheStickyMaskAndKeepsTh
     masked.BindMask = static_cast<Uint16>(allocated.BindMask | kMGPipeBindShaderImage);
     masked.ImageBindableHint = 1;
     ASSERT_FALSE(MGPipeResourceRespecifyNeedsAck(masked))
-        << "a metadata respecify must never ask for a reallocation acknowledgement";
+        << "a metadata respecify must never ask for a reallocation acknowledgment";
     ASSERT_TRUE(MGPipeApplyResourceRespecify(masked, nullptr));
 
     EXPECT_EQ(TextureRecordOf(11).Desc.BindMask, masked.BindMask)

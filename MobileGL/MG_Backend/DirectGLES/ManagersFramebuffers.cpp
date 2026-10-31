@@ -146,7 +146,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // re-issued is invalidated too - the attachment versions below, and under
             // MOBILEGL_PIPE_PUSH the record memos stamped at the end of this function - so the
             // next sync re-attaches all non-empty attachments at their identity points AND
-            // (see SyncToBackend's attachment loop) detaches any colour point whose frontend owner
+            // (see SyncToBackend's attachment loop) detaches any color point whose frontend owner
             // is empty. Without that detach a stale image would survive under a point the table now
             // claims for a different, empty attachment.
             for (Uint i = 0; i < MAX_COLOR_ATTACHMENT_SLOTS; ++i) {
@@ -250,7 +250,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // kMGPipeSurfaceNoTextureTarget on a texture point is a seam defect - refused loudly and
         // answered false, never guessed. False is the safe direction for all four: the mask
         // turns an emulation ON, and an emulation that does not run leaves the driver's own
-        // (correct-for-the-real-format) behaviour, while one that runs on the wrong buffer
+        // (correct-for-the-real-format) behavior, while one that runs on the wrong buffer
         // clamps or overwrites texels the application wrote.
         static Bool PushedSurfaceTextureTarget(const MG_Pipe::MGPSurface& surface, TextureTarget* out) {
             if (surface.TextureTarget == MG_Pipe::kMGPipeSurfaceNoTextureTarget) {
@@ -314,7 +314,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The record's surface for an attachment POINT, or null when this record does not
         // describe that point at all. MGPFramebufferState carries Color[8] + Depth + Stencil
         // (D-C1), which is every point a framebuffer can hold on the handle arm: D-C3 refuses
-        // bit 9 outright on a driver reporting more than 8 colour attachments, and the
+        // bit 9 outright on a driver reporting more than 8 color attachments, and the
         // FRONT/BACK points belong to the DEFAULT framebuffer, which has no twin at all.
         const MG_Pipe::MGPSurface* PushedSurfaceForAttachment(const MG_Pipe::MGPFramebufferState& record,
                                                               FramebufferAttachmentType point) {
@@ -465,7 +465,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // an object the apply thread was handed.
                 //
                 // P5e (fix1, ID-81): arm-selected for the texture arm's reason, and here it is a
-                // BEHAVIOUR difference even though the by-handle body dereferences nothing: the
+                // BEHAVIOR difference even though the by-handle body dereferences nothing: the
                 // object form reports a refused allocation to the application through the live
                 // GLContext (RecordError) and the by-handle form deliberately does not, because
                 // under a transport there is no application on this side to report it to. On the
@@ -483,7 +483,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         // The read attachment's storage carries an alpha channel its frontend format does not
-        // (the three-channel colour-renderable widening). GL answers such a read with 1.0, but
+        // (the three-channel color-renderable widening). GL answers such a read with 1.0, but
         // the storage holds whatever the draw wrote there, so the readback has to overwrite it.
         Bool IsAlphaWidenedFallbackReadAttachment() {
             const auto* record = MG_Pipe::MGPipeApplier().ReadFramebuffer();
@@ -552,7 +552,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void BackendFramebufferObject::ApplyReadBufferFromRecord(const MG_Pipe::MGPFramebufferState& record,
                                                                  Uint glNameForDiag) {
             // D-C1 makes the NULL Res the spelling of "no attachment" and c0c's
-            // kMGPipeSurfaceKindNone makes Kind agree with it on a zero-initialised record.
+            // kMGPipeSurfaceKindNone makes Kind agree with it on a zero-initialized record.
             // Res stays the test - it is the one D-C1 fixes - and Kind is CROSS-CHECKED
             // rather than consulted: the two are one statement the emitter has to make
             // twice, and a record where they disagree is a seam defect, not an empty point.
@@ -569,7 +569,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             FramebufferAttachmentType pushedReadBuf = FramebufferAttachmentType::None;
             if (!readSurfaceEmpty) {
                 // EVERY FIELD THAT IDENTIFIES THE IMAGE, not the three v1 compared (m-4).
-                // The same image legally sits at two colour points - a layered attachment of
+                // The same image legally sits at two color points - a layered attachment of
                 // one array and a single slice of it are different surfaces of one Res - so a
                 // partial comparison resolves to the lower index and the refusal branch below
                 // ("refusing to guess") would then be doing part of the guessing itself.
@@ -590,7 +590,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 if (!matched) {
                     MGLOG_E_ONCE("MGPipe: framebuffer %u's resolved read surface {%u, %u} matches no "
-                                 "colour attachment of its own record - refusing to guess a read "
+                                 "color attachment of its own record - refusing to guess a read "
                                  "buffer",
                                  glNameForDiag, record.ReadSurface.Res.Slot, record.ReadSurface.Res.Gen);
                     return;
@@ -659,7 +659,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // fire the table would disagree with the glDrawBuffers the caller already issued,
                 // which is the exact non-injectivity this table exists to remove.
                 MOBILEGL_ASSERT(a < slotCount && !assigned[a],
-                                "Draw buffer %u names colour attachment %u which is out of range or duplicated.", s, a);
+                                "Draw buffer %u names color attachment %u which is out of range or duplicated.", s, a);
                 if (a >= slotCount || assigned[a]) {
                     continue;
                 }
@@ -890,7 +890,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // 3. The attachments. Three gates, and the key is the object's rather than the
             //    binding's: idGenerationMoved ("I re-minted a driver id, so a point may hold a
-            //    dead one"), attachmentPointsMoved ("the colour permutation moved, so a point
+            //    dead one"), attachmentPointsMoved ("the color permutation moved, so a point
             //    whose record did not change still has to be re-issued") and the record hash.
             //    NOT m_syncedRecordHashes: the per-target array is the object arm's re-arm
             //    trigger, and the points written below belong to the driver FBO rather than to
@@ -910,7 +910,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const Bool empty =
                         surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone || MG_Pipe::MGPipeHandleIsNull(surface.Res);
                     // The detach that keeps m_backendColorSlots a permutation of the PHYSICAL
-                    // layout: a colour point whose record says empty must not keep the previous
+                    // layout: a color point whose record says empty must not keep the previous
                     // owner's image, or glReadBuffer returns it. Bounded by the driver's cap,
                     // because GL_COLOR_ATTACHMENTn above it is INVALID_ENUM.
                     if (isColorPoint && empty) {
@@ -979,12 +979,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         GLenum BackendFramebufferObject::GetBackendAttachmentType(FramebufferAttachmentType frontendAtt) const {
-            // Only colour attachments are ever relocated; depth/stencil, the default framebuffer's
+            // Only color attachments are ever relocated; depth/stencil, the default framebuffer's
             // FRONT/BACK names and None map straight through.
             if (frontendAtt < FramebufferAttachmentType::Color0 || frontendAtt > FramebufferAttachmentType::Color31) {
                 return MG_Util::ConvertFramebufferAttachmentTypeToGLEnum(frontendAtt);
             }
-            // The table is a permutation of the backend colour points, so this is the one point that
+            // The table is a permutation of the backend color points, so this is the one point that
             // owns this attachment. Searching the draw-buffer array instead returned the identity
             // point for every attachment that was not a draw buffer - which is exactly the point a
             // relocated draw buffer had just taken over, so COLOR_ATTACHMENT0 read back the image of

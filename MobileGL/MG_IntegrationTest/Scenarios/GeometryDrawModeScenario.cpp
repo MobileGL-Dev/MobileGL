@@ -242,12 +242,12 @@ void main()
 
             glDrawTransformFeedbackInstanced(GL_LINES, feedback, 1);
             EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_INVALID_OPERATION))
-                << "glDrawTransformFeedbackInstanced must honour the geometry input primitive";
+                << "glDrawTransformFeedbackInstanced must honor the geometry input primitive";
             DrainErrors();
 
             glDrawTransformFeedbackStreamInstanced(GL_LINES, feedback, 0, 1);
             EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_INVALID_OPERATION))
-                << "glDrawTransformFeedbackStreamInstanced must honour the geometry input primitive";
+                << "glDrawTransformFeedbackStreamInstanced must honor the geometry input primitive";
             DrainErrors();
 
             // The compatible mode replays the captured span with no error at all, which is what

@@ -10,7 +10,7 @@
 //
 // The state used to be recorded and reported back by glGet but never applied, so an upper-left
 // origin drew the right way up and a [0, 1] depth mode kept GL's [-1, 1] clip volume. Each case
-// below is a colour-only observable of one half of the extension:
+// below is a color-only observable of one half of the extension:
 //
 //  - origin: a primitive in the lower half of clip space lands in the TOP half of the window
 //    under GL_UPPER_LEFT, on the default framebuffer (which DirectVulkan stores flipped already)

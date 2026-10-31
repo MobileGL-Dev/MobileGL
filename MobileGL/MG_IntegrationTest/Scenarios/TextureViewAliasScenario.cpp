@@ -6,8 +6,8 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// Scenario - THE OWNER-KEYED EMISSION CURSOR (P3b/P4b, wave 2-D; ROADMAP's "dirty 归属反转 -
-// 按存储属主键控的发射游标"). THE VERIFICATION HALF.
+// Scenario - THE OWNER-KEYED EMISSION CURSOR (P3b/P4b, wave 2-D; ROADMAP's "dirty ownership inversion -
+// an emission cursor keyed on the storage owner"). THE VERIFICATION HALF.
 //
 // THE CODE HALF ALREADY LANDED and this file is the gate it never had:
 //
@@ -30,8 +30,8 @@
 // That is exactly the shape SSIM and every ordinary pixel case go green over.
 //
 // SO THE CLAIM IS ASSERTED ON BOTH CHANNELS AT ONCE, and neither alone is the gate
-// (7.3, "门：新增场景，通过 view 上传、经属主采样（以及反
-// 向），跨 draw 边界各一次"):
+// (7.3, "gate: a new scenario that uploads through a view, samples through the owner
+// (and the reverse), once each across a draw boundary"):
 //
 //   PIXELS     an upload through one name must be visible through the other name, in the SAME
 //              frame it was issued - and the layers the view does not address must not move.
@@ -295,7 +295,7 @@ void main() { oColor = texture(uTex, vec3(vUv, float(uLayer))); }
             }
 
             // Whole-region rather than a spot check, for the reason HeadlessGL.h gives: three of
-            // four vertices carrying stale data still paints a correct centre pixel.
+            // four vertices carrying stale data still paints a correct center pixel.
             void ExpectWholeSurface(const Image& image, Rgba8 expected, const char* what) {
                 int offenders = 0;
                 Rgba8 firstOffender{};

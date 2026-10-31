@@ -146,7 +146,7 @@ namespace MobileGL::MG_Backend {
             return false;
         }
         // The same for a YUV fourcc, whose planes and hints `layout` gives. A YUV buffer the
-        // server did not export is taken too (its labelled CPU-copy fallback).
+        // server did not export is taken too (its labeled CPU-copy fallback).
         virtual Bool ImportSharedImagePlanes(int fd, Uint32 width, Uint32 height, Uint32 fourcc,
                                              const SharedImageImportLayout& layout, Uint64* outId) {
             (void)fd, (void)width, (void)height, (void)fourcc, (void)layout, (void)outId;

@@ -15,7 +15,7 @@
 //
 //   * ORDER and SCISSOR: a draw, a scissored clear, a second draw - all in one pass. The clear
 //     must land after the first draw and before the second, inside the scissor box only.
-//   * THE DRAW-BUFFER INDEX: VkClearAttachment::colorAttachment is the SUBPASS colour slot, which
+//   * THE DRAW-BUFFER INDEX: VkClearAttachment::colorAttachment is the SUBPASS color slot, which
 //     the wire pass lays out by draw-buffer slot, not by framebuffer attachment point. With
 //     glDrawBuffers({NONE, ATTACHMENT0}) a clear writes attachment 0 and leaves attachment 1 alone;
 //     glClearBufferfv(GL_COLOR, 1, ...) is the same slot by number.
@@ -326,7 +326,7 @@ void main() { o0 = texture(uPalette, vec2(0.5, 0.5)); }
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             glClearDepth(1.0);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            // The palette changes every frame; this frame's colour is what the sprite must show.
+            // The palette changes every frame; this frame's color is what the sprite must show.
             const unsigned char texel[4] = {static_cast<unsigned char>(frame == 2 ? 0 : 255), 255, 0, 255};
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, palette);
@@ -336,7 +336,7 @@ void main() { o0 = texture(uPalette, vec2(0.5, 0.5)); }
             // Terrain: no depth test, red.
             glDisable(GL_DEPTH_TEST);
             Quad(1.0f, 0.0f, 0.0f, 1.0f, 0.5f);
-            // Sprites: depth-tested against the cleared depth, palette-coloured.
+            // Sprites: depth-tested against the cleared depth, palette-colored.
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LEQUAL);
             glUseProgram(paletteProgram);

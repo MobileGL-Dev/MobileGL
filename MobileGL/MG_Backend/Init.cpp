@@ -240,7 +240,7 @@ namespace MobileGL::MG_Backend {
             // a bit derived from `ActiveBackendType == ...` would keep claiming the capability
             // for a build, a flavour or a future backend whose table does not carry the arm -
             // which is exactly how 66 uploads were lost to a consumer bit that nobody could
-            // have honoured. `g_resourceOpsAtStep2` is the pointer this function just pinned,
+            // have honored. `g_resourceOpsAtStep2` is the pointer this function just pinned,
             // and step 5 already refuses a run where that pointer was swapped underneath us, so
             // reading the arm off it means the published bit and the table that has to answer
             // for it cannot come apart.

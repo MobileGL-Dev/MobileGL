@@ -1866,7 +1866,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 
     # ---- P3b/P4b espryt D1 slice 4: THE READBACK FAMILY ON THE SPLIT ARMS -------------------
     #
-    # The 回读 half of the plan's "回读 / pack state" row. The PACK half is done - server reads
+    # The readback half of the plan's "readback / pack state" row. The PACK half is done - server reads
     # with neutral pack state, the client scatters (ID-49, EmitTables.cpp) - and the READBACK half
     # had no split coverage at all, so every claim about it was a reading of the code rather than
     # a run of it. Arming the lanes is the first half of the work and the census is the second:

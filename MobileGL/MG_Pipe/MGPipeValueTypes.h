@@ -271,11 +271,11 @@ namespace MobileGL {
         Float PolygonOffsetUnits = 0.0f;
         // GL_POLYGON_OFFSET_CLAMP (GL 4.6 core 14.6.5 / GL_EXT_polygon_offset_clamp): the maximum
         // magnitude of the offset glPolygonOffsetClamp's third argument allows. Zero - the default
-        // - means "no clamp", which is exactly the behaviour glPolygonOffset leaves behind.
+        // - means "no clamp", which is exactly the behavior glPolygonOffset leaves behind.
         Float PolygonOffsetClamp = 0.0f;
 
         // glClipControl (GL 4.5 core 13.5). Defaults per table 23.7 are the pre-4.5 fixed
-        // behaviour: origin at the lower left, depth mapped from -1..1.
+        // behavior: origin at the lower left, depth mapped from -1..1.
         GLenum ClipOrigin = GL_LOWER_LEFT;
         GLenum ClipDepthMode = GL_NEGATIVE_ONE_TO_ONE;
 
@@ -307,7 +307,7 @@ namespace MobileGL {
         Bool DepthClampEnabled = false;
         Bool TextureCubeMapSeamlessEnabled = false;
 
-        // Clear State. GL's initial clear colour is (0, 0, 0, 0) (GL 4.6 core table 23.24): an
+        // Clear State. GL's initial clear color is (0, 0, 0, 0) (GL 4.6 core table 23.24): an
         // application that never calls glClearColor - or caches it and skips the redundant call -
         // clears to transparent, and offscreen layers depend on it.
         FloatVec4 ClearColor = FloatVec4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -326,7 +326,7 @@ namespace MobileGL {
         // GL_EXT_fragment_shading_rate: the pipeline rate glShadingRateEXT sets and the two
         // combiner operations of glShadingRateCombinerOpsEXT. Placed in the three alignment bytes
         // between SampleCoverageInvert and SampleMaskValue, the way FramebufferSrgbEnabled and its
-        // two neighbours were, so sizeof and every existing offset stay put. All three are
+        // two neighbors were, so sizeof and every existing offset stay put. All three are
         // PIPELINE state (their setters call BumpVersions). The rate is stored in the packed form
         // the extension defines for gl_ShadingRateEXT and the attachment texels -
         // (log2(width) << 2) | log2(height), so 1x1 = 0 - and each op as its index in
@@ -530,9 +530,9 @@ namespace MobileGL {
         Unknown = -1
     };
 
-    // Which of the three GL_TEXTURE_BORDER_COLOR entry-point families last wrote the border colour,
+    // Which of the three GL_TEXTURE_BORDER_COLOR entry-point families last wrote the border color,
     // and therefore which of the three stored representations is AUTHORITATIVE. GL 4.6 core 8.10:
-    // TexParameterIiv/Iuiv store an integer border colour "unmodified, with an internal data type of
+    // TexParameterIiv/Iuiv store an integer border color "unmodified, with an internal data type of
     // integer", TexParameterfv stores a floating-point one, and the derived forms are only a
     // convenience for a getter of the other spelling. A backend cannot pick the right driver entry
     // point (glSamplerParameterIiv vs fv) or the right VkBorderColor family without this: numerically
@@ -562,7 +562,7 @@ namespace MobileGL {
         // not on the texture - a texture object reaches it through the sampler object it owns. The
         // three representations are the float, integer and unsigned-integer forms glSamplerParameterfv,
         // glSamplerParameterIiv and glSamplerParameterIuiv set; whichever is written last defines
-        // the colour and the other two follow it, so a getter always has an answer.
+        // the color and the other two follow it, so a getter always has an answer.
         FloatVec4 borderColor = {0.0f, 0.0f, 0.0f, 0.0f};
         IntVec4 borderColorI = {0, 0, 0, 0};
         UintVec4 borderColorUI = {0, 0, 0, 0};

@@ -301,7 +301,7 @@ TEST_F(VertexArrayTest, CurrentVertexAttributeStorageCoversFullCapacity) {
     EXPECT_FLOAT_EQ(stored.floatValue[0], 1.0f);
     EXPECT_FLOAT_EQ(stored.floatValue[3], 4.0f);
 
-    // Neighbouring slots keep the GL default of (0, 0, 0, 1).
+    // Neighboring slots keep the GL default of (0, 0, 0, 1).
     const auto& untouched = MG_State::pGLContext->GetCurrentVertexAttribute(highIndex - 1);
     EXPECT_FLOAT_EQ(untouched.floatValue[0], 0.0f);
     EXPECT_FLOAT_EQ(untouched.floatValue[3], 1.0f);

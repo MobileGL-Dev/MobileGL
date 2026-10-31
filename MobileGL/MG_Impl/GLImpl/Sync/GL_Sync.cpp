@@ -167,7 +167,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetSynciv(GLsync sync, GLenum pname, GLsizei bufSize, GLsizei* length, GLint* values) {
         // GL 4.6 core 4.1: a negative bufSize is INVALID_VALUE, an unnamed sync is INVALID_VALUE
-        // and an unrecognised pname is INVALID_ENUM. All three used to leave glGetError() clean
+        // and an unrecognized pname is INVALID_ENUM. All three used to leave glGetError() clean
         // and write a plausible-looking zero, which is the one failure mode a caller cannot tell
         // apart from a real answer - GL_SYNC_STATUS legitimately answers GL_UNSIGNALED (0x9118),
         // but a mistyped pname answered a bare 0 that no query ever returns.

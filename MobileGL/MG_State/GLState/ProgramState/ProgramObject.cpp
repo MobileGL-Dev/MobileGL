@@ -126,7 +126,7 @@ namespace MobileGL::MG_State::GLState {
             // and describe a program that no longer exists.
             BumpLinkObservableVersions();
         }
-        // A node that settled as Cancelled published nothing, and m_artifacts still holds
+        // A node that settled as Canceled published nothing, and m_artifacts still holds
         // what Link()'s prologue left there: cleared, LINK_STATUS false, no info log. That is
         // the correct answer for a link that was superseded or abandoned, and it is why no
         // caller of CancelLink() has to repair anything afterwards.
@@ -160,7 +160,7 @@ namespace MobileGL::MG_State::GLState {
         if (pending->IsComplete()) {
             m_spirv = Move(pending->artifacts);
         }
-        // A node that settled as Cancelled published nothing, so m_spirv stays empty with
+        // A node that settled as Canceled published nothing, so m_spirv stays empty with
         // spirvStatus false: linked, queryable, not drawable. Nothing to repair.
 
         // Order matters, and it is the GL order. The shadow arrives zero-filled; the shaders'
@@ -207,7 +207,7 @@ namespace MobileGL::MG_State::GLState {
     // MobileGL parses with Vulkan-relaxed rules, which sweep default-block uniforms into
     // MGL_GLOBAL_UBO; a block member cannot carry an initializer in SPIR-V, so glslang hands
     // the folded constants over as a side-channel (TIntermediate::getUniformInitializers) and
-    // this is where they are honoured. Without it every such uniform silently read zero -
+    // this is where they are honored. Without it every such uniform silently read zero -
     // which is what half of KHR-GL43.shader_storage_buffer_object was actually failing on.
     //
     // Writes go straight into the shadow rather than through glUniform*: this runs INSIDE the
@@ -221,7 +221,7 @@ namespace MobileGL::MG_State::GLState {
         const auto& initializers = Artifacts().uniformInitialValues;
         if (initializers.empty()) return;
         if (m_spirv.globalUboScratch.empty() || m_spirv.uniformOffsets.empty()) {
-            // Phase B published no shadow (cancelled, or superseded by a relink). The program
+            // Phase B published no shadow (canceled, or superseded by a relink). The program
             // is not drawable; there is nowhere for these to land.
             return;
         }
@@ -328,7 +328,7 @@ namespace MobileGL::MG_State::GLState {
         bytes.swap(m_pendingUniformBytes);
 
         if (m_spirv.globalUboScratch.empty() || m_spirv.uniformOffsets.empty()) {
-            // Phase B produced nothing (cancelled at teardown, or a relink superseded it).
+            // Phase B produced nothing (canceled at teardown, or a relink superseded it).
             // The program is not drawable, so there is nowhere for these to land and nothing
             // that could observe them.
             MGLOG_D("ProgramObject %u: dropping %zu buffered uniform write(s); the SPIR-V job published no shadow",
@@ -362,8 +362,8 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void ProgramObject::CancelLink() {
-        // Phase B first: it is chained behind phase A, so cancelling A would otherwise run A's
-        // continuation and post a node this call is about to abandon anyway. Cancelling it up
+        // Phase B first: it is chained behind phase A, so canceling A would otherwise run A's
+        // continuation and post a node this call is about to abandon anyway. Canceling it up
         // front makes that continuation a no-op.
         //
         // Cooperative and non-blocking, both of them. A node that no worker has picked up
@@ -471,7 +471,7 @@ namespace MobileGL::MG_State::GLState {
     // NO CancelLink here, nor in DetachShader below. Both only edit the attach lists, which
     // a pending link does not read - it snapshotted (stage, source, compile node) per shader
     // at enqueue and is isolated from every later mutation. GL agrees: attaching or detaching
-    // takes effect at the NEXT link and leaves the current LINK_STATUS alone, so cancelling
+    // takes effect at the NEXT link and leaves the current LINK_STATUS alone, so canceling
     // would make `glLinkProgram; glAttachShader; glGetProgramiv(LINK_STATUS)` report FALSE
     // for a link that succeeded - and would break glCreateShaderProgramv outright, since that
     // is specified as link-then-detach and would discard its own link before anyone read it.
@@ -631,7 +631,7 @@ namespace MobileGL::MG_State::GLState {
         // The capture stage is the LAST vertex-processing stage the program has, which is the same
         // rule ProgramLinkTask::ResolveTransformFeedbackVaryings resolves the names against. The
         // application's own request wins if it made one: that can only happen on a mixed program,
-        // which is not a shape ARB_gl_spirv defines, and honouring what the application explicitly
+        // which is not a shape ARB_gl_spirv defines, and honoring what the application explicitly
         // asked for is the safer of the two readings.
         if (task->in.requestedXfbVaryings.empty()) {
             for (const ShaderStage captureStage :

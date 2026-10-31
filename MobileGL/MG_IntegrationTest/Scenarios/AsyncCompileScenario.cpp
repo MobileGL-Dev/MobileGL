@@ -569,7 +569,7 @@ void main() {
 
             // Distinct per program (so neither the source memo nor the adoption map turns
             // a compile into a no-op) but a pure pass-through at runtime: the bulk sits in
-            // a branch a zero-initialised uniform never takes.
+            // a branch a zero-initialized uniform never takes.
             const auto fragmentSource = [](const int index) {
                 std::string source = "#version 330 core\nin vec3 vColor;\nout vec4 oColor;\n";
                 source += "uniform float uGate" + std::to_string(index) + ";\n";

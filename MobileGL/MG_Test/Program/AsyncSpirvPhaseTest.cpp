@@ -330,9 +330,9 @@ void main() { fragColor = vec4(1.0); }
 // ---------------------------------------------------------------------------------------
 
 // The state the split invented and GL gives no way out of: phase A published LINK_STATUS
-// GL_TRUE, and phase B then settled CANCELLED rather than Complete - its body threw
+// GL_TRUE, and phase B then settled CANCELED rather than Complete - its body threw
 // (bad_alloc out of GlslangToSpv/spirv-opt under pack-load memory pressure), the pool failed
-// to enqueue it, or teardown cancelled it while it was queued. The shadow is then a
+// to enqueue it, or teardown canceled it while it was queued. The shadow is then a
 // default-constructed SpirvArtifacts: empty uniformOffsets, null scratch, spirvStatus false -
 // while the whole phase-A query surface, IsValidUniformLocation() included, keeps answering.
 //
@@ -366,7 +366,7 @@ TEST_F(AsyncSpirvPhaseTest, ALinkedProgramWhoseSpirvJobWasCancelledDegradesInste
         ++cancelled;
 
         // ---- the contract: linked, fully queryable, not drawable ----
-        EXPECT_TRUE(object->GetLinkStatus()) << "a cancelled phase B must not retract LINK_STATUS";
+        EXPECT_TRUE(object->GetLinkStatus()) << "a canceled phase B must not retract LINK_STATUS";
         EXPECT_EQ(QueryLinkStatus(program), GL_TRUE);
         EXPECT_FALSE(object->GetSpirvStatus());
         EXPECT_TRUE(object->IsSpirvComplete());
@@ -420,7 +420,7 @@ TEST_F(AsyncSpirvPhaseTest, ALinkedProgramWhoseSpirvJobWasCancelledDegradesInste
         EXPECT_EQ(GetError(), GL_NO_ERROR);
     }
 
-    EXPECT_GT(cancelled, 0) << "no phase B was ever cancelled; this case proved nothing";
+    EXPECT_GT(cancelled, 0) << "no phase B was ever canceled; this case proved nothing";
 }
 
 // The mirror image: with async off the state is not reachable at all, because both bodies run
@@ -791,7 +791,7 @@ TEST_F(AsyncSpirvPhaseTest, RelinkingOverAPendingSpirvJobIsClean) {
         GetUniformfv(program, secondTint, tint);
         for (int c = 0; c < 3; ++c) {
             EXPECT_FLOAT_EQ(tint[c], 0.0f)
-                << "a uniform write buffered against the cancelled link leaked into the relink, component " << c;
+                << "a uniform write buffered against the canceled link leaked into the relink, component " << c;
         }
     }
 

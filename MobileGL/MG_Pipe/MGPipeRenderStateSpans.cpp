@@ -10,7 +10,7 @@
 // generated/PipeSpanTable.inc declares (ARCHITECTURE.md §5.3). The pipeline half holds every
 // byte a BumpVersions() setter writes, which covers all fixed-function state Magma's pipeline
 // build reads and more; the extra bytes cost nothing because the subset is hashed only when
-// m_pipelineStateVersion moves. Render-pass facts (colour attachment count, rasterization
+// m_pipelineStateVersion moves. Render-pass facts (color attachment count, rasterization
 // samples and the effective sample mask derived from them) are not in RenderStateParameters,
 // so Magma keeps renderPassHash beside the CSO handle in its pipeline memo key.
 #include <MG_Pipe/MGPipe.h>

@@ -107,10 +107,10 @@ namespace MobileGL {
             // (VUID-VkImageViewCreateInfo-viewType-01004), which is every cube map array texture -
             // both its sampled view and its full view.
             Bool SupportsImageCubeArray = false;
-            // VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT on a 3D colour image, i.e. whether one z slice
+            // VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT on a 3D color image, i.e. whether one z slice
             // of a GL_TEXTURE_3D texture can be named by a 2D view and attached to a framebuffer.
             // Vulkan 1.1 core, but per format+usage - this is an OPTIMISTIC summary probed over the
-            // common colour attachment formats. The authoritative answer is taken per format at
+            // common color attachment formats. The authoritative answer is taken per format at
             // image creation in VkTextureManager, which withdraws the flag and remembers the verdict
             // when a driver refuses it.
             Bool Supports2DArrayCompatible3DImages = false;

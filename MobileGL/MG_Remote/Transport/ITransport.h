@@ -75,7 +75,7 @@ namespace MobileGL::MG_Remote::Transport {
 
         // Receives one fd previously shared by the peer. On success *outFd owns
         // a descriptor this process must close. `sideband` receives the bytes
-        // that travelled with it (may be empty) and must be at least
+        // that traveled with it (may be empty) and must be at least
         // FdPassing::kMaxSidebandBytes: an fd offer is one datagram and cannot
         // be half-consumed, so the capacity is checked BEFORE anything is read
         // and a short buffer returns MOBILEGL_ERR_BUFFER_TOO_SMALL with the

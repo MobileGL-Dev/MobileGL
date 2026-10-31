@@ -90,7 +90,7 @@ namespace MobileGL::MG_State::GLState {
         // byte-identical one cannot change what a compile would produce: the whole
         // pipeline (preprocess -> lexical checks -> glslang parse) is a pure function of
         // (stage, source, CompileEnv). So keeping the compiled state is not an optimization
-        // that changes observable behaviour - the COMPILE_STATUS, the info log and the
+        // that changes observable behavior - the COMPILE_STATUS, the info log and the
         // reflection a caller can query are exactly what a real recompile would have
         // rebuilt, byte for byte. A compile still IN FLIGHT is left running for the same
         // reason: it is computing the right answer for text this object still holds.
@@ -142,7 +142,7 @@ namespace MobileGL::MG_State::GLState {
         // GL-observable half of a failure, COMPILE_STATUS and the info log, lives in
         // `artifacts` and every sharer reads the identical copy of it.
         MG_Util::Async::ApplyDeferredDiagnostics(*m_compiled);
-        // A node that settled as Cancelled published nothing. Dropping it here is what keeps
+        // A node that settled as Canceled published nothing. Dropping it here is what keeps
         // the object's state machine to two reachable cases - "no job" and "a job that
         // completed" - so every reader below can treat a live node as authoritative.
         //
@@ -196,7 +196,7 @@ namespace MobileGL::MG_State::GLState {
         // authorized to cancel only if BOTH say the result has become unobservable.
         //
         // 1. Other shader objects. From stage 6 a node can be SHARED by several GL shader
-        //    names that were handed byte-identical source; cancelling here would turn a
+        //    names that were handed byte-identical source; canceling here would turn a
         //    compile they must still see as GL_TRUE into GL_FALSE. Only the releaser that
         //    takes the count to zero - i.e. the last holder - may cancel. See
         //    ShaderCompileTask::AddAdopter for why a plain Int is sound here and for the
@@ -258,7 +258,7 @@ namespace MobileGL::MG_State::GLState {
         // Hoisted above the node construction because stage 6 keys off it too: this same
         // answer decides whether the adoption map is consulted at all, so a
         // glMaxShaderCompilerThreadsKHR(0) and a flag-off build both bypass sharing exactly
-        // as they bypass the pool, and their behaviour stays byte-identical to pre-stage-6.
+        // as they bypass the pool, and their behavior stays byte-identical to pre-stage-6.
         const Bool runOnPool = m_preprocessCache && MG_Util::Async::AsyncShaderCompileActive();
         const Uint64 sourceHash = ShaderPreprocessCache::HashSource(*m_source);
 

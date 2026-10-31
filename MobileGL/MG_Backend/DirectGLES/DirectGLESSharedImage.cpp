@@ -56,7 +56,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 DupNativeFenceFdFn DupNativeFenceFd = nullptr;
                 // YUV images: sampled as external textures (GL_OES_EGL_image_external_essl3), and
                 // through GL_EXT_YUV_target's raw Y'CbCr sampler where the driver has it, so the
-                // conversion is the import's own (its colour hints) rather than the driver's guess.
+                // conversion is the import's own (its color hints) rather than the driver's guess.
                 Bool ExternalEssl3 = false;
                 Bool YuvTarget = false;
             };
@@ -573,7 +573,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     conversion.TargetOffset = g_GLESFuncs.glGetUniformLocation(program, "uOffset");
                 }
                 MGLOG_I("Shared images: YUV images convert through %s",
-                        ownConversion ? "GL_EXT_YUV_target with the import's colour hints"
+                        ownConversion ? "GL_EXT_YUV_target with the import's color hints"
                                       : "the driver's external-sampler conversion");
             }
             if (conversion.Framebuffer == 0) g_GLESFuncs.glGenFramebuffers(1, &conversion.Framebuffer);

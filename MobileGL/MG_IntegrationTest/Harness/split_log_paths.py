@@ -385,7 +385,7 @@ def verify_split_arming(logs_dir, junit_path, expected_path):
     applied to arming:
 
       * an entry whose client log carries the arming line is ARMED and needs nothing else;
-      * an entry that ctest reported SKIPPED is recognised without a name - a gtest skip is a
+      * an entry that ctest reported SKIPPED is recognized without a name - a gtest skip is a
         process that brought a session up and left before any verb, which is honestly unarmed,
         and the skip set is driver-dependent (a GitHub runner's lavapipe/llvmpipe skips more
         or fewer than the host's), so naming those would ratchet on the driver;

@@ -109,7 +109,7 @@ void main() {
                 glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(0));
                 glBindVertexArray(0);
 
-                // A solid red 2x2 texture, so the sampled colour is the same wherever the
+                // A solid red 2x2 texture, so the sampled color is the same wherever the
                 // (deliberately degenerate) coordinates land.
                 const unsigned char red[] = {255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255};
                 glGenTextures(1, &m_texture);

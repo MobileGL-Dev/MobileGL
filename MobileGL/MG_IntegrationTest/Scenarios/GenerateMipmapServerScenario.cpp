@@ -21,7 +21,7 @@
 //
 // EVERY CASE CHECKS THE GL ANSWER BY SAMPLING. The base level is split into two halves (bottom
 // rows A, top rows B) so a generation that loses the row order, or reads another level, cannot
-// average to the right colour. Each generated level is read back through texelFetch into an RGBA8
+// average to the right color. Each generated level is read back through texelFetch into an RGBA8
 // target, and the levels outside the window are checked unchanged (or still undefined).
 //
 // ARMS. Both backends, monolith and Split / Spawn / Tcp; Magma is the control. The forced-CPU arm
@@ -45,7 +45,7 @@
 //       ignoring BASE_LEVEL and MAX_LEVEL, and the storage grow before them defines levels past
 //       MAX_LEVEL (DirectGLES.cpp GenerateColorTexture2DMipmap / GenerateDepthTexture2DMipmap /
 //       EnsureGenerateMipmapStorageAllocated);
-//   M3  Magma: a colour format without BLIT_SRC|BLIT_DST (R11F_G11F_B10F on lavapipe) is skipped
+//   M3  Magma: a color format without BLIT_SRC|BLIT_DST (R11F_G11F_B10F on lavapipe) is skipped
 //       with a warning and its levels stay undefined texels - the monolith has no shader arm,
 //       which the wire arm has had since P7 (VulkanRenderer.cpp GenerateMipmap).
 
@@ -484,8 +484,8 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                 if (status != GL_FRAMEBUFFER_COMPLETE) {
                     glBindFramebuffer(GL_FRAMEBUFFER, 0);
                     FirstGLError();
-                    GTEST_SKIP() << format.name << " is not colour-renderable on " << Gl().BackendName()
-                                 << " (status 0x" << std::hex << status << ")";
+                    GTEST_SKIP() << format.name << " is not color-renderable on " << Gl().BackendName() << " (status 0x"
+                                 << std::hex << status << ")";
                 }
                 glViewport(0, 0, kEdge, kEdge);
                 glUseProgram(m_paintProgram);

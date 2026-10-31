@@ -910,7 +910,7 @@ namespace MobileGL::MG_Pipe {
         const void* initialBytes = (carryBase && buffer.GetSize() > 0) ? buffer.MappedData() : nullptr;
         // kNeedsAck rides on the CALL and MGPipeResourceRespecifyNeedsAck(desc) decides per
         // record: only an immutable store (a glBufferStorage*) is a real synchronous
-        // allocation and only it is allowed one. In monolith the acknowledgement is
+        // allocation and only it is allowed one. In monolith the acknowledgment is
         // ((void)0), because the applier is one function call away and has already run by
         // the time this returns; the transport wires the doorbell to that same predicate.
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -1061,7 +1061,7 @@ namespace MobileGL::MG_Pipe {
         record.Res = handle;
         record.Offset = offset;
         record.Size = size;
-        // The application's REAL flags, not a normalised subset: the backend's kill-switch
+        // The application's REAL flags, not a normalized subset: the backend's kill-switch
         // arm reads INVALIDATE_RANGE / INVALIDATE_BUFFER / UNSYNCHRONIZED per call to choose
         // between a map+memcpy+unmap and an upload, so merging them here would change which.
         record.AccessFlags = accessFlags;
@@ -1103,8 +1103,8 @@ namespace MobileGL::MG_Pipe {
         MGPipeRouteResourceReadback(record);
     }
 
-    // NO UnmapPersistent PRODUCER IN P3a, AND THAT IS DELIBERATE. The catalogue has the call
-    // and wire implemented it, but D-J forbids new behaviour and there is nothing to convert:
+    // NO UnmapPersistent PRODUCER IN P3a, AND THAT IS DELIBERATE. The catalog has the call
+    // and wire implemented it, but D-J forbids new behavior and there is nothing to convert:
     // BufferBackendOps has seven hooks and none of them is an unmap, and
     // PipeResource::ReleasePersistentMap() (BufferObject.cpp, from RedefineStorage) tells the
     // backend nothing today - it learns from the Respecify that follows. Emitting
@@ -1913,7 +1913,7 @@ namespace MobileGL::MG_Pipe {
     // PipeInputs.h's F-class block, so freshness never reaches them and the exit gate was
     // structurally blind on exactly the seven most dangerous rows. The hook is a no-op outside
     // a server-stamped verb, so InvalidateCompileEnv keeps being reachable from backend
-    // initialisation - the case the exemption was written for - and every monolith lane, split
+    // initialization - the case the exemption was written for - and every monolith lane, split
     // build included, behaves as it does today.
 #if MOBILEGL_BUILD_DISAGGREGATED
 #define MGP_STICKY_FORWARD_PULL(Field) MGPipeStickyForwardPull(MGPipeInputField::Field)
@@ -1958,7 +1958,7 @@ namespace MobileGL::MG_Pipe {
 
     namespace {
         // The frontend half of MGPipeNotifyCompileEnvChanged (PipeApply.h): registered once, at
-        // static initialisation, by the translation unit that owns the forward.
+        // static initialization, by the translation unit that owns the forward.
         const Bool kCompileEnvHookRegistered = [] {
             MGPipeSetCompileEnvChangedHook([] {
                 if (gPipeInputs->IsLive()) gPipeInputs->InvalidateCompileEnv();
@@ -2512,7 +2512,7 @@ namespace MobileGL::MG_Pipe {
 
         MGPipeFieldMask SuppliedFieldMask(Uint64 pushMask, Bool applierDerives, Bool contextValuesWireLive) {
             // THE CONSUMER SIGNAL IS READ ONLY WHERE THE WALK BELOW COULD REACH IT, and that
-            // guard is not a micro-optimisation - it is what keeps R-8's DIAGNOSTIC COUNTERS
+            // guard is not a micro-optimization - it is what keeps R-8's DIAGNOSTIC COUNTERS
             // where they were (P5d r3 package C review, minor 2). In the conjunction below
             // P4aFamilyHasItsConsumer sits AFTER `(pushMask & subsystem) != 0`, and it answers a
             // constant `true` for every subsystem outside the P4a families - so at a mask that
@@ -2664,7 +2664,7 @@ namespace MobileGL::MG_Pipe {
             // default: MGPipeApplierReset() clears the CSO store and the residual block and
             // leaves gPipeInputs->m_currentVertexAttribute holding the PREVIOUS context's
             // defaults. So the InvalidateAll() a fresh context does to the set-hash
-            // suppressor would have been cancelled two lines later by this diff, and the one
+            // suppressor would have been canceled two lines later by this diff, and the one
             // call P2 fully owns would publish nothing across a context change - exactly the
             // "memo that serves a stale answer" the tracker's own COMPLETE-state rule
             // (Tracker.h) exists to forbid. EmitRenderState has the same arm
@@ -2724,7 +2724,7 @@ namespace MobileGL::MG_Pipe {
         // counters, the 15 per-target touched-buffer-binding counts and the five XFB values -
         // emitted at validate WHEN ANY COVERED VALUE MOVED, which the whole-record hash says:
         // there is deliberately no dirty bit for the family (the tracker's value-class dirty
-        // accounting is untouched - "零新增记账", ARCHITECTURE.md 5.2) and no dirty mask in the
+        // accounting is untouched - "no new accounting", ARCHITECTURE.md 5.2) and no dirty mask in the
         // payload, so a suppressed record means "nothing moved", never "field invalid" (§1).
         //
         // THE PRODUCER IS TRANSPORT-GATED, and the residual-fill skip for the same eight fields
@@ -2906,7 +2906,7 @@ namespace MobileGL::MG_Pipe {
         //
         // THE ORDER IS ARCHITECTURE.md 5.4's RECOMMENDED ONE - framebuffer, then program, then
         // textures/sampler/image/global constants - and that document is explicit that the
-        // order is code organisation and NOT a contract: all of a verb's set_*/bind_* must
+        // order is code organization and NOT a contract: all of a verb's set_*/bind_* must
         // complete before the verb, and apart from "a resource create precedes a bind to it"
         // there is no ordering requirement between them. The server specialises the shader and
         // the pipeline lazily at the verb, from everything it holds at that moment, which is
@@ -2951,7 +2951,7 @@ namespace MobileGL::MG_Pipe {
         // points and bit 16 is the two writable classes, which share a shutter because a
         // storage bind and a counter bind are the same event to every reader of the record.
         // Bit 17's family (set_stream_output_targets) has no adapter at all - XFB stays
-        // lockstep for the whole of P5e (§5.7) - and that absence is the catalogue's split,
+        // lockstep for the whole of P5e (§5.7) - and that absence is the catalog's split,
         // not an omission.
         Uint64 EmitConstBuffers(GLContext& ctx) {
             return MGPipeShaderBufferEmitterInstance().EmitConstBuffers(ctx);
@@ -3005,7 +3005,7 @@ namespace MobileGL::MG_Pipe {
         // an unbarriered verb is allowed to hand the server.
         //
         // `fillOwed` is deliberately a separate name from `barriered`, and that is what makes
-        // the red-once one line: setting it to `true` restores the old behaviour (a fill for
+        // the red-once one line: setting it to `true` restores the old behavior (a fill for
         // every verb) and the guard below then fires Fatal{RoleViolation, "gPipeInputs"} on
         // the first unbarriered verb, by name.
         const Bool runAhead = ClientRunsAhead();
@@ -3033,7 +3033,7 @@ namespace MobileGL::MG_Pipe {
         // §2.1's predicate, client-side (see ClientVerbIsBarriered).
         const Bool barriered = !runAhead || ClientVerbIsBarriered(verb, ctx);
         // THE ONE LINE THE RED-ONCE FLIPS: `= true` here is "fill for every verb", the
-        // pre-P5e behaviour, and it turns the guard below into the abort §3.5 names.
+        // pre-P5e behavior, and it turns the guard below into the abort §3.5 names.
         const Bool fillOwed = barriered;
         g_lastFillWasBarriered = fillOwed;
         if (fillOwed) {
@@ -3197,7 +3197,7 @@ namespace MobileGL::MG_Pipe {
         // P4a's segment, in ARCHITECTURE.md 5.4's RECOMMENDED order - framebuffer, then
         // program, then textures / sampler / image / global constants - which is why it stands
         // before the render-state block rather than after it. That order is explicitly code
-        // organisation and not a contract (all of a verb's set_*/bind_* complete before the
+        // organization and not a contract (all of a verb's set_*/bind_* complete before the
         // verb, and the server specialises lazily AT the verb from everything it then holds),
         // so nothing about the P2 and P3a emissions changes by standing after it; what it buys
         // is that the file reads in the order the design states.
@@ -3241,7 +3241,7 @@ namespace MobileGL::MG_Pipe {
         }
 
         // P5e's segment (sb, §5.6): the indexed buffer binding points, AFTER the program
-        // segment for the same "code organisation, not a contract" reason ARCHITECTURE.md 5.4
+        // segment for the same "code organization, not a contract" reason ARCHITECTURE.md 5.4
         // gives for P4a's order - all of a verb's set_*/bind_* complete before the verb, and
         // the server resolves a point against its own descriptor at its sync point. It reads
         // better here because the uniform window is what the program's block bindings INDEX

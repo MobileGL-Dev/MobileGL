@@ -23,11 +23,11 @@ namespace MobileGL::MG_State::GLState {
         if (it == m_entries.end()) return nullptr;
 
         SharedPtr<ShaderCompileTask> node = it->second.lock();
-        // Expired (every shader object that held it has released it), settled as Cancelled
+        // Expired (every shader object that held it has released it), settled as Canceled
         // (the enqueue lost a race with teardown, or the body threw), or CANCELLATION
         // REQUESTED but not yet settled (a releaser fired Cancel() while a worker was still
         // inside RunBody(), so the node is stuck at Running until the body returns - see
-        // JobNode::Run: once m_cancelled is set, the node is DOOMED to end up Cancelled no
+        // JobNode::Run: once m_cancelled is set, the node is DOOMED to end up Canceled no
         // matter how the body finishes, it just has not gotten there yet). All three can
         // never publish artifacts a caller may rely on, so all three are misses. Only the
         // first two are dead weight worth pruning from the index here - a cancellation-
@@ -54,7 +54,7 @@ namespace MobileGL::MG_State::GLState {
 
         SweepIfCrowded();
         // operator[] rather than a find/insert pair: an existing entry for this key is either
-        // a re-registration of the same source (the previous node expired or was cancelled)
+        // a re-registration of the same source (the previous node expired or was canceled)
         // or an astronomically rare hash collision. The newcomer wins in both cases.
         m_entries[ShaderSourceKey{.stage = node->stage,
                                   .sourceHash = node->sourceHash,

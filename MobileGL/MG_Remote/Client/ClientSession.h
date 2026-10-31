@@ -214,13 +214,13 @@ namespace MobileGL::MG_Remote::Client {
         // one with a single WireTail; the barrier policy lives in exactly one body. A distinct
         // name rather than an overload, because `nullptr, 0` would match both.
         // P5e (ra, CONTRACT-P5E §2.5): `wantReply` is the ONE caller-side relaxation of the
-        // catalogue's reply rule, and it exists for exactly one row - resource_subdata's
+        // catalog's reply rule, and it exists for exactly one row - resource_subdata's
         // BUFFER half, whose Bool the only caller discards (PipeFill.cpp's
         // MGPipeEmitResourceSubData). The row keeps kReplySlot on the wire (the server still
         // posts; an unread slot is harmless, ReplySlotPool's seq-stamped slots), so nothing about the
         // protocol moves - what moves is that under run-ahead this client neither waits for
         // the answer nor reads it, which is what makes the 64 KB persistent-map push
-        // fire-and-forget instead of a hidden round trip per block. It is NOT a licence to
+        // fire-and-forget instead of a hidden round trip per block. It is NOT a license to
         // skip an answer a caller uses: R-5 still forbids re-deriving one locally, and every
         // other kReplySlot row passes true (the default) and waits.
         Uint64 EmitAndWaitTails(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
@@ -462,7 +462,7 @@ namespace MobileGL::MG_Remote::Client {
         // this immediately before each EmitAndWait(MGPWireOp::ReadPixels, ...), with that
         // band's box, its Format/Type enums and the DstSize it computed - and, when not even one
         // pixel fits a reply, once for that one pixel instead of emitting; the server's Post
-        // keeps its own refusal as the last line of defence, but that one fires on the apply
+        // keeps its own refusal as the last line of defense, but that one fires on the apply
         // thread with the record already on the wire, where all the client sees is a hang.
         void RequireReadPixelsReplyFits(Uint32 width, Uint32 height, Uint32 format, Uint32 type, Uint64 bytes) const;
 

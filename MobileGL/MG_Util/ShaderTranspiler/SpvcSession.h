@@ -133,7 +133,7 @@ namespace MobileGL {
                 // stages; it may repeat a binding declared by several of them.
                 spvc_result SetAtomicCounterBlockBindings(Int topBinding, Vector<Int>& outGlBindings);
                 // Drops the Index decoration from every fragment output that carries the DEFAULT
-                // colour index 0, so the emitted ESSL does not print `index = 0`.
+                // color index 0, so the emitted ESSL does not print `index = 0`.
                 //
                 // Index 0 is what every single-source fragment output already is, in GL and in
                 // ESSL alike, and SPIR-V carries the decoration only because the application

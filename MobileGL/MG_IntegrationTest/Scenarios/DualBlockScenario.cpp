@@ -70,7 +70,7 @@ namespace MGITest {
             EXPECT_NE(before.serverIdentity, nullptr)
                 << "dual-block control: the server block's identity was never set (CONTRACT-P5E §3.2's "
                    "server-owned SetIdentity) - the backend's identity-keyed memo caches read nullptr "
-                   "as a hit on their zero-initialised slot";
+                   "as a hit on their zero-initialized slot";
 
             // One client verb boundary, driven directly so no draw reaches the server: the CLIENT
             // block's serial must move and the SERVER block's must not. Under a shared block the second

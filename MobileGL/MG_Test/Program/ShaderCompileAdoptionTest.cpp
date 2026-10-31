@@ -13,7 +13,7 @@
 //     two programs linking that one node to byte-identical SPIR-V;
 //   * that sharing did not make a cancel dangerous. Before this stage a node had exactly one
 //     shader object, so "this object stopped caring" and "nothing can observe this result"
-//     were the same statement and CancelCompile() cancelled unconditionally. They are not the
+//     were the same statement and CancelCompile() canceled unconditionally. They are not the
 //     same statement any more, and the four mutation paths that used to reach that cancel -
 //     re-source, delete, the orphan-name sweep, the destructor - are each covered below with
 //     a second object still holding the node.
@@ -453,9 +453,9 @@ TEST_F(ShaderCompileAdoptionTest, DeletingOneSharerLeavesTheOtherIntact) {
 // RunBody() for it - when the last holder releases it. ReleaseCompileNode fires Cancel(),
 // but JobNode::Cancel on a Running node only sets the cancellation-REQUEST flag; the state
 // stays Running until the worker's body returns and JobNode::Run forces the final transition
-// to Cancelled (see JobNode::Run's tail: it takes Cancelled instead of Complete whenever
+// to Canceled (see JobNode::Run's tail: it takes Canceled instead of Complete whenever
 // m_cancelled is set, regardless of how the body finished). FindAdoptable must refuse a node
-// in that in-between state - not just one already settled as Cancelled - or C inherits a
+// in that in-between state - not just one already settled as Canceled - or C inherits a
 // doomed node and glGetShaderiv reports GL_FALSE with an empty info log for valid source.
 TEST_F(ShaderCompileAdoptionTest, RunningCancelRequestedNodeIsNotAdopted) {
     const AsyncModeScope async(true);
@@ -584,7 +584,7 @@ TEST_F(ShaderCompileAdoptionTest, OrphanSweepWithALinkPinnedSharedNodeHoldsBoth)
 }
 
 // Every sharer released, in turn, with nothing pinning the node: the LAST release is the one
-// that may cancel, and afterwards the map must not hand the cancelled node to anybody. The
+// that may cancel, and afterwards the map must not hand the canceled node to anybody. The
 // property asserted is the one that matters and it is timing-free: whatever happened to the
 // old node, a later object with the same source must end up with a CORRECT compile.
 TEST_F(ShaderCompileAdoptionTest, AfterEverySharerIsGoneTheNextCompileIsStillCorrect) {
@@ -613,7 +613,7 @@ TEST_F(ShaderCompileAdoptionTest, AfterEverySharerIsGoneTheNextCompileIsStillCor
     ShaderSource(c, 1, &text, nullptr);
     CompileShader(c);
     ASSERT_EQ(QueryCompileStatus(c), GL_TRUE)
-        << "a cancelled node must never be adopted - it can only ever report GL_FALSE. " << QueryShaderInfoLog(c);
+        << "a canceled node must never be adopted - it can only ever report GL_FALSE. " << QueryShaderInfoLog(c);
     const GLuint program = LinkWith(c);
     ASSERT_EQ(QueryLinkStatus(program), GL_TRUE);
     EXPECT_GE(GetUniformLocation(program, "uSeed240"), 0);
@@ -621,7 +621,7 @@ TEST_F(ShaderCompileAdoptionTest, AfterEverySharerIsGoneTheNextCompileIsStillCor
 }
 
 // ---------------------------------------------------------------------------------------
-// The bypasses: both must be byte-identical to the pre-stage-6 behaviour
+// The bypasses: both must be byte-identical to the pre-stage-6 behavior
 // ---------------------------------------------------------------------------------------
 
 // The kill switch. With the flag off, compilation is synchronous and NOTHING is adopted -
@@ -737,7 +737,7 @@ TEST_F(ShaderCompileAdoptionTest, StressFortyEightObjectsOverSixSources) {
 
 // The adversarial interleaving, with duplicates everywhere: compile, query, re-source,
 // re-compile, delete, all with the pool busy and most objects sharing nodes. Nothing here
-// asserts timing - what it hunts for is a node cancelled out from under a sharer, which
+// asserts timing - what it hunts for is a node canceled out from under a sharer, which
 // surfaces as a wrong status, a wrong uniform, or a crash.
 TEST_F(ShaderCompileAdoptionTest, StressSharedNodesUnderResourceAndDelete) {
     const AsyncModeScope async(true);
@@ -796,7 +796,7 @@ TEST_F(ShaderCompileAdoptionTest, StressSharedNodesUnderResourceAndDelete) {
 // The map itself, driven directly
 // ---------------------------------------------------------------------------------------
 // Two of the map's rules cannot be forced deterministically through the GL surface - a
-// cancelled node depends on beating a worker to it, and a CompileEnv re-capture needs a
+// canceled node depends on beating a worker to it, and a CompileEnv re-capture needs a
 // backend swap. Both are unconditional properties of the class, so they are asserted here
 // against the class.
 
@@ -853,7 +853,7 @@ TEST(ShaderCompileAdoptionMapTest, EnvFingerprintMismatchIsNotAdopted) {
     EXPECT_EQ(map.GetAdoptionCount(), 0u);
 }
 
-// A node that settled as Cancelled published nothing, so adopting it would hand the new
+// A node that settled as Canceled published nothing, so adopting it would hand the new
 // object a compile that can only ever report GL_FALSE. It must be a miss, and the dead entry
 // must be pruned where it is found rather than waiting for the amortized sweep.
 TEST(ShaderCompileAdoptionMapTest, CancelledNodeIsNotAdoptedAndIsPruned) {
@@ -862,7 +862,7 @@ TEST(ShaderCompileAdoptionMapTest, CancelledNodeIsNotAdoptedAndIsPruned) {
     const String text = "#version 460\nvoid main() {}\n";
     const SharedPtr<ShaderCompileTask> node = MakeNode(text, ShaderStage::Fragment, env);
     map.Register(node);
-    // Never posted, so this settles the node as Cancelled right here.
+    // Never posted, so this settles the node as Canceled right here.
     node->Cancel();
     ASSERT_TRUE(node->IsCancelled());
     ASSERT_EQ(map.GetEntryCount(), 1u);

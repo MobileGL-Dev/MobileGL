@@ -570,7 +570,7 @@ class Arm:
         self.summary["boot_id"] = self.adb.boot_id()
         self.summary["started_utc"] = datetime.now(timezone.utc).isoformat()
 
-        # PURGE THE PREVIOUS ARM'S ARTEFACTS BEFORE THIS ONE STARTS, and not after it ends.
+        # PURGE THE PREVIOUS ARM'S ARTIFACTS BEFORE THIS ONE STARTS, and not after it ends.
         # The runner's result directory is keyed by case and backend, not by arm, so arm N+1
         # overwrites arm N's benchmark.json in place - and if arm N+1 fails early it leaves arm N's
         # file sitting there under arm N+1's name. `read_benchmark` cannot tell: it reads whatever is
@@ -715,7 +715,7 @@ class Arm:
             json.dumps(self.summary, indent=2), encoding="utf-8")
 
     def assert_arm(self):
-        """Does the library's own log prove the arm it is labelled as?
+        """Does the library's own log prove the arm it is labeled as?
 
         Two questions, and the second is the one that matters for `spawn`:
           1. did the transport resolve to what this arm claims (the ConfigLoader marker), and

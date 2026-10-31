@@ -1974,7 +1974,7 @@ void main() { color = u + v; }
 
     // ------------------------------------------------------------- length on every path ----
     // glGetProgramResourceiv's *length is the caller's only signal for how many entries params
-    // holds, and callers are entitled to leave it uninitialised: the CTS declares `GLsizei
+    // holds, and callers are entitled to leave it uninitialized: the CTS declares `GLsizei
     // length;` next to a 1000-entry stack array and then loops `for (i = 0; i < length; ++i)`
     // (gl4cProgramInterfaceQueryTests.cpp:2172). Leaving it untouched on an error path therefore
     // does not "return nothing" - it hands the caller whatever was on its stack and makes it walk

@@ -838,7 +838,7 @@ def execute(args: argparse.Namespace) -> int:
         if empty_streak >= args.max_empty_streak:
             print(
                 f"[run_cts_windows] aborting after {empty_streak} consecutive chunks made no "
-                "case progress; no unobserved case was labelled Crash/Hang",
+                "case progress; no unobserved case was labeled Crash/Hang",
                 file=sys.stderr,
             )
             break

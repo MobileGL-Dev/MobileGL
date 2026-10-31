@@ -1419,7 +1419,7 @@ TEST_F(GeneralBufferTest, General_PersistentExplicitFlushOnlyDirtiesFlushedRange
 
     // The explicit flush is what GL 4.6 6.2.1 promises reaches the store. (Until P13 W6 this also
     // asserted that a per-draw sync moved nothing; the record arm's push publishes the map itself,
-    // so that was the deleted frontend arm's behaviour, not a rule.)
+    // so that was the deleted frontend arm's behavior, not a rule.)
     FlushMappedBufferRange(GL_ARRAY_BUFFER, sizeof(GLint), sizeof(GLint));
     EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
 
@@ -2019,7 +2019,7 @@ TEST_F(BufferTest, RedefiningANonAdoptedBufferIsUnchanged) {
 // in place and never has a staging copy - so the unmap simply skipped the copy-back
 // for a resident store. Residency now also comes from a shader storage binding
 // (EnsureGpuResidentStorage at draw time) and from large-store adoption, both of which
-// an application then re-initialises through an ordinary map/write/unmap: the
+// an application then re-initializes through an ordinary map/write/unmap: the
 // conformance suite re-seeds every SSBO that way before each draw, and every re-seed
 // after the first draw was dropped on the floor. These pin the landing for each map
 // shape, on the backend that writes the coherent mapping in place and on the one that

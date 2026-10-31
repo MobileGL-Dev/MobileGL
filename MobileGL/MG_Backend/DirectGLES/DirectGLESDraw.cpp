@@ -59,7 +59,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // P5e (mv): THE ARM SELECTOR of this family - VertexInputReadsRecords() - moved to
         // Managers.h, unchanged. MultiDraw.cpp is a second translation unit on the same draw
         // path and has to select the same arm; a copy of the conjunction there would be two
-        // selectors for one family. Its rationale travelled with it.
+        // selectors for one family. Its rationale traveled with it.
 
         // P5e (vi): "does this draw fetch any attribute out of the application's own memory",
         // answered FROM THE RECORD instead of from the frontend VAO. The emitter publishes
@@ -238,7 +238,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // feedback records per emitted primitive, so a replayed draw would write its vertices N
         // times; rasterizer discard means there are no fragments to gate at all, so replaying
         // would be pure cost with nothing to show for it. Both fall back to a single pass with an
-        // open gate, i.e. to the pre-emulation behaviour, rather than to wrong data.
+        // open gate, i.e. to the pre-emulation behavior, rather than to wrong data.
         if (MG_Pipe::gPipeInputs->IsTransformFeedbackActive() ||
             MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) {
             return 1;
@@ -521,7 +521,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
         TextureImpl::SyncNeccessaryTextures();
         FramebufferImpl::SyncCurrentFBO();
-        // A colour clear is exactly the operation that is allowed to write a widened
+        // A color clear is exactly the operation that is allowed to write a widened
         // attachment's alpha - it is what puts the 1.0 there that every later draw is masked
         // away from. SyncCurrentFBO ran first, so g_alphaWidenedDrawBufferMask already describes
         // the framebuffer this clear will land on.
@@ -565,17 +565,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Bool outOfRange = cc.x() < 0.f || cc.x() > 1.f || cc.y() < 0.f || cc.y() > 1.f || cc.z() < 0.f ||
                                     cc.z() > 1.f || cc.w() < 0.f || cc.w() > 1.f;
             // A widened attachment's stored alpha has to end up 1.0, and glClear applies ONE
-            // clear colour to every draw buffer - so a framebuffer that mixes a widened
+            // clear color to every draw buffer - so a framebuffer that mixes a widened
             // attachment with a native one cannot be served by doctoring glClearColor. Take the
             // same per-draw-buffer glClearBufferfv route the out-of-range case already uses and
-            // substitute the alpha only where it belongs. Scissor and the colour write mask apply
+            // substitute the alpha only where it belongs. Scissor and the color write mask apply
             // to glClearBufferfv exactly as they do to glClear, so a scissored clear stays
             // scissored and an application that masked alpha off still gets its way (the storage
             // then keeps the 1.0 an earlier clear left, which is the same answer).
             //
-            // glClearBufferfv on an INTEGER colour buffer is GL_INVALID_OPERATION, so a
+            // glClearBufferfv on an INTEGER color buffer is GL_INVALID_OPERATION, so a
             // framebuffer with one of those as a draw buffer keeps plain glClear - which ES
-            // leaves undefined for integer colour buffers anyway, and which an application that
+            // leaves undefined for integer color buffers anyway, and which an application that
             // wants a defined answer must replace with glClearBufferuiv/iv (those DO substitute
             // the widened alpha). The out-of-range trigger is left exactly as it was.
             const Uint32 widenedDrawBuffers = FramebufferImpl::g_alphaWidenedDrawBufferMask;

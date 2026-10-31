@@ -588,7 +588,7 @@ TEST_F(RenderStateTest, IndexedRectangleQueriesRejectAnOutOfRangeIndex) {
 // window", which the frontend cannot spell before a surface exists). DirectGLES resolved the two
 // by looking at the EXTENT and so inverted every deliberately empty box into the full surface -
 // KHR-GL43.viewport_array.scissor_zero_dimension is exactly that draw, and it came back holding
-// the drawn colour where the untouched fill was required.
+// the drawn color where the untouched fill was required.
 //
 // These drive RenderState directly instead of the GL entry points on purpose: the flag's whole
 // content is what it says BEFORE the first scissor call of a context, and this binary shares one

@@ -207,7 +207,7 @@ build-test/tools/trace_replay/mobilegl_trace_replay \
 ```
 
 At each call boundary it walks every live framebuffer object (or only the named
-ones), reads back every colour attachment and the depth attachment, and writes
+ones), reads back every color attachment and the depth attachment, and writes
 `fbo<N>-att<M>.png` / `fbo<N>-depth.png` plus a `manifest.txt` line per
 attachment recording the attached object, size, internal format, component type
 and per-channel min/max/mean and a content hash. Attachments are read as floats
@@ -326,7 +326,7 @@ case pass" but "which cases diverge, and is the divergence reproducible":
 
 The archive exists because `.trace-work/android-retrace-result/<case>-<backend>/` is
 keyed by case and backend and by nothing else: without `--archive-dir` the only
-artefact that survives a three-repeat run is the last one, and "were the three
+artifact that survives a three-repeat run is the last one, and "were the three
 repeats the same picture?" becomes unanswerable after the fact.
 
 ```sh
@@ -539,7 +539,7 @@ its old local 180-second budget. A growing log does not bypass the explicit abso
 On timeout the driver terminates and reaps the entire case process group,
 including a child that ignores TERM after CMake exits, and stops the matrix to
 avoid cascading Busy failures. Check the peer before resuming. Ctrl-C/TERM/HUP
-also clean up the group and save a cancelled checkpoint.
+also clean up the group and save a canceled checkpoint.
 
 Each attempt has a new directory. `checkpoint.json` is written atomically, and
 only a zero exit plus current-attempt successful result, matching backend/call/

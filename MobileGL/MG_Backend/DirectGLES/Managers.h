@@ -198,7 +198,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLenum IndexType() const { return m_indexType; }
 
     private:
-        // Declared before m_capOverride so it is initialised first (members initialise in
+        // Declared before m_capOverride so it is initialized first (members initialize in
         // declaration order): the whole decision is made once, and both the cap override and the
         // constructor body read the same answer.
         RestartSubstitutionKind m_kind = RestartSubstitutionKind::None;
@@ -248,7 +248,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Indices whose whole state tuple (viewport rectangle, scissor rectangle, scissor-test enable,
     // depth range) is identical share ONE pass, so the overwhelmingly common case - every index
     // still holding what glViewport/glScissor/glDepthRange broadcast to all sixteen - collapses
-    // to a single pass with an all-ones gate mask, i.e. one draw and no behaviour change at all.
+    // to a single pass with an all-ones gate mask, i.e. one draw and no behavior change at all.
     //
     // Whether emulation runs. Off only under MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION falsy, which
     // restores the pre-emulation path as a negative control.
@@ -527,7 +527,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Bool ResolveProgramSubsystemArm();
     // P13 W6: every family runs the record arm - the frontend arms these resolvers used to choose
     // between are gone, so no draw-path site asks them any more (the integration peeks still read
-    // the latches). The one refusal a running process can still meet - a driver whose colour-
+    // the latches). The one refusal a running process can still meet - a driver whose color-
     // attachment cap exceeds the wire's width - is checked once, at capability bring-up.
     void ResolveRecordArmFamilies();
 
@@ -843,7 +843,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // glBufferStorageExternalEXT, so `id` is immutable, persistentMapped and
             // persistentPtr is this server's own coherent map of the client's pages. The
             // reference is this twin's own, released only after a fence that follows the
-            // store's last use has signalled (RetireT0Import). Survives an ES context loss:
+            // store's last use has signaled (RetireT0Import). Survives an ES context loss:
             // the next ensure re-imports it. Null for every store T0 did not adopt.
             void* externalAhb = nullptr;
             // P8-C: A SHADER WROTE THIS STORE ON THIS SIDE since the R-11 staged copy (or, for
@@ -1632,7 +1632,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         // Components per texel the frontend format's client data carries, for the three-channel
-        // formats that can be widened to a four-channel colour-renderable target; 0 for everything
+        // formats that can be widened to a four-channel color-renderable target; 0 for everything
         // else. See PrepareChannelWidenedUpload.
         Uint GetWidenableClientComponentCount(TextureInternalFormat format);
 
@@ -1642,7 +1642,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool IsIntegerWidenableFormat(TextureInternalFormat format);
 
         // Repacks three-component client data as four components with an alpha of 1.0 in
-        // `uploadType`, for a format the backend widened to keep a colour attachment renderable.
+        // `uploadType`, for a format the backend widened to keep a color attachment renderable.
         // Returns `data` untouched when no widening applies. Pure CPU and context-free so a unit
         // test can exercise the exact packing the driver is handed; `widenedData` is the caller's
         // scratch buffer and has to outlive the returned pointer.
@@ -1921,7 +1921,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             SamplerParameters m_cacheSamplerParameters;
             UintVec2 m_cacheLodRange = {0, 1000};
             // All three representations plus the form, because none of them alone identifies the
-            // border colour the driver texture is holding: two integer borders can share one float
+            // border color the driver texture is holding: two integer borders can share one float
             // (anything differing above 2^24), and a Float -> Int transition can leave every number
             // unchanged while still needing a different driver entry point.
             FloatVec4 m_cacheBorderColor = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -1975,7 +1975,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Hands back the whole RECORD rather than its Params, because the parameter push
             // reads two things from beside them: Desc.InternalFormat, which decides the two
             // channel-widening swizzle compositions, and Params.BuiltinSampler, which is where
-            // the border colour lives (it is sampler state, GL 4.6 table 23.18, and P4a does
+            // the border color lives (it is sampler state, GL 4.6 table 23.18, and P4a does
             // not duplicate it onto MGPTextureParams).
             const MG_Pipe::MGPipeResourceRecord* ResolvePushedTextureParams(
                 const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
@@ -1994,7 +1994,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // m_syncedShapeParamsVersion) AND m_syncedContentVersion: the applier bumps it on
             // every respecify and every sub-data it applies to this resource, which is exactly
             // the union those four covered, without the coarse "any texture's churn re-opens
-            // every gate" behaviour the sampling-resolution generation had.
+            // every gate" behavior the sampling-resolution generation had.
             Uint64 m_syncedResourceSerial = 0;
             // The record's ParamsSerial at the last SyncTextureParamsToBackend. Replaces
             // m_syncedTextureParamsVersion; MGPTextureParams::ForceResync replaces
@@ -2186,7 +2186,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                framebuffer, as a GL_COLOR_ATTACHMENTm enum. ES only accepts glDrawBuffers bufs[s] ==
                GL_COLOR_ATTACHMENTs, so a GL draw-buffer slot s naming attachment a forces a's image
                under backend slot s. This table is the single owner of that decision and is kept a
-               PERMUTATION of the backend colour slots: every other attachment keeps its identity
+               PERMUTATION of the backend color slots: every other attachment keeps its identity
                slot when that slot survived, and is parked on the lowest free slot when it did not.
                Deriving the point per-query from the draw-buffer array instead handed the identity
                point to any attachment that was not a draw buffer - i.e. exactly the point a
@@ -2248,7 +2248,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // false accounts of one physical state: a composite framebuffer synced as DRAW in a
             // depth pre-pass detaches the points its other attachment state attaches, and the
             // end-of-frame sync of that same record on the READ side then found its own slot
-            // already stamped by an earlier identical sync, walked nothing, left the colour point
+            // already stamped by an earlier identical sync, walked nothing, left the color point
             // detached, and the driver refused the following glBlitFramebuffer with
             // INVALID_OPERATION. Keying on the object is what makes "this hash is applied" mean
             // "these points are on the driver now".
@@ -2305,7 +2305,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // describe that point at all (Color8..Color31, and the default framebuffer's FRONT/BACK
         // tokens). MGPFramebufferState carries Color[8] + Depth + Stencil, which is every point
         // a framebuffer can hold on the handle arm - D-C3 refuses bit 9 outright on a driver
-        // reporting more than 8 colour attachments. P5e (fb) exports it: the twin's attachment
+        // reporting more than 8 color attachments. P5e (fb) exports it: the twin's attachment
         // walk, the named blit's aspect plan and the detach walk all ask the same question of
         // the same record, and a second copy of the Color/Depth/Stencil dispatch beside each of
         // them is how one of them ends up describing a point differently from the others.
@@ -2313,13 +2313,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                               FramebufferAttachmentType point);
         // True when the read buffer names a fixed-point (norm/snorm) attachment that the
         // backend actually stores in a floating-point format. GL clamps a read from a
-        // fixed-point colour buffer to [0,1] (GL_CLAMP_READ_COLOR defaults to
+        // fixed-point color buffer to [0,1] (GL_CLAMP_READ_COLOR defaults to
         // GL_FIXED_ONLY); the substituted float storage would not, so the readback path
         // has to apply the clamp itself.
         Bool IsFixedPointFallbackReadAttachment();
 
         // True when the read buffer names a three-channel attachment the backend actually stores
-        // in a four-channel format (the colour-renderable widening). A format without alpha reads
+        // in a four-channel format (the color-renderable widening). A format without alpha reads
         // back as 1.0, so the readback path has to overwrite the alpha the draw left behind -
         // unconditionally, since this is the format's own semantics rather than the
         // GL_CLAMP_READ_COLOR rule the clamp above implements.
@@ -2337,19 +2337,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // driver where no interception is possible. So the stored alpha is kept at 1.0 instead:
         // a clear touching a widened buffer writes alpha 1.0, and every draw into it has its
         // alpha write mask forced off, so nothing can ever move it again. The application's own
-        // colour mask is untouched - glGet(GL_COLOR_WRITEMASK) still reports what it set.
+        // color mask is untouched - glGet(GL_COLOR_WRITEMASK) still reports what it set.
         extern Uint32 g_alphaWidenedDrawBufferMask;
 
-        // Bit i set = DRAW BUFFER i of the framebuffer bound as DRAW resolves to a colour
+        // Bit i set = DRAW BUFFER i of the framebuffer bound as DRAW resolves to a color
         // attachment with an INTEGER format. Recomputed beside the mask above and for its sake:
-        // glClearBufferfv on an integer colour buffer is GL_INVALID_OPERATION, so the
+        // glClearBufferfv on an integer color buffer is GL_INVALID_OPERATION, so the
         // per-draw-buffer clear route the widening needs has to stand down when one is present.
-        // (glClear on an integer colour buffer is left undefined by ES in the first place, and
+        // (glClear on an integer color buffer is left undefined by ES in the first place, and
         // an application that wants a defined answer has to call glClearBufferuiv/iv - which does
         // carry the widened alpha substitution.)
         extern Uint32 g_integerColorDrawBufferMask;
 
-        // The colour a clear has to hand the driver for one draw buffer: the application's value,
+        // The color a clear has to hand the driver for one draw buffer: the application's value,
         // except that a widened attachment's alpha is replaced by the 1.0 its three-channel
         // format implies. `one` is 1.0 encoded in the clear call's own component type - the
         // integer clears carry the integer 1, the float clear carries 1.0f.
@@ -2909,7 +2909,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // self-contained would produce a per-draw rebuild: the other eight inputs - the draw
             // FBO's snorm/unorm clamp masks, the fragColor broadcast count, the storage-block
             // binding signature, the atomic-counter set, the live image formats and the patch
-            // parameters - are all still specialised at the verb, from state this backend holds.
+            // parameters - are all still specialized at the verb, from state this backend holds.
             // 0 means "never stamped", which is a guaranteed miss (applier serials start at 1).
             Uint64 GetSyncedShaderCsoSerial() const { return m_syncedShaderCsoSerial; }
             // P5e (pg): the SECOND server-owned key, and it replaces GetImageUnitVersion() on

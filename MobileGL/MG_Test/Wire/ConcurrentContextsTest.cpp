@@ -10,8 +10,8 @@
 // thread of its own, every window with its own context. Normally they all share with one global
 // context; after a device loss that share context is lost, so the replacements are created without
 // sharing - one share group per window, drawing at the same time. Each thread here owns a pbuffer,
-// a context and a textured draw of its own colour, and reads it back over and over - through the
-// exported EGL and GL entry points, which is where the client serialises its threads.
+// a context and a textured draw of its own color, and reads it back over and over - through the
+// exported EGL and GL entry points, which is where the client serializes its threads.
 //
 // Every shape below has one rule in common: a thread's records apply under ITS context, whatever the
 // other threads bind, release or destroy meanwhile. The shapes differ in what the other threads do:
@@ -115,7 +115,7 @@ namespace {
         return 0xFF000000u | (0x40u + 0x50u * static_cast<Uint32>(index % 3)) << 8 |
                (0x20u + 0x30u * static_cast<Uint32>(index / 3));
     }
-    // The clear colour of a churn cycle (ReadbackRace): a different one per thread and cycle.
+    // The clear color of a churn cycle (ReadbackRace): a different one per thread and cycle.
     Uint32 ChurnColourOf(int index, int cycle) {
         return 0xFF000000u | (0x10u * static_cast<Uint32>(index)) << 16 |
                (static_cast<Uint32>(cycle * 7) & 0xFFu) << 8 | 0x80u;
@@ -154,7 +154,7 @@ namespace {
         Uint32 colour = 0;
     };
 
-    // The thread's program, vertex array and one-texel texture of its own colour.
+    // The thread's program, vertex array and one-texel texture of its own color.
     Drawing BuildDrawing(int index, ThreadReport* out) {
         static const char* kVertex =
             "#version 330 core\n"

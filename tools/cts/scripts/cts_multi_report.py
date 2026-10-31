@@ -7,7 +7,7 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # End of Source File Header
 
-"""Summarise any number of GL CTS suites and MobileGL backends.
+"""Summarize any number of GL CTS suites and MobileGL backends.
 
 Each repeatable suite specification consists of four values: backend, label,
 caselist, and result directory.  For example::

@@ -104,7 +104,7 @@ namespace {
         // Probe 5's inconclusive path: nothing compiles, including the location-0 control.
         bool everyCompileFails = false;
         // Probe 6: a blit writes the destination array layer the framebuffer names, or always
-        // layer 0. The second knob is the inconclusive path - a driver that does not honour the
+        // layer 0. The second knob is the inconclusive path - a driver that does not honor the
         // SOURCE layer either fails the probe's control.
         bool blitIgnoresDestinationLayer = false;
         bool blitIgnoresSourceLayer = false;
@@ -112,7 +112,7 @@ namespace {
         // Probe 7: the driver stores a WHOLE 16-bit packed ALLOCATION with its fields packed
         // from the other end of the word - on the measured device, every level of the probe's
         // 30x30x12 three-level array, while same-shape plain-2D images stay in the canonical
-        // order. Modelled at the raw copy, which is the only path that can observe it (uploads
+        // order. Modeled at the raw copy, which is the only path that can observe it (uploads
         // and readbacks of the same image decode the driver's own layout consistently): a copy
         // whose SOURCE is any level of the mirrored allocation delivers the mirrored
         // re-encoding, which the plain-2D readback then decodes with the non-REV order -
@@ -178,7 +178,7 @@ namespace {
             // The device rule the probe reproduces: the mirrored layout is only picked when
             // the levels were uploaded onto a texture still at the driver defaults - any
             // glTexParameteri BEFORE the first upload steers the driver to the plain layout.
-            // Modelling it makes a params-first probe (the round-one regression: it measured
+            // Modeling it makes a params-first probe (the round-one regression: it measured
             // "clean" in the very context whose params-after textures mirrored) stop
             // detecting, which turns that mistake into a red test instead of a silent miss.
             bool paramsTouchedBeforeUpload = false;
@@ -639,7 +639,7 @@ namespace {
                     g_fake.lastSampledValue = 0.0f;
                 } else if (g_fake.msaaSwizzledAlphaCorrupted && swizzle == GL_RED && component == 'w' &&
                            sampleIndex != 0 && g_fake.sampledMultisampleProgramCount >= 2) {
-                    // Uninitialised memory: a value that is neither the answer nor the clear.
+                    // Uninitialized memory: a value that is neither the answer nor the clear.
                     g_fake.lastSampledValue = -1.34954e-17f;
                 }
                 return;

@@ -15,7 +15,7 @@
 // references the texture BEFORE the upload in the same recording and checks the command saw the
 // old texels (or that the upload is not overwritten by it):
 //   - a draw sampling the texture (the sampled-texture path);
-//   - a clear of the texture as a colour attachment, issued as the FIRST command after a
+//   - a clear of the texture as a color attachment, issued as the FIRST command after a
 //     glFinish, so it is resolved before the recording that holds it has begun.
 // Every case reads back only after all of its commands, so no readback orders them for us.
 

@@ -41,8 +41,8 @@
 // W or E that sits on such a path must either be latched with one of the _ONCE forms
 // below or be demoted to MGLOG_D, which production compiles out entirely.
 //
-// The latch is a function-local atomic - zero-initialised before any dynamic
-// initialisation runs, so it is safe from any thread at any time, needs no guard
+// The latch is a function-local atomic - zero-initialized before any dynamic
+// initialization runs, so it is safe from any thread at any time, needs no guard
 // variable, and costs one relaxed test-and-set on the already-cold failure path. Note
 // that the latch is per CALL SITE, not per subject: a site that reports "texture %u is
 // unsupported" reports only the first such texture. That is the intended trade - the

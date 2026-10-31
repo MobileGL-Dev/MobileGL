@@ -44,7 +44,7 @@ namespace MobileGL::MG_State::GLState {
     //
     // ---- Lifetime and pruning ----
     // WeakPtr, never SharedPtr: the map is an index, not an owner. An entry whose node has
-    // been released by every shader object simply expires, and a node that was CANCELLED
+    // been released by every shader object simply expires, and a node that was CANCELED
     // carries no result at all, so both are treated as misses and pruned where they are
     // found. Pruning is otherwise amortized: Register() sweeps the whole map whenever it has
     // grown past twice its size at the last sweep, which bounds the map at O(live nodes)
@@ -60,10 +60,10 @@ namespace MobileGL::MG_State::GLState {
         // A hit is honored only after the FULL source text has been compared byte for byte
         // against the candidate node's own snapshot: the hash in the key is a lookup
         // accelerator, never the answer (ShaderSourceKey). A node that has settled as
-        // Cancelled is never handed out - it published nothing, so adopting it would give the
+        // Canceled is never handed out - it published nothing, so adopting it would give the
         // new object a compile that can never report anything but GL_FALSE. Nor is a node
         // whose cancellation has merely been REQUESTED but not yet settled (still Running,
-        // with IsCancellationRequested() true): JobNode::Run forces such a node to Cancelled
+        // with IsCancellationRequested() true): JobNode::Run forces such a node to Canceled
         // the moment its body returns regardless of how the body finished, so it is already
         // doomed and handing it out would just move the same GL_FALSE-with-no-log outcome to
         // a second, unrelated shader object.

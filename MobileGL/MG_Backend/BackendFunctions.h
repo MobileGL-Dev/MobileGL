@@ -218,7 +218,7 @@ namespace MobileGL::MG_Backend {
         void (*BeginTransformFeedback)(GLenum primitiveMode);
         void (*EndTransformFeedback)();
         // ARB_transform_feedback2. A backend that leaves these null keeps the single
-        // implicit capture span the frontend has always modelled; the frontend state
+        // implicit capture span the frontend has always modeled; the frontend state
         // (paused flag, per-object bindings) is tracked either way.
         void (*PauseTransformFeedback)();
         void (*ResumeTransformFeedback)();

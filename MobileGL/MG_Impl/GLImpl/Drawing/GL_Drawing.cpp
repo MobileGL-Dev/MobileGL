@@ -204,7 +204,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // Draws without a geometry stage write exactly the primitives they assemble,
     // clamped by the capture buffers' remaining capacity (a full buffer stops
     // recording whole primitives, which is what PRIMITIVES_WRITTEN reports).
-    // Geometry amplification is not modelled here.
+    // Geometry amplification is not modeled here.
     static void AccountTransformFeedbackPrimitives(GLenum mode, GLsizei count) {
         if (!MG_State::pGLContext->IsTransformFeedbackActive()) return;
         // A paused span captures nothing, so a draw made while paused contributes to

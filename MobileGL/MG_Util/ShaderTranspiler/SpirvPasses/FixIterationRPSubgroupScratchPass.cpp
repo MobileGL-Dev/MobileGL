@@ -101,7 +101,7 @@ namespace MobileGL {
                 // memory out at natural alignment and the limit
                 // (VUID-RuntimeSpirv-Workgroup-06530) counts the padding that produces,
                 // so a model that sums unpadded sizes would under-count exactly where the
-                // budget check matters. Returns false for anything not modelled here,
+                // budget check matters. Returns false for anything not modeled here,
                 // which the caller answers by declining to grow at all rather than by
                 // certifying growth against a total it knows is an underestimate.
                 bool WorkgroupTypeLayout(IRContext* context, uint32_t typeId, uint32_t* size, uint32_t* alignment,

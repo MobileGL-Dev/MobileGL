@@ -239,7 +239,7 @@ namespace MobileGL::MG_State::GLState {
     // deferral mechanism (and JobNode's debug assert on it) exists.
     void ShaderCompileTask::RunBody() {
         // Own the failure rather than letting JobNode's backstop settle the node as
-        // Cancelled: an abandoned node publishes nothing, so the shader would report
+        // Canceled: an abandoned node publishes nothing, so the shader would report
         // COMPILE_STATUS false with an EMPTY info log. GL models a failed compile as
         // status + log, so turn a throw into exactly that - a completed job whose result
         // is "this shader did not compile", with a log the application can read.

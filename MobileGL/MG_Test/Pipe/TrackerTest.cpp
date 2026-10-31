@@ -1209,7 +1209,7 @@ namespace {
         ASSERT_EQ(MGPipeVertexAttribDefaultsLastHeader().Count, 1u)
             << "a steady context published more than the one attribute that moved";
 
-        // A different context, whose 32 defaults are the value-initialised {0,0,0,1} the
+        // A different context, whose 32 defaults are the value-initialized {0,0,0,1} the
         // tracker's own reset produces - so a diff against the staging mirror finds nothing.
         MG_State::pGLContext = MakeUnique<GLContext>();
         Draw();

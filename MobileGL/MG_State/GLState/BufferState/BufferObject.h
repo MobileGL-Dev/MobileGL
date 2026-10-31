@@ -147,7 +147,7 @@ namespace MobileGL {
             // Everything here is behind the build option AND behind
             // `MG_Config::Transport != Monolith` at the call site, because an extra
             // resource_subdata record or an extra respecify on the monolith path is new
-            // behaviour and D-J forbids it. The pull build compiles none of it, which is also
+            // behavior and D-J forbids it. The pull build compiles none of it, which is also
             // how G1 holds over a file this central.
 
             // ONE BLOCK of the mapped span (PersistentMapTracker::BlockBytes), emitted through

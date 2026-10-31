@@ -857,7 +857,7 @@ namespace {
             WireLogError("MG_Remote server: session pid=%d reaped signal=%d sessionsFaulted=%lu", reaped,
                          WTERMSIG(status), sessionsFaulted);
         } else {
-            // Neither exited nor signalled: WUNTRACED/WCONTINUED are not passed, so this is a status
+            // Neither exited nor signaled: WUNTRACED/WCONTINUED are not passed, so this is a status
             // this build does not understand. Counted as a fault rather than silently ignored.
             ++sessionsFaulted;
             WireLogError("MG_Remote server: session pid=%d reaped status=0x%x sessionsFaulted=%lu", reaped, status,

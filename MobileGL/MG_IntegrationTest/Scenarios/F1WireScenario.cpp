@@ -577,12 +577,12 @@ void main() { color = vec4(value, 0.25, 0.75, 1.0); }
     //     MGPipe: Fatal{UnmigratedVerb, "Magma:mipmap-shader-format-or-shape"}
     // deterministically, under both run-ahead and lockstep, while the monolith arm passed and the
     // host lane stayed green. It stayed green because lavapipe reports BLIT_SRC|BLIT_DST for every
-    // colour format this scenario can create: `nativeBlit` is always true here, so NEITHER shader
+    // color format this scenario can create: `nativeBlit` is always true here, so NEITHER shader
     // arm of GenerateWireMipmap has ever executed on the gate machine. A refusal no host lane can
     // reach is a refusal that ships.
     //
     // MGITEST_MAGMA_FORCE_SHADER_MIPMAP is what makes them reachable, and it selects which one:
-    //   1 - drop the native blit only. The destination level is still a colour attachment, so the
+    //   1 - drop the native blit only. The destination level is still a color attachment, so the
     //       pass renders straight into it (the arm an Adreno takes for a format without BLIT_DST).
     //   2 - also treat the destination as not attachable. The pass renders into owned scratch and
     //       copies the mip in (the arm it takes for a texture whose image never got
@@ -603,8 +603,8 @@ void main() { color = vec4(value, 0.25, 0.75, 1.0); }
         glDisable(GL_SCISSOR_TEST);
         glClearColor(0.75f, 0.25f, 0.5f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        // Two different halves, not one flat colour: a pass that loses GL's row order averages to
-        // the same number everywhere and a single-colour assertion would call that correct.
+        // Two different halves, not one flat color: a pass that loses GL's row order averages to
+        // the same number everywhere and a single-color assertion would call that correct.
         glEnable(GL_SCISSOR_TEST);
         glScissor(0, 0, 8, 4);
         glClearColor(0.25f, 0.75f, 0.5f, 1.0f);
@@ -614,7 +614,7 @@ void main() { color = vec4(value, 0.25, 0.75, 1.0); }
         glGenerateMipmap(GL_TEXTURE_2D);
         ASSERT_GT(PeekSplitRuntime().emitSeq, before) << "F1.ShaderMip.wire";
         // Level one is 4x4, and each of its rows averages two source rows from ONE half - the
-        // boundary never falls inside a destination texel, so the two colours survive unmixed.
+        // boundary never falls inside a destination texel, so the two colors survive unmixed.
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 1);
         ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
         GLubyte rows[4][4]{};
@@ -658,7 +658,7 @@ void main() { color = vec4(value, 0.25, 0.75, 1.0); }
     // TWO HALVES AND A BAND THAT IS NOT ASSERTED. The generated level is read back through a real
     // sampled attachment, so a flat fill would prove nothing: the source is split at its middle
     // row instead. The ported filter takes a 2x2 box at ivec2(texCoord * srcTexelSize), which
-    // lands half a texel off the destination centre - the monolith's own arithmetic, kept
+    // lands half a texel off the destination center - the monolith's own arithmetic, kept
     // deliberately (§3.2 retires a refusal by matching that arm, defects included). Under either
     // reading of that half texel, destination rows 0..2 come only from the lower half and rows
     // 4..7 only from the upper half; row 3 is the straddle and is the one row this case does not
@@ -778,7 +778,7 @@ void main() { color = vec4(value, 0.25, 0.75, 1.0); }
     // P8-F: `Magma:mipmap-shader-format-or-shape` IS A NAMED DECLINE ON THE WIRE ARM NOW, which is
     // the monolith arm's answer for a chain it cannot build (VulkanRenderer.cpp's GenerateMipmap
     // declines a format without blit support and leaves the chain unwritten). It used to end the
-    // session. A 3D texture is a shape neither wire shader arm takes (the colour pass samples a
+    // session. A 3D texture is a shape neither wire shader arm takes (the color pass samples a
     // sampler2D), so with the native blit forced off (MGITEST_MAGMA_FORCE_SHADER_MIPMAP) it is what
     // reaches the refusal on this host - lavapipe blits a 3D RGBA8 chain natively otherwise.
     //
@@ -1087,7 +1087,7 @@ void main() { imageStore(destination, ivec2(gl_GlobalInvocationID.xy), vec4(0.0,
         glDeleteTextures(1, &root);
     }
 
-    // Historical case name retained for the registered test catalogue. The old P7
+    // Historical case name retained for the registered test catalog. The old P7
     // refusal is retired: this case now requires the VBO draw's actual green pixels.
     TEST_F(F1WireScenario, EnabledVertexBufferDrawKeepsNamedP7Fatal) {
         if (!Ready()) return;
@@ -1138,14 +1138,14 @@ void main() { color = vec4(0.0, 1.0, 0.0, 1.0); }
         if (!Ready()) return;
         Attach(GL_RGBA8);
         const char* fragment = R"(#version 430 core
-layout(std140, binding=3) uniform Colour { vec4 value; };
+layout(std140, binding=3) uniform Color { vec4 value; };
 layout(location=0) out vec4 color;
 void main() { color = value; }
 )";
         const GLuint program =
             BuildWireProgram({{GL_VERTEX_SHADER, kWireVertexIdTriangle}, {GL_FRAGMENT_SHADER, fragment}});
         ASSERT_NE(program, 0u);
-        const GLuint block = glGetUniformBlockIndex(program, "Colour");
+        const GLuint block = glGetUniformBlockIndex(program, "Color");
         ASSERT_NE(block, GLuint(GL_INVALID_INDEX));
         glUniformBlockBinding(program, block, 3);
         GLint alignment = 0;
@@ -1706,7 +1706,7 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
         glClearColor(1, 0, 1, 1);
         glClear(GL_COLOR_BUFFER_BIT);
         glViewport(2, 1, 5, 3);
-        // Copy into the centre half with BOTH destination axes reversed. Scissor
+        // Copy into the center half with BOTH destination axes reversed. Scissor
         // keeps only its left half, so a plain unclipped vkCmdBlitImage is incorrect.
         glScissor(width / 4, height / 4, width / 4, height / 2);
         glEnable(GL_SCISSOR_TEST);
@@ -1739,7 +1739,7 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
     // four rotations declines by name.
     //
     // THE SOURCE IS A 3D TEXTURE SLICE, which is ordinary defined GL (a layer of a 3D texture is a
-    // legal colour attachment) and is exactly the shape the shader pass cannot sample. The same case
+    // legal color attachment) and is exactly the shape the shader pass cannot sample. The same case
     // runs twice on each arm: plain, taking the identity fall-through, and under
     // MGITEST_MAGMA_FORCE_DEFAULT_BLIT_SCRATCH, taking the rotated arm's scratch path on an identity
     // surface - where it must produce THE SAME PIXELS. That equality is what makes the scratch arm
@@ -1771,7 +1771,7 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
             glClear(GL_COLOR_BUFFER_BIT);
         }
         glDisable(GL_SCISSOR_TEST);
-        // The OTHER slice gets one flat colour that appears in no quadrant.
+        // The OTHER slice gets one flat color that appears in no quadrant.
         glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, volume, 0, 0);
         glClearColor(0, 1, 1, 1);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -1805,10 +1805,10 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
     }
 
     namespace {
-        // An 8x4 RGBA8 colour renderbuffer at `samples`, bottom half red and top half green in GL row
-        // order. TWO HALVES AND NOT ONE COLOUR, for the reason the shader-mip case gives: a pass that
+        // An 8x4 RGBA8 color renderbuffer at `samples`, bottom half red and top half green in GL row
+        // order. TWO HALVES AND NOT ONE COLOR, for the reason the shader-mip case gives: a pass that
         // loses GL's row order averages a flat fill back to the same number everywhere and a
-        // single-colour assertion calls that correct. Returns false when this driver cannot host the
+        // single-color assertion calls that correct. Returns false when this driver cannot host the
         // attachment, which is a skip and not a failure.
         bool MakeMultisampleHalvesFbo(int samples, GLuint& fbo, GLuint& renderbuffer) {
             glGenFramebuffers(1, &fbo);
@@ -1831,7 +1831,7 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
             return true;
         }
 
-        // A single-sample RGBA8 destination of the given size, cleared to a colour that appears in no
+        // A single-sample RGBA8 destination of the given size, cleared to a color that appears in no
         // assertion below - so "the blit did nothing" and "the blit landed the wrong band" read
         // differently from each other.
         void MakeSingleSampleTarget(int width, int height, const GLfloat (&clear)[4], GLuint& fbo, GLuint& tex) {
@@ -1849,7 +1849,7 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
     // P7 wave 2-B2, CONTRACT-P7 §3.2: `multisample-blit-shape@P7` RETIRES.
     //
     // vkCmdResolveImage carries ONE extent and one offset per side. It can neither scale nor flip,
-    // so the wire arm refused every multisample colour blit whose destination rectangle was a
+    // so the wire arm refused every multisample color blit whose destination rectangle was a
     // different size from its source - which glBlitFramebuffer names, and which the MONOLITH arm
     // already reaches by the route this package gives the wire arm (VulkanRenderer.cpp's
     // `regionWasTransformed` branch: resolve into a scratch at raw offsets, then blit the scratch).
@@ -1858,12 +1858,12 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
     //
     // THE SCALE AND THE FLIP IN ONE CASE, over the same source, because they fail differently: a
     // blit that dropped the scale lands a 8x4 band in a 4x2 attachment (and the driver refuses the
-    // command), while one that dropped the flip returns the right two colours in the wrong order.
+    // command), while one that dropped the flip returns the right two colors in the wrong order.
     // The second blit's expectation is the first's, rows swapped, so neither can pass the other's
     // assertion.
     //
     // Red once (executed, reverted): restore the two `width != |dx1-dx0|` clauses in
-    // WireFramebuffer.cpp's colour resolve arm and both blits die as
+    // WireFramebuffer.cpp's color resolve arm and both blits die as
     // Fatal{UnmigratedVerb, "Magma:multisample-resolve-region"}.
     TEST_F(F1WireScenario, MultisampleColorBlitScalesAndFlipsThroughTheResolveScratch) {
         if (!Ready()) return;
@@ -1878,7 +1878,7 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
 
         // Half the source in each axis: every destination texel is the resolve of a 2x2 source box
         // that lies wholly inside ONE half, so the boundary never falls inside a destination texel
-        // and the two colours cannot mix.
+        // and the two colors cannot mix.
         constexpr GLfloat kBlue[4]{0, 0, 1, 1};
         GLuint dstFbo = 0, dstTexture = 0;
         MakeSingleSampleTarget(4, 2, kBlue, dstFbo, dstTexture);
@@ -1965,7 +1965,7 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
         }
         while (glGetError() != GLenum(GL_NO_ERROR)) {}
         glDisable(GL_SCISSOR_TEST);
-        glClearColor(1, 0, 1, 1); // magenta: the colour the declined blit must leave behind
+        glClearColor(1, 0, 1, 1); // magenta: the color the declined blit must leave behind
         glClear(GL_COLOR_BUFFER_BIT);
         ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsBlitDecline.setup";
 
@@ -1985,7 +1985,7 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
         // decline records its error where the blit is PERFORMED - the server's apply thread - and
         // that error reaches this client's queue with a later reply, not with the blit call. Without
         // the round trip the check below reads GL_NO_ERROR and the INVALID_OPERATION surfaces at
-        // whatever the next synchronising call happens to be, which is how it first showed up:
+        // whatever the next synchronizing call happens to be, which is how it first showed up:
         // attached to the resolve twenty lines down, a call that is not wrong about anything.
         glFinish();
         EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
@@ -2061,7 +2061,7 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
         }
         while (glGetError() != GLenum(GL_NO_ERROR)) {}
         glDisable(GL_SCISSOR_TEST);
-        glClearColor(1, 0, 1, 1); // magenta: the colour the declined blit must leave behind
+        glClearColor(1, 0, 1, 1); // magenta: the color the declined blit must leave behind
         glClear(GL_COLOR_BUFFER_BIT);
         ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsAspectDecline.setup";
 
@@ -2276,7 +2276,7 @@ void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
     // environment) carries MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL=1, which forces the serial half
     // of the busy predicate to answer "idle" - the state the unsound completed-serial floor put the
     // wire arm into on the device. With the serial half forced to lie, only the submission-fence
-    // half can still order the copy, so the entry pins that DEFENCE term. The guarantee is the
+    // half can still order the copy, so the entry pins that DEFENSE term. The guarantee is the
     // floor (VulkanRenderer::OnSubmitsCompletedUpTo), which the knob bypasses; its lane is the
     // OpenRA split retrace's "MGWIRE-FLOOR unsound-serial-complete" red condition.
     TEST_F(F1WireScenario, StreamedBufferSubDataBeforeEachDrawIsOrdered) {
@@ -2296,8 +2296,8 @@ void main() { fragColor = vColor; }
 )"}});
         ASSERT_NE(program, 0u);
 
-        // One vertical bar per batch, each in its own two-pixel column and its own colour, so a
-        // draw that read another batch's bytes lands in the wrong column AND the wrong colour.
+        // One vertical bar per batch, each in its own two-pixel column and its own color, so a
+        // draw that read another batch's bytes lands in the wrong column AND the wrong color.
         constexpr GLfloat kColors[kBatches][4] = {{1, 0, 0, 1}, {0, 1, 0, 1}, {0, 0, 1, 1}, {1, 1, 0, 1}};
         const auto batchVertices = [&](int batch) {
             const GLfloat x0 = -1.0f + static_cast<GLfloat>(batch) * 0.5f;

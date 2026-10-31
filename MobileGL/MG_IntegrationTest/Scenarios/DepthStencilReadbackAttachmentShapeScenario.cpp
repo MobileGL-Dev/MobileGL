@@ -10,7 +10,7 @@
 // AND THE DEFAULT FRAMEBUFFER'S ADVERTISED DEPTH/STENCIL FORMAT.
 //
 // Three shipped defects, all of them invisible to a test that only ever attaches a 2D texture
-// or only ever asks the default framebuffer for a colour value.
+// or only ever asks the default framebuffer for a color value.
 //
 // (1) The ES depth/stencil readback emulation identifies the source format by binding the
 //     attachment's texture NAME to GL_TEXTURE_2D and asking that target for its internal
@@ -32,7 +32,7 @@
 //     GL blits depth/stencil only between IDENTICAL formats, so an application that reads
 //     GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, allocates the buffer it was just told about and
 //     blits gets GL_INVALID_OPERATION - and a rejected glBlitFramebuffer transfers NOTHING,
-//     colour bits included. DirectVulkan has published its real format since the swapchain
+//     color bits included. DirectVulkan has published its real format since the swapchain
 //     work; this is the half that was missing.
 //
 // Every case poisons its destination with a value the correct answer cannot be, so "the
@@ -85,7 +85,7 @@ namespace MGITest {
             }
 
             // Clears the currently bound framebuffer's depth and stencil to the shared
-            // reference values, with both write masks explicitly open (glClear honours them,
+            // reference values, with both write masks explicitly open (glClear honors them,
             // and a leftover mask from another scenario in this shared context would look
             // exactly like the bug under test).
             void ClearDepthStencil() const {
@@ -310,7 +310,7 @@ namespace MGITest {
         EXPECT_EQ(FirstGLError(), 0u);
         ASSERT_TRUE(FramebufferIsComplete());
 
-        // Put a known depth in the default framebuffer, then blit colour+depth+stencil out of
+        // Put a known depth in the default framebuffer, then blit color+depth+stencil out of
         // it into the buffer that its own description asked for.
         BindDefaultFramebuffer();
         glViewport(0, 0, width, height);
@@ -334,9 +334,9 @@ namespace MGITest {
         const float depth = ReadDepthAt(width / 2, height / 2);
         const int stencil = ReadStencilAt(width / 2, height / 2);
         EXPECT_EQ(FirstGLError(), 0u);
-        // The colour bit is the precondition, not the claim: it says this stack can blit out of
+        // The color bit is the precondition, not the claim: it says this stack can blit out of
         // its default framebuffer at all, which has nothing to do with depth/stencil formats.
-        // DirectVulkan on a surfaceless pbuffer cannot - the whole call, colour included, is a
+        // DirectVulkan on a surfaceless pbuffer cannot - the whole call, color included, is a
         // no-op there, while the same blit works on a real surface (KHR-GLxx.framebuffer_blit
         // exercises exactly it and Magma passes 33/33 on device). Skipping keeps the
         // depth/stencil claim below falsifiable instead of drowning it in an unrelated
@@ -351,7 +351,7 @@ namespace MGITest {
             glDeleteRenderbuffers(1, &depthRbo);
             gl.EndFrame();
             GTEST_SKIP() << "backend " << gl.BackendName()
-                         << " on this surface transferred no colour either (green=" << int(color[1])
+                         << " on this surface transferred no color either (green=" << int(color[1])
                          << "): it cannot blit out of the default framebuffer here, so the depth/stencil half proves "
                             "nothing. The GL-error assertion above still ran, and it is the format contract";
         }

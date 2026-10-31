@@ -24,7 +24,7 @@ A gate whose baker is a different program from the gate has the same failure one
 day the CLI's defaults and the library's diverge, the gate reds on a header nobody can
 regenerate, and the fix is to edit the words by hand.
 
-FORMATTING IS PRESERVED PER HEADER, not normalised: the headers in the tree disagree about
+FORMATTING IS PRESERVED PER HEADER, not normalized: the headers in the tree disagree about
 words per line and about the `u` suffix, and reformatting one of them would bury a one-word
 change in a whole-file diff. The style is read back out of the array being replaced.
 

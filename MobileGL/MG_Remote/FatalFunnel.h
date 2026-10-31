@@ -69,7 +69,7 @@ namespace MobileGL::MG_Remote {
     ::std::uint64_t SessionLatchCount();
 
     // ---- one latch domain per served session ---------------------------------------------
-    // The latch is per session so one peer's bad bytes cannot stop a neighbour in the same
+    // The latch is per session so one peer's bad bytes cannot stop a neighbor in the same
     // process: its readers (the apply loop, DrainRing, ServerMain's control loop) run on the
     // session's own threads. SessionRuntime opens a domain per served session and
     // ThreadSessionScope binds both of its threads to it; an unbound thread uses domain 0, the

@@ -430,7 +430,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // submission still carries, and run_trace_case.cmake reds a split retrace on any
         // "MGWIRE-FLOOR unsound-serial-complete" line, which is that fix's lane.
         //
-        // THE SUBMISSION TERM IS A PROBE AND A DEFENCE, NOT A SECOND GUARANTEE. It is not sound
+        // THE SUBMISSION TERM IS A PROBE AND A DEFENSE, NOT A SECOND GUARANTEE. It is not sound
         // on its own: lastUseSubmitIndex is stamped at AcquireWireSlice with the next submission
         // index, but the draw that acquired the slice can still be pushed into a LATER
         // submission - BindProgramUniformBuffers -> SyncWireTextureShape's preserve path ->
@@ -458,7 +458,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         } else if (busyBySerial || busyBySubmission) {
             // Vulkan buffer copies require four-byte aligned ranges. An odd GL
             // byte update waits, then writes only the exact range; rounding it
-            // from a CPU shadow could overwrite neighbouring GPU-written bytes.
+            // from a CPU shadow could overwrite neighboring GPU-written bytes.
             if (((offset | size) & 3u) == 0) {
                 uploaded = StagedWireRangeCopy(*resource, bytes, static_cast<SizeT>(offset), static_cast<SizeT>(size));
             }
@@ -589,7 +589,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         // B3: the draw this slice is being acquired for is normally recorded into the NEXT
         // submission - normally, not always: a mid-draw flush (SyncWireTextureShape's preserve
-        // path) can submit this index without the draw. This stamp is the defence term's input
+        // path) can submit this index without the draw. This stamp is the defense term's input
         // (see WriteWireBuffer); the floor behind lastUseSerial is the guarantee. Read off the
         // owning renderer's counter (its GetWireNextSubmitIndex()) when it was handed one.
         if (m_submitCounter != nullptr)

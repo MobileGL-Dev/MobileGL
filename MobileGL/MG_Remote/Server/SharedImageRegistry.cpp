@@ -665,7 +665,7 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         return live;
     }
 
-    // ---- synchronisation ------------------------------------------------------------------------
+    // ---- synchronization ------------------------------------------------------------------------
 
     namespace SyncFile {
         Bool Signaled(int fd) {

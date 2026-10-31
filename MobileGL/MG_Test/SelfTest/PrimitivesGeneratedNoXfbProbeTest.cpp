@@ -11,7 +11,7 @@
 // GPU; the two pure functions are where the cheap mistakes live - a verdict that reads a
 // half-broken driver as healthy, an override arm swapped so ForceOn disarms, a
 // substitute ranked below a worse one - and every driver the campaign has
-// characterised is written down here as a fake measurement so the mapping cannot
+// characterized is written down here as a fake measurement so the mapping cannot
 // drift without a red:
 //   - a conforming driver (stream counts everywhere),
 //   - lavapipe as measured 2026-08: stream silent everywhere, the dedicated

@@ -13,7 +13,7 @@
  * name one it was handed, through the process's own MobileGL client session. The component
  * resolves them with dlsym; nothing links against them.
  *
- * Images are server-allocated colour buffers exported as dma-buf descriptors. Their memory layout
+ * Images are server-allocated color buffers exported as dma-buf descriptors. Their memory layout
  * is the allocator's: the modifier reported is DRM_FORMAT_MOD_INVALID, and the only meaningful
  * thing to do with a descriptor is to hand it back (an import, here or through EGL) - not to map
  * it and assume rows.
@@ -46,7 +46,7 @@ extern "C"
 #define MOBILEGL_SHARED_IMAGE_FOURCC_XBGR8888 0x34324258u /* 'XB24' */
 /* ARGB8888 / XRGB8888: allocatable too. The layout of every shared image is the server's own
  * (modifier INVALID, never mapped), and channels are addressed logically by the GL that reads and
- * writes them, so the name an image is allocated under never changes its colours. */
+ * writes them, so the name an image is allocated under never changes its colors. */
 #define MOBILEGL_SHARED_IMAGE_FOURCC_ARGB8888 0x34325241u /* 'AR24' */
 #define MOBILEGL_SHARED_IMAGE_FOURCC_XRGB8888 0x34325258u /* 'XR24' */
 /* Two-plane YUV 4:2:0 (ABI 2), when the server's platform allocates it (listed by

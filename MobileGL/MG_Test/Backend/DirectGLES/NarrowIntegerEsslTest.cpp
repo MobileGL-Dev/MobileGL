@@ -9,7 +9,7 @@
 // A vertex stage armed with the narrow-integer seeds, through the same steps the DirectGLES build
 // takes: the array-input split, the RuntimeWidths pass, ESSL 3.00 emission and the uniform
 // promotion. The two widths have to come out as `uniform highp uint` (anything else is read
-// uninitialised or at too low a precision) and the result has to be ESSL 3.00 a compiler accepts.
+// uninitialized or at too low a precision) and the result has to be ESSL 3.00 a compiler accepts.
 // The emission here uses plain ESSL 3.00 options, not the build's whole pass chain; the
 // integration lanes run that chain (NarrowIntegerAttributeScenario).
 
@@ -95,7 +95,7 @@ void main() { color = vec4(a) + vec4(b); }
         return result != nullptr ? String(result) : String{};
     }
 
-    // Declarations of `name` as a uint, whatever their qualifiers or initialiser.
+    // Declarations of `name` as a uint, whatever their qualifiers or initializer.
     SizeT CountUintDeclarations(const String& source, const char* name) {
         SizeT count = 0;
         for (const char* suffix : {";", " ="}) {

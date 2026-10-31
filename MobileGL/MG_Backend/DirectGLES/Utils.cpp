@@ -163,7 +163,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace
 
     namespace TextureImpl {
-        // Every image that can back a colour attachment needs a colour-renderable storage format,
+        // Every image that can back a color attachment needs a color-renderable storage format,
         // and ES has no renderable three-channel format at all: a three-channel float fallback is
         // a legal ES texture but neither legal multisample storage nor a legal attachment, so
         // GL_RGB8_SNORM / GL_RGB16F / ... have to be widened to four channels for any of them.
@@ -178,7 +178,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // allocating it byte for byte.
         //
         // Do NOT read that as "nothing changes off-device". Measured on llvmpipe 26.1.6
-        // (the headless CI driver), an ES 3.2 GL_TEXTURE_2D colour attachment is COMPLETE for
+        // (the headless CI driver), an ES 3.2 GL_TEXTURE_2D color attachment is COMPLETE for
         // GL_RGB8 and GL_RGB16F but INCOMPLETE_ATTACHMENT for GL_RGB8_SNORM, GL_SRGB8 and every
         // RGB integer format, and UNSUPPORTED for GL_RGB32F. Those eight formats therefore DO
         // take the widened path on llvmpipe, which is where the retrace fixtures and the glcts
@@ -798,7 +798,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // geometry STAGES core but leaves gl_PointSize out of their gl_PerVertex entirely,
             // and SPIRV-Cross - which only ever sees a SPIR-V BuiltIn PointSize decoration -
             // prints the identifier with no directive behind it. Same hard rule as the two
-            // neighbours: never emitted speculatively, because `#extension` on a name the driver
+            // neighbors: never emitted speculatively, because `#extension` on a name the driver
             // does not advertise is a compile error of its own.
             if (extensionName == nullptr || glslCode.find(extensionName) != String::npos) {
                 return glslCode;
@@ -831,7 +831,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             static const std::regex imageDeclRegex(
                 R"((layout\s*\(([^)]*)\)\s*)?uniform\s+(?:(?:readonly|writeonly|coherent|volatile|restrict|highp|mediump|lowp)\s+)*[iu]?image[A-Za-z0-9]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\[[^\]]*\])?\s*;)");
             // Every image format spelling GLSL has, so a declaration that already carries one is
-            // recognised whatever it says - the caller's map is consulted only for declarations
+            // recognized whatever it says - the caller's map is consulted only for declarations
             // with NO format, never to override a written one.
             static const std::regex existingFormatRegex(
                 R"(\b(rgba32f|rgba16f|rg32f|rg16f|r11f_g11f_b10f|r32f|r16f|rgba16|rgb10_a2|rg16|rg8|r16|r8|rgba16_snorm|rgba8_snorm|rg16_snorm|rg8_snorm|r16_snorm|r8_snorm|rgba32i|rgba16i|rgba8i|rg32i|rg16i|rg8i|r32i|r16i|r8i|rgba32ui|rgba16ui|rgba8ui|rgb10_a2ui|rg32ui|rg16ui|rg8ui|r32ui|r16ui|r8ui)\b)");
@@ -1124,7 +1124,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             source += "precision highp float;\n";
             source += "precision highp int;\n";
             source += "layout(vertices = " + std::to_string(patchVertices) + ") out;\n";
-            // Mirrored, never invented. An empty member list means the neighbouring stage did not
+            // Mirrored, never invented. An empty member list means the neighboring stage did not
             // redeclare the block either, and the driver's own built-in declaration is then what
             // both sides agree on - redeclaring here would be the thing that broke the match.
             if (!inPerVertexMembers.empty()) {
@@ -1783,7 +1783,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 //
                 // Nothing downstream reads these names: the two passes that key on the GL uniform
                 // name (RebindImageUniformsToFrontendUnits, BakeImageFormatQualifiers) both run
-                // BEFORE this one, RemoveLayoutBinding recognises an image declaration by its TYPE
+                // BEFORE this one, RemoveLayoutBinding recognizes an image declaration by its TYPE
                 // token, and CacheResourceLocations skips image uniforms outright because ES image
                 // units come only from layout(binding=N). The declarations this pass LEAVES ALONE -
                 // already readonly/writeonly in the source, or r32f/r32i/r32ui, which need no
@@ -1825,7 +1825,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // Both halves carry `coherent`; see BuildImageDeclaration. The
                     // single-declaration cases below stay as they were - nothing aliases them, so
                     // there is no visibility to restore and no reason to pay for the cache
-                    // behaviour.
+                    // behavior.
                     edits.push_back({decl.declStart, decl.declLength,
                                      BuildImageDeclaration(decl, "readonly", decl.aliasName,
                                                            /*forceCoherent=*/true) +

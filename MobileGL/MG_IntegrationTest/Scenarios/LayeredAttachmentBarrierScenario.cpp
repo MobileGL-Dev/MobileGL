@@ -16,7 +16,7 @@
 // and the copy read layer N. The layer the transfer touched was never transitioned: it sat in
 // COLOR_ATTACHMENT_OPTIMAL (or DEPTH_STENCIL_ATTACHMENT_OPTIMAL) while being read as TRANSFER_SRC.
 //
-// That is undefined behaviour, not a guaranteed wrong pixel: a layout is a compression/tiling
+// That is undefined behavior, not a guaranteed wrong pixel: a layout is a compression/tiling
 // promise, so a driver that stores both layouts identically returns the right bytes anyway. The
 // software lanes (lavapipe) are exactly such a driver, which is why this scenario is paired with a
 // validation-layer run - the layer names the mismatch outright
@@ -26,8 +26,8 @@
 //
 // The four cases below are the four transfer paths that take an attachment layer from GL:
 //
-//   glReadPixels (colour)                    -> VulkanRenderer::ReadPixels
-//   glBlitFramebuffer (colour)               -> VulkanRenderer::BlitNamedFramebuffer
+//   glReadPixels (color)                    -> VulkanRenderer::ReadPixels
+//   glBlitFramebuffer (color)               -> VulkanRenderer::BlitNamedFramebuffer
 //   glReadPixels (GL_DEPTH_COMPONENT)        -> VulkanRenderer::ReadDepthStencilImageToClient
 //   glBlitFramebuffer (GL_DEPTH_BUFFER_BIT)  -> VulkanRenderer::BlitNamedFramebuffer, depth leg
 //
@@ -140,7 +140,7 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
                 }
             }
 
-            // An RGBA8 2D array with a different uniform colour per layer.
+            // An RGBA8 2D array with a different uniform color per layer.
             GLuint MakeColorArray() {
                 GLuint texture = 0;
                 glGenTextures(1, &texture);
@@ -172,7 +172,7 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
                 return texture;
             }
 
-            // One FBO naming `layer` of the given arrays. Depth is optional (0 = colour only).
+            // One FBO naming `layer` of the given arrays. Depth is optional (0 = color only).
             GLuint MakeLayerFbo(GLuint colorArray, GLuint depthArray, int layer) {
                 GLuint fbo = 0;
                 glGenFramebuffers(1, &fbo);
@@ -296,11 +296,11 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
             EXPECT_NEAR(blitted.g, kPaintedColor.g, 2);
             EXPECT_NEAR(blitted.b, kPaintedColor.b, 2);
 
-            ExpectOtherLayersUntouched(destinationArray, kDestinationLayer, "colour blit destination");
+            ExpectOtherLayersUntouched(destinationArray, kDestinationLayer, "color blit destination");
             // The source layer was rendered, not blitted into, so it is checked separately.
             const Rgba8 source = ReadLayer(sourceArray, kSourceLayer);
             EXPECT_NEAR(source.r, kPaintedColor.r, 2) << "blit source layer is " << Describe(source);
-            ExpectOtherLayersUntouched(sourceArray, kSourceLayer, "colour blit source");
+            ExpectOtherLayersUntouched(sourceArray, kSourceLayer, "color blit source");
         }
 
         // The depth aspect of the same readback path: the depth image sits in

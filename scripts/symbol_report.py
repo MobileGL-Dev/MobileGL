@@ -12,7 +12,7 @@ P0.5's acceptance gate says every `nm --defined-only -S` delta has to be explain
 symbol. The awkward part is that de-nesting a type renames every mangled
 name that mentions it - `ProgramObject::LinkArtifacts` -> `LinkArtifacts` shows up inside
 every `std::vector<...>` instantiation too - so a raw nm diff of a pure move looks
-catastrophic. `--strip-scope` folds those into a "renamed-only" bucket: same normalised
+catastrophic. `--strip-scope` folds those into a "renamed-only" bucket: same normalized
 demangled name, byte-identical size. What is left over is the report's real content.
 
     python3 scripts/symbol_report.py --before old.so --after new.so
@@ -195,7 +195,7 @@ def bucket(before, after, only_names, threshold):
                                 "before": b["size"], "after": a["size"]})
             continue
         if a["mangled"] != b["mangled"]:
-            # same normalised name, byte-identical size: the pure-move signature
+            # same normalized name, byte-identical size: the pure-move signature
             if wanted(name):
                 renamed.append({"name": name, "delta": 0,
                                 "before": b["mangled"][0], "after": a["mangled"][0]})
@@ -302,7 +302,7 @@ def self_test():
     if [(r["name"], r["delta"]) for r in resized] != [("MobileGL::Grew()", 0x10)]:
         problems.append("resized bucket: {}".format([(r["name"], r["delta"]) for r in resized]))
     # `ProgramObject::LinkArtifacts::Reset` -> `LinkArtifacts::Reset` folds to the same
-    # normalised name at the same size: renamed-only, not added+removed.
+    # normalized name at the same size: renamed-only, not added+removed.
     if [r["name"] for r in renamed] != ["MobileGL::MG_State::GLState::LinkArtifacts::Reset()"]:
         problems.append("renamed bucket: {}".format([r["name"] for r in renamed]))
     if unchanged != 2:  # ProgramObject::Link() and NoSize()
@@ -432,8 +432,8 @@ def main():
     say("{} -> {} defined symbols: {} added, {} removed, {} resized, {} renamed".format(
         before_count, after_count, len(added), len(removed), len(resized), len(renamed)))
     # The two counts differ by the folding: several mangled symbols can share one
-    # normalised demangled name (local aliases, `.cold` parts, identical-COMDAT clones).
-    say("{} -> {} normalised names, {} unchanged (name, size and mangling all identical)".format(
+    # normalized demangled name (local aliases, `.cold` parts, identical-COMDAT clones).
+    say("{} -> {} normalized names, {} unchanged (name, size and mangling all identical)".format(
         len(before), len(after), unchanged))
     if only_names:
         say("listing restricted to names containing: " + ", ".join(only_names))
@@ -468,7 +468,7 @@ def main():
                             ["symbol", "before", "after", "delta"])
     lines += markdown_table("Renamed only (same size)",
                             [(r["name"], r["before"], r["after"]) for r in renamed],
-                            ["normalised symbol", "before mangling", "after mangling"])
+                            ["normalized symbol", "before mangling", "after mangling"])
     report = "\n".join(lines) + "\n"
 
     if args.markdown:

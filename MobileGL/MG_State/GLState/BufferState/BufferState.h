@@ -95,7 +95,7 @@ namespace MobileGL::MG_State::GLState {
         // have moved" in one read, which is what a per-draw shutter can afford.
         //
         // #if MOBILEGL_PIPE_PUSH so the pull build's BufferState does not resize (G1) - the same
-        // licence TextureState::NoteImageUnitTouched took at P5d r3.
+        // license TextureState::NoteImageUnitTouched took at P5d r3.
         void NoteBindPointChanged(const BufferTarget target) {
             auto it = std::find(BufferBindPointTargets.begin(), BufferBindPointTargets.end(), target);
             if (it == BufferBindPointTargets.end()) return;

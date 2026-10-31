@@ -212,7 +212,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // InProcessTeardown() - touches neither the driver nor another TU's statics.
     //
     // P14 S6: "EVERY TABLE" IS NOW "EVERY BUCKET OF THIS SESSION". The tables are keyed by
-    // {session, share group}, so the same rebuild of the eight registries would take a NEIGHBOUR
+    // {session, share group}, so the same rebuild of the eight registries would take a NEIGHBOR
     // session's twins with it - and with S2's in-process supervisor serving several sessions at
     // once that is not a hypothetical: this runs from ~BackendObject_DirectGLES, on the apply
     // thread of the session that is ending. So the drop is scoped to the calling thread's
@@ -533,7 +533,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     // Fragment stage. Returns false when the stage has no entry point to gate onto, which the
     // caller reports: the program still links and still renders, it just renders every index
-    // with the first replay pass's state - i.e. it degrades to the pre-emulation behaviour
+    // with the first replay pass's state - i.e. it degrades to the pre-emulation behavior
     // rather than to a black screen.
     Bool InjectViewportIndexPassGate(String& source) {
         // Built beside the input and swapped in only on success, so a stage this pass declines
@@ -879,7 +879,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     "MGPFramebufferState::Color[%u]'s wire width",
                     cap, MG_Pipe::kMGPipeMaxColorAttachments);
             BufferImpl::StopOnArmlessPipeSubsystem(
-                "kMGPipeSubsystemFramebuffer (bit 9) cannot carry this driver's colour attachments, and "
+                "kMGPipeSubsystemFramebuffer (bit 9) cannot carry this driver's color attachments, and "
                 "the record arm is the only arm since P13 W6");
         }
     }
@@ -914,7 +914,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!TextureImpl::IsMultisampleTextureTarget(target)) return 0;
         // The same three inputs the storage allocation clamps with (SyncToBackend's multisample
         // arm): the record's format and requested count, and the format's ES transfer format,
-        // which only decides the integer-vs-colour fallback when the probe has no answer.
+        // which only decides the integer-vs-color fallback when the probe has no answer.
         const auto internalFormat = static_cast<TextureInternalFormat>(record->Desc.InternalFormat);
         GLenum glInternalFormat = 0, glFormat = 0, glType = 0;
         TextureImpl::GenerateTextureFormatInfo(internalFormat, &glInternalFormat, &glFormat, &glType, target);
@@ -931,7 +931,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     // N-7: D KEYS ON THE UPLOAD HALF; WIRE (AccumulatePendingUpload, PipeApply.cpp) KEYS ON
-    // THE WHOLE PACKED FIELD. That asymmetry is resolved HERE, in D's favour and with the
+    // THE WHOLE PACKED FIELD. That asymmetry is resolved HERE, in D's favor and with the
     // reason, rather than by widening the two comparisons: D's question is per (uploadTarget,
     // level) because that is the granularity its upload loop iterates - it is handed a
     // TextureUploadTarget and a level and has no second key to offer - while wire's is per

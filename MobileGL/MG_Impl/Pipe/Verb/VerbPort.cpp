@@ -1706,7 +1706,7 @@ namespace MobileGL::MG_Record {
         const Uint64 rowPixels = pack.RowLength > 0 ? static_cast<Uint64>(pack.RowLength) : static_cast<Uint64>(width);
         const Uint64 alignment = pack.Alignment > 0 ? static_cast<Uint64>(pack.Alignment) : 1ull;
         const Uint64 strideBytes = ((rowPixels * bytesPerPixel + alignment - 1) / alignment) * alignment;
-        // m6: the client re-derives GL 4.6 8.4.4's pack layout, so it honours GL_PACK_ROW_LENGTH
+        // m6: the client re-derives GL 4.6 8.4.4's pack layout, so it honors GL_PACK_ROW_LENGTH
         // VERBATIM - including the ill-formed 0 < ROW_LENGTH < width, where the row stride is
         // narrower than a written row and consecutive rows overlap. GL leaves that case to the
         // implementation; the client reproduces exactly what the monolith backend's own scatter
@@ -1835,7 +1835,7 @@ namespace MobileGL::MG_Record {
         // makes it an offset, never an address - the emitter refused the other case by name).
         block.Offset = static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(indirect));
         block.ParameterOffset = hasParameterBuffer ? static_cast<Uint64>(parameterOffset) : 0u;
-        // 0 = tightly packed, as GL spells it; the backend normalises. Negative counts and
+        // 0 = tightly packed, as GL spells it; the backend normalizes. Negative counts and
         // strides have already been refused by the frontend.
         block.Stride = stride > 0 ? static_cast<Uint32>(stride) : 0u;
         block.DrawCount = drawCount > 0 ? static_cast<Uint32>(drawCount) : 0u;

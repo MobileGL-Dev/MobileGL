@@ -245,7 +245,7 @@ static void bench_multi_draw_elements_base_vertex(GLenum mode, const GLsizei* co
  * glFinish and glFlush as no-ops (MG_Impl/GLImpl/Exporting/Definitions.cpp),
  * so a glFinish-paced loop would time only the CPU-side submit on a MobileGL
  * backend while timing submit-plus-GPU on the native driver - the two numbers
- * would not describe the same work. A sync object is honoured by every stack
+ * would not describe the same work. A sync object is honored by every stack
  * measured here.
  */
 typedef void (*case_fn)(int frame, long a, long b);

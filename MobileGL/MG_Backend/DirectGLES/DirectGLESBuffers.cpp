@@ -378,7 +378,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // CountPrimitivesForDraw does not know and for the instanced/indirect entry
                     // points that never call it.
                     MGLOG_E_ONCE("EndTransformFeedback: scattered capture discarded - packedStride=%zu, "
-                                 "CPU-modelled captured vertices=%zu, scratch capacity=%zu. The capture buffers keep "
+                                 "CPU-modeled captured vertices=%zu, scratch capacity=%zu. The capture buffers keep "
                                  "their pre-draw contents.",
                                  packedStride, modelledVertices, xfb.scatterCapacityVertices);
                     return;
@@ -431,7 +431,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // (glBufferData(size, NULL) with no resource_subdata since), which
                     // M-3 declares legal: every byte the application has not staged is
                     // UNDEFINED by its own declaration, and `staged` is already
-                    // value-initialised to zero - which is byte for byte what the monolith
+                    // value-initialized to zero - which is byte for byte what the monolith
                     // arm scatters over when it reads a fresh MappedData(). Skipping the
                     // Memcpy is therefore the WHOLE of the difference; skipping the TARGET
                     // threw the varyings away and left the application's buffer holding its
@@ -669,7 +669,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The frontend VAO is taken ONLY when the applier's own vertex-buffer window says a
         // client-sourced attribute exists, which is what retires the per-draw
         // GetBoundVertexArray row of the ordinary (VBO-backed) DrawArrays - the strict lane's
-        // `GetBoundVertexArray@DrawArrays` marker - without touching this path's behaviour.
+        // `GetBoundVertexArray@DrawArrays` marker - without touching this path's behavior.
         // `static` on purpose (G1): the pull build must not gain an exported name for a
         // function that only re-homes two identical inline blocks the two DrawArrays entry
         // points used to carry. The same spelling governs the three below, and for a second

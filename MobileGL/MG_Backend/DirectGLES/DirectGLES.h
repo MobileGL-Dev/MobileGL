@@ -187,7 +187,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // glTexBuffer / glTexBufferRange through whichever spelling this driver's buffer-texture
     // support actually ships: the unsuffixed names are ES 3.2 core, while an EXT/OES driver
     // exports glTexBuffer{,Range}EXT / OES. Callers must have checked
-    // AreBufferTexturesSupported() first. CallTexBufferRange reports whether it could honour
+    // AreBufferTexturesSupported() first. CallTexBufferRange reports whether it could honor
     // the range - no tier is required to expose the range form, and the whole-buffer form is
     // the documented fallback.
     void CallTexBuffer(GLenum target, GLenum internalFormat, GLuint buffer);
@@ -448,7 +448,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // hold" query and no way to ask a context for its share group, so a case that must tell "the
     // same native context still serves" from "a fresh one was built", or a sharing pair from two
     // unrelated contexts, reads it here. These are pure reads plus one key override; neither is on
-    // a production path and neither changes behaviour.
+    // a production path and neither changes behavior.
     EGLContext NativeContextHandleFor(Uint64 sessionKey, Uint64 contextToken);
     // Overrides the key the calling thread resolves to, for the life of the call. The backend's
     // ordinary answer comes from the server layer's probe; this is how a case drives exactly the
@@ -484,8 +484,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Pushes the frontend's render-state block to the ES driver, diffed against what was
         // last pushed.
         //
-        // `forColorClear` names the CALLER, and the only thing it changes is the colour write
-        // mask handed to the driver. A draw into a colour attachment the backend widened from
+        // `forColorClear` names the CALLER, and the only thing it changes is the color write
+        // mask handed to the driver. A draw into a color attachment the backend widened from
         // three channels to four gets that buffer's alpha channel masked OFF, so nothing can
         // move the stored alpha away from the 1.0 the application's three-channel format
         // implies (see FramebufferImpl::g_alphaWidenedDrawBufferMask). A CLEAR is how that 1.0
@@ -494,7 +494,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // followed by a draw re-pushes the mask instead of early-outing on an unchanged
         // frontend version.
         //
-        // The application's own colour mask is never modified: glGet(GL_COLOR_WRITEMASK)
+        // The application's own color mask is never modified: glGet(GL_COLOR_WRITEMASK)
         // answers from the frontend state, which this function only reads.
         void SyncRenderState(Bool forColorClear = false);
         void InvalidateSyncedRenderState();

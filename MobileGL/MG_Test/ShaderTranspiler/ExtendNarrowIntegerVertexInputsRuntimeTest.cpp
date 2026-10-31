@@ -169,7 +169,7 @@ TEST(ExtendNarrowIntegerVertexInputsRuntimeWidths, SeedsEveryIntegerInputFromThe
     EXPECT_EQ(ValidationError(output), String{});
     const String text = Disassemble(output);
 
-    // The two globals: named, Private, initialised to 0 and never stored.
+    // The two globals: named, Private, initialized to 0 and never stored.
     for (const char* name : {kNarrowIntegerWidths8GlobalName, kNarrowIntegerWidths16GlobalName}) {
         const String id = String("%") + name;
         EXPECT_NE(text.find(id + " = OpVariable %_ptr_Private_uint Private %uint_0"), String::npos) << name << "\n"

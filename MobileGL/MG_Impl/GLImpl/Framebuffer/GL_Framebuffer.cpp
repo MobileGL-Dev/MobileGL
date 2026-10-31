@@ -128,7 +128,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // because a capability recorded for one of them says nothing about the others: DirectGLES
         // decides each target's substitution against that target's own probe, and a buffer texture
         // never gets one at all. This is also where the three-channel widening becomes visible to
-        // the application - a GL_RGB8_SNORM colour attachment on a driver with no renderable
+        // the application - a GL_RGB8_SNORM color attachment on a driver with no renderable
         // three-channel format answers COMPLETE because the backend stores it as GL_RGBA16F and
         // recorded FramebufferRenderable in CaveatCaps.
         Bool IsColorInternalFormatRenderable(TextureInternalFormat format, SizeT capabilityTargetIndex) {
@@ -502,9 +502,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (!FramebufferImpl::ValidateColorAttachmentInRange(attachmentType, functionName)) return false;
             // "An INVALID_OPERATION error is generated if zero is bound to target." MobileGL keeps
             // a real FramebufferObject for framebuffer 0, so a null test can never see this - the
-            // object is always there, and framebuffer 0 has to be recognised by identity instead,
+            // object is always there, and framebuffer 0 has to be recognized by identity instead,
             // the same comparison DrawBuffers_State makes. Without this an attach onto the default
-            // framebuffer silently REPLACED its colour attachment, permanently desynchronising it
+            // framebuffer silently REPLACED its color attachment, permanently desynchronising it
             // from what the swapchain keeps publishing.
             const auto& defaultFramebufferInfo = FramebufferImpl::pDefaultFramebufferInfo;
             if (!framebufferObject ||
@@ -568,12 +568,12 @@ namespace MobileGL::MG_Impl::GLImpl {
                 // shorthand for attaching the same image to both halves (GL 4.6 core 9.2.6), so
                 // whether glFramebufferTexture made it LAYERED is a property of the call, not of
                 // which half is being recorded - and dropping it here (the parameter defaults to
-                // false) recorded a non-layered depth/stencil attachment beside a layered colour
+                // false) recorded a non-layered depth/stencil attachment beside a layered color
                 // one for every layered target. That is an inconsistent framebuffer by 9.4.1's
                 // own rule, and downstream it means the depth/stencil attachment covers layer 0
                 // alone: DirectVulkan built its view with layerCount 1 under a framebuffer
                 // declaring N layers (VUID-VkFramebufferCreateInfo-flags-04535), and DirectGLES
-                // attached one layer of it beside a layered colour target, which the driver
+                // attached one layer of it beside a layered color target, which the driver
                 // answers with GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS - every draw silently
                 // produced nothing. This is the shape
                 // texture_cube_map_array.stencil_attachments_*_layered and
@@ -1654,7 +1654,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         // Everything above is the spec's error set and is answered for every target and every layer
-        // on every backend. Whether the attachment can actually be honoured is a backend question:
+        // on every backend. Whether the attachment can actually be honored is a backend question:
         // DirectGLES hands the layer to glFramebufferTextureLayer and renders to it, while
         // DirectVulkan maps a GL layer onto a Vulkan array layer with no notion of a 3D depth slice,
         // so a slice lands outside the image and the renderer asserts on the clear. Letting it
@@ -1904,7 +1904,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->RecordError(
                 isMultiBufferName ? ErrorCode::InvalidOperation : ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             std::format("`src` = {} does not name a single readable colour buffer.",
+                                             std::format("`src` = {} does not name a single readable color buffer.",
                                                          MG_Util::ConvertGLEnumToString(src))));
             return;
         }
@@ -1918,7 +1918,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         // Naming a buffer the other kind of framebuffer has is INVALID_OPERATION rather than
         // INVALID_ENUM (GL 4.6 core 17.4.1) - the name is accepted, this framebuffer just has no
-        // such colour buffer.
+        // such color buffer.
         if (isDefaultFBO && attType != FramebufferAttachmentType::None &&
             (attType < FramebufferAttachmentType::FrontLeft || attType > FramebufferAttachmentType::BackRight)) {
             MG_State::pGLContext->RecordError(
@@ -2060,7 +2060,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     // Which buffers the integer clears accept is narrower than the float one, and differs between
     // them: signed values can clear COLOR or STENCIL, unsigned only COLOR (GL 4.6 core 17.4.3.1).
-    // Only the colour buffer is indexed; a stencil clear names the single stencil buffer, so any
+    // Only the color buffer is indexed; a stencil clear names the single stencil buffer, so any
     // drawbuffer other than 0 is out of range rather than merely unused.
     Bool ValidateNamedClearIntegerv_State(GLenum buffer, GLint drawbuffer, const void* value, Bool allowStencil,
                                           const char* caller) {
@@ -2121,7 +2121,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // glInvalidateFramebuffer and its three siblings only grant the implementation permission to
     // throw the named attachments' contents away - "become undefined" is satisfied by keeping them
     // - so MobileGL validates the call and leaves the contents alone. Discarding is a bandwidth
-    // optimisation that would need a backend dependency; it can be added later without changing
+    // optimization that would need a backend dependency; it can be added later without changing
     // what any of these entry points promise. The conformance tests exercise the validation, which
     // is the part that was missing.
     Bool ValidateInvalidateAttachments_State(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
@@ -2144,7 +2144,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (isDefaultFramebuffer) {
                 switch (attachment) {
                 // The by-name forms name the default framebuffer's buffers the way
-                // glClearNamedFramebuffer does, with COLOR standing for the colour buffer, while
+                // glClearNamedFramebuffer does, with COLOR standing for the color buffer, while
                 // the target forms use the individual FRONT_LEFT/BACK_RIGHT tokens. Both spellings
                 // reach here, so both are accepted (GL 4.6 core 17.4.4).
                 case GL_COLOR:
@@ -3341,7 +3341,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
         // Depth and stencil have no meaningful interpolation, so GL_LINEAR is rejected outright
-        // rather than downgraded - even when the mask also carries the colour bit.
+        // rather than downgraded - even when the mask also carries the color bit.
         if (filter == GL_LINEAR && (mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) != 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,

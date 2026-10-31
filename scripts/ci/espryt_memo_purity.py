@@ -20,7 +20,7 @@ exemptions; the first is gone from the tree, and the second is compiled into the
 embeds (the push monolith without MG_Remote), so it is shipped code and gets the same rule.
 The rule is now "no frontend-pointer KEY in any named memo family, in any build", and nothing
 else; the one allow-list entry below is a named, dated carve-out.
-It does not evaluate the preprocessor - it recognises the conditional spellings the
+It does not evaluate the preprocessor - it recognizes the conditional spellings the
 tree actually uses - and it does not look at DirectVulkan, whose own key inventory is
 P7 wave 2's.
 
@@ -107,7 +107,7 @@ def legacy_lines(code: str) -> set[int]:
 def _retired_legacy_lines(code: str) -> set[int]:
     """The pre-W3b exemption, kept only for the self-test's record of what changed.
 
-    NOT a preprocessor. It recognises `#if MOBILEGL_PIPE_LEGACY_MEMOS`,
+    NOT a preprocessor. It recognizes `#if MOBILEGL_PIPE_LEGACY_MEMOS`,
     `#if !MOBILEGL_BUILD_DISAGGREGATED`, and the `#else` of
     `#if MOBILEGL_BUILD_DISAGGREGATED` - which is every spelling these two files use -
     and treats every other conditional as transparent."""

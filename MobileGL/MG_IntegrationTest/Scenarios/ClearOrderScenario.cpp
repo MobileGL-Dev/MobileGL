@@ -9,15 +9,15 @@
 // Scenario - A CLEAR TAKES EFFECT WHERE THE APPLICATION ISSUED IT, WHICHEVER FRAMEBUFFER IT WENT THROUGH.
 //
 // Minecraft clears its targets through framebuffers of their own (a depth-only one for the shared
-// depth texture, one per colour target) and draws through another framebuffer holding the same
+// depth texture, one per color target) and draws through another framebuffer holding the same
 // textures. Magma keeps such a clear on the image and folds it into the load op of the next pass
 // that draws into the image, records it inside the open pass when that pass holds the image, and
 // runs it before any other use (sampling, blit, readback, upload, respecify). Each case below is
 // one of those paths, with no readback between the clear and the work that depends on it:
 //   - a depth clear through a depth-only framebuffer, then a depth-tested draw through the main one
 //     (folded into the next pass), and the same while the main pass is open (inside it);
-//   - a colour clear through a framebuffer of its own, then a draw covering half the texture
-//     through another framebuffer holding it (the other half keeps the clear colour);
+//   - a color clear through a framebuffer of its own, then a draw covering half the texture
+//     through another framebuffer holding it (the other half keeps the clear color);
 //   - a cleared texture sampled, blitted from, uploaded into, read back and re-specified before
 //     any pass draws into it;
 //   - a scissored clear, which clears only its box.
@@ -190,7 +190,7 @@ void main() { color = tint; })";
                 EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << why;
             }
 
-            // Main framebuffer (colour + depth) and a depth-only clear framebuffer sharing its depth.
+            // Main framebuffer (color + depth) and a depth-only clear framebuffer sharing its depth.
             struct Pair {
                 GLuint color, depth, main, depthOnly;
             };

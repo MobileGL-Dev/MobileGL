@@ -327,7 +327,7 @@ void main() { fragColor = thisIdentifierWasNeverDeclared; }
 // With the quirk unset (Auto = the shipped default), GL_COMPILE_STATUS on a pending compile
 // must join it: after the query, the node is terminal. This is the case that guards the
 // default against ever silently flipping. No blocker here - a blocked pool would turn the
-// (correct) joining behaviour into a deadlock; a plain backlog only makes the pre-join
+// (correct) joining behavior into a deadlock; a plain backlog only makes the pre-join
 // state likely, and the assertion is valid either way.
 TEST_F(OptimisticStatusTest, OffByDefaultTheStatusStillJoins) {
     const AsyncModeScope async(true);

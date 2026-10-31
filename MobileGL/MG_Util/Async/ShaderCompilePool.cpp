@@ -145,7 +145,7 @@ namespace MobileGL::MG_Util::Async {
 
     Uint DetectShaderCompileThreadCount() {
         if (const Uint32 configured = MG_Config::Features.AsyncShaderCompileThreads; configured > 0) {
-            // An explicit request is honoured as given - it is the escape hatch for measuring
+            // An explicit request is honored as given - it is the escape hatch for measuring
             // scaling and for working around a device - so it is not squeezed into [1, 4].
             return configured;
         }
@@ -203,7 +203,7 @@ namespace MobileGL::MG_Util::Async {
         void RunOnWorker(SharedPtr<JobNode> node) {
             tl_isPoolThread = true;
             // A node that was already handed to Asio when StopAndDrain ran still arrives
-            // here; cancelling it first turns the dispatch into a state transition instead of
+            // here; canceling it first turns the dispatch into a state transition instead of
             // a full compile, so the drain's join() returns promptly. This Cancel() runs
             // before `mutex` is ever taken in this frame, so it is not subject to the
             // re-entrancy hazard DispatchLocked's comment describes.
@@ -279,7 +279,7 @@ namespace MobileGL::MG_Util::Async {
         // Enqueueing can throw: the thread_pool construction and asio::post both allocate,
         // and under memory pressure a throw here would escape glCompileShader leaving the
         // node Pending with nothing left to dispatch it - the first observable read would
-        // then block the GL thread forever. Settle the node instead: a cancelled node is a
+        // then block the GL thread forever. Settle the node instead: a canceled node is a
         // state every joiner already handles.
         //
         // `node` is still valid in the catch for every throw this try can produce. The
@@ -299,7 +299,7 @@ namespace MobileGL::MG_Util::Async {
             }
         }
         catch (...) {
-            MGLOG_E_ONCE("ShaderCompilePool::Post: enqueue failed; cancelling the job so its joiner "
+            MGLOG_E_ONCE("ShaderCompilePool::Post: enqueue failed; canceling the job so its joiner "
                          "cannot block forever");
             if (node) node->Cancel();
             return;

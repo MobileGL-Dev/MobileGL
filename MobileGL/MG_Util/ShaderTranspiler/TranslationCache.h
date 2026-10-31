@@ -659,7 +659,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // names the emitted ESSL spells. Empty for every program without a tessellation or
         // geometry stage that declares one block name in both directions, i.e. for all but a
         // handful. The maps rather than what they were derived from: they ARE the pass's
-        // arguments, so they are exactly as fine as its behaviour and no finer.
+        // arguments, so they are exactly as fine as its behavior and no finer.
         const std::map<String, String>* inputBlockRenames = nullptr;
         const std::map<String, String>* outputBlockRenames = nullptr;
         // THIS STAGE's share of the interface-block LOCATION strip - the two arguments

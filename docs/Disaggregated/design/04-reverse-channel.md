@@ -1,62 +1,62 @@
-# 反向通道（原 ARCHITECTURE §8）
+# Reverse Channel (formerly ARCHITECTURE §8)
 
-> 设计细节。设计要点与全部章节的索引见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)。章节编号沿用原 `ARCHITECTURE.md`，代码注释里的 `ARCHITECTURE.md §N` 按编号在这里找到。
+> Design details. The design highlights and an index of all sections are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Section numbers follow the original `ARCHITECTURE.md`; `ARCHITECTURE.md §N` in code comments resolves by number here.
 
-## 8. 反向通道
+## 8. Reverse channel
 
-### 8.1 `MGPipeCallbacks`（`MG_Pipe/MGPipeCallbacks.h`）
+### 8.1 `MGPipeCallbacks` (`MG_Pipe/MGPipeCallbacks.h`)
 
-七个具名回调，取代后端直接 poke 前端对象的 95 个调用点（具名化是有意偏离 D8）。monolith 下直调，split 下是 `SEG_EVENT` 上的记录。
+Seven named callbacks replace the 95 call sites where the backend directly pokes frontend objects (the naming is a deliberate deviation D8). Under monolith they are direct calls; under split they are records on `SEG_EVENT`.
 
-| 回调 | 作用 |
+| Callback | Role |
 |---|---|
-| `OnGlError` | 延迟的 GL 错误；**必须对命令流有序** |
-| `OnGpuWritten` | GPU 写过的 buffer 范围（收窄 client 保守自建的 pending 集） |
-| `OnBufferWriteback` | PBO 回读、XFB 捕获结果；必须与 epoch bump 有序 |
-| `OnTextureWriteback` | CPU 回退生成 mip 的纹素 |
-| `OnMipLevelsGenerated` | 只带形状 |
-| `OnSurfaceChanged` | 默认帧缓冲的格式与尺寸（server 拥有显示时 client 靠它得知窗口尺寸） |
-| `OnCapsInvalidated` | 取代 `InvalidateCompileEnv` |
+| `OnGlError` | deferred GL errors; **must be ordered with respect to the command stream** |
+| `OnGpuWritten` | buffer ranges the GPU has written (narrowing the client's conservatively built pending set) |
+| `OnBufferWriteback` | PBO readback, XFB capture results; must be ordered with the epoch bump |
+| `OnTextureWriteback` | texels of CPU-fallback generated mips |
+| `OnMipLevelsGenerated` | shape only |
+| `OnSurfaceChanged` | format and size of the default framebuffer (when the server owns the display, this is how the client learns the window size) |
+| `OnCapsInvalidated` | replaces `InvalidateCompileEnv` |
 
-`OnLog` 已删除（P9 W3；与 W2 删除的 `OnTexturePullRequest` 合计，回调 9 → 7）：零生产者、零消费者、无 `EventKind`。server 日志走控制面 `LogLine`（带 `level`），由 `MG_Remote/Transport/LogForward.h` 的队列 + 发送线程转发：≤WARN 有损（队列满即丢、计数、流内 `LogForward{Dropped}` 标出缺口），≥ERROR 无损 + 限速（超速排队延迟；超出错误字节上限时合并成一条 `LogForward{Coalesced}`），FATAL 有界等待写出；日志线程永不等 socket。
+`OnLog` has been removed (P9 W3; together with `OnTexturePullRequest` removed in W2, callbacks 9 → 7): zero producers, zero consumers, no `EventKind`. Server logs go through the control-plane `LogLine` (with `level`), forwarded by the queue + sending thread in `MG_Remote/Transport/LogForward.h`: ≤WARN is lossy (dropped when the queue is full, counted, the gap marked in-stream by `LogForward{Dropped}`), ≥ERROR is lossless + rate-limited (over-rate lines queue with delay; when the error byte cap is exceeded they are merged into one `LogForward{Coalesced}`), FATAL waits with a bound to be written out; the logging thread never waits on the socket.
 
-后端凭空造的前端对象（Magma 占位纹理、swapchain 默认 FB 占位）改为 server 原生；pull 构建里的 `m_backend` 类成员真删会动 `sizeof`（G1），随 P13 退役（D-K）。
+Frontend objects invented out of thin air by the backend (Magma placeholder textures, the swapchain default FB placeholder) become server-native; truly deleting the `m_backend`-style members in pull builds would change `sizeof` (G1), so they retire with P13 (D-K).
 
-### 8.2 有序性是正确性要求
+### 8.2 Ordering is a correctness requirement
 
-每次 writeback 之后的 epoch bump 必须在任何后续读该 handle 的命令之前被 server 应用。**反向通道需要与正向通道相同的有序保证。**
+The epoch bump after each writeback must be applied by the server before any later command that reads that handle. **The reverse channel needs the same ordering guarantee as the forward channel.**
 
-### 8.3 错误、ack 与日志
+### 8.3 Errors, acks and logs
 
-- **唯一允许同步 ack 的入口是 `glBufferStorage`**：`ResourceRespecify` 的 `kNeedsAck` 由逐记录谓词收窄到"不可变 **buffer**"（D-A2），纹理 OOM 在 monolith 里本来就推迟到 sync 时刻。respecify 带逐 level 作用域与"只换元数据"的形式，不误丢已接受的待上传。
-- 其余错误一律晚到，走有序的 `OnGlError`。
+- **The only entry allowed to ack synchronously is `glBufferStorage`**: `ResourceRespecify`'s `kNeedsAck` is narrowed by a per-record predicate to the "immutable **buffer**" (D-A2); texture OOM was already deferred to sync time under monolith. respecify carries per-level scope and a "metadata-only" form, and does not mistakenly drop accepted pending uploads.
+- All other errors are late, going through the ordered `OnGlError`.
 
-#### 8.3.1 server 日志的转发队列
+#### 8.3.1 The server log forwarding queue
 
-`MG_Remote/Transport/LogForward.h` 的 `LogForwardChannel`：`Offer` 只在通道互斥锁下拷贝一行入队，唯一的发送线程按入队顺序写帧，写 socket 时不持锁，所以 FATAL 以下的行花在转发上的只是一次加锁加一次拷贝（`LogForwardCounters::maxOfferNs`），与对端是否在读无关。server 自己的日志文件在转发之前写（`Log.cpp`），总有全部行。
-- DEBUG / INFO / WARN 有损：使有损字节超过 `lossyQueueBytes` 的行丢弃并计数；缺口闭合时（下一条放得下的 ≤WARN 行、`LogFlush` ack 或 `Close`）通道自己插一条 WARN `LogForward{Dropped}`，写明条数、字节与起始时间。
-- ERROR 无损、限速：令牌桶（`errorBurstLines` 起步、`errorLinesPerSecond` 补充），超速的行按序排队延迟、不丢；排队的错误字节超过 `errorQueueBytes`（有损上限的 8 倍）时不再入队，由排在下一个能入队条目之前的一条 ERROR `LogForward{Coalesced}` 代替。
-- FATAL = ERROR + 等待：最多等 `fatalFlushMs`，直到发送线程写出它及之前的一切；一次等待超时后，在发送线程写出任何东西之前，后续 FATAL 不再等（`MGLOG_F` 也标记可存活的情形，可能连发）。`Log.cpp` 在日志锁外交出 FATAL 行。
-- `LogFlush` ack（`OfferControlFrame`）排在之前提交的每一行之后，`MGPipeSyncPeerLog` 的「ack 到达时之前的行都已在文件里」因此成立；它排队期间发送线程不限速。
-- `Close()` 不再收行，给队列 `closeDrainMs` 不限速发完；发送线程仍卡在写里时调用属主提供的 `unblock`（`ServerMain`：对控制 socket `shutdown(2)`），以便 join 而不是泄漏线程，剩余条目计为 abandoned。
-- 只有 TCP server 形态转发（`ServerMain.cpp`，`MOBILEGL_IPC_LOG_FORWARD`）；unix spawn server 与 inproc apply 线程自己写 `<base>.server.log`。
+`LogForwardChannel` in `MG_Remote/Transport/LogForward.h`: `Offer` only copies one line into the queue under the channel mutex, and the single sending thread writes frames in enqueue order, holding no lock while writing the socket, so for lines below FATAL, forwarding costs only one lock plus one copy (`LogForwardCounters::maxOfferNs`), regardless of whether the peer is reading. The server's own log file is written before forwarding (`Log.cpp`), so it always has all lines.
+- DEBUG / INFO / WARN are lossy: a line that would push the lossy bytes over `lossyQueueBytes` is dropped and counted; when the gap closes (the next ≤WARN line that fits, a `LogFlush` ack, or `Close`), the channel itself inserts a WARN `LogForward{Dropped}` stating the count, bytes and start time.
+- ERROR is lossless and rate-limited: a token bucket (`errorBurstLines` to start, replenished by `errorLinesPerSecond`); over-rate lines queue in order with delay and are not dropped; when queued error bytes exceed `errorQueueBytes` (8 times the lossy cap), further lines are not enqueued, replaced by one ERROR `LogForward{Coalesced}` placed before the next entry that can be enqueued.
+- FATAL = ERROR + waiting: wait at most `fatalFlushMs`, until the sending thread has written it and everything before it; after one wait times out, later FATALs do not wait until the sending thread writes anything (`MGLOG_F` also marks survivable cases, which may fire in succession). `Log.cpp` hands off FATAL lines outside the log lock.
+- The `LogFlush` ack (`OfferControlFrame`) is ordered after every previously submitted line, so `MGPipeSyncPeerLog`'s "when the ack arrives, all preceding lines are already in the file" holds; while it is queued, the sending thread is not rate-limited.
+- `Close()` accepts no more lines and gives the queue `closeDrainMs` to drain without rate limiting; if the sending thread is still stuck in a write, it calls the owner-supplied `unblock` (`ServerMain`: `shutdown(2)` on the control socket) so the thread can be joined rather than leaked, and remaining entries count as abandoned.
+- Only the TCP server form forwards (`ServerMain.cpp`, `MOBILEGL_IPC_LOG_FORWARD`); the unix spawn server and the inproc apply thread write `<base>.server.log` themselves.
 
-### 8.4 纹理重铸：字节全在 server 手里，没有拉取（P9 W2 撤销原「唯一的新停顿类」D-B6）
+### 8.4 Texture re-mint: all bytes are in the server's hands, no pull (P9 W2 withdraws the original "only new stall class" D-B6)
 
-原设计假设 server 不保留纹素、重铸要把 level 从 client 拉回来。P5c 之后 server 有 `StagedTextureStore`，GPU 写过的层本来就在 GPU 图像里——**两个后端的重铸都不需要 client 的任何字节**：
+The original design assumed the server kept no texels and re-minting had to pull levels back from the client. After P5c the server has `StagedTextureStore`, and GPU-written layers are already in the GPU image — **neither backend's re-mint needs any bytes from the client**:
 
-| | split 下重铸的字节来源 | monolith |
+| | Source of re-mint bytes under split | monolith |
 |---|---|---|
-| Espryt | `RequireImageBindableStorageByHandle`：驱动上确实存在的层逐层读回旧 GPU 纹理，pending 盒用 store 合并；驱动没有的层（最后一次 sync 之后才定义）不读，store 覆盖就重放 store，否则跳过；驱动拒读而 store 覆盖时退回 store；已 immutable 且无需加宽的原样保留 | 前端臂重放 client 影子 |
-| Magma | 重建带 `STORAGE` 的 VkImage，`PreserveTextureContentsOnRecreate` GPU→GPU 拷贝 | 同左 |
+| Espryt | `RequireImageBindableStorageByHandle`: layers that really exist on the driver are read back from the old GPU texture one by one, with pending boxes merged using the store; layers the driver does not have (defined only after the last sync) are not read, store coverage replays the store, otherwise they are skipped; when the driver refuses the read while the store covers it, fall back to the store; layers already immutable and needing no widening are kept as they are | the frontend arm replays the client shadow |
+| Magma | rebuild the VkImage with `STORAGE`, `PreserveTextureContentsOnRecreate` GPU→GPU copy | same as left |
 
-- 只改读 store 不够：GPU 写过的层 store 里是旧字节或没有字节；语料里 Espryt 的两次重铸（`iris-photon`、`iris-derivative`）都是 store 无字节的渲染目标。
-- 「整格式再生」两臂都只上传 pending 层、不回读也不拉取；「view 源重铸」只剩源需要加宽，走同一条 ByHandle 路径。
-- 删除：`OnTexturePullRequest`（与 W3 删除的 `OnLog` 合计，回调 9 → 7）、`texture-remint-pull` 标记。op 50 `ResourceSubDataComplete` 只追加不删，留作退役行（解码拒收）。`MOBILEGL_PIPE_TEXEL_RETAIN_MB` 已无消费者，但在 pull 构建里，随 P13 删（G1）。
-- `ImageBindableHint` 仍是预防：hint 在第一次 sync 前到达就直接按 image-bindable 分配，省掉一次 server 回读 + 重传。
-- 已知 dev 缺陷（非 P9）：monolith Espryt 的前端臂重放 client 影子，覆盖 GPU 写过的纹素。
-- 普查、覆盖矩阵、门与 red-once：见 git 历史。
+- Changing only what the store reads is not enough: GPU-written layers have old bytes or no bytes in the store; in the corpus both Espryt re-mints (`iris-photon`, `iris-derivative`) are render targets with no bytes in the store.
+- "Whole-format regeneration" on both arms uploads only the pending layers, with no readback and no pull; "view source re-mint" leaves only the source needing widening and goes through the same ByHandle path.
+- Removed: `OnTexturePullRequest` (together with `OnLog` removed in W3, callbacks 9 → 7), the `texture-remint-pull` flag. op 50 `ResourceSubDataComplete` is append-only and kept as a retired line (decoding rejects it). `MOBILEGL_PIPE_TEXEL_RETAIN_MB` has no consumers left, but in pull builds it is deleted with P13 (G1).
+- `ImageBindableHint` is still a precaution: if the hint arrives before the first sync, storage is allocated image-bindable directly, saving one server readback + retransfer.
+- Known dev defect (not P9): monolith Espryt's frontend arm replays the client shadow, overwriting GPU-written texels.
+- Census, coverage matrix, gates and red-once: see the git history.
 
-### 8.5 XFB scatter 留在 server
+### 8.5 XFB scatter stays on the server
 
-补丁循环需要"捕获前的字节"，而拆分后权威影子归 server（`StagedShadow`），所以 scatter 在 server 原地跑完；回程只有一条 `OnBufferWriteback`，载补好的整段，按 `SEG_EVENT` 容量的四分之一切片（`MGPipeBufferWritebackSliceBytes`），最后一片落地即蕴含之前每一片。孤儿目标（`HasDefinedContent == 0`）零填充后照常散射。`OnXfbScatterReady` 已删除（回调 10 → 9）。落地论证见 git 历史（espryt D1）。
+The patch loop needs "the bytes before capture", and after the split the authoritative shadow belongs to the server (`StagedShadow`), so scatter runs to completion in place on the server; the return trip is a single `OnBufferWriteback` carrying the patched whole range, sliced to a quarter of `SEG_EVENT` capacity (`MGPipeBufferWritebackSliceBytes`), and landing the last slice implies every preceding one. Orphan targets (`HasDefinedContent == 0`) are zero-filled and scattered as usual. `OnXfbScatterReady` has been removed (callbacks 10 → 9). For the landing argument see the git history (espryt D1).

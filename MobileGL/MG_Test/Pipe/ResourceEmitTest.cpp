@@ -503,7 +503,7 @@ namespace {
         EXPECT_TRUE(MGPipeSetSubDataBufferRange(record, 0, 0xFFFFFFFFull));
     }
 
-    // BEHAVIOUR NEUTRALITY, ASSERTED RATHER THAN ASSUMED. Every dispatch in the family is a
+    // BEHAVIOR NEUTRALITY, ASSERTED RATHER THAN ASSUMED. Every dispatch in the family is a
     // null check that falls through while no backend has installed a table - which is what
     // lets the client half land without changing a single observable - and every one of them
     // hands the backend a HANDLE and a payload, never a frontend object.
@@ -1456,9 +1456,9 @@ namespace {
     // The slot spaces of kinds Buffer, Texture and Renderbuffer are independent - the client
     // allocator is per kind - so one slot-indexed table would alias three live objects onto one
     // record. These cases are about the branch and nothing else: which table a call lands in,
-    // that the three do not see each other, and that a target or a kind the catalogue does not
+    // that the three do not see each other, and that a target or a kind the catalog does not
     // name is refused rather than routed to whichever table came first. The texture family's
-    // own behaviour (parameters, the sub-data validator, the pending-upload set) is in
+    // own behavior (parameters, the sub-data validator, the pending-upload set) is in
     // TextureEmitTest beside the emitter cases it belongs with.
     // =====================================================================================
 
@@ -1699,7 +1699,7 @@ namespace {
     }
 
     // Neither branch may fall through to a table it was not named. A target or a kind outside
-    // the catalogue would otherwise land in whichever table the code happened to reach first,
+    // the catalog would otherwise land in whichever table the code happened to reach first,
     // and destroy a live object of a kind the call was never about.
     TEST(ResourceEmit, AResourceTargetOrKindTheCatalogueDoesNotNameIsRefusedRatherThanRouted) {
         ApplierGuard guard;
@@ -1896,7 +1896,7 @@ namespace {
     //
     // Every enumerator, one fresh buffer each, so the assertion is an EQUALITY rather than a
     // "has the bit": a target that maps to no bit at all (the transfer and query targets)
-    // must leave the mask empty, and a table row that leaked a neighbour's bit fails here.
+    // must leave the mask empty, and a table row that leaked a neighbor's bit fails here.
     //
     // ON CREATE the mask is necessarily empty and that is not a gap in the test: the create
     // is emitted from the buffer object's CONSTRUCTOR, and nothing can be bound to an object
@@ -2171,7 +2171,7 @@ namespace {
             EXPECT_EQ(covered, whole) << "the split covered the range more or less than exactly once";
         };
 
-        // Three chunks and a remainder: the smallest range that says the cap is being honoured
+        // Three chunks and a remainder: the smallest range that says the cap is being honored
         // rather than the record's own bound - and at that bound the same range is ONE record,
         // so what cuts it below is the stage chunk and nothing else.
         constexpr Uint64 kThreeChunks = kChunk * 3 + 7;

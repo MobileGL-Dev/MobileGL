@@ -18,7 +18,7 @@
 // KHR-GLxx.clip_distance.functional. glIsEnabled lied about it too - it returned GL_FALSE
 // immediately after a successful glEnable.
 //
-// The assertions are behavioural, not query-shaped, because a query-only test passes against a
+// The assertions are behavioral, not query-shaped, because a query-only test passes against a
 // backend that stores the bit and never forwards it. Each case draws one full-viewport triangle
 // whose clip distance is positive on one side of the viewport and negative on the other, then
 // checks BOTH sides: the kept side proves the draw happened at all, and the clipped side is the
@@ -31,7 +31,7 @@
 // clip by EVERY declared gl_ClipDistance regardless of the enables, so
 // AnEnabledClipDistanceRemovesTheNegativeHalf goes green there against the broken tree as well,
 // and the two cases that need real per-distance semantics skip (see
-// DriverHonoursPerDistanceEnables). What actually pins the behaviour is Adreno, through
+// DriverHonoursPerDistanceEnables). What actually pins the behavior is Adreno, through
 // KHR-GLxx.clip_distance.functional - whose "without dynamic redeclaration" variants declare all
 // gl_MaxClipDistances slots and enable only the first N, i.e. exactly the subset semantics these
 // skipped cases assert. Read a green CI run here as "the state survives the frontend", not as
@@ -171,7 +171,7 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
             // state, i.e. when a written-but-disabled gl_ClipDistance leaves its fragments
             // alone. Not every stack does, and the difference is not MobileGL's to hide:
             //
-            //   - Adreno's ES driver honours GL_CLIP_DISTANCE0_EXT..7_EXT, which is what makes
+            //   - Adreno's ES driver honors GL_CLIP_DISTANCE0_EXT..7_EXT, which is what makes
             //     KHR-GLxx.clip_distance.functional pass on the device once the enables are
             //     forwarded at all.
             //   - Vulkan has no such state: every clip distance a shader declares is active,

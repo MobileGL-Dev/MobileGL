@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The arithmetic of the MGPipe catalogue (plan B section 4.4, appendix A). Everything here
+// The arithmetic of the MGPipe catalog (plan B section 4.4, appendix A). Everything here
 // is cheap on purpose: it is the test that fails when PipeCalls.def and the seven generated
 // files stop agreeing, and it must not need a GL context to say so.
 
@@ -23,7 +23,7 @@
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
-// P4a: MGPipeUnmigratedEmulation's declaration, and the applier's records the catalogue's size
+// P4a: MGPipeUnmigratedEmulation's declaration, and the applier's records the catalog's size
 // pins now reach. Push-only, like the translation unit that defines them - in a pull build the
 // symbol does not exist and the one case that calls it is compiled out.
 #include <MG_Impl/Pipe/SlotAllocator.h>
@@ -61,7 +61,7 @@ TEST(PipeCatalogue, FrontendNeverTakesAnApplierAddress) {
 }
 
 namespace {
-    // Counting expansions of the catalogue. The Class parameter is a real enumerator, so a
+    // Counting expansions of the catalog. The Class parameter is a real enumerator, so a
     // per-class count is a constant expression too.
 #define MGP_COUNT_ONE(Name, Payload, Class, Flags, Wait) +1
 #define MGP_COUNT_CLASS(Name, Payload, Class, Flags, Wait) +((Class) == countedClass ? 1 : 0)
@@ -73,7 +73,7 @@ namespace {
         return 0 MGP_CALL_LIST(MGP_COUNT_CLASS);
     }
 
-    // Every payload named in the catalogue must be a memcpy-able POD, and so must every
+    // Every payload named in the catalog must be a memcpy-able POD, and so must every
     // payload the verify comparator knows about.
 #define MGP_ASSERT_CALL_PAYLOAD_POD(Name, Payload, Class, Flags, Wait)                                                 \
     static_assert(std::is_trivially_copyable_v<Payload>, #Name "'s payload " #Payload " is not trivially copyable");
@@ -83,9 +83,9 @@ namespace {
     static_assert(std::is_trivially_copyable_v<Payload>, #Payload " is not trivially copyable");
     MGP_VERIFY_PAYLOAD_LIST(MGP_ASSERT_VERIFY_PAYLOAD_POD)
 
-    // The catalogue's own spelling of an opcode, for a failure message. The wire codec has one
+    // The catalog's own spelling of an opcode, for a failure message. The wire codec has one
     // of these and MG_Pipe may not reach it (MG_Remote is above this layer), so the table is
-    // expanded from the catalogue here rather than a name being duplicated per EXPECT.
+    // expanded from the catalog here rather than a name being duplicated per EXPECT.
 #define MGP_CATALOGUE_NAME_ROW(Name, Payload, Class, Flags, Wait) #Name,
     constexpr const char* kCatalogueOpNames[] = {"<kInvalid>", MGP_CALL_LIST(MGP_CATALOGUE_NAME_ROW)};
 #undef MGP_CATALOGUE_NAME_ROW
@@ -114,7 +114,7 @@ TEST(PipeCatalogue, HandleIsEightBytes) {
     EXPECT_FALSE(MGPipeIsCompositeShaderSlot(kMGPipeShaderCsoSlotLimit));
 }
 
-// The catalogue, the number documented in its header, and the two generated tables are one
+// The catalog, the number documented in its header, and the two generated tables are one
 // fact stated three times. This is the test that notices when they stop being.
 TEST(PipeCatalogue, EntryCountMatchesTheDocumentedCount) {
     static_assert(kExpandedCallCount == MGP_CALL_LIST_DOCUMENTED_COUNT);
@@ -201,7 +201,7 @@ TEST(PipeCatalogue, UninstalledTablesAreAllNull) {
     EXPECT_EQ(gMGPipeScreen.FenceCreate, nullptr);
     EXPECT_EQ(gMGPipeScreen.ApplierReset, nullptr);
     EXPECT_EQ(gMGPipeContext.ObjectDeath, nullptr);
-    // P5e's opcode 80 joins them: the row is catalogued, its codec layout is written and its
+    // P5e's opcode 80 joins them: the row is cataloged, its codec layout is written and its
     // tails are validated, but there is no MGPipeApplySetProgramBindings and no route - package
     // pg installs both. A null here is the contract, not an omission.
     EXPECT_EQ(gMGPipeContext.SetProgramBindings, nullptr);
@@ -218,7 +218,7 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     // IDEMPOTENT, and called here on purpose: what this case observes is WHICH rows the
     // installer fills, not whether an installer ran somewhere in this binary. Leaving that to
     // ambient linkage is what made the same assertion pass in one build directory and fail in
-    // another - the object file carrying a static initialiser was dropped by the linker in the
+    // another - the object file carrying a static initializer was dropped by the linker in the
     // binaries that did not name a symbol in it.
     MGPipeInstallMonolithTables();
 
@@ -290,7 +290,7 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     // notice's mailbox are the producers, byte for byte as before (G1/G2).
     EXPECT_EQ(gMGPipeScreen.ApplierReset, nullptr);
     EXPECT_EQ(gMGPipeContext.ObjectDeath, nullptr);
-    // P5e's set_program_bindings (CONTRACT-P5E.md §1): catalogued with a null route until pg
+    // P5e's set_program_bindings (CONTRACT-P5E.md §1): cataloged with a null route until pg
     // installs the applier entry point and the adapter beside it.
     EXPECT_EQ(gMGPipeContext.SetProgramBindings, nullptr);
 }
@@ -384,7 +384,7 @@ TEST(PipeCatalogue, TextureParamsNameTheirBuiltinSamplerAndFramebufferStateNames
     // the enum is the only thing that says what fits.
     EXPECT_LE(static_cast<Uint32>(MGPipeFramebufferTarget::Count), 256u);
     EXPECT_EQ(sizeof(MGPFramebufferState::Target), 1u);
-    // The wire's colour-attachment width is ONE width, and it is the wire's rather than the
+    // The wire's color-attachment width is ONE width, and it is the wire's rather than the
     // driver's: a driver reporting more attachments than this is refused at bring-up, never
     // truncated into the record.
     EXPECT_EQ(kMGPipeMaxColorAttachments, 8u);
@@ -410,12 +410,12 @@ TEST(PipeCatalogue, EveryTextureTargetMapsToItsOwnResourceTarget) {
             << "TextureTarget " << i << " has no MGPResourceDesc::Target row";
         EXPECT_LT(MGPipeResourceTargetForTextureTarget(target), static_cast<Uint32>(MGPipeResourceTarget::Count));
     }
-    // Buffer is 0 and stays 0: P3a's constant is what a zero-initialised record already says,
+    // Buffer is 0 and stays 0: P3a's constant is what a zero-initialized record already says,
     // and the narrowed ack predicate below compares against it.
     EXPECT_EQ(static_cast<Uint32>(MGPipeResourceTarget::Buffer), 0u);
     EXPECT_EQ(kMGPipeResourceTargetBuffer, 0u);
     // No texture target may collide with the buffer target, or a texture descriptor would ask
-    // for a synchronous acknowledgement.
+    // for a synchronous acknowledgment.
     for (SizeT i = 0; i < static_cast<SizeT>(TextureTarget::TextureTargetCount); ++i) {
         EXPECT_NE(MGPipeResourceTargetForTextureTarget(static_cast<TextureTarget>(i)),
                   static_cast<Uint32>(kMGPipeResourceTargetBuffer));
@@ -512,7 +512,7 @@ TEST(PipeCatalogue, SurfaceNamesItsKindItsTextureTargetAndItsDepthStencilAspect)
     EXPECT_EQ(kMGPipeSurfaceKindTexture, static_cast<Uint8>(MGPipeKind::Texture));
     EXPECT_EQ(kMGPipeSurfaceKindRenderbuffer, static_cast<Uint8>(MGPipeKind::Renderbuffer));
     EXPECT_NE(kMGPipeSurfaceKindTexture, kMGPipeSurfaceKindRenderbuffer);
-    // None == 0 is load-bearing: it is what makes a zero-initialised record already BE the
+    // None == 0 is load-bearing: it is what makes a zero-initialized record already BE the
     // empty attachment point, which every emitter and every reader relies on.
     EXPECT_EQ(kMGPipeSurfaceKindNone, 0u);
 
@@ -611,7 +611,7 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // P5e (§1) appended ONE more, by the same rule: opcode 80, and
     // nothing before it moved. set_program_bindings is a kCtxState row with THREE tails and a
     // host span in the third; it lands with a null route and a sink that refuses it by name,
-    // exactly as set_shader_buffers has sat catalogued-and-dead since P4a.
+    // exactly as set_shader_buffers has sat cataloged-and-dead since P4a.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetProgramBindings), 80);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::DeleteStreamOutput), 81);
     // P9 (§1) appended the two pack-buffer readbacks, by the same rule:
@@ -824,7 +824,7 @@ TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
     }
 
     // The partition, by count. 15 + 1 + 1 = 17 rows wait (shared_image made the reply rows 15; P15
-    // left one kWaitApplied row); every other row of the catalogue does
+    // left one kWaitApplied row); every other row of the catalog does
     // not. A row that changed class moves two of these numbers at once - which is why the
     // kWaitApplied count went 9 -> 10 and the kWaitNone offset 24 -> 25 in the SAME commit that
     // moved resource_copy_region (P5e gl, ID-118).
@@ -854,8 +854,8 @@ TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
     EXPECT_EQ(none, static_cast<SizeT>(kMGPipeCallCount) - 17u);
     EXPECT_EQ(other, 0u) << "a row carries the kWaitClassCount terminator as its class";
 
-    // And the reply half of the partition BOTH WAYS, over the whole catalogue: exactly the rows
-    // that own a slot wait for one. gen_pipe.py refuses a catalogue where they disagree; this
+    // And the reply half of the partition BOTH WAYS, over the whole catalog: exactly the rows
+    // that own a slot wait for one. gen_pipe.py refuses a catalog where they disagree; this
     // is the same statement where a reader of the table will look for it.
     for (SizeT i = 1; i < static_cast<SizeT>(MGPWireOp::kOpCount); ++i) {
         const auto op = static_cast<MGPWireOp>(i);
@@ -1016,7 +1016,7 @@ TEST(PipeCatalogue, FloatVectorsCompareBitwise) {
     EXPECT_FALSE(MGPipeVerify(leftState, rightState, &inner));
     EXPECT_STREQ(inner, "BlendStates");
     // P2's three new capability bools are members like any other, so the comparator names
-    // them rather than folding them into a neighbour's padding.
+    // them rather than folding them into a neighbor's padding.
     rightState = leftState;
     rightState.FramebufferSrgbEnabled = true;
     EXPECT_FALSE(MGPipeVerify(leftState, rightState, &inner));
@@ -1390,7 +1390,7 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     // started acknowledging every immutable texture allocation the moment P4a's texture family
     // landed. Texture allocation is already deferred to sync time in monolith (glTexImage* and
     // glTexStorage* only mark the storage dirty, and even glRenderbufferStorage* allocates
-    // lazily inside SyncToBackend), so splitting changes no observable behaviour and this batch
+    // lazily inside SyncToBackend), so splitting changes no observable behavior and this batch
     // must not ack. glBufferStorage stays the only entry point allowed a synchronous one.
     //
     // This is the negative control for a future widening, in both directions: a predicate that
@@ -1411,13 +1411,13 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     EXPECT_FALSE(MGPipeResourceRespecifyNeedsAck(renderbuffer));
 
     // And the buffer half still answers true with the target spelled explicitly rather than
-    // relying on a zero-initialised record to mean "buffer".
+    // relying on a zero-initialized record to mean "buffer".
     MGPResourceDesc immutableBuffer{};
     immutableBuffer.Immutable = 1;
     immutableBuffer.Target = kMGPipeResourceTargetBuffer;
     EXPECT_TRUE(MGPipeResourceRespecifyNeedsAck(immutableBuffer));
 
-    // And the opcode did not move: a flag-word edit is not a catalogue edit.
+    // And the opcode did not move: a flag-word edit is not a catalog edit.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::ResourceRespecify), 3);
 
     // P4a, ID-18 M4. The metadata-update rule is a PROSE contract stated beside the predicate
@@ -1436,7 +1436,7 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     EXPECT_NE(offsetof(MGPResourceDesc, HasDefinedContent), offsetof(MGPResourceDesc, ImageBindableHint));
 }
 
-// G13b, D-M: "emulation 在 split 下显式 Fatal 直到 P8" costs P4a a NAMED, GREPPABLE call site
+// G13b, D-M: "emulations are an explicit Fatal under split until P8" costs P4a a NAMED, GREPPABLE call site
 // per unmigrated emulation and nothing else - in monolith MGPipeUnmigratedEmulation is a no-op
 // and the emulation still runs on exactly the code path it runs on today. What this pins is
 // the LIST, because the whole value of the mechanism is that P5 and P8 edit one function

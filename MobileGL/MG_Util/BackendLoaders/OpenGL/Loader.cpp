@@ -1468,7 +1468,7 @@ namespace MobileGL::MG_Util::BackendLoader {
 
         // THE GENERATOR OF THIS WHOLE BUG FAMILY, closed here. A bare glGetIntegerv/glGetFloatv
         // of a pname the driver does not have does two damaging things at once: it leaves the
-        // local at whatever the declaration initialised it to - an optimistic number the frontend
+        // local at whatever the declaration initialized it to - an optimistic number the frontend
         // then advertises as a capability - and it leaves a GL_INVALID_ENUM in the queue where
         // the next unrelated probe's caller, or the application's first glGetError, gets blamed
         // for it. The per-stage storage block, fragment interpolation and buffer texture probes
@@ -1482,7 +1482,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // GL_SMOOTH_LINE_WIDTH_RANGE / GL_SMOOTH_LINE_WIDTH_GRANULARITY (0x0B22 / 0x0B23) are
         // desktop-only - ES has never had an antialiased line width query - so on a real GLES
         // driver these two raise GL_INVALID_ENUM. Kept as probes rather than dropped because the
-        // ANGLE and desktop-GL hosts MobileGL also runs on do answer them; the initialisers are
+        // ANGLE and desktop-GL hosts MobileGL also runs on do answer them; the initializers are
         // the GL 4.6 table 23.55 minimum of [1, 1], which is both the honest answer for a driver
         // that cannot say and what an untouched out-param already holds.
         glesFuncs.glGetFloatv(GL_SMOOTH_LINE_WIDTH_RANGE, smoothLineWidthRange);
@@ -1525,7 +1525,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // ES 3.2 core, or EXT_tessellation_shader on 3.1. Probed rather than version-gated so a
         // 3.1 driver that HAS the extension still gets to answer; the clamp below is what makes a
         // rejected query safe, since GL 4.6 table 23.66 and ES 3.2 table 21.45 set the same
-        // minimums the initialisers carry and neither API permits less.
+        // minimums the initializers carry and neither API permits less.
         glesFuncs.glGetIntegerv(GL_MAX_PATCH_VERTICES, &maxPatchVertices);
         glesFuncs.glGetIntegerv(GL_MAX_TESS_GEN_LEVEL, &maxTessGenLevel);
         maxPatchVertices = std::max(maxPatchVertices, 32);
@@ -1876,7 +1876,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // Through glesFuncs, like every other capability query here: a bare glGetIntegerv resolves
         // to MobileGL's own exported entry point, which answers this pname from the very
         // capability table being filled in - so the driver's real alignment never arrived and the
-        // backend reported an unconstrained offset it cannot honour.
+        // backend reported an unconstrained offset it cannot honor.
         GLint textureBufferOffsetAlignment = 1;
         glesFuncs.glGetIntegerv(GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT, &textureBufferOffsetAlignment);
         // Core in ES 3.2 and in EXT_texture_buffer; an older context rejects the pname and leaves
@@ -2118,7 +2118,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    Avoid sampler mipmap min filter: %s", caps.AvoidSamplerMipmapMinFilter ? "true" : "false");
         MGLOG_I("    Avoid explicit LOD bias: %s", caps.AvoidExplicitLodBias ? "true" : "false");
 
-        // Last line of defence. Capability init is the very first thing that touches the driver,
+        // Last line of defense. Capability init is the very first thing that touches the driver,
         // so anything it leaves in the error queue surfaces at the APPLICATION's first
         // glGetError and gets attributed to whatever call the app happened to make. Every group
         // above drains its own, but a probe added later must not be able to reintroduce the leak.

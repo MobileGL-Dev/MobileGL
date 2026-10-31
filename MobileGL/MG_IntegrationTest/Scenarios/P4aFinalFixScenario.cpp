@@ -154,7 +154,7 @@ void main() { oColor = texture(uTex, vUv); }
                 return texels;
             }
 
-            // A 4x4 level 0 of one colour, NEAREST_MIPMAP_NEAREST with the level range clamped
+            // A 4x4 level 0 of one color, NEAREST_MIPMAP_NEAREST with the level range clamped
             // to `maxLevel`, so a single-level texture is complete and a chain is complete once
             // its levels exist.
             static GLuint MakeLevel0(std::uint8_t r, std::uint8_t g, std::uint8_t b, int maxLevel, int size = 4) {
@@ -209,7 +209,7 @@ void main() { oColor = texture(uTex, vUv); }
                 const int cx = image.Width() / 2;
                 const int cy = image.Height() / 2;
                 std::cout << "[ P4aFinalFix ] case=" << caseName << " backend=" << Gl().BackendName()
-                          << " MOBILEGL_PIPE_PUSH=" << (mask ? mask : "(unset)") << " centre=" << image.At(cx, cy)
+                          << " MOBILEGL_PIPE_PUSH=" << (mask ? mask : "(unset)") << " center=" << image.At(cx, cy)
                           << " (" << image.ColorName(cx, cy) << ")" << std::endl;
             }
 
@@ -446,7 +446,7 @@ void main() { oColor = texture(uTex, vUv); }
 
         // A sampler object bound to the unit the draw samples through, deleted while bound: GL
         // unbinds it from every unit at glDeleteSamplers, and the texture's own parameters apply
-        // again. Both draws must be the texture's colour.
+        // again. Both draws must be the texture's color.
         TEST_F(P4aFinalFixScenario, ASamplerObjectDeletedWhileBoundLeavesTheNextDrawIntact) {
             if (!Ready()) return;
             const GLuint texture = MakeLevel0(255, 0, 0, /*maxLevel=*/0);

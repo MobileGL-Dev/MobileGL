@@ -229,7 +229,7 @@ namespace MobileGL::MG_Remote::Transport {
             ++m_counters.abandoned;
             return;
         }
-        // A gap before the acknowledgement is marked before it: the client reads the file after the
+        // A gap before the acknowledgment is marked before it: the client reads the file after the
         // ack arrives, and a gap it cannot see there is a gap it will read as "nothing was said".
         QueueGapNoticesLocked(/*lossyGapToo=*/true);
         Item item;

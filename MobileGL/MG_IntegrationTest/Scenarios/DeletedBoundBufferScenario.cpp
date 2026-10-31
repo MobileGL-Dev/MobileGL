@@ -324,7 +324,7 @@ void main() {
 
     // Transform feedback: nothing re-sends a capture window at a draw today (bit 17 is computed and
     // not emitted), so the stale-handle failure cannot reach the backend through this target; the
-    // case pins the behaviour anyway - the delete unbinds, a draw after the slot is reused runs,
+    // case pins the behavior anyway - the delete unbinds, a draw after the slot is reused runs,
     // and a fresh capture buffer at the same point receives exactly the captured values.
     TEST_F(DeletedBoundBufferScenario, ATransformFeedbackBufferDeletedWhileBoundLeavesNoStaleBinding) {
         if (!Ready() || IsSkipped()) return;

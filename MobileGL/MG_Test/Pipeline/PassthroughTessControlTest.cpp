@@ -63,7 +63,7 @@ namespace {
 
     // The built-in members of every block in the module, keyed by the struct's result id, in
     // member order. A gl_PerVertex is exactly such a struct, and its member list IS the shape the
-    // neighbouring stage has to agree with.
+    // neighboring stage has to agree with.
     constexpr Uint32 kOpTypeStruct = 30;
 
     std::map<Uint32, Vector<Uint32>> BuiltInBlockShapes(const Vector<Uint32>& spirv) {
@@ -212,7 +212,7 @@ TEST_F(PassthroughTessControlTest, CompilesWithNonDefaultLevels) {
     EXPECT_TRUE(shaderResult) << (shaderResult ? String{} : shaderResult.error().log) << source;
 }
 
-// The generator honours the mask it is given, in both directions. This is what covers the
+// The generator honors the mask it is given, in both directions. This is what covers the
 // pre-cutoff three-member form now that no authorable tessellation evaluation stage produces it
 // (ARB_tessellation_shader is GL 4.0 and gl_CullDistance joins the block at 400), and it is also
 // the fallback ReflectPassthroughTessControlNeed uses when it cannot read a module's block.
@@ -253,7 +253,7 @@ TEST_F(PassthroughTessControlTest, RedeclaresExactlyTheRequestedMembers) {
 TEST_F(PassthroughTessControlTest, MatchesTheFrontendPerVertexBlock) {
     using namespace MG_Util::ShaderTranspiler;
 
-    // MORE THAN ONE VERSION, because the shape is a function of the neighbour's GLSL version and
+    // MORE THAN ONE VERSION, because the shape is a function of the neighbor's GLSL version and
     // a single-version case cannot see that. glslang gates gl_PerVertex's gl_CullDistance member
     // on a version cutoff, and this case used to link #version 430 ONLY - which is exactly why a
     // generator hardcoded to the pre-cutoff three-member form looked correct while every program

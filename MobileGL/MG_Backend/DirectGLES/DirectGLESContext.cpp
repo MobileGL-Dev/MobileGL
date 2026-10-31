@@ -343,14 +343,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // default framebuffer is answered out of that guess, and being wrong is not cosmetic: GL
     // blits depth/stencil only between IDENTICAL formats, so a caller that reads
     // GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, allocates the buffer it was told about and blits
-    // gets GL_INVALID_OPERATION and a silently dropped blit - colour bits included, because a
+    // gets GL_INVALID_OPERATION and a silently dropped blit - color bits included, because a
     // rejected glBlitFramebuffer transfers nothing at all. DirectVulkan already publishes its
     // real format when it creates the swapchain (SwapchainObject::Create); this is the
     // DirectGLES half, and here the answer can simply be asked of the ES default framebuffer.
     //
     // Only the format is published. The placeholder's 512x512 extent is left alone: all three
     // attachments share it, and FramebufferObject::CheckCompleteness requires them to agree, so
-    // resizing depth/stencil without colour would report the default framebuffer incomplete.
+    // resizing depth/stencil without color would report the default framebuffer incomplete.
     static void PublishDefaultFramebufferDepthStencilFormat() {
         auto& defaultFBOInfo = MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo;
         // P8-SE: THE PLACEHOLDER IS ONLY THE MONOLITH ARM'S TARGET. With a transport the answer is
@@ -1550,7 +1550,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
         // Clearing the global owner works from ANY thread (a release request can
-        // legally arrive on a thread other than the current owner); erring towards
+        // legally arrive on a thread other than the current owner); erring toward
         // "not current" only defers buffer ops, which is always safe.
         InvalidateEglVerifiedStamp();
         t_native.boundContext = EGL_NO_CONTEXT;

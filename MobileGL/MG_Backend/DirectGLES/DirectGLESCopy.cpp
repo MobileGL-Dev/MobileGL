@@ -982,7 +982,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     // P8-B2: RGB16F / RGB32F MIP GENERATION ON THE SERVER, FROM THE SERVER'S OWN LEVEL.
     //
-    // ES generates a chain only for a colour-renderable, filterable format, and whether the
+    // ES generates a chain only for a color-renderable, filterable format, and whether the
     // driver's storage for these two is one depends on the driver: Espryt stores them natively
     // where the driver renders the three-channel form and widens them to RGBA16F / RGBA32F where
     // it does not (TextureImpl::BackendTextureFormatAddsAlpha), and a widened RGBA32F still needs
@@ -1249,7 +1249,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
-        // P5e (tx2), CONTRACT-P5E §5.2 / ruling 14 (ID-92's neighbour): GENERATE_MIPMAP RESOLVES
+        // P5e (tx2), CONTRACT-P5E §5.2 / ruling 14 (ID-92's neighbor): GENERATE_MIPMAP RESOLVES
         // ITS TEXTURE FROM VerbMipRes, NEVER FROM THE ACTIVE UNIT.
         //
         // The verb's own record names the texture (MGPMipPlan::Res, stashed as VerbMipRes) and
@@ -1634,7 +1634,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // The frontend has already recorded the rebinding on the program object
     // (SetShaderStorageBlockBinding) - that record is what GL_BUFFER_BINDING reports and what
     // BackendProgramObjectImpl::SyncToBackend replays onto every driver program it builds. So
-    // the only work left here is an optimisation: push the change straight onto a driver
+    // the only work left here is an optimization: push the change straight onto a driver
     // program that is ALREADY built and already current with this link, so the next draw does
     // not have to be preceded by a rebuild.
     //
@@ -1667,7 +1667,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     namespace {
-        // A colour attachment the backend widened from three channels to four has to end up
+        // A color attachment the backend widened from three channels to four has to end up
         // holding alpha 1.0 - the value GL reports for a channel the application's format does
         // not have - so an explicit per-buffer clear of it writes 1.0 rather than whatever the
         // application passed (SubstituteWidenedClearAlpha, in Managers.h). Draws can never move

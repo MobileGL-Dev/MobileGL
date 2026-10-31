@@ -24,7 +24,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 stencil{};
     };
 
-    // A colour clear reaches us from one of glClear/ClearBufferfv, ClearBufferiv or
+    // A color clear reaches us from one of glClear/ClearBufferfv, ClearBufferiv or
     // ClearBufferuiv, and Vulkan reads VkClearColorValue's union according to the destination
     // image's format rather than converting between the members - a float written where an
     // integer format is expected is reinterpreted bit for bit, not rounded. Remember which entry
@@ -53,7 +53,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // vkCmdClearColorImage names the image, so the driver applies the destination format's transfer
     // function to whatever value it is handed. Every other write path in this backend goes through
     // the UNORM twin view while GL_FRAMEBUFFER_SRGB is off (ResolveSrgbAttachmentWriteFormat) and
-    // therefore stores the raw value GL asked for. Rewrites `payload` to the linear colour whose
+    // therefore stores the raw value GL asked for. Rewrites `payload` to the linear color whose
     // encoding is that raw value, so a direct image clear of an sRGB destination agrees with them.
     // A no-op for every other format, for integer clear encodings, and when GL is doing the
     // encoding itself.

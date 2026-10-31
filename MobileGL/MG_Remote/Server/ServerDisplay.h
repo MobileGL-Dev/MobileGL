@@ -43,7 +43,7 @@ namespace MobileGL::MG_Remote::Server {
     // The leased window changed size (surfaceChanged of the SAME window: the app's layout moved it).
     // Same rules: called with the display's lock held; the holder reads the new extent with WindowExtent.
     using ServerWindowResizedHook = void (*)(void* holder);
-    // Asked about every 50 ms while AcquireFor waits; true ends the wait (Cancelled).
+    // Asked about every 50 ms while AcquireFor waits; true ends the wait (Canceled).
     using ServerWindowWaitCancel = Bool (*)(void* user);
 
     struct ServerWindowLease {

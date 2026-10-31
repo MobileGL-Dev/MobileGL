@@ -396,7 +396,7 @@ namespace MobileGL::MG_Remote::Client {
                 static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->stencilAttachment.get());
             if (info.Width != 0 && info.Height != 0) {
                 // The SWAPCHAIN's publication shape: an extent-carrying event. Reproduces
-                // SwapchainObject's monolith writes statement for statement - colour storage
+                // SwapchainObject's monolith writes statement for statement - color storage
                 // at the extent, depth/stencil format then storage - because
                 // FramebufferObject::CheckCompleteness requires every attachment to agree.
                 const Int extentWidth = static_cast<Int>(info.Width);
@@ -419,7 +419,7 @@ namespace MobileGL::MG_Remote::Client {
             } else {
                 // The DirectGLES publication shape: FORMAT ONLY, Width/Height == 0. The
                 // placeholder's 512x512 extent is deliberately left alone - all three
-                // attachments share it, and resizing depth/stencil without colour would
+                // attachments share it, and resizing depth/stencil without color would
                 // report the default framebuffer incomplete.
                 if (depthTex != nullptr) depthTex->SetInternalFormat(format);
                 if (stencilTex != nullptr) stencilTex->SetInternalFormat(format);
@@ -1515,11 +1515,11 @@ namespace MobileGL::MG_Remote::Client {
             }
             if (received != MOBILEGL_OK)
                 SessionFail(MGFatalFamily::ProtocolCorruption,
-                            "MGPipe: Fatal{ProtocolCorruption, LogFlush} no acknowledgement rc=%d", received);
+                            "MGPipe: Fatal{ProtocolCorruption, LogFlush} no acknowledgment rc=%d", received);
             const auto* reply = ParseEnvelope(bytes);
             if (!reply)
                 SessionFail(MGFatalFamily::ProtocolCorruption,
-                            "MGPipe: Fatal{ProtocolCorruption, LogFlush} malformed acknowledgement");
+                            "MGPipe: Fatal{ProtocolCorruption, LogFlush} malformed acknowledgment");
             if (const auto* ack = reply->msg_as_LogFlush()) {
                 if (!ack->ack() || ack->seq() != seq) {
                     SessionFail(MGFatalFamily::ProtocolCorruption,
@@ -1555,7 +1555,7 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         // ONE CONTROL OP AT A TIME. The twelve forwarders are already
-        // caller-serialised on the server's m_callerMutex under inproc; the same
+        // caller-serialized on the server's m_callerMutex under inproc; the same
         // discipline has to hold here or two replies race for one correlation.
         const std::lock_guard<std::mutex> lock(m_remoteControlMutex);
         // The whole op - prefix drain, reply, event delivery - runs on one budget: the cold-start
@@ -2258,11 +2258,11 @@ namespace MobileGL::MG_Remote::Client {
 
         // Does this row own a reply slot? kMGPipeCallFlags IS THE SINGLE SOURCE OF TRUTH
         // (R-16 / ID-31) - fourteen rows now, because the four Bool acceptance entry points
-        // gained the flag. Asking the catalogue rather than the caller is what stops a caller
+        // gained the flag. Asking the catalog rather than the caller is what stops a caller
         // that forgot to pass a buffer from silently turning an answer into a guess.
         //
         // P5e (ra) ADDS ONE CALLER-SIDE CONJUNCT AND NO SECOND SOURCE OF TRUTH: `wantReply`.
-        // The catalogue still says which rows CARRY a slot; a caller that passes false says it
+        // The catalog still says which rows CARRY a slot; a caller that passes false says it
         // will not read this one (resource_subdata's buffer half, §2.5 - the only such caller).
         // The server posts either way, so the wire is unchanged and the row keeps its flag.
 
@@ -2483,7 +2483,7 @@ namespace MobileGL::MG_Remote::Client {
 
     void ClientSession::WaitForApplyToCatchUp(const char* why) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // A NO-OP WITHOUT RUN-AHEAD, and that is not an optimisation: under lockstep the
+        // A NO-OP WITHOUT RUN-AHEAD, and that is not an optimization: under lockstep the
         // client already waited for every record it published, so appliedSeq is at
         // LastPublishedSeq by construction and a second wait would only add a park on a
         // watermark that is already reached.
@@ -3029,7 +3029,7 @@ namespace MobileGL::MG_Remote::Client {
         };
         Int32 status = Wire::ReplySink::kStatusError;
         EmitAndWait(MG_Pipe::MGPWireOp::MapPersistent, &handle, sizeof(handle), nullptr, 0, nullptr, 0, &status);
-        m_prePublish = nullptr; // a cancelled encode never ran it
+        m_prePublish = nullptr; // a canceled encode never ran it
 #if !defined(_WIN32)
         ::close(hop);
 #endif

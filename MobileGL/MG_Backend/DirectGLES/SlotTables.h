@@ -302,7 +302,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // THE CALLING THREAD'S BUCKET, not every bucket, and that is the semantic answer
             // rather than a shortcut: a caller walking twins is asking "which of the objects I
             // can see need this", and what it can see is its own share group. Every bucket in
-            // one process would walk a neighbour session's objects.
+            // one process would walk a neighbor session's objects.
             ForCallingThread().ForEachLive(fn);
         }
         // Every bucket, in one pass. The caller receives the key with the handle so it can tell
@@ -479,7 +479,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // THE TWO DIRECTIONS ARE NOT SYMMETRIC. The handle arrived in a payload, so
             // `handle.Gen < entry.Gen` is a reachable input, and adopting it would destroy the INCUMBENT LIVE twin - a
             // driver buffer id, a persistent map, a pooled store, released by a defaulted destructor that issues no
-            // glDeleteBuffers and no pool enrolment - and then stamp the slot back to the dead resource's generation,
+            // glDeleteBuffers and no pool enrollment - and then stamp the slot back to the dead resource's generation,
             // after which the incumbent's own FindByHandle refuses it and it is silently handed a fresh, empty twin.
             // That is a leak AND a resource that loses its storage with no diagnostic, i.e. the shape commit d7655247
             // fixed and the thing MGPipeHandle::Gen exists to prevent. So: forward is a recycle and resets the twin,
@@ -725,9 +725,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         // The holder list: intrusive and doubly linked, so registering and unregistering are
-        // two pointer writes with no allocation, and its head is a constant-initialised
+        // two pointer writes with no allocation, and its head is a constant-initialized
         // static - which is what lets the process-lifetime registry globals in Managers.cpp
-        // link themselves in from their own constructors with no initialisation-order
+        // link themselves in from their own constructors with no initialization-order
         // question to answer. Single-threaded, like every table it links (the tables live and
         // die on the context thread, as the notice they answer does).
         void LinkHolder() {

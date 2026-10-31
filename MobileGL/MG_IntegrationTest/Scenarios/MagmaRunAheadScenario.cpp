@@ -188,7 +188,7 @@ void main(){vec2 p[3]=vec2[3](vec2(-1,-1),vec2(3,-1),vec2(-1,3));gl_Position=vec
             ExpectQueued(2);
             hold.Release();
             // Resource creation requires a reply, and storage definitions may require an
-            // allocation acknowledgement. Do not hold the apply owner across those legal
+            // allocation acknowledgment. Do not hold the apply owner across those legal
             // waits. There is still no GPU readback/Finish before all four draws, so the
             // old GPU store must survive respecify and deletion until its draws complete.
             glBufferData(GL_ARRAY_BUFFER, sizeof(b), b.data(), GL_STREAM_DRAW);

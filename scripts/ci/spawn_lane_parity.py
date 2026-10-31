@@ -25,7 +25,7 @@ runs", not "runs inproc"), and that arm's scenario is monolith-only by construct
 have a spawn counterpart, so it is named as an exception rather than allowed to widen the
 tolerance for everything else.
 
-P7 PACKAGE L ADDS THE SAME QUESTION FOR MAGMA, IN TWO TIERS, AND THE NORMALISATION IS
+P7 PACKAGE L ADDS THE SAME QUESTION FOR MAGMA, IN TWO TIERS, AND THE NORMALIZATION IS
 DIFFERENT ON PURPOSE. The Espryt half above strips the sub-lane tails `F1.` and `Ct.` because
 they name neither the case nor the arm. The Magma half must NOT: `RunAhead.Credit1.` and
 `RunAhead.Credit3.` are two entries of the same case, differing in the credit the lane pins, and

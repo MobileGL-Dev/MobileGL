@@ -192,7 +192,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 size = 0;
             Uint64 lastUseSerial = 0;
             // P7 wave 2 package B3: the submission expected to carry the most recent GPU use
-            // of this buffer - the busy predicate's DEFENCE term, not its guarantee (see
+            // of this buffer - the busy predicate's DEFENSE term, not its guarantee (see
             // WriteWireBuffer). IsSubmitIndexComplete polls the real fence and reports an
             // unsubmitted index as incomplete, but the stamp is taken before the draw is
             // recorded and a mid-draw flush can submit it without the draw.

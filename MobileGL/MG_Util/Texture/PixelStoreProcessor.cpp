@@ -138,7 +138,7 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             case TextureInternalFormat::DepthComponent32F:
                 out = {1, ShadowComponent::Float32, false};
                 return true;
-            // Stencil is the one single-channel INTEGER shadow that is not a colour format: eight
+            // Stencil is the one single-channel INTEGER shadow that is not a color format: eight
             // bits, held as an unsigned index rather than a normalized value.
             case TextureInternalFormat::StencilIndex8:
                 out = {1, ShadowComponent::UInt8, true};
@@ -1192,8 +1192,8 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
         outputPixel.clear();
         // A stencil index became a transferable format when STENCIL_INDEX8 texture storage did (see
         // GetUnpackChannelMapping), but this helper serves glClearBufferData, whose internal formats
-        // are all colour (GL 4.6 core table 8.20): a stencil pattern would otherwise pass the size
-        // check and land silently in an equally-sized colour store.
+        // are all color (GL 4.6 core table 8.20): a stencil pattern would otherwise pass the size
+        // check and land silently in an equally-sized color store.
         if (textureInputFormat == TextureInputFormat::StencilIndex) return false;
         if (inputPixel == nullptr || !IsValidUnpackPixelPair(textureInputFormat, inputDataType)) return false;
 

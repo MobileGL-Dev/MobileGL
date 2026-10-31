@@ -358,10 +358,10 @@ TEST(RingTest, HardDrainBumpsTheGenerationOnlyWhenQuiesced) {
 
 TEST(RingTest, CorruptHeaderIsRefusedRatherThanDispatched) {
     // SEG_CMD is written by the peer process, so a compile-time size assert on
-    // the record catalogue proves nothing about what is actually in the
+    // the record catalog proves nothing about what is actually in the
     // mapping. Hand-build a ring whose first header is impossible (a size that
     // is not a multiple of 8) and check the consumer refuses it instead of
-    // dispatching into undefined behaviour.
+    // dispatching into undefined behavior.
     alignas(4096) RingControl control{};
     InitRingControl(control);
     std::vector<std::uint8_t> bytes(256, 0);
@@ -744,7 +744,7 @@ TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
     // RingProducer::Reserve MASKS kRecPad OUT of whatever the caller passes
     // (Ring.cpp: `flags & ~kRecPad`). So the worst of the three collisions - a real record
     // framed as a wrap filler and skipped by Pop - is ALREADY DEFENDED for anyone who goes
-    // through Reserve. That defence is worth knowing about and worth pinning, because it is
+    // through Reserve. That defense is worth knowing about and worth pinning, because it is
     // also exactly one bit wide: the other two collisions pass straight through.
     RingFixture ring(1024);
     const std::uint32_t drawVboCallFlags = MGPipeCallFlagsFor(MGPWireOp::DrawVbo);
@@ -780,7 +780,7 @@ TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
     // What saves it is the KIND. RingConsumer::Pop skips a record only when it carries kRecPad
     // AND kind == kRingPadRecordKind (Ring.cpp: `(header.flags & kRecPad) != 0 && header.kind ==
     // kRingPadRecordKind` - "BOTH, not just the flag"). Kind 0 is the wrap filler's and nothing
-    // else's, because the call catalogue starts at 1. So the stamped record is DELIVERED, lies
+    // else's, because the call catalog starts at 1. So the stamped record is DELIVERED, lies
     // and all, and the decoder can reject it by name - which it can only do because it got it.
     // THE ASSERT AND THE EXPECTS BELOW ARE THE CONTROL ON THAT KIND CHECK: delete the
     // `&& header.kind == kRingPadRecordKind` half of Pop's condition and this record vanishes

@@ -345,10 +345,10 @@
 // P4a, D-F1: THE PADDING TRAP. SamplerParameters is sizeof == 100 with THREE BYTES OF
 // TRAILING PADDING (96 bytes of members plus the 1-byte borderColorForm) and had no field
 // table and no MGP_VERIFY_PAYLOAD_LIST row at all, so MGPSamplerDesc's blob was compared as
-// BYTES and MOBILEGL_PIPE_VERIFY could false-differ on uninitialised padding - a coin flip
+// BYTES and MOBILEGL_PIPE_VERIFY could false-differ on uninitialized padding - a coin flip
 // rather than a gate. With this list the comparator sees the sixteen members and the three
 // bytes can never enter the answer. The client-side CSO cache hashes and memcmp-confirms over
-// a ZERO-INITIALISED canonical copy for the same reason, which is the other half of D-F1.
+// a ZERO-INITIALIZED canonical copy for the same reason, which is the other half of D-F1.
 #define MGP_FIELDS_SamplerParameters(F) \
     F(wrapS) F(wrapT) F(wrapR) F(minFilter) F(magFilter) F(mipmapMode) F(minLod) F(maxLod) \
     F(lodBias) F(maxAnisotropy) F(compareFunc) F(compareMode) F(borderColor) F(borderColorI) \

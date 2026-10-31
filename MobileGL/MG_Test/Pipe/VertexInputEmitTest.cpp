@@ -673,7 +673,7 @@ namespace {
         constexpr int kChurn = 64;
         Uint32 peakLive = 0;
         for (int round = 0; round < kChurn; ++round) {
-            // Through the name allocator, so MarkVertexArrayForDeletion recognises the name and
+            // Through the name allocator, so MarkVertexArrayForDeletion recognizes the name and
             // actually drops the slot's reference - and so the recycled NAME is part of the
             // shape, exactly as a chunk renderer's is. The lifetime id is fresh every round
             // whatever the name does, which is what the free has to key on.

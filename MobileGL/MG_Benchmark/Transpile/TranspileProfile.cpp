@@ -19,7 +19,7 @@
 // zero-pass Optimizer::Run and a bare BuildModule on the same binary, so the FIXED
 // parse/serialize overhead can be separated from the work the passes actually do. It also
 // runs the same pass set merged onto ONE Optimizer, which is the saving a merged chain
-// would realise.
+// would realize.
 //
 // Measurement only: it links MobileGL_s and drives the public ShaderCompiler API, so it
 // needs no GL context and no driver. The driver's own glCompileShader/glLinkProgram is
@@ -746,7 +746,7 @@ void main() {
             Emit(name, "program", "glslang.GlslangToSpv (both stages)", "frontend", 0, inner);
         }
 
-        // ---- build the artefacts every later measurement runs against ----
+        // ---- build the artifacts every later measurement runs against ----
         BuiltProgram built;
         {
             auto shaders = ParseBoth(vsPre, fsPre, env);

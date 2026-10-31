@@ -682,7 +682,7 @@ void main() {
         }
 
         // A hundred 2x2 boxes two texels apart: more than the 96 rects the storage keeps, so its
-        // list folds neighbours together, gaps and all.
+        // list folds neighbors together, gaps and all.
         TEST_F(PartialUploadOverGpuContentScenario, AHundredSubImagesKeepTheGpuClearBetweenThem) {
             if (!Ready()) return;
             std::vector<Box> boxes;

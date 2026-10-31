@@ -10,7 +10,7 @@
 
 Reads the four hand-maintained sources of truth
 
-    MobileGL/MG_Pipe/PipeCalls.def      the call catalogue
+    MobileGL/MG_Pipe/PipeCalls.def      the call catalog
     MobileGL/MG_Pipe/PipeFields.def     per-payload field lists for the verify comparator
     MobileGL/MG_Pipe/Coverage.def       accessor -> call mapping for the read inventory,
                                         and the sticky-field list
@@ -23,13 +23,13 @@ plus the vendored copy of the backend read inventory
 
 and writes MobileGL/MG_Pipe/generated/*.inc. The outputs are COMMITTED; CI regenerates
 them and fails on a diff, which is what keeps the seven generators from drifting apart
-from the catalogue (they all consume the same .def).
+from the catalog (they all consume the same .def).
 
     python3 scripts/gen_pipe.py              # write the generated files, print the summary
     python3 scripts/gen_pipe.py --check      # fail if regenerating would change anything
     python3 scripts/gen_pipe.py --self-test  # the negative controls: each gate below must trip
 
-Both modes refuse a catalogue whose call payload has no field list in PipeFields.def: a
+Both modes refuse a catalog whose call payload has no field list in PipeFields.def: a
 payload the G4 comparator cannot see is a payload MOBILEGL_PIPE_VERIFY is blind to. Both
 also refuse a field list that does not name every data member of its struct (or names one
 that is not a member), and a backend accessor read through gPipeInputs-> / pGLContext-> that
@@ -573,7 +573,7 @@ def parse_wait_classes():
     this list is what the generated kMGPipeWaitClasses[] table spells into C++, and a copy
     here would go stale in exactly the case that matters. kWaitClassCount is the terminator and
     is NOT a class a row may carry - a row that named it would generate a table entry the
-    lookup uses to mean 'this opcode never came from the catalogue'."""
+    lookup uses to mean 'this opcode never came from the catalog'."""
     text = read(os.path.join(PIPE_DIR, "MGPipe.h"))
     body = WAIT_ENUM_RE.search(text)
     if not body:
@@ -597,7 +597,7 @@ def check_wait_classes_are_known(calls):
     compile error in one consumer.
 
       1. The token must be an MGPipeWaitClass enumerator, and never the kWaitClassCount
-         terminator, which the generated lookup uses for "not from this catalogue".
+         terminator, which the generated lookup uses for "not from this catalog".
       2. kReplySlot and kWaitReply must agree, BOTH WAYS. A reply-slot row that did not wait
          would be a waiter that hangs - the client would run on and read a slot nobody had
          posted into yet; a waiting row with no slot would block on an answer nobody posts.
@@ -690,7 +690,7 @@ def banner(name, title, sources):
 
 def gen_wire_layout(calls, payloads):
     """Compiler-evaluated wire layout, including same-width member reorders."""
-    out = [banner("PipeWireLayout.inc", "P6.5: wire layout and ordered catalogue.",
+    out = [banner("PipeWireLayout.inc", "P6.5: wire layout and ordered catalog.",
                   "PipeFields.def and PipeCalls.def")]
     out += ["struct WireLayoutMember { const char* Name; Uint64 Offset; Uint64 Size; };",
             "inline constexpr WireLayoutMember kMGPipeWireLayoutMembers[] = {"]
@@ -735,12 +735,12 @@ def gen_tables(calls):
     out.append("// A table that is not exactly its call count of function pointers has grown a")
     out.append("// member that no generator knows about.")
     out.append("static_assert(sizeof(MGPipeScreen) == kMGPipeScreenCallCount * sizeof(void (*)()),")
-    out.append("              \"MGPipeScreen is not exactly its catalogue's function pointers\");")
+    out.append("              \"MGPipeScreen is not exactly its catalog's function pointers\");")
     out.append("static_assert(sizeof(MGPipeContext) == kMGPipeContextCallCount * sizeof(void (*)()),")
-    out.append("              \"MGPipeContext is not exactly its catalogue's function pointers\");")
+    out.append("              \"MGPipeContext is not exactly its catalog's function pointers\");")
     out.append("static_assert(kMGPipeScreenCallCount + kMGPipeContextCallCount == kMGPipeCallCount);")
     out.append("static_assert(kMGPipeCallCount == MGP_CALL_LIST_DOCUMENTED_COUNT,")
-    out.append("              \"the catalogue and its documented count disagree\");")
+    out.append("              \"the catalog and its documented count disagree\");")
     return "\n".join(out) + "\n"
 
 
@@ -833,8 +833,8 @@ enum class MGPWireOp : Uint16 {
 // GetCaps and CreateSamplerState came to carry an MGPBlobRef member with no kHasBlob on
 // their line at all - nothing compared the two, because nothing had both in one place.
 //
-// Index 0 is MGPWireOp::kInvalid and is kNone: the catalogue is 1-based, and an encoder
-// that reads flags for an opcode it never got from the catalogue must see the empty set
+// Index 0 is MGPWireOp::kInvalid and is kNone: the catalog is 1-based, and an encoder
+// that reads flags for an opcode it never got from the catalog must see the empty set
 // rather than another call's flags.
 //
 // kHasBlob here means EXACTLY "the payload owns an MGPBlobRef member". Three calls carry
@@ -853,7 +853,7 @@ enum class MGPWireOp : Uint16 {
     out.append("              \"the flags table and the opcode space disagree\");")
     out.append("""
 // The only supported read of the table. Out-of-range is kNone rather than undefined
-// behaviour, because the one caller that can pass a bad opcode is a decoder holding bytes
+// behavior, because the one caller that can pass a bad opcode is a decoder holding bytes
 // off a stream, and it must reach its own Fatal{ProtocolCorruption} rather than read past
 // the array on the way there.
 inline constexpr Uint32 MGPipeCallFlagsFor(MGPWireOp op) {
@@ -862,7 +862,7 @@ inline constexpr Uint32 MGPipeCallFlagsFor(MGPWireOp op) {
                                                            : static_cast<Uint32>(kNone);
 }
 
-// The catalogue class of every opcode, indexed the same way; index 0 is kCallClassCount,
+// The catalog class of every opcode, indexed the same way; index 0 is kCallClassCount,
 // never a real class, for the flags table's reason.
 inline constexpr Uint8 kMGPipeCallClasses[static_cast<SizeT>(MGPWireOp::kOpCount)] = {
     /*  0                         */ static_cast<Uint8>(kCallClassCount),
@@ -883,7 +883,7 @@ inline constexpr MGPipeCallClass MGPipeCallClassFor(MGPWireOp op) {
 
 // P5e (2.2): THE WAIT CLASS OF EVERY OPCODE, indexed the same way.
 // Index 0 is kWaitClassCount - never a real class - for the flags table's reason: the one
-// caller that can pass an opcode this catalogue never produced is a decoder holding bytes off
+// caller that can pass an opcode this catalog never produced is a decoder holding bytes off
 // a stream, and it must reach its own Fatal{ProtocolCorruption} rather than a wait decision.
 //
 // This is the STATIC HALF of MGPipeBarriered(op, payload, applierState), the predicate the emit
@@ -908,7 +908,7 @@ inline constexpr MGPipeWaitClass MGPipeWaitClassFor(MGPWireOp op) {
 }
 
 // THE COLUMN'S OWN INVARIANT, stated in C++ as well as in the generator: a reply-slot row
-// waits for its reply and a waiting row owns a slot. gen_pipe.py refuses a catalogue where the
+// waits for its reply and a waiting row owns a slot. gen_pipe.py refuses a catalog where the
 // two disagree, and this is the same statement where a reader of the generated table will look
 // for it - a kReplySlot row that did not wait would run on and read a slot nobody had posted
 // into, and a kWaitReply row with no slot would block on an answer nobody posts.
@@ -923,7 +923,7 @@ static_assert(MGPipeWaitClassFor(MGPWireOp::ApplierReset) == kWaitApplied,
 static_assert(MGPipeWaitClassFor(MGPWireOp::ReadPixels) == kWaitReply,
               "a readback's answer is not derivable (R-5)");
 
-// Spot checks the generator states about its own output, so that a catalogue edit that
+// Spot checks the generator states about its own output, so that a catalog edit that
 // silently drops a flag is a build break here and not a wrong decode six packages away.
 static_assert(MGPipeCallFlagsFor(MGPWireOp::kInvalid) == static_cast<Uint32>(kNone),
               "opcode 0 is not a call and carries no flags");
@@ -1011,9 +1011,9 @@ inline MGPipeWireRecordApplyFn gMGPipeWireRecordApply = nullptr;
 // record's own count fields and require it to EQUAL MGPWireRecHeader::Size - belongs to the
 // decoder, which has the payload (MG_Remote/Wire's MGPipeWireRecordLayout, P5 w1).
 //
-// The switch and the opcode enum come from the same list, so a call added to the catalogue
+// The switch and the opcode enum come from the same list, so a call added to the catalog
 // cannot be forgotten here; the default arm is for the opcode that never came from this
-// catalogue at all - a byte off a corrupt stream - and it is fatal for the same reason the
+// catalog at all - a byte off a corrupt stream - and it is fatal for the same reason the
 // bounds check is.
 //
 // With no decoder installed - every monolith build, and a split build before
@@ -1661,7 +1661,7 @@ def self_test(accessors):
     # The positive control: the canned struct's exact list passes, and the parser sees the
     # padding member as padding and the function as not a member.
     check_field_lists_cover_struct_members({"Canned": ["A", "B", "C"]}, ["Canned"], [canned_struct])
-    # ... and the real catalogue's real flags and wait classes pass the same gates.
+    # ... and the real catalog's real flags and wait classes pass the same gates.
     check_call_flags_are_known(calls_for_control)
     check_wait_classes_are_known(calls_for_control)
     if trips == 0:

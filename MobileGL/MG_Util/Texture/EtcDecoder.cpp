@@ -85,7 +85,7 @@ namespace MobileGL::MG_Util::EtcDecoder {
 
             Int base[2][3] = {};
             if (!diff) {
-                // Individual mode: two 4-bit colours.
+                // Individual mode: two 4-bit colors.
                 base[0][0] = Extend4(Bits(word, 63, 60));
                 base[1][0] = Extend4(Bits(word, 59, 56));
                 base[0][1] = Extend4(Bits(word, 55, 52));

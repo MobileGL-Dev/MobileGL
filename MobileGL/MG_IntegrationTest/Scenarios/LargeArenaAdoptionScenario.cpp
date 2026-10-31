@@ -236,7 +236,7 @@ void main() { word = 0xC0FFEEu; }
                                     "MOBILEGL_PIPE_STATS=1, MOBILEGL_PIPE_STATS_PERIOD=1 and a private "
                                     "MOBILEGL_LOG_FILE_PATH. The ambient entries and the two subsystem "
                                     "arms configure none of that, and their log is shared - a read there "
-                                    "would race a neighbour's bring-up.";
+                                    "would race a neighbor's bring-up.";
                     return;
                 }
                 if (!BuildMarkerIsSet("MGITEST_PIPE_PUSH_BUILD")) {

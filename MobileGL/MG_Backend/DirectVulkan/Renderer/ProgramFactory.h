@@ -92,7 +92,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // The gl_PerVertex members a pass-through tessellation control stage may have to carry,
         // in the order glslang declares them - which is the order a redeclaration must use.
-        // Which of them exist is a function of the neighbouring stage's GLSL VERSION
+        // Which of them exist is a function of the neighboring stage's GLSL VERSION
         // (gl_CullDistance joins the block at #version 450), so the mask is read off that
         // stage's SPIR-V rather than assumed. See ReflectPerVertexInputMembers.
         enum class PerVertexMemberBit : Uint32 {
@@ -647,7 +647,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // member set, because all three decide what the generator emits. The size comes from
         // PATCH_VERTICES and the levels from PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL
         // - draw state rather than link state, and the CTS case that motivated this links at the
-        // default 3 and draws at 4. The member set comes from the neighbouring evaluation stage's
+        // default 3 and draws at 4. The member set comes from the neighboring evaluation stage's
         // own SPIR-V, so two programs at different GLSL versions need different modules. The
         // pipeline cache re-keys on the same inputs, so the module a pipeline was built with is
         // part of that pipeline's identity. Compiling is bounded by the number of distinct

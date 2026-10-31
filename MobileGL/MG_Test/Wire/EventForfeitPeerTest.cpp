@@ -495,7 +495,7 @@ namespace {
                control->SendFrame(MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()}) == MOBILEGL_OK;
     }
 
-    // A LogFlush that asks for an acknowledgement (ack=false is the REQUEST; the server's answer
+    // A LogFlush that asks for an acknowledgment (ack=false is the REQUEST; the server's answer
     // carries ack=true), exactly the frame ClientSession::SyncPeerLog sends - minus the drain that
     // SyncPeerLog does first.
     bool SendLogFlush(Client::ClientSession& client, std::uint64_t seq) {
@@ -1055,7 +1055,7 @@ namespace {
             ASSERT_EQ(ServerLog(logBase).find("recv failed"), std::string::npos)
                 << "the flood finished only after the control connection died - the stall was ended by "
                    "TCP_USER_TIMEOUT, not survived";
-            // (2) The peer reads again and synchronises its log.
+            // (2) The peer reads again and synchronizes its log.
             const char go = 1;
             ASSERT_EQ(::write(release[1], &go, 1), 1);
             struct pollfd wait{synced[0], POLLIN, 0};

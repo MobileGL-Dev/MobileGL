@@ -74,7 +74,7 @@ namespace {
             // 0 is the "this slot holds nothing" value in every memo that stores an
             // id, so a live object must never be able to answer to a zeroed slot.
             EXPECT_NE(lifetimeId, 0u) << typeName << " handed out lifetime id 0 (attempt " << attempt
-                                      << "), which is the value a zero-initialised memo slot already carries";
+                                      << "), which is the value a zero-initialized memo slot already carries";
             EXPECT_GT(lifetimeId, previousId)
                 << typeName << " lifetime ids must be strictly increasing, so an id is never handed out twice "
                 << "(attempt " << attempt << ")";

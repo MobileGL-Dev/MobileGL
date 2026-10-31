@@ -1,21 +1,21 @@
-# 工程纪律与验证门
+# Engineering discipline and verification gates
 
-> 参考。验证门的设计见 [`../design/07-memory-readback-verification.md`](../design/07-memory-readback-verification.md) §13.2；各阶段实际跑门的结果在 `../notes/<阶段>/README.md`。
+> Reference. The design of the verification gates is in [`../design/07-memory-readback-verification.md`](../design/07-memory-readback-verification.md) §13.2; the per-phase gate results are in the phase notes (in git history).
 
-## 每个提交
+## Every commit
 
-- 默认 ALL target 必须完整构建；禁止提交热路径插桩（CI grep 门）。
-- **每个门必须能因它存在的理由变红**：带阴性对照并真跑过一次红（R-16）；公共 GL 看不见的改用白盒断言。
-- 正确性门是硬门；**性能只记录、不设门**（用户 2026-09-08），但数字必须真的采到。专门的优化阶段排在路线图推完之后；P13 之后的性能轮以 `dev` 构建为基线（用户 2026-10-07）。
-- **拆分不顺手修 `dev` 的 bug**：发现的 `dev` 侧缺陷记成独立条目、独立 PR。
+- The default ALL target must build completely; instrumenting hot paths is not allowed in commits (a CI grep gate).
+- **Every gate must be able to turn red for the reason it exists**: it has a negative control and has really run red once (R-16); what public GL cannot see is asserted white-box instead.
+- Correctness gates are hard gates; **performance is recorded, not gated** (user, 2026-09-08), but the numbers must actually be measured. Dedicated optimization phases come after the roadmap; performance rounds after P13 use the `dev` build as the baseline (user, 2026-10-07).
+- **Do not fix `dev` bugs along the way**: a defect found on the `dev` side becomes its own entry and its own PR.
 
-## 每个阶段出口
+## Every phase exit
 
-- 跑一次五部分门：接口纯度、语义影子比对、行为 A/B、性能记录、覆盖与句柄纪律。
-- 字节 / 名字级等式：**G5** 受保护区域逐字节一致；**G14** 测试名只增不删。**G1**（pull 构建的符号集与 `.text` 对基线恒等）与 **G2**（pull 与 push 的测试名集合相同）随 pull 构建在 P13 退役；接班的是：出货库零 `MG_Remote` 符号检查、skip 普查（新出现的跳过与消失的名字都要在基线里具名）、recorder 金标（`MG_Test/Pipe/RecorderGoldenTest.cpp`：固定 GL 调用序列的记录流逐条比对，改金标要在提交里说为什么），以及 link ratchet（server 一半对前端的引用只减不增，不允许 `# P13` 注解）。
-- 性能判据是**逐线程 CPU 时间**；设备对比走 reboot-clean + 同热窗口配对 A/B，只用 Redmi `2f7cbe2e`（[`pin-verification-2026-09-07.md`](pin-verification-2026-09-07.md)）；Windows 机器不是正确性门。
-- 收官由异模型族审查一次，发现进入下一阶段首轮；实现方与审查方错开模型族；不过度验证（用户 2026-09-16，ID-66）。
+- Run the five-part gate once: interface purity, semantic shadow comparison, behavioral A/B, performance record, coverage and handle discipline.
+- Byte and name level equalities: **G5** protected regions are byte-identical; **G14** test names only grow. **G1** (the pull build's symbol set and `.text` identical to the baseline) and **G2** (the pull and push builds have the same set of test names) retired with the pull build in P13; their successors are: the zero-`MG_Remote`-symbol check on the shipped library, the skip census (newly appearing skips and disappearing names must be named in the baseline), the recorder golden (`MG_Test/Pipe/RecorderGoldenTest.cpp`: record streams from a fixed GL call sequence compared one by one; changing the golden requires saying why in the commit), and the link ratchet (the server half's references to the frontend only fall, and `# P13` annotations are not allowed).
+- The performance criterion is **per-thread CPU time**; device comparisons use reboot-clean + same-thermal-window paired A/B, on the Redmi `2f7cbe2e` only (pin-verification record, in git history); a Windows machine is not a correctness gate.
+- The close-out is reviewed once by a different model family; findings enter the first round of the next phase; implementers and reviewers use different model families; do not over-verify (user, 2026-09-16, ID-66).
 
 ## CTS
 
-`gl44to46` 约 56,271 例，单独计价：逐阶段只跑该阶段可能影响的具名块；完整 caselist 只在架构边界与合并 `dev` 之前跑，放 CI 不放关键路径。
+`gl44to46` has about 56,271 cases and is priced separately: each phase runs only the named blocks it can affect; the full caselist runs only at architecture boundaries and before merging into `dev`, in CI rather than on the critical path.

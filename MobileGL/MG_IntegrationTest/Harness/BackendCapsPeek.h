@@ -11,7 +11,7 @@
 // It exists for exactly one assertion: that the six per-axis compute limits the MGPipe
 // caps block carries (DynamicBackendParameters::MaxComputeWorkGroupCount/Size, plan B
 // section 4.4.1) are the same numbers glGetIntegeri_v answers today, since P0.5 retires
-// the getter in favour of the caps. A separate translation unit, because the scenario
+// the getter in favor of the caps. A separate translation unit, because the scenario
 // sources include the GL headers with prototypes and MobileGL's umbrella header is not
 // meant to meet them in one file.
 

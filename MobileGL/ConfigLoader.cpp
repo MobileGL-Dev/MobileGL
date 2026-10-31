@@ -526,7 +526,7 @@ namespace MobileGL::MG_ConfigLoader {
                     "ring to an apply thread");
             return;
         }
-        // The three P6 forms. Recognised precisely, so the diagnostic can say "rejected"
+        // The three P6 forms. Recognized precisely, so the diagnostic can say "rejected"
         // rather than "unknown", which are different bugs on the operator's side.
         // P6 `sm`/`cp`: spawn is IMPLEMENTED. It launches a server process on a
         // rendezvous of its own and connects to it - the two processes are
@@ -575,7 +575,7 @@ namespace MobileGL::MG_ConfigLoader {
         QueryEnvVariable("MOBILEGL_IPC_CONTROL", ipc.Control, "fork");
         QueryEnvVariable("MOBILEGL_IPC_DATA", ipc.Data, "auto");
         // Both ring floors are 1 MiB, not 0: a ring caps ONE record at half its size, and
-        // the catalogue's largest fixed payload (MGPFramebufferState, 304 bytes) plus a
+        // the catalog's largest fixed payload (MGPFramebufferState, 304 bytes) plus a
         // create_shader_state archive already needs far more than a toy ring. The ceilings
         // are sanity, not policy.
         ipc.RingMb = QueryEnvUint32("MOBILEGL_IPC_RING_MB", 8, 1, 1024);
@@ -703,7 +703,7 @@ namespace MobileGL::MG_ConfigLoader {
             const Bool serverProcess = role != nullptr && std::strcmp(role, "server") == 0;
             if (ipc.Surface == MG_Config::IpcSurface::Server && !serverProcess &&
                 MG_Config::Transport != MG_Config::TransportMode::Spawn) {
-                // Said, not silently honoured: there is no remote server here to own a window.
+                // Said, not silently honored: there is no remote server here to own a window.
                 MGLOG_W("Config: MOBILEGL_IPC_SURFACE=server is IGNORED - it asks a remote server "
                         "(MOBILEGL_TRANSPORT=spawn, a fork or tcp:// control) to own the window surface, "
                         "and this run has none. Window surfaces stay the client's own");
@@ -711,7 +711,7 @@ namespace MobileGL::MG_ConfigLoader {
         }
 
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
-        // One line, on the arm where these numbers decide behaviour, because every one of
+        // One line, on the arm where these numbers decide behavior, because every one of
         // them is a number a bug report has to quote.
         // CREATE-WINDOW IS IN THIS LINE BECAUSE A RUN HAS TO SAY WHICH WINDOW IT USED. It was
         // missing while the value was a number nobody varied, and the moment it became one that

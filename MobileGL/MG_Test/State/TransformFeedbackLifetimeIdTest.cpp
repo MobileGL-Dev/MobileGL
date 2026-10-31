@@ -59,7 +59,7 @@ TEST(TransformFeedbackLifetimeIdTest, AnObjectAtARecycledNameCarriesAFreshLifeti
     context.BindTransformFeedbackObject(name);
     const Uint64 firstId = context.GetBoundTransformFeedbackLifetimeId();
     EXPECT_NE(firstId, 0u) << "a live transform feedback object answered to id 0, which is the value a "
-                              "zero-initialised backend slot already carries";
+                              "zero-initialized backend slot already carries";
 
     // The default object is a different object and must not share the id.
     context.BindTransformFeedbackObject(0);

@@ -61,7 +61,7 @@
 // that lets the sync read - the set is complete exactly when every piece has landed, and a level
 // with a hole in it is Fatal{StageSnapshotTooNarrow}: the same words as the buffer half, for the
 // same reason, because those bytes have never existed on this side and inventing them is silent
-// data loss rather than a missing optimisation. THE QUESTION IS "IS THE RANGE THE READER ASKS
+// data loss rather than a missing optimization. THE QUESTION IS "IS THE RANGE THE READER ASKS
 // FOR COVERED", not "is the level the size the client meant": no format crosses the wire, so a
 // leading run that already reaches the image's high-water mark reads as complete when later
 // pieces are still missing - unreachable, because nothing reads between the pieces of one verb,
@@ -502,7 +502,7 @@ namespace MobileGL::MG_Record {
 
         // The calling thread's SESSION's levels (every group of it - the callers are a session's
         // context teardown and its applier release), or every level on a thread that is no
-        // session's. A live neighbour session's declared levels are not this caller's to drop:
+        // session's. A live neighbor session's declared levels are not this caller's to drop:
         // that is the P14 Fatal StagedShadow.h's StagedBucket describes.
         void DropAll() {
             if (!m_any.load(std::memory_order_acquire)) return;

@@ -29,9 +29,9 @@
 // what says a red pixel in the colliding case is about the name and not about this machine's
 // tessellation, its geometry stage, or the block mechanism in general.
 //
-// Colour code, so a failure names its own cause:
+// Color code, so a failure names its own cause:
 //   green  - the payload crossed all four stage boundaries, which is the pass.
-//   blue   - the clear colour: nothing was drawn at all (the program did not link, or the
+//   blue   - the clear color: nothing was drawn at all (the program did not link, or the
 //            backend program was rejected and every draw became a no-op).
 //   red    - the pipeline ran but the plain (non-block) varying did not arrive, i.e. the
 //            failure is not about interface blocks.
@@ -39,7 +39,7 @@
 //            zeroed or garbage. That is the defect this scenario exists for.
 //
 // llvmpipe and lavapipe run this faithfully but do NOT reproduce the original defect - the
-// aliasing is a Mali ES compiler behaviour. Read a green run here as "the rename did not
+// aliasing is a Mali ES compiler behavior. Read a green run here as "the rename did not
 // break the ordinary path"; the claim it pins on the device is the CTS group above.
 
 #include <string>
@@ -280,7 +280,7 @@ void main()
                 return program;
             }
 
-            // Clears to BLUE, so "the draw painted nothing" is a colour of its own rather
+            // Clears to BLUE, so "the draw painted nothing" is a color of its own rather
             // than something that could be mistaken for a zeroed payload.
             Rgba8 DrawAndReadCentre(GLuint program) const {
                 glViewport(0, 0, Gl().Width(), Gl().Height());
@@ -334,7 +334,7 @@ void main()
         // stages honestly, but nothing MobileGL reports answers for the geometry stage the
         // same way (GL_MAX_GEOMETRY_* are frontend constants and an ES driver may legitimately
         // report zero geometry storage blocks while having geometry shaders), so a stack that
-        // cannot build a five-stage program at all is recognised here, by trying.
+        // cannot build a five-stage program at all is recognized here, by trying.
         TEST_F(IoBlockNameCollisionScenario, DistinctlyNamedBlocksCarryThePayloadThroughFiveStages) {
             if (!Ready()) return;
 

@@ -12,7 +12,7 @@
 // GOT it is a different question and it is answered by Harness/SplitRuntimePeek.h, out of the
 // running process - see the long argument in that header. The split of responsibility matters:
 // an environment variable is a request, and this package's first version treated a request (plus
-// a grep over source text) as evidence that the request had been honoured. Review finding M-1
+// a grep over source text) as evidence that the request had been honored. Review finding M-1
 // falsified that by renaming one string in six files, which armed eleven lanes and turned eight
 // of them green against the monolith path.
 //
@@ -71,7 +71,7 @@ namespace MGITest::SplitLane {
     }
 
     // Empty when this case may assert; otherwise the reason to GTEST_SKIP() with. The reason is
-    // spelled out rather than summarised because a skip line is the only thing anyone reads when
+    // spelled out rather than summarized because a skip line is the only thing anyone reads when
     // they ask "did the split lane actually run" - and because the previous version of this
     // message named the wrong missing thing (review finding N-1): it said MG_Remote/Client did
     // not exist, on a tree where it existed and compiled and every entry point aborted.

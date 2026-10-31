@@ -800,7 +800,7 @@ TEST_F(DemoteFloat64Test, TheThirtyTwoBitBehaviourIsUnchanged) {
     EXPECT_FALSE(RewritesToAnAbsoluteValueTest(CompareAgainst("float", "1.0")))
         << "a float compared against 1.0 must not be rewritten";
     EXPECT_TRUE(RewritesToAnAbsoluteValueTest(CompareAgainst("float", "0.0")))
-        << "the 32-bit behaviour this pass shipped with must be preserved exactly";
+        << "the 32-bit behavior this pass shipped with must be preserved exactly";
 }
 
 // The pass matches ZERO, not "small". The old constant-is-zero test was `fabs(v) <= 1e-4`, so a

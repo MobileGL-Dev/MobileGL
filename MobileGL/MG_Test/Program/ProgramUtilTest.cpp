@@ -665,7 +665,7 @@ void main() {
     // declaration, so measure the line rather than assuming its length.
     EXPECT_EQ(outputPos, source.find('\n', versionPos) + 1);
     EXPECT_NE(source.find("// #version 460 core"), String::npos);
-    // This #line sits ahead of the version directive, where GLSL would never have honoured it, so
+    // This #line sits ahead of the version directive, where GLSL would never have honored it, so
     // it is still dropped. Directives that follow the version line are kept - see
     // PreprocessKeepsPlainLineDirectivesAndSparesLookalikeIdentifiers.
     EXPECT_EQ(source.find("#line"), String::npos);
@@ -995,7 +995,7 @@ void main() {
 TEST_F(ProgramUtilTest, RetargetLegacyVersionDirectiveOnlyTouchesNormalizedDesktopCore) {
     using namespace MG_Util::ShaderTranspiler;
 
-    // Only MobileGL's own normalization is retargetable, and it is recognised by the marker the
+    // Only MobileGL's own normalization is retargetable, and it is recognized by the marker the
     // preprocessor leaves on the directive line - so normalize a legacy source rather than
     // hand-writing the directive the marker belongs to.
     String normalized = "#version 130\nvoid main() {}\n";
@@ -2386,7 +2386,7 @@ TEST_F(ProgramUtilTest, CompileEnvWithoutBackendAdvertisesEverything) {
     EXPECT_TRUE(env.IsExtensionAdvertised(MobileGL::E_GL_ARB_gpu_shader_int64));
 }
 
-// P0b layer 2: ShaderPreprocessCache, tested directly. The GL-level behaviour it
+// P0b layer 2: ShaderPreprocessCache, tested directly. The GL-level behavior it
 // enables is covered end to end in ProgramTest; these pin the container itself,
 // where the interesting cases (hash collisions, both eviction budgets) are hard
 // to provoke through glCompileShader.
@@ -3350,7 +3350,7 @@ void main() {
     const Vector<Uint32> spirv = BuildSpirvForStage(vs, GL_VERTEX_SHADER);
     ASSERT_FALSE(spirv.empty());
     EXPECT_TRUE(ShaderCompiler::ModuleDeclaresBufferTextureSampler(spirv))
-        << "an isamplerBuffer must be recognised as a buffer texture";
+        << "an isamplerBuffer must be recognized as a buffer texture";
 }
 
 // The float and unsigned spellings lower to the same Dim=Buffer image with a different
@@ -3396,7 +3396,7 @@ void main() { fragColor = texture(Albedo, vUv) + vec4(texelFetch(Ids, ivec2(0), 
         << "only Dim=Buffer images are buffer textures";
 }
 
-// Pins the SPIRV-Cross behaviour the whole defect rests on: below ESSL 320 it synthesizes an
+// Pins the SPIRV-Cross behavior the whole defect rests on: below ESSL 320 it synthesizes an
 // EXT_texture_buffer requirement from the image type itself. There is nothing in the module
 // to strip - which is why the OES driver is served by retargeting the emitted directive
 // (RetargetTextureBufferExtension) rather than by rewriting the SPIR-V.
@@ -3501,7 +3501,7 @@ void main() { ssb.sum = imageAtomicAdd(i0, 2, 7u); }
 
 // The negative control, and the whole reason the pass exists: SPIRV-Cross's ES emulation of 1D
 // images does not ask whether the type is arrayed, so it wraps an already-two-component
-// coordinate in a two-component constructor. Pinning the upstream behaviour here means that if a
+// coordinate in a two-component constructor. Pinning the upstream behavior here means that if a
 // future SPIRV-Cross bump fixes it, this test fails and says so, rather than the pass quietly
 // becoming dead weight.
 TEST_F(ProgramUtilTest, SpirvCrossEmitsAMalformedCoordinateFor1DArrayImages) {
@@ -3638,7 +3638,7 @@ void main() { ssb.sum = imageLoad(i0, 2).r; }
 // all: SPIRV-Cross widens a 1D image coordinate in OpImageRead and OpImageWrite but not in
 // OpImageTexelPointer, so the atomic comes out addressing an `uimage2D` with a scalar. Every ES
 // driver answers "no matching overloaded function found" and the whole stage - with every other
-// image in it - is lost. Pinning the upstream behaviour here means a future SPIRV-Cross bump that
+// image in it - is lost. Pinning the upstream behavior here means a future SPIRV-Cross bump that
 // fixes it fails this test instead of leaving the lowering as silent dead weight.
 TEST_F(ProgramUtilTest, SpirvCrossEmitsAScalarCoordinateForA1DImageAtomic) {
     using namespace MG_Util::ShaderTranspiler;
@@ -3805,7 +3805,7 @@ void main() { ssb.data = textureLodOffset(g_sampler4, vec2(0.5, 1.0), 0.0, 0); }
 
 // The negative control, and the whole reason the pass exists: SPIRV-Cross emits the sampler as 2D
 // and widens the coordinate, then hands the scalar offset straight through. Pinning the upstream
-// behaviour here means that if a future SPIRV-Cross bump fixes it, this test fails and says so,
+// behavior here means that if a future SPIRV-Cross bump fixes it, this test fails and says so,
 // rather than the pass quietly becoming dead weight.
 TEST_F(ProgramUtilTest, SpirvCrossEmitsAScalarOffsetFor1DSamplers) {
     using namespace MG_Util::ShaderTranspiler;

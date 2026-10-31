@@ -616,7 +616,7 @@ void main() { g_data[gl_LocalInvocationIndex] = 1u; }
                         << axis.name << "[" << i << "]: MGPCaps carries " << capsAxis[i]
                         << " but glGetIntegeri_v answers " << indexed[i]
                         << " - the caps block and the getter path must be one number, because P0.5 retires "
-                           "the getter in favour of the caps";
+                           "the getter in favor of the caps";
                 }
             }
         }

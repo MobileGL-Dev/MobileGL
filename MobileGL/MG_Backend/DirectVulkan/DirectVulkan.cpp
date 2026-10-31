@@ -238,7 +238,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // GetProgramResourceCache does it - over a multi-stage program with an arrayed SSBO and an
     // atomic-counter block, and asserts element-for-element equality with what the archive
     // published. That equivalence is what makes an #if here a build-time SELECTION rather than
-    // a behavioural fork, and it is the reason the case exists.
+    // a behavioral fork, and it is the reason the case exists.
     //
     // WHY AN #if AT ALL, AND WHAT IT COSTS. LinkArtifacts::storageBlocks is
     // MOBILEGL_BUILD_DISAGGREGATED-only, because one more Vector member changes the struct's
@@ -263,7 +263,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
         auto it = find(name);
         if (it == blocks.end()) {
-            // Archive names are normalised, so an arrayed block that GL enumerates per element
+            // Archive names are normalized, so an arrayed block that GL enumerates per element
             // - "B[0]", "B[1]" - is one entry here, spelled "B". Same second chance the cache
             // gave, for the same callers.
             const auto bracket = name.rfind('[');

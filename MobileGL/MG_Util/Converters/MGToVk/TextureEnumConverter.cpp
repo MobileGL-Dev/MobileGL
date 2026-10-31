@@ -290,7 +290,7 @@ namespace MobileGL {
             case TexturePixelDataType::UnsignedInt1010102:
                 // GL_UNSIGNED_INT_10_10_10_2 is R in bits 22-31, G 12-21, B 2-11, A 0-1 - an
                 // R10G10B10A2 packing Vulkan has no format for at all. Reported as UNDEFINED
-                // rather than as the A2*10*10*10 neighbours below, which are a different
+                // rather than as the A2*10*10*10 neighbors below, which are a different
                 // packing: naming one of those would hand a caller a format whose components
                 // sit in the wrong bits.
                 return VK_FORMAT_UNDEFINED;

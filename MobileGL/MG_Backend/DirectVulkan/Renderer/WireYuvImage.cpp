@@ -15,9 +15,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // texture's image: the texture keeps its own RGBA8 level 0 (VkTextureManager::SyncWireTextureShape)
     // and, at its first use in each frame, the image is CONVERTED into it here - the image's
     // AHardwareBuffer imported with its external format, sampled through an immutable sampler that
-    // carries a VkSamplerYcbcrConversion built from the import's colour hints, one triangle over the
+    // carries a VkSamplerYcbcrConversion built from the import's color hints, one triangle over the
     // target. Zero CPU copies for an image this server allocated; a foreign one (a video decoder's
-    // buffer) is first brought up to date by the registry's labelled CPU copy (RefreshForeign).
+    // buffer) is first brought up to date by the registry's labeled CPU copy (RefreshForeign).
     //
     // Why converted rather than sampled in place: a Y'CbCr conversion is an immutable sampler, which
     // lives in the descriptor set layout and therefore in every application pipeline that samples the
@@ -154,7 +154,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // ---- the texture's import of the buffer, and the pipeline its conversion needs ----
         auto* source = static_cast<WireYuvSource*>(resource.yuvSource.get());
         if (source != nullptr && !(source->hints == hints)) {
-            // Re-imported with other colour hints: the conversion (and so the view) changes.
+            // Re-imported with other color hints: the conversion (and so the view) changes.
             auto retired = MakeUnique<VkTextureManager::TextureResource>();
             retired->yuvSource = std::move(resource.yuvSource);
             WireRetiredObjects objects{};

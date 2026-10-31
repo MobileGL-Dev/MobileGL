@@ -19,7 +19,7 @@
 #   DEV_TOOLS       Phone dir for device/*.sh and channel files. Default: /data/local/tmp/anl
 #   DEV_SHARE       Phone dir bind-mounted into the container as /run/anland-mobilegl (screenshots,
 #                   server lib staging, display daemon socket). Default: /data/local/tmp/anland-mobilegl
-#   ANDROID_SERIAL  Honoured by adb itself; leave unset when only one device is attached
+#   ANDROID_SERIAL  Honored by adb itself; leave unset when only one device is attached
 #                   (USB serial or a wireless "ip:port").
 
 _skill_scripts=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

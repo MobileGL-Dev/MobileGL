@@ -24,7 +24,7 @@
 //     evaluation stage and only then captured. This is the shape of
 //     KHR-GL4x.tessellation_shader.tessellation_control_to_tessellation_evaluation.
 //     gl_MaxPatchVertices_Position_PointSize, which is 216 of the ~240 conformance bodies
-//     the family still fails: gl_Position arrives, and everything travelling beside it in
+//     the family still fails: gl_Position arrives, and everything traveling beside it in
 //     the same patch does not.
 //
 // The assertions are on the captured BYTES against a CPU-computed reference, never on the
@@ -509,7 +509,7 @@ void main()
 
         // The reduced conformance body. `withPointSize` selects between its two halves;
         // everything else - one input vertex, an output patch of GL_MAX_PATCH_VERTICES, a
-        // user per-vertex block travelling beside gl_PerVertex, the capture taken off the
+        // user per-vertex block traveling beside gl_PerVertex, the capture taken off the
         // evaluation stage - is the same on both.
         void TessellationXfbCaptureScenario::RunPerVertexPayloadCase(bool withPointSize) {
             if (!Ready()) GTEST_SKIP();
@@ -779,7 +779,7 @@ void main()
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
         }
 
-        // The same patch with gl_PointSize travelling in gl_PerVertex beside gl_Position.
+        // The same patch with gl_PointSize traveling in gl_PerVertex beside gl_Position.
         // In ESSL gl_PointSize does not EXIST in a tessellation stage unless
         // GL_EXT_tessellation_point_size is requested, so a backend that lowers to ESSL
         // without asking for it does not merely lose the value - the stage fails to compile

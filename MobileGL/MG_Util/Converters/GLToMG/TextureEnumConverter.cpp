@@ -259,7 +259,7 @@ namespace MobileGL {
             case GL_STENCIL_INDEX8:
                 return TextureInternalFormat::StencilIndex8;
             // The unsized stencil base format resolves to the only stencil storage there is, the
-            // same way the unsized colour and depth base formats below resolve to theirs. Returning
+            // same way the unsized color and depth base formats below resolve to theirs. Returning
             // Unknown made glTexImage2D(GL_STENCIL_INDEX) an error, which killed the negative
             // clear-texture cases in their own setup before they could reach the call they test.
             case GL_STENCIL_INDEX:
@@ -477,7 +477,7 @@ namespace MobileGL {
             switch (v) {
             case GL_NEAREST:
             case GL_LINEAR:
-                return SamplerMipmapMode::None; // 无 mipmap 时
+                return SamplerMipmapMode::None; // when there is no mipmap
             case GL_NEAREST_MIPMAP_NEAREST:
             case GL_LINEAR_MIPMAP_NEAREST:
                 return SamplerMipmapMode::Nearest;
@@ -509,7 +509,7 @@ namespace MobileGL {
         SamplerCompareMode ConvertGLEnumToSamplerCompareMode(GLenum v) {
             switch (v) {
             case 0:
-                return SamplerCompareMode::None; // 无 compare
+                return SamplerCompareMode::None; // no compare
             case GL_COMPARE_REF_TO_TEXTURE:
                 return SamplerCompareMode::CompareToTexture;
             default:

@@ -632,7 +632,7 @@ namespace {
     // The same stall over the real thing: a SocketTransport pair whose far end does not read until
     // the caller is done. The socket fills, the sender blocks inside SendFrame (as it would on TCP),
     // and the caller - 20,000 WARN lines of ~600 bytes, ~12 MB, far past any socket buffer - never
-    // waits on it. Then the far end reads, and what it gets is levelled LogLines with the gap
+    // waits on it. Then the far end reads, and what it gets is leveled LogLines with the gap
     // marked. Close() needs no cut: the reader drains.
     TEST(LogForwardChannel, OverARealSocketThePeerNotReadingNeverHoldsTheCaller) {
         std::unique_ptr<SocketTransport> client, server;

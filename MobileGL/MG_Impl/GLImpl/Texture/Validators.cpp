@@ -249,7 +249,7 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         case TextureInternalFormat::Depth24Stencil8:
         case TextureInternalFormat::Depth32FStencil8:
         case TextureInternalFormat::DepthStencil:
-        // Stencil-only is not a colour format either: a colour client format read against a
+        // Stencil-only is not a color format either: a color client format read against a
         // STENCIL_INDEX8 texture has to be the same INVALID_OPERATION as against a depth one.
         case TextureInternalFormat::StencilIndex8:
             return true;
@@ -336,7 +336,7 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         }
 
         // The stencil-only transfer path arrived with GL 4.4 / ARB_texture_stencil8, and only ever
-        // pairs with stencil-only storage: against a depth, depth-stencil or colour internal format
+        // pairs with stencil-only storage: against a depth, depth-stencil or color internal format
         // STENCIL_INDEX keeps the pre-4.4 answer (GL CTS packed_pixels feeds exactly that pairing
         // and expects INVALID_OPERATION).
         if (format == TextureInputFormat::StencilIndex && internalFormat != TextureInternalFormat::StencilIndex8) {
@@ -506,9 +506,9 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
 
     namespace {
         // Component set of an UNSIZED base internal format, as the bitmask GL 4.6 SS 8.6
-        // reasons about. Colour components are independent bits so "subset" is a plain
+        // reasons about. Color components are independent bits so "subset" is a plain
         // mask test; depth and stencil are their own components and never satisfy a
-        // colour request (or each other).
+        // color request (or each other).
         enum : Uint32 {
             kComponentR = 1u << 0,
             kComponentG = 1u << 1,

@@ -385,7 +385,7 @@ namespace MobileGL::MG_Remote::Transport {
                 m_dead.store(true, std::memory_order_release);
                 return false;
             }
-            // Readiness with no bit we requested or recognise: there is
+            // Readiness with no bit we requested or recognize: there is
             // nothing to consume and no way to make progress, so refuse to
             // poll this descriptor again.
             MGLOG_D("MG_Remote doorbell: fd %d ready with revents=0x%X", m_fd, static_cast<unsigned>(pfd.revents));

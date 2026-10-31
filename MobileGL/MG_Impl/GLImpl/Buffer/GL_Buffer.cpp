@@ -412,7 +412,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 break;
             case GL_BUFFER_ACCESS_FLAGS:
                 // The MapBufferRange flags verbatim; glMapBuffer's access enum has already been
-                // normalised into the same bits. Zero while the buffer is not mapped.
+                // normalized into the same bits. Zero while the buffer is not mapped.
                 *params = bufferObject->IsMapped() ? static_cast<GLint>(MG_Util::ConvertBufferMappingAccessToGLEnum(
                                                          bufferObject->GetMappingAccess()))
                                                    : 0;

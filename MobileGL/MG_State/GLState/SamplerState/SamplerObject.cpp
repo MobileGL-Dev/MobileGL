@@ -183,14 +183,14 @@ namespace MobileGL {
                 return m_samplerParameters.maxAnisotropy;
             }
 
-            // The three border-colour representations are kept in step so a getter of any form has
+            // The three border-color representations are kept in step so a getter of any form has
             // an answer whichever form was written. Integer <-> float uses the plain value, matching
             // what glTexParameterIiv/Iuiv mean: those forms are for integer texture formats, whose
             // border components are the raw integers rather than a normalized fraction.
             //
             // Which of the three the application actually WROTE is recorded separately in
             // borderColorForm, because the derived values erase it: a backend has to know whether to
-            // forward the colour through glSamplerParameterfv or glSamplerParameterIiv (and which
+            // forward the color through glSamplerParameterfv or glSamplerParameterIiv (and which
             // VkBorderColor family to ask Vulkan for), and the numbers alone cannot say. That is also
             // why every setter's early-out tests the form as well as the value - a float (0,0,0,1)
             // followed by an integer (0,0,0,1) is a real state change even though nothing numeric

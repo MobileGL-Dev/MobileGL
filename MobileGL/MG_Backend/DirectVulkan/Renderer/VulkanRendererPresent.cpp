@@ -190,7 +190,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VK_VERIFY(result, "Present, vkQueuePresentKHR");
         // EGL swap semantics: the presented color buffer's content is undefined the
         // next time this image is acquired (EGL_BUFFER_DESTROYED, the default swap
-        // behaviour), and EVERY ancillary depth/stencil buffer's content is
+        // behavior), and EVERY ancillary depth/stencil buffer's content is
         // undefined after any swap. The render-pass manager turns the undefined
         // attachments' next tile loads into LOAD_OP_DONT_CARE.
         //

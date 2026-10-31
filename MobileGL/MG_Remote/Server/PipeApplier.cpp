@@ -448,8 +448,8 @@ namespace MobileGL::MG_Remote::Server {
                 return false;
             }
             SI::ImageRef image = SI::Identify(fd, op.Width, op.Height, op.Format, why);
-            // YUV: the planes and colour hints ride in Damage (MGPImportPlaneWord). A buffer this
-            // server did not allocate is taken too, through the labelled CPU-copy fallback
+            // YUV: the planes and color hints ride in Damage (MGPImportPlaneWord). A buffer this
+            // server did not allocate is taken too, through the labeled CPU-copy fallback
             // (SharedImageRegistry.h, Image::ForeignSource); RGBA ones never are.
             const Bool yuv = SI::FourccIsYuv(op.Format) && op.DamageCount == MG_Pipe::kMGPImportPlaneWords;
             if (image == nullptr && yuv) {
@@ -696,7 +696,7 @@ namespace MobileGL::MG_Remote::Server {
         // per-verb stamp refreshes it against the served-context serial). A no-op unless the
         // dual-block rehearsal is armed; without it the server block's ContextIdentity() stays
         // nullptr and the backend's identity-keyed memo caches read that as a HIT on their
-        // zero-initialised slot - an unnamed null dereference instead of a named marker.
+        // zero-initialized slot - an unnamed null dereference instead of a named marker.
         MG_Pipe::MGPipeServerBlockNoteIdentity();
         m_attached = true;
     }

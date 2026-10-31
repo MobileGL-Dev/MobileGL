@@ -109,7 +109,7 @@ void main()
 )";
 
     // A stage with no interface block at all: the pass must leave its located varyings alone
-    // and report that it changed nothing, so the caller declines the re-serialised module.
+    // and report that it changed nothing, so the caller declines the re-serialized module.
     const char* kNoBlockTessEvalSource = R"(#version 420 core
 layout(isolines, point_mode) in;
 
@@ -267,7 +267,7 @@ TEST_F(StripIoBlockLocationsTest, ReportsNoChangeForAStageWithoutInterfaceBlocks
     Vector<Uint32> output;
     ShaderCompiler::StripIoBlockLocationsForEssl(input, true, true, strippedAny, output, true);
     EXPECT_FALSE(strippedAny) << "a stage with no interface block must report nothing stripped, or "
-                                 "the caller adopts a re-serialised module for nothing";
+                                 "the caller adopts a re-serialized module for nothing";
     // gl_PerVertex is an Input AND an Output block in this stage and must not be touched; the
     // located plain varyings must not be either. Either way the emitted ESSL is unchanged.
     if (!output.empty()) {
@@ -283,5 +283,5 @@ TEST_F(StripIoBlockLocationsTest, DeclinesWhenNeitherDirectionIsArmed) {
     Vector<Uint32> output;
     EXPECT_FALSE(ShaderCompiler::StripIoBlockLocationsForEssl(input, false, false, strippedAny, output, true));
     EXPECT_FALSE(strippedAny);
-    EXPECT_TRUE(output.empty()) << "an unarmed call must not even re-serialise the module";
+    EXPECT_TRUE(output.empty()) << "an unarmed call must not even re-serialize the module";
 }

@@ -22,7 +22,7 @@
 // INVALIDATE_RANGE clobbered GPU-written data - an SSBO counter beside the app's SubData - with
 // stale shadow bytes (FlushPendingRangesFrom, ManagersBuffers.cpp). Tier 1's INVALIDATE_RANGE is an ASSERTION that
 // the old bytes are dead, so declaring bytes covered that nothing staged is not a missing
-// optimisation, it is a silent data loss. The coverage set below is therefore exact, and a
+// optimization, it is a silent data loss. The coverage set below is therefore exact, and a
 // drain that reaches outside it is Fatal rather than a re-read of whatever happens to be there.
 //
 // WHY IT IS A HEADER AND NOT A BLOCK INSIDE Managers.cpp. Two reasons, and the second is the
@@ -55,7 +55,7 @@ namespace MobileGL::MG_Record {
     // P14: WHOSE STAGED BYTES ARE THESE? The two server stores below are one per process, but the
     // in-process display server serves several sessions in that process at once, and a session's
     // end (DestroyEGLContext's OnBackendContextDestroyed) used to DropAll() them - every live
-    // neighbour's declared texture levels and buffer shadows with it. The neighbour's next upload
+    // neighbor's declared texture levels and buffer shadows with it. The neighbor's next upload
     // into a texture it had declared long ago then read as "resource_subdata arrived before the
     // server declared texture level", a Fatal that took the whole display process (and so every
     // session in it) down. The texture store is also keyed by the client's {slot, gen}, which two

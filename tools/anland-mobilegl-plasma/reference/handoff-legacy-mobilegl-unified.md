@@ -63,7 +63,7 @@ Details: `docs/Performance/glmark2-handoff.md`.
 - Bench scripts: `tools/device_bench/anland_glmark2/`.
 
 ### 2. GitHub Actions CI (stopped mid-way, no handoff from its agent)
-- **Background:** CI had been red since about 2026-09-26 (Test workflow) and since 2026-10-02 (APK workflow retraces). Most runs show `cancelled` only because each newer push cancels them.
+- **Background:** CI had been red since about 2026-09-26 (Test workflow) and since 2026-10-02 (APK workflow retraces). Most runs show `canceled` only because each newer push cancels them.
 - **Landed:**
 
 | Commit | What |
@@ -79,7 +79,7 @@ Details: `docs/Performance/glmark2-handoff.md`.
   - the APK workflow's **retrace failures** (Retrace and validate), on DirectGLES for minecraft-1.21.11-main-menu, 1.21.4 startup/in-world/main-menu, 1.17-main-menu-854 and OpenRA, and on DirectVulkan for 1.17-main-menu-854;
   - they first appeared around `5accb098` / `8da082f8` (2026-10-02); last green APK run `2f64ede8`;
   - not yet bisected. Candidates:
-    - the clear-colour default (0,0,0,0), which is GL-correct, so judge any golden against the spec;
+    - the clear-color default (0,0,0,0), which is GL-correct, so judge any golden against the spec;
     - anonymous-struct sampler handling in glslang;
     - sampler CSO publishing;
     - the scissor-shadow fix;
@@ -134,7 +134,7 @@ Details: `docs/Performance/glmark2-handoff.md`.
   - `5a7b23f6` / `258b9460` / `16b07cf4` suspend, resume and resize.
 - **Shared images:** `38842985`, `3d17e8c1`, `350fc699`, `67226176`, `b5cab441`, `7520e53b`.
 - **Misc:**
-  - `8da082f8` clear colour starts at (0,0,0,0);
+  - `8da082f8` clear color starts at (0,0,0,0);
   - `51c37bcb` sampler param conversion;
   - `15f9b27a` sampler CSO per share group;
   - `239fc228` gl_FragCoord access chains;

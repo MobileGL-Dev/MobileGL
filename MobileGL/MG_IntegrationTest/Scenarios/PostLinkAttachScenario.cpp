@@ -79,7 +79,7 @@ void main()
 }
 )";
 
-        // The replacement fragment stage of the last case. A different colour, so "which
+        // The replacement fragment stage of the last case. A different color, so "which
         // executable did this draw run" is answerable from the frame alone.
         const char* const kBlueFragmentSource = R"(#version 330 core
 out vec4 fragColor;
@@ -133,7 +133,7 @@ void main()
                 glGenVertexArrays(1, &m_vao);
                 glBindVertexArray(m_vao);
                 m_target = MakeColorFbo(kFboWidth, kFboHeight);
-                ASSERT_NE(m_target.fbo, 0u) << "could not create the scenario's colour target";
+                ASSERT_NE(m_target.fbo, 0u) << "could not create the scenario's color target";
                 BindFbo(m_target);
                 DrainErrors();
             }
@@ -196,7 +196,7 @@ void main()
             }
 
             // Clears to red, draws the full-viewport triangle, and hands back the frame. Red
-            // is deliberately the clear colour: a draw that silently did not execute leaves a
+            // is deliberately the clear color: a draw that silently did not execute leaves a
             // red target, which is a different failure message from a draw that executed and
             // painted the wrong thing.
             //
@@ -211,8 +211,8 @@ void main()
                 return ReadPixels(kFboWidth, kFboHeight);
             }
 
-            // The clear colour is red and no shader here ever writes red, so "still red" reads
-            // as "the draw did not execute" and any other wrong colour as "it executed against
+            // The clear color is red and no shader here ever writes red, so "still red" reads
+            // as "the draw did not execute" and any other wrong color as "it executed against
             // the wrong modules" - two failures worth telling apart.
             static void ExpectFullyColored(const Image& frame, const Rgba8& expected, const char* what) {
                 ASSERT_FALSE(frame.Empty()) << what << ": nothing was read back";
@@ -283,7 +283,7 @@ void main()
         // modules the draw in that window ran. Between the detach+attach and the relink the
         // program has three attached shaders and two modules, and GL 4.6 core 7.3 says the
         // executable is still the one the last link produced - so the frame must come out in
-        // the OLD fragment shader's colour, not the newly attached one's and not garbage.
+        // the OLD fragment shader's color, not the newly attached one's and not garbage.
         //
         // This is also the other direction of the fix, so it cannot be "freeze the backend on
         // the first link": the relink really does swap the executable, and the very next draw

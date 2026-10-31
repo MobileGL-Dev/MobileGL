@@ -16,7 +16,7 @@ namespace MobileGL::MG_Util {
     // GL 4.6 core 2.3.5 "Fixed-Point Data Conversions", for the 32-bit signed normalized pair that
     // GL_TEXTURE_BORDER_COLOR is specified and queried in when the NON-"I" integer entry points are
     // used (glTexParameteriv / glSamplerParameteriv / glGetTexParameteriv / glGetSamplerParameteriv).
-    // The "I" entry points (TexParameterIiv / Iuiv) carry a raw integer border colour instead and
+    // The "I" entry points (TexParameterIiv / Iuiv) carry a raw integer border color instead and
     // must NOT go through these.
     //
     // The two directions have to be an exact pair or a legal round trip is destroyed: the CTS writes
@@ -39,7 +39,7 @@ namespace MobileGL::MG_Util {
 
     // Equation 2.3: round(f * (2^(b-1) - 1)). f is clamped to [-1, 1] first, as the equation's domain
     // requires; the multiply is done in double so a near-1 float cannot round past INT32_MAX before
-    // the cast, which is undefined behaviour rather than a saturating one.
+    // the cast, which is undefined behavior rather than a saturating one.
     inline Int32 FloatToSignedNormalizedInt32(Float value) {
         if (std::isnan(value)) return 0;
         const Float clamped = std::clamp(value, -1.0f, 1.0f);

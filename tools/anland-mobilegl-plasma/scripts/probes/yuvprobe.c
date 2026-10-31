@@ -15,9 +15,9 @@
 //   1. FOREIGN NV12 (and P010): a dma-buf from /dev/dma_heap/system - a buffer the MobileGL server
 //      did not allocate, as a video decoder's would be - with padded pitches and a gap before the
 //      chroma plane, filled with four vertical bars (red, green, blue, white) in BT.709 narrow
-//      range. Imported with eglCreateImage(EGL_LINUX_DMA_BUF_EXT) and its colour hints, bound to
+//      range. Imported with eglCreateImage(EGL_LINUX_DMA_BUF_EXT) and its color hints, bound to
 //      GL_TEXTURE_EXTERNAL_OES, drawn through a samplerExternalOES shader into an RGBA8 FBO and read
-//      back: each bar must come out its colour. The buffer is then rewritten with the bars in
+//      back: each bar must come out its color. The buffer is then rewritten with the bars in
 //      reverse order and, after a native fence (what ends a frame for an offscreen producer), drawn
 //      again: the new order must show (the server refreshes a foreign buffer at each frame).
 //   2. GBM NV12: gbm_bo_create(NV12) through the mobilegl GBM backend (a server-allocated YUV

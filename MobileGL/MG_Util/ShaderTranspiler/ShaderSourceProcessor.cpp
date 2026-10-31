@@ -409,7 +409,7 @@ namespace {
                 // '#' follows - which is the ordinary shape of a resolved shader-pack source (one
                 // leading #version, nothing after it), and it makes this whole sweep quadratic in
                 // shader size. A 131 KB glsl-transformer output in .trace-work has exactly one '#'
-                // in the file. Searching the line span is behaviour-identical: every hashPos the
+                // in the file. Searching the line span is behavior-identical: every hashPos the
                 // unbounded form could accept already had to satisfy hashPos < lineEnd.
                 if (info.hasValidVersionDirective && probe < lineEnd) {
                     const void* hash = std::memchr(code.data() + probe, '#', lineEnd - probe);
@@ -540,7 +540,7 @@ namespace {
     // gets the second one spliced into the tail of the first - which is exactly what VK-GL-CTS's
     // ShaderImageLoadStoreBase::BuildProgram does (kGLSLPrec ends without a newline, and
     // NegativeUniform's own sources begin with "#version 310 es"). Desktop drivers accept it; the
-    // duplicate says nothing new, so honouring it costs no semantics.
+    // duplicate says nothing new, so honoring it costs no semantics.
     //
     // Blanked rather than erased so that every offset in `info` - which was measured against this
     // same source - stays valid, and so the line count, and with it __LINE__ and every glslang
@@ -957,7 +957,7 @@ namespace {
         return 0;
     }
 
-    // Whether the shader-language extension `name` is one this backend cannot honour in this
+    // Whether the shader-language extension `name` is one this backend cannot honor in this
     // stage - which is what a `#extension name : require` must then fail on, and what an
     // `enable` must not pretend to have turned on. glslang parses desktop GLSL 4.60, where
     // these are always available, so without this a shader would compile here and then fail
@@ -1072,7 +1072,7 @@ namespace {
     // block (no other block kind may hold an unsized member at all), only on a member that is not
     // the last one, and only when every subscript of that member's name in the source is a decimal
     // literal. Anything outside that shape is left exactly as it was - and the shape itself has no
-    // correct behaviour today, so the rewrite cannot take a working case away.
+    // correct behavior today, so the rewrite cannot take a working case away.
     void SizeNonFinalUnsizedBufferBlockMembers(MobileGL::String& source) {
         // Both tokens must be present for the shape to exist, and "[]" is absent from essentially
         // every real shader source, so this is the whole cost for them.
@@ -1359,7 +1359,7 @@ namespace {
     // All-or-nothing, in the discipline of the scanners below it: an array subroutine uniform, a
     // subroutine token inside a #if arm or a macro body, an unbalanced file, a type that is never
     // declared - anything outside the grammar abandons the whole pass with the source untouched,
-    // which is exactly today's behaviour.
+    // which is exactly today's behavior.
     void LowerShaderSubroutines(MobileGL::String& source) {
         if (source.find("subroutine") == MobileGL::String::npos) return;
 
@@ -1773,7 +1773,7 @@ namespace {
     // extension macro the shader is entitled to disappears with it. A CTS shader guarded by
     // `#if !GL_OES_sample_variables / this is broken / #endif` then takes the broken branch.
     //
-    // The extension BEHAVIOUR survives the rewrite (glslang honours "#extension X : require" under
+    // The extension BEHAVIOR survives the rewrite (glslang honors "#extension X : require" under
     // either profile), so this is a preamble-fidelity gap and nothing more; restoring the macros is
     // the whole fix.
     //
@@ -1793,7 +1793,7 @@ namespace {
         // preamble defines all of them, and the CTS-shaped "#if !GL_OES_sample_variables" guard
         // reads one of them.
         //
-        // `#extension all : warn` is deliberately NOT honoured here, unlike in the built-in gate.
+        // `#extension all : warn` is deliberately NOT honored here, unlike in the built-in gate.
         // The two answer different questions: the gate asks "would glslang have this extension
         // turned on", where `all` genuinely says yes, while this asks "which preamble macros did
         // the ES -> desktop rewrite take away". glslang's preamble runs BEFORE any #extension line

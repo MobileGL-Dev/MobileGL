@@ -43,7 +43,7 @@
 //       D-K2's dependency refusal. Every MGPBoundView::Texture and MGPImageView::Res names a
 //       Texture handle and only bit 10 populates the texture slot table, so a sampler subsystem
 //       without it would miss every lookup and walk on without unbinding. The bring-up logs ONE
-//       error naming BOTH bits, refuses bit 11 and runs the legacy sampler arm - modelled on the
+//       error naming BOTH bits, refuses bit 11 and runs the legacy sampler arm - modeled on the
 //       bit-8-requires-bit-7 refusal of ResolveVertexInputSubsystemArm (since removed). The assertion is
 //       that the refusal is NAMED and that the run then produces the same pixels as any other
 //       lane: a refusal that half-ran, or that aborted, would both be failures here.
@@ -63,8 +63,8 @@
 //       stated reason is worse than no assertion (review F-M6).
 //
 //   every lane
-//       THE PIXELS MUST NOT MOVE. The workload draws one solid-colour quad through a texture, an
-//       explicit sampler object and a user framebuffer, and every lane must read back that colour.
+//       THE PIXELS MUST NOT MOVE. The workload draws one solid-color quad through a texture, an
+//       explicit sampler object and a user framebuffer, and every lane must read back that color.
 //       "The counters moved and the picture did not" is the whole claim - a switch that changed
 //       what is drawn would not be an A/B, it would be a bug.
 //
@@ -541,7 +541,7 @@ void main() { oColor = texture(uTex, vUv); }
             } else {
                 FAIL() << "unknown " << kLaneMarker << " value '" << m_lane
                        << "': the arms are on / off / refused / refused-texture / consumer / "
-                          "no-consumer. Reading an unrecognised name as any of them would make "
+                          "no-consumer. Reading an unrecognized name as any of them would make "
                           "this lane assert another arm's expectation while claiming to test "
                           "this one.";
             }
@@ -587,11 +587,11 @@ void main() { oColor = texture(uTex, vUv); }
             // The refusal is decided from the bitmask, but it is a BACKEND's decision: D-K2 puts it
             // in ResolveSamplersSubsystemArm(), beside the bit-8-requires-bit-7 refusal that
             // already ships, and that function is package D's (Managers.cpp). A backend that does
-            // not yet honour P4a's mask at all cannot refuse a dependency inside it, so on such a
+            // not yet honor P4a's mask at all cannot refuse a dependency inside it, so on such a
             // tree there is nothing here to find and this case SKIPS rather than reporting the
             // absence of an unimplemented subsystem as a failure. The marker is the same one
             // HandleRecycle's P4a cases read - "does any source under this backend name one of the
-            // four P4a subsystem constants" - because naming the constant is exactly what honouring
+            // four P4a subsystem constants" - because naming the constant is exactly what honoring
             // the mask means.
             {
                 const std::string& backend = Gl().BackendName();
@@ -603,7 +603,7 @@ void main() { oColor = texture(uTex, vUv); }
                                     "MobileGL/MG_Backend/"
                                  << backend
                                  << " names any of kMGPipeSubsystem{Framebuffer, TextureResources, "
-                                    "Samplers, Programs}, so this backend does not honour P4a's mask "
+                                    "Samplers, Programs}, so this backend does not honor P4a's mask "
                                     "and cannot refuse a dependency inside it. D-K2's refusal lives "
                                     "in ResolveSamplersSubsystemArm() beside the bit-8-requires-bit-7 "
                                     "one ResolveVertexInputSubsystemArm made (since removed), in "
@@ -638,7 +638,7 @@ void main() { oColor = texture(uTex, vUv); }
                    "resource subsystem (bit 10) it depends on, and no single ERROR line of the "
                    "library's log both says it REFUSED and names the two bits. D-K2 requires ONE "
                    "MGLOG_E naming both and a fall back to the legacy sampler arm; a mask that is "
-                   "silently half-honoured is the failure this case exists to catch, and it is "
+                   "silently half-honored is the failure this case exists to catch, and it is "
                    "invisible in the pixels by construction. The set bit may be spelled by the "
                    "constant's name, '(bit 11)' or '0x800', before ' is set but '; the needed bit "
                    "must be the helper's 'missing 0x400)' field after it. The log was "
@@ -677,11 +677,11 @@ void main() { oColor = texture(uTex, vUv); }
         // texture family's Resolve*SubsystemArm - package D's Managers.cpp - and this case is the
         // pin that says it is there.
         //
-        // ON A TREE WHOSE BACKEND DOES NOT HONOUR P4a's MASK THIS SKIPS, NAMED, exactly as the
+        // ON A TREE WHOSE BACKEND DOES NOT HONOR P4a's MASK THIS SKIPS, NAMED, exactly as the
         // 0x9ff case does and for the same reason: a backend that never reads the four constants
         // cannot refuse a dependency between two of them, and reporting the absence of an
         // unimplemented subsystem as a failure is what ID-2 forbids. Once the backend DOES name
-        // them the case is a hard pin, which is the point - if D's texture-family resolver honours
+        // them the case is a hard pin, which is the point - if D's texture-family resolver honors
         // the mask and does not carry this row, this entry is where that shows.
         //
         // WHAT THIS ARM DOES ON THE INTEGRATED TREE, corrected (review F-v2-m2). An earlier
@@ -692,7 +692,7 @@ void main() { oColor = texture(uTex, vUv); }
         // case matches - so the arm ARMS AND PASSES. A red here is therefore a real finding about
         // that resolver (it stopped refusing, refused for the wrong reason, or printed the mirror
         // sentence, which the direction check above is what catches) and must not be waved
-        // through as a sequencing artefact.
+        // through as a sequencing artifact.
         // ------------------------------------------------------------------------------------
         TEST_F(ObjectSubsystemControlScenario, ATextureBitWithoutTheSamplerBitIsRefusedAndNamed) {
             if (!Ready()) return;
@@ -717,7 +717,7 @@ void main() { oColor = texture(uTex, vUv); }
                                     "MobileGL/MG_Backend/"
                                  << backend
                                  << " names any of kMGPipeSubsystem{Framebuffer, TextureResources, "
-                                    "Samplers, Programs}, so this backend does not honour P4a's mask "
+                                    "Samplers, Programs}, so this backend does not honor P4a's mask "
                                     "and cannot refuse a dependency inside it. D-K2's fourth row "
                                     "(bit 10 requires bit 11, ID-15) lives in the texture family's "
                                     "Resolve*SubsystemArm beside the bit-11-requires-bit-10 and "

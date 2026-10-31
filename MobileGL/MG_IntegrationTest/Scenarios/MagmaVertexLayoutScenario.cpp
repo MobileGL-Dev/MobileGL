@@ -152,7 +152,7 @@ void main() { color = vec4(vTint, 1.0); })";
             }
 
             std::array<GLubyte, 4> ClearDrawRead(GLuint program) {
-                glClearColor(0.0f, 0.0f, 1.0f, 1.0f); // blue: the "the draw did not land" colour
+                glClearColor(0.0f, 0.0f, 1.0f, 1.0f); // blue: the "the draw did not land" color
                 glClear(GL_COLOR_BUFFER_BIT);
                 glUseProgram(program);
                 glBindVertexArray(m_vao);
@@ -173,7 +173,7 @@ void main() { color = vec4(vTint, 1.0); })";
         // THE ASSERTION IS THAT THE PROCESS IS STILL HERE and that the framebuffer still holds the
         // clear, which together say "declined" rather than "rendered wrong pixels". A gtest case
         // cannot assert the absence of an abort any more directly than by reaching its next
-        // statement: the old behaviour took the whole binary down, so every case after this one in
+        // statement: the old behavior took the whole binary down, so every case after this one in
         // the lane was equally the control.
         TEST_F(MagmaVertexLayoutScenario, AnUnmappableVertexFormatDeclinesTheDrawInsteadOfEndingTheSession) {
             if (!Ready() || IsSkipped()) return;
@@ -189,7 +189,7 @@ void main() { color = vec4(vTint, 1.0); })";
                 EXPECT_NEAR(pixel[i], blue[i], 1)
                     << "component " << i
                     << ": the draw was expected to DECLINE (leaving the clear "
-                       "colour) because location 1 is an enabled GL_FIXED array the program reads "
+                       "color) because location 1 is an enabled GL_FIXED array the program reads "
                        "and Vulkan has no format for it. A non-clear pixel means the attribute was "
                        "silently replaced by the current vertex attribute value, which is the exact "
                        "wrong-pixels outcome the monolith arm's pre-flight refuses.";

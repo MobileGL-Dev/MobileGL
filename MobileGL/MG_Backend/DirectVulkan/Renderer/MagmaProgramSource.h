@@ -165,7 +165,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // wire draw path entirely - this header no longer includes spirv_reflect.h at all.
         Uint GetShaderStorageBlockIndex(const String& name) const {
             const auto& blocks = Link().storageBlocks;
-            // The archive carries NORMALISED names (the array subscript stripped), because
+            // The archive carries NORMALIZED names (the array subscript stripped), because
             // that is the spelling SPIRV-Reflect's type_name gives and the spelling
             // ProgramFactory::ReflectLayout looks up. A caller that still holds a GL-style
             // "Foo[2]" gets the same second chance it always had.

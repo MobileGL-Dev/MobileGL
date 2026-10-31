@@ -26,7 +26,7 @@
 # four static_asserts in MGPipeValueTypes.h's trip-wire block still hold, the field list in
 # PipeFields.def still names it and the generated comparator still compares it. What breaks is the
 # VALUE - the wire record now says "not BGRA" for a GL_BGRA attribute, which is the shape that made
-# a swizzled colour array read back with its channels in driver order. It is also the field with
+# a swizzled color array read back with its channels in driver order. It is also the field with
 # the least other coverage: `Size` keeps 4 for GL_BGRA (D-G2), so a dropped IsBgra does not even
 # change the attribute's size.
 #
@@ -265,7 +265,7 @@ fi
 case "$VERDICT" in
   did-not-trip)
     say "NEGATIVE CONTROL DID NOT TRIP: $TEST_NAME was still green with ${FIELD} no longer copied"
-    say "into MGPVertexAttribWire. A GL_BGRA attribute travelled as a non-BGRA one and the emission"
+    say "into MGPVertexAttribWire. A GL_BGRA attribute traveled as a non-BGRA one and the emission"
     say "comparison did not notice, so G6 is not checking what it claims to check."
     say "The failing run's output is kept at $LOG_DIR/ctest-after.log"
     exit 1

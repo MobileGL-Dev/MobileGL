@@ -13,7 +13,7 @@
 //   the ARITHMETIC cases run in any push build and say the table PARTITIONS the field set -
 //   70 rows, four classes, every BARRIER-PULLED row naming the phase that retires it;
 //
-//   the BEHAVIOUR cases run only in a split build and say the table is LOAD-BEARING - that a
+//   the BEHAVIOR cases run only in a split build and say the table is LOAD-BEARING - that a
 //   server verb stamp makes the record-supplied fields readable and withdraws the rest, that a
 //   retired pointer/forward reads are unconditionally named Fatal on the server, and that
 //   monolith storage remains readable without ever borrowing a server stamp.
@@ -359,7 +359,7 @@ TEST_F(FieldOwnershipTest, TheAdmittedPullTableIsID84sDerivationAndNotAList) {
 }
 
 // ---------------------------------------------------------------------------------------
-// The behaviour: the table is load-bearing. Split builds only - it is the server verb stamp
+// The behavior: the table is load-bearing. Split builds only - it is the server verb stamp
 // that arms all of it, and nothing in a monolith lane stamps.
 // ---------------------------------------------------------------------------------------
 
@@ -371,7 +371,7 @@ TEST_F(FieldOwnershipTest, TheAdmittedPullTableIsID84sDerivationAndNotAList) {
 // not an abort: the walk stamps FilledGen from the verb serial whether or not it copied, so the
 // field reads FRESH with the previous verb's value and the draw goes out with a stale binding
 // slot. Poison catches an UNSTAMPED read; it cannot catch a stamped-but-uncopied one. That is
-// exactly why this case exists - there is no second line of defence behind it.
+// exactly why this case exists - there is no second line of defense behind it.
 //
 // So each input is moved on its own with the answer read back in between, and in an order where
 // a memo that ignored that input would have to return the stale answer rather than the right one
@@ -461,7 +461,7 @@ TEST_F(FieldOwnershipTest, TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMov
             EXPECT_EQ(MGPipeFieldMaskHas(withConsumer, field), MGPipeFieldMaskHas(withoutConsumer, field))
                 << kMGPipeInputFieldNames[i]
                 << "'s supplied answer moved with the P4a consumer signal. That is CORRECT "
-                   "behaviour and this assertion is a trip wire, not a defect report: the "
+                   "behavior and this assertion is a trip wire, not a defect report: the "
                    "conjunct stopped being dominated, so the memo's fourth key input is now "
                    "observable and needs the move-it-and-read-it-back pair steps 1-3 give the "
                    "other three - under split through CapsMirrorInstance().Adopt() with and "
@@ -510,7 +510,7 @@ TEST_F(FieldOwnershipTest, AServerStampMakesRecordSuppliedFieldsFreshAndWithdraw
     EXPECT_FALSE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::RecordError));               // sticky
 }
 
-// THE STICKY EXEMPTION, CANCELLED. generated/PipeFilled.inc answers "fresh" for a sticky field
+// THE STICKY EXEMPTION, CANCELED. generated/PipeFilled.inc answers "fresh" for a sticky field
 // whatever the serial says - but it tests "never filled" FIRST, so the stamp's withdrawal
 // (FilledGen = 0) wins over kMGPipeInputFieldSticky without a line of the generated file
 // changing. Before this, the seven most dangerous fields were exempt by construction.
@@ -628,7 +628,7 @@ TEST_F(FieldOwnershipTest, AStickyForwardIsCountedAsAResidualPull) {
 }
 
 // ... and outside a server-stamped verb they are ordinary monolith calls, which is what keeps
-// InvalidateCompileEnv reachable from backend initialisation - the case the exemption exists
+// InvalidateCompileEnv reachable from backend initialization - the case the exemption exists
 // for - and what keeps build-split's monolith lanes behaving as a verify build's do.
 TEST_F(FieldOwnershipTest, NothingIsCountedOutsideAServerStampedVerb) {
     MGPipeValidateForVerb(MGPipeVerb::ReadPixels);
@@ -643,7 +643,7 @@ TEST_F(FieldOwnershipTest, NothingIsCountedOutsideAServerStampedVerb) {
 // server MG_Impl is not in the process, so MGPipeValidateForVerb/MGPipeLeaveVerb never run and
 // MGPipeServerClearVerbBoundary is the ONLY thing that can disarm the flag; without it the
 // server latches TRUE after its first stamp and the sticky exemption - the one
-// InvalidateCompileEnv is reached from backend initialisation under - is gone for good.
+// InvalidateCompileEnv is reached from backend initialization under - is gone for good.
 TEST_F(FieldOwnershipTest, TheAppliersOwnClearDisarmsTheStampWithoutTheClientsFill) {
     MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
     ASSERT_TRUE(gPipeInputs->ServerStampedVerb());
@@ -864,7 +864,7 @@ TEST_F(FieldOwnershipTest, RoleSplitGivesTheFillSideADistinctBlockTheStampNeverT
 
     // And the server block's identity is server-owned under the rehearsal (§3.2's other half):
     // the stamp set it, and it is non-null - a null identity reads as a hit against
-    // DirectGLES' zero-initialised fb-slot memo cache, which is the unnamed crash this line
+    // DirectGLES' zero-initialized fb-slot memo cache, which is the unnamed crash this line
     // exists to preclude.
     EXPECT_NE(gPipeInputs->ContextIdentity(), nullptr);
 }

@@ -84,9 +84,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // again in VkClearManager.cpp - and the two are not independent: the render pass builds the
     // attachment view and VkFramebufferCreateInfo::layers from one, while the CLEAR key built from the
     // other is written verbatim into VkImageSubresourceRange::layerCount when a queued glClear is
-    // materialised outside a render pass (MaterializePendingClearForTexture). They are two consumers
+    // materialized outside a render pass (MaterializePendingClearForTexture). They are two consumers
     // of the same GL clear, so any disagreement means the same glClear produces two different pictures
-    // depending only on which path happens to consume it first - and the materialise path then POPS
+    // depending only on which path happens to consume it first - and the materialize path then POPS
     // the entry, so the other one never runs. Fixing one copy and leaving the other is exactly how
     // that split gets introduced; keep them the same function.
     //
@@ -586,7 +586,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                        Uint32 layerCount = 1);
 
         // SHARED IMAGES: a server shared image's
-        // AHardwareBuffer bound as a single-level 2D colour image on THIS session's device, on dedicated
+        // AHardwareBuffer bound as a single-level 2D color image on THIS session's device, on dedicated
         // memory imported from the buffer. Android only (false with `why` elsewhere, or when the device
         // did not take the AHardwareBuffer extension). The image is born UNDEFINED; whoever uses it
         // acquires it from the foreign queue family first, and a writer releases it back after.

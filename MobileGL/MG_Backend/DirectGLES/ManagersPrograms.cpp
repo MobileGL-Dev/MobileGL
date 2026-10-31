@@ -417,7 +417,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // every draw of every program with an override would rebuild. Taking the client's number
         // verbatim removes that coupling: there is one authority, and the twin's stamp and the
         // clean clause read the same field. The monolith arm's source carries the answer of the
-        // function this replaces, computed from the frontend map, so its behaviour is unchanged.
+        // function this replaces, computed from the frontend map, so its behavior is unchanged.
         Uint64 ComputeShaderStorageBlockBindingSignature(const ProgramBuildSource& src) {
             return src.StorageOverrideSignature;
         }
@@ -1022,7 +1022,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // GL 4.6 core table 23.53 requires GL_MAX_SAMPLES >= 4, so every multisample
             // ceiling MobileGL advertises is floored to 4 no matter what the ES driver
-            // reports - but the realised allocation cannot be, and
+            // reports - but the realized allocation cannot be, and
             // ClampSamplesToBackendSupport quietly gives an integer or depth multisample
             // texture the ONE sample Adreno and Mali actually support for it. A shader
             // written against the advertised ceiling then fetches a sample that storage does
@@ -1051,7 +1051,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     *effectiveSpirv, splitArrayInputSpirv, enableSpirvValidation) &&
                 !splitArrayInputSpirv.empty() && splitArrayInputSpirv != *effectiveSpirv) {
                 // Only when the pass ACTUALLY split something: the optimizer hands back a
-                // re-serialised copy either way, and that round trip is not free - it cost the
+                // re-serialized copy either way, and that round trip is not free - it cost the
                 // minecraft-1.21.1-neoforge-create-indirect-in-world-align1024 retrace 0.15 SSIM.
                 effectiveSpirv = &splitArrayInputSpirv;
             }
@@ -1095,11 +1095,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //     Left outside, a second program sharing this stage's key would be served ESSL
             //     with the blocks un-renamed and the repair would silently stop working - the
             //     same trap SetAtomicCounterBlockBindings sets one screen down.
-            //   * AT THIS POSITION, because moving a SPIR-V pass in a chain is a behavioural
+            //   * AT THIS POSITION, because moving a SPIR-V pass in a chain is a behavioral
             //     change, and this one arrived device-verified on Mali. Hoisting it above the
             //     cache probe instead would have needed no key material at all (the rename would
             //     already be in the module bytes the key hashes) and was rejected for that
-            //     reason: it reorders the chain, and it would re-serialise the module on every
+            //     reason: it reorders the chain, and it would re-serialize the module on every
             //     build including the ones the memo is there to make free.
             // Its two rename maps are therefore KEY MATERIAL - see the caller.
             Vector<unsigned int> uniquifiedIoBlockSpirv;
@@ -1333,7 +1333,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // The caller arms the two directions; both are false unless the driver POST
             // measured the defect AND this program has a stage that can hit it. Adopted only
             // when this stage really had a located block, for the reason the array-input split
-            // documents: the optimizer hands back a re-serialised copy either way.
+            // documents: the optimizer hands back a re-serialized copy either way.
             //
             // LAST IN THE CHAIN, and that position is load-bearing. Vulkan SPIR-V REQUIRES a
             // Location on every user-defined Input/Output variable
@@ -1385,7 +1385,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // ES fixes a storage block's binding at link from its layout(binding=) qualifier
             // and has no glShaderStorageBlockBinding to move it afterwards, so a rebinding
-            // can only be honoured by printing it INTO the qualifier. Rewriting the Binding
+            // can only be honored by printing it INTO the qualifier. Rewriting the Binding
             // decoration before SPIRV-Cross emits is what does that; RemoveLayoutBinding
             // then deliberately preserves the qualifier for `buffer` declarations.
             if (!storageBlockBindingOverrides.empty()) { // empty for almost every program
@@ -1516,12 +1516,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
-            // Mirrored from the neighbours rather than fixed: whether SPIRV-Cross redeclares
+            // Mirrored from the neighbors rather than fixed: whether SPIRV-Cross redeclares
             // gl_PerVertex, and with which members, depends on what the application's shaders
             // touched, and a synthesized stage that redeclares a DIFFERENT shape than the stage
             // it feeds is an ES link error against a program with no other problem. gl_in copies
             // the vertex stage's OUT block (that is what arrives) and gl_out the evaluation
-            // stage's IN block (that is what is expected). A neighbour that redeclared nothing
+            // stage's IN block (that is what is expected). A neighbor that redeclared nothing
             // yields an empty list, which leaves the driver's own built-in declaration in place -
             // which is exactly what matching it requires.
             const String inMembers = ExtractPerVertexBlockMembers(vertexStageEssl, /*input=*/false).value_or(String());
@@ -1531,7 +1531,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             String source =
                 BuildPassthroughTessControlEssl(ResolveBackendEsslVersion(), patchVertices, inMembers, outMembers,
                                                 m_passthroughTessControlOuterLevel, m_passthroughTessControlInnerLevel);
-            // The mirrored member lists can carry gl_PointSize - the neighbour stage declared it,
+            // The mirrored member lists can carry gl_PointSize - the neighbor stage declared it,
             // so matching it is the whole point - and a redeclaration is exactly as illegal as a
             // reference in ESSL without the extension. Same directive, same never-speculative
             // rule as the per-stage loop; a driver with neither spelling gets nothing added and
@@ -1543,7 +1543,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     : nullptr;
             source = RequestPointSizeExtension(Move(source), passthroughPointSizeExtension);
             // Same for gl_ClipDistance/gl_CullDistance mirrored out of a vertex stage that
-            // writes them: the neighbour could only compile with the extension, so it exists.
+            // writes them: the neighbor could only compile with the extension, so it exists.
             source = RequestClipCullDistanceExtension(Move(source));
 
             const GLuint backendShaderId = g_GLESFuncs.glCreateShader(GL_TESS_CONTROL_SHADER);
@@ -1608,7 +1608,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_frontendProgramId = src.GetExternalIndex();
 
             // GetSpirvStatus() as well as GetLinkStatus(): a program whose phase-B job was
-            // cancelled (teardown) or whose optimizer run failed is fully linked and fully
+            // canceled (teardown) or whose optimizer run failed is fully linked and fully
             // queryable, but has no SPIR-V to build a driver program out of. GL cannot retract
             // a LINK_STATUS it already reported true, so "linked but not drawable" is the
             // answer, and this is where the ES backend expresses it.
@@ -1773,7 +1773,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //
             // The repair is a rename keyed on the PRODUCING stage, planned here and applied
             // per stage below so a producer and its consumer keep naming the same block.
-            // Gated twice over, because a re-serialised module is not free (it cost the
+            // Gated twice over, because a re-serialized module is not free (it cost the
             // create-indirect retrace 0.15 SSIM the first time the array-input split missed
             // its gate; the case is now
             // minecraft-1.21.1-neoforge-create-indirect-in-world-align1024): only a tessellation
@@ -1890,7 +1890,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // an output nothing can read. That is not merely useless: in a separable program
             // pipeline the fragment stage lives in a DIFFERENT program, which never saw this
             // build and cannot be given a gate, so promoting there would hang an unmatched
-            // varying off a program to buy nothing. Both cases keep the pre-emulation behaviour,
+            // varying off a program to buy nothing. Both cases keep the pre-emulation behavior,
             // which is what a program with no fragment stage had anyway.
             const Bool programHasFragmentStage =
                 std::find(linkedStages.begin(), linkedStages.end(), ShaderStage::Fragment) != linkedStages.end();
@@ -1974,7 +1974,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // KEYING ON THE RESOLVED MAPS rather than on what they were derived from
                 // (collidingIoBlockNames, declaredIoBlockNames, stagePipelineIndices, this
                 // stage's index) is deliberate: the maps ARE the pass's arguments, so they are
-                // exactly as fine as the pass's behaviour and no finer. Two programs whose
+                // exactly as fine as the pass's behavior and no finer. Two programs whose
                 // collision plans differ but whose maps for THIS stage come out identical really
                 // do produce the same ESSL and should share the entry.
                 //
@@ -2225,7 +2225,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 //  * AFTER RebindImageUniformsToFrontendUnits, so the binding it copies onto
                 //    both halves of a split image is already the frontend texture unit (and so
                 //    that pass never has to reason about the alias it introduces);
-                //  * BEFORE RemoveLayoutBinding, whose keepBindingRegex recognises an image
+                //  * BEFORE RemoveLayoutBinding, whose keepBindingRegex recognizes an image
                 //    declaration and preserves its binding - an image unit cannot be set from
                 //    the API in ES, so the qualifier is the only binding mechanism there is,
                 //    and both halves of the pair have to still be carrying theirs when it runs.
@@ -2639,7 +2639,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // arm - and building from an empty reflection would produce a program with no
             // uniforms and no modules, i.e. a black screen with no marker anywhere. The
             // create's own trip wire already refuses a record that declares no blobs AND
-            // carries no artefacts (PipeApply.cpp); this is the same statement one level later,
+            // carries no artifacts (PipeApply.cpp); this is the same statement one level later,
             // where the twin can name the handle.
             if (!record->Archive) {
                 MGLOG_E_ONCE("MGPipe: shader CSO {%u, %u} carries no server-owned archive; its "
@@ -2668,7 +2668,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // one location per ELEMENT, so a caller walking locations sees the same name
             // repeatedly; this turns it back into "goku[k]". Anything that is not an array
             // (or whose base location cannot be resolved) comes back unchanged, so the only
-            // behaviour that moves is the array case.
+            // behavior that moves is the array case.
             String SubscriptUniformNameForElement(const ProgramBuildSource& program, const String& name,
                                                   Uint location) {
                 if (name.size() < 3 || name.compare(name.size() - 3, 3, "[0]") != 0) return name;
@@ -2794,7 +2794,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!m_backendProgramUsable) {
                 // Every draw made with this program renders nothing and raises no GL error, so
                 // without this line the only symptom is a framebuffer that kept its clear
-                // colour. Latched: the early return above only dedupes CONSECUTIVE binds, so an
+                // color. Latched: the early return above only dedupes CONSECUTIVE binds, so an
                 // app alternating a healthy and a broken program would otherwise log every
                 // single draw. Parked at MGLOG_I until the level ordering was fixed.
                 MGLOG_E_ONCE("Backend program for GL program %u is unusable (a shader failed to transpile, "

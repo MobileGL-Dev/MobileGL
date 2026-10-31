@@ -17,7 +17,7 @@
 //
 // The two routes had different arming. The declared route armed the widening on the format
 // alone; the baked route armed it only when the driver lacked GL_NV_image_formats. That reads
-// like an optimisation and is not one: SPIRV-Cross throws for its is_desktop_only_format set the
+// like an optimization and is not one: SPIRV-Cross throws for its is_desktop_only_format set the
 // moment it targets ESSL, whatever the driver would have accepted, so on a driver that HAS the
 // extension the shader half of the widening stayed switched off while TextureImpl's storage/bind
 // half - which keys on SpirvCrossCanPrintEsslImageFormat, not on the driver bit - still ran. The

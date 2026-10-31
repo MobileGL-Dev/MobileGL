@@ -57,7 +57,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (MG_Pipe::gPipeInputs->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb)) return;
         if (ResolveSrgbAttachmentWriteFormat(destinationFormat, false) == destinationFormat) return;
 
-        // sRGB -> linear (GL 4.6 core 8.24), applied to the colour channels only: alpha is stored
+        // sRGB -> linear (GL 4.6 core 8.24), applied to the color channels only: alpha is stored
         // linearly in an sRGB format and must pass through untouched.
         const auto toLinear = [](Float encoded) {
             const Float value = std::clamp(encoded, 0.0f, 1.0f);

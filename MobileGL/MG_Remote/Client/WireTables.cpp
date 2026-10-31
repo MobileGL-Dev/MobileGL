@@ -36,7 +36,7 @@
 #include <MG_State/GLState/StateObjectDeathNotice.h>
 #include <MG_Util/Debug/Log.h>
 // P5e (pg): ID-87 asks this package for bytes-per-link measured rather than argued, and the
-// archive's byte count exists exactly once - here, where it is serialised.
+// archive's byte count exists exactly once - here, where it is serialized.
 #include <MG_Util/Metrics/PipeStats.h>
 // P12: kDefaultReplySlotCount, because the create window's ceiling is derived from the pool it
 // shares rather than from a number written twice (see kCreateWindowMax below).
@@ -589,7 +589,7 @@ namespace MobileGL::MG_Remote::Client {
                 session.EmitAndWaitTails(MGPWireOp::ResourceCreate, payload, sizeof(*payload), nullptr, 0, nullptr, 0,
                                          &status, nullptr, /*wantReply=*/false, /*willReadReply=*/true);
             if (seq == Wire::kInvalidSeq) {
-                // Cancelled: there is no ordinal to read an answer from, and the caller must NOT
+                // Canceled: there is no ordinal to read an answer from, and the caller must NOT
                 // latch an object the record never described.
                 MG_Pipe::MGPipePostReply(*reply, Wire::ReplySink::kStatusDeclined, 0u);
                 ++g_emitted;
@@ -858,12 +858,12 @@ namespace MobileGL::MG_Remote::Client {
                             "MGPipe: Fatal{ArtefactsMissing, \"create_shader_state\"} - the record's "
                             "two typed companions are null. Under monolith the applier reads the "
                             "modules out of spirv->generatedSpirv; under split there is nothing to "
-                            "serialise, and emitting the record anyway would create a CSO with no "
+                            "serialize, and emitting the record anyway would create a CSO with no "
                             "code");
             }
             // EncodeProgramArchive APPENDS and never fails - everything it walks is owned
             // plain data - so an empty archive means the two structs themselves were empty,
-            // which is a linked program with no artefacts and is not a codec question.
+            // which is a linked program with no artifacts and is not a codec question.
             //
             // P5e (pg): THE FRAMED form, so the record's own copy on the far side can pair each
             // module with its stage. The bare EncodeProgramArtifacts is still what the verify
@@ -881,7 +881,7 @@ namespace MobileGL::MG_Remote::Client {
             if (archive.empty()) {
                 SessionFail(MGFatalFamily::ArchiveEmpty,
                             "MGPipe: Fatal{ArchiveEmpty, \"create_shader_state\"} - the program's "
-                            "artefacts serialised to nothing");
+                            "artifacts serialized to nothing");
             }
             MG_Pipe::MGPProgramDesc record = *desc;
             for (Uint32 i = 0; i < 6; ++i)

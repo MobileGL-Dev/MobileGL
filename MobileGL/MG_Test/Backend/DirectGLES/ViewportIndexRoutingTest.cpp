@@ -170,7 +170,7 @@ void main()
 
 // A stage the pass declines must reach the driver exactly as it arrived, not half-rewritten.
 // The caller logs the decline and the program still renders - unrouted, which is the old
-// behaviour - so a partially edited source here would turn a degradation into a broken shader.
+// behavior - so a partially edited source here would turn a degradation into a broken shader.
 TEST(ViewportIndexRoutingTest, AStageWithNoEntryPointIsDeclinedWithoutBeingEdited) {
     const String before = "#version 320 es\nprecision highp int;\nhighp int f() { return gl_ViewportIndex; }\n";
     String source = before;

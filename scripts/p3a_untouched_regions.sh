@@ -7,7 +7,7 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # End of Source File Header
 
-# G5's gate: "pool 与延迟释放原样搬" is LITERAL - ELEVEN functions in
+# G5's gate: "the pool and the deferred release are moved as they are" is LITERAL - ELEVEN functions in
 # MobileGL/MG_Backend/DirectGLES/Managers.cpp are byte-identical after P3a.
 #
 # WHAT G5 CLAIMS, and why a diff of the file cannot say it. ARCHITECTURE.md §9.1 puts the three

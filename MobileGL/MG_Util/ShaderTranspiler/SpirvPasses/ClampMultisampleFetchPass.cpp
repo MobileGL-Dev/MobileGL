@@ -115,7 +115,7 @@ namespace MobileGL {
                     // Depth == 1 is the ONLY spelling that positively means a depth image.
                     // glslang writes 0 for a plain sampler and 2 ("no indication") wherever it
                     // cannot tell, and GLSL has no multisampled shadow sampler for it to write 1
-                    // for, so everything but an explicit 1 falls to the colour ceiling - which is
+                    // for, so everything but an explicit 1 falls to the color ceiling - which is
                     // also the safer of the two to guess at, being the one GL_MAX_SAMPLES itself
                     // describes. Guarded because Depth is only readable on a well-formed type.
                     if (imageType->NumInOperands() > kDepthOperand &&
@@ -126,7 +126,7 @@ namespace MobileGL {
                 }
 
                 // An unsigned integer sampled type: the usampler* family, which is what reads the
-                // stencil aspect of a multisample texture as well as integer colour.
+                // stencil aspect of a multisample texture as well as integer color.
                 bool HasUnsignedIntegerSampledType(IRContext* context, const Instruction* imageType) {
                     const Instruction* sampledType =
                         context->get_def_use_mgr()->GetDef(imageType->GetSingleWordInOperand(kSampledTypeOperand));
@@ -367,7 +367,7 @@ namespace MobileGL {
                             // Anything that gives up half way - after the import or the bound
                             // constant has been added - would leave a MUTATED module reported as
                             // SuccessWithoutChange, which spvtools::Optimizer asserts against
-                            // (it re-serialises and compares byte for byte in that case).
+                            // (it re-serializes and compares byte for byte in that case).
                             const uint32_t glslStd450Id = EnsureGlslStd450Import(irContext);
                             if (glslStd450Id == 0u) {
                                 // Id space exhausted, and the import was NOT added. Nothing has

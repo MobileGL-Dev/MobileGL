@@ -692,7 +692,7 @@ namespace MobileGL {
             // (ParseHelper.cpp vkRelaxedRemapUniformVariable). What this reads is the snapshot
             // glslang takes at that exact site, handed over through TIntermediate; the GL
             // location assigner in ProgramLinkTask::DoReflection is the only party left that
-            // can honour the number.
+            // can honor the number.
             //
             // Keyed by declared name (no "[0]" suffix), plus one synthesized key per outer
             // index of an array-of-arrays - see the note in the implementation for why

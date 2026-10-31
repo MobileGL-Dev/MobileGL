@@ -160,7 +160,7 @@ namespace MobileGL::MG_Remote::Transport {
         bool m_tcp = false;
         TransportRole m_role = TransportRole::Client;
 
-        // ITransport's threading rule: callers serialise sends, and receives may
+        // ITransport's threading rule: callers serialize sends, and receives may
         // run on one dedicated reader thread concurrently with those sends. So
         // the two directions get one mutex each rather than one shared - a
         // single lock would make a blocked receive stall every send, which is

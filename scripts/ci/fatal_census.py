@@ -41,7 +41,7 @@ and integration harnesses drive the library rather than being it.
 THE SITES OF THE WIDENED PERIMETER, TRIAGED. The widening found 83; the same package routed
 five of them through Session::Fail and added one funnel of its own, so the floor the baseline
 records is 79 over 20 files. The triage is the argument for why the gate can be green with
-seventy-nine deaths inside it. The ENFORCEABLE artefact is the baseline's per-file map - this
+seventy-nine deaths inside it. The ENFORCEABLE artifact is the baseline's per-file map - this
 prose is why that map reads the way it does.
 
   (i)   INSIDE A SANCTIONED FUNNEL - 5 sites, and the only ones allowed to carry no marker. The

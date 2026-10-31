@@ -227,7 +227,7 @@ namespace MobileGL::MG_Pipe {
         // such a verb is a BARRIER_PULLED read counted rather than Fatal, and only there is a
         // sticky forward a residual pull. PipeApplier::LeaveApplier must clear it after every
         // record: a server process has no client half to do it, so the flag would stay set and
-        // later reads (InvalidateCompileEnv during another context's backend initialisation)
+        // later reads (InvalidateCompileEnv during another context's backend initialization)
         // would be judged against the last verb's mask.
         Bool ServerStampedVerb() const { return m_serverStampedVerb; }
 
@@ -622,7 +622,7 @@ namespace MobileGL::MG_Pipe {
         // them with handle tables and callbacks.
         // They carry no MGP_INPUT_CHECK / MGP_INPUT_VERIFY_READ (the declared exception to
         // P1 brief D4's "every accessor body"): a forward is a live call, not a stored value,
-        // and InvalidateCompileEnv is reached from backend initialisation before any verb has
+        // and InvalidateCompileEnv is reached from backend initialization before any verb has
         // filled, where a check would be Fatal{...@<none>} on every start. Their sticky stamp
         // is therefore consulted by no accessor; the tests pin it through
         // MGPipeInputFieldIsFresh directly.
@@ -689,7 +689,7 @@ namespace MobileGL::MG_Pipe {
         // MGPipeServerSetContextLive's flag. In the block, not in a process global, because the
         // in-process display server runs several sessions at once and each has its own served
         // context: one session's teardown or eglMakeCurrent(NO_CONTEXT) must not mark a
-        // neighbour's context dead mid-frame (P14; the per-thread block resolution below is
+        // neighbor's context dead mid-frame (P14; the per-thread block resolution below is
         // what makes this the calling session's).
         Bool m_serverContextLive = false;
         MGPipeVerb m_currentVerb = MGPipeVerb::kVerbCount;
@@ -896,7 +896,7 @@ namespace MobileGL::MG_Pipe {
     // from MGPipeApplierContextSerial() - the server's own served-context clock, which is what
     // moves when the served context does. Without it the server block's ContextIdentity() would
     // stay nullptr, and DirectGLES' fb-slot memo cache compares identity FIRST (a nullptr
-    // against its own nullptr initialiser reads as a hit and hands out a null slot): an
+    // against its own nullptr initializer reads as a hit and hands out a null slot): an
     // unnamed crash where the rehearsal exists to produce a named one. A no-op with the
     // rehearsal off, so the client's per-verb SetIdentity keeps owning the shared block there.
     void MGPipeServerBlockNoteIdentity();

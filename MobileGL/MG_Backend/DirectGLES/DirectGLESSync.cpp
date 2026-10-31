@@ -601,7 +601,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // spelling the driver provides (Adreno exposes only eglSwapBuffersWithDamageKHR), so
         // the null check below is the whole chain: a driver with neither presents with plain
         // eglSwapBuffers. Passing n_rects == 0 is not a partial present - the extension
-        // defines it as "the entire surface is implicitly damaged and the behaviour is
+        // defines it as "the entire surface is implicitly damaged and the behavior is
         // equivalent to calling eglSwapBuffers" - and the wire protocol carries no damage
         // rectangles for the server to forward, so the full surface is what is meant anyway.
         //

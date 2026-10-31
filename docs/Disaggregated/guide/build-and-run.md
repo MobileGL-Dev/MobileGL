@@ -1,39 +1,39 @@
-# 构建、运行与测试
+# Build, run and test
 
-> 上手说明。文档导航见 [`../README.md`](../README.md)；全部开关见 [`../design/09-build-switches-counters.md`](../design/09-build-switches-counters.md) 附 A。
+> Getting started. For the documentation index see [`../README.md`](../README.md); for every switch see [`../design/09-build-switches-counters.md`](../design/09-build-switches-counters.md) appendix A.
 
-## 三种构建
+## Three builds
 
-P13 起只有一种单进程形态：后端只从前端推来的记录取状态（记录臂），旧的「后端直接读前端」路径与 pull / push 两套构建一起删掉了（`MOBILEGL_PIPE_PUSH` 不再是 CMake 选项）。
+Since P13 there is only one single-process shape: the backend takes its state solely from the records the frontend pushes (the record arm); the old "backend reads the frontend directly" path went away together with the pull / push builds (`MOBILEGL_PIPE_PUSH` is no longer a CMake option).
 
-| 构建目录 | CMake | 用途 |
+| Build directory | CMake | Purpose |
 |---|---|---|
-| `build-linux` | 默认 | 出货形态（FCL 内嵌库就是它）：单进程，记录臂，不编 `MG_Remote` |
-| `build-verify` | `-DMOBILEGL_PIPE_VERIFY=ON` | 每个 draw 把推来的状态与前端实际状态逐字段比对；慢，永不出货 |
-| `build-split` | `-DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON` | 可以拆成两线程 / 两进程 / 两台机器；不设 `MOBILEGL_TRANSPORT` 时是同一记录臂的单进程对照 |
+| `build-linux` | default | The shipped shape (the FCL embedded library is this one): single process, record arm, `MG_Remote` not built |
+| `build-verify` | `-DMOBILEGL_PIPE_VERIFY=ON` | Every draw compares the pushed state field by field with the frontend's actual state; slow, never shipped |
+| `build-split` | `-DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON` | Can split into two threads / two processes / two machines; with `MOBILEGL_TRANSPORT` unset it is the single-process control on the same record arm |
 
-库由七个 OBJECT 模块拼成（`mg_util` / `mg_pipe` / `mg_backend` / `mg_frontend` / `mg_remote_transport` / `mg_remote_client` / `mg_remote_server`，按 `scripts/link_ratchet.py` 的 PARTITION 划分）；split 构建另有 `MobileGL_server_linkcheck`，证明 server 那一半不带前端模块也能链接（剩下的前端引用是 link ratchet 基线里具名的债务）。
+The library is assembled from seven OBJECT modules (`mg_util` / `mg_pipe` / `mg_backend` / `mg_frontend` / `mg_remote_transport` / `mg_remote_client` / `mg_remote_server`, partitioned by `scripts/link_ratchet.py`); the split build also has `MobileGL_server_linkcheck`, which proves the server half links without the frontend modules (the remaining frontend references are named debts in the link-ratchet baseline).
 
-## 选拓扑
+## Choosing a topology
 
-split 构建在运行时用 `MOBILEGL_TRANSPORT` 选拓扑；**不设就是单进程（monolith）对照**：
+The split build selects the topology at run time with `MOBILEGL_TRANSPORT`; **unset means the single-process (monolith) control**:
 
-| `MOBILEGL_TRANSPORT` | 形态 |
+| `MOBILEGL_TRANSPORT` | Shape |
 |---|---|
-| 不设 / `monolith` | 单线程直调 |
-| `inproc` | 同一进程两个线程（CI 的主验收形态） |
-| `spawn` | 两个进程；再用 `MOBILEGL_IPC_CONTROL`（`fork` / `unix:<path>` / `tcp://host:port`）与 `MOBILEGL_IPC_DATA`（`auto` / `shm` / `stream`）选控制面与数据面，跨机时还要 `MOBILEGL_IPC_TOKEN`（≥16 字节） |
+| unset / `monolith` | Single thread, direct calls |
+| `inproc` | Two threads in one process (the main CI acceptance shape) |
+| `spawn` | Two processes; `MOBILEGL_IPC_CONTROL` (`fork` / `unix:<path>` / `tcp://host:port`) and `MOBILEGL_IPC_DATA` (`auto` / `shm` / `stream`) then choose the control and data planes; across machines also set `MOBILEGL_IPC_TOKEN` (at least 16 bytes) |
 
 ```text
 MOBILEGL_TRANSPORT=inproc MOBILEGL_ITEST_REQUIRE_GPU=1 ctest --test-dir build-split -L integration-split --output-on-failure
-ctest --test-dir build-split -L 'integration-(spawn|tcp)' --output-on-failure   # 条目自带 spawn / tcp 环境与私有日志
+ctest --test-dir build-split -L 'integration-(spawn|tcp)' --output-on-failure   # the entries carry their own spawn / tcp environment and private logs
 ```
 
-其他常用旋钮：`MOBILEGL_IPC_RUN_AHEAD`（默认 1，client 发完就走）、`MOBILEGL_IPC_STAGE_MB`（默认 32，其 1/4 是大块上传的分块预算）、`MOBILEGL_IPC_SURFACE=server`（使用 Android server 自己的窗口）、`MOBILEGL_PIPE_STATS=1`（边界计数器，日志里的 `MGPipe stats:` 行）。
+Other common knobs: `MOBILEGL_IPC_RUN_AHEAD` (default 1, the client sends and moves on), `MOBILEGL_IPC_STAGE_MB` (default 32; a quarter of it is the chunk budget for large uploads), `MOBILEGL_IPC_SURFACE=server` (use the Android server's own window), `MOBILEGL_PIPE_STATS=1` (boundary counters, the `MGPipe stats:` lines in the log).
 
 ## Android
 
-- 两份 APK flavour：单进程 / split（Gradle 属性 `mobilegl.buildDisaggregated`、`mobilegl.buildDisaggregatedInproc`；独立 plugin 构建默认 split，FCL 内嵌默认单进程）。split APK 同样要设 `MOBILEGL_TRANSPORT`，不设就是单进程对照。
-- 设备侧 server 有两种形态：离屏的前台 Service（`MobileGLServerService`）与上屏的 `MobileGLDisplayActivity`；同一时刻只有一个。plugin 与 trace 两个 flavour 的 APK 都带（standalone 构建默认开 `mobilegl.buildDisaggregated`），入口是 APK 底部导航栏的 “Render Server” 页；plugin flavour 的这三个组件不导出，只有 trace 允许 adb 直接按组件名拉起。
-- 电脑当 client、手机当 server 的跨机配置（起 server、设令牌、`adb forward` 备用路线）见 git 历史中的"两边怎么配"。
-- 性能对比只用 Redmi `2f7cbe2e`，按 [`pin-verification-2026-09-07.md`](pin-verification-2026-09-07.md) 定频，reboot-clean、同热窗口、配对 A/B。P13 之后的性能工作以 `dev` 分支构建为「之前」基线（用户 2026-10-07）。
+- Two APK flavors: single-process / split (Gradle properties `mobilegl.buildDisaggregated`, `mobilegl.buildDisaggregatedInproc`; a standalone plugin build defaults to split, the FCL embedding defaults to single-process). The split APK also needs `MOBILEGL_TRANSPORT`; unset means the single-process control.
+- The on-device server has two shapes: an off-screen foreground Service (`MobileGLServerService`) and the on-screen `MobileGLDisplayActivity`; only one at a time. Both the plugin and trace flavor APKs carry them (standalone builds enable `mobilegl.buildDisaggregated` by default); the entry point is the "Render Server" page in the APK's bottom navigation. In the plugin flavor these three components are not exported; only the trace build allows adb to start them directly by component name.
+- For the cross-machine setup with the computer as client and the phone as server (starting the server, setting the token, the `adb forward` fallback), see "configuring the two sides" in the phase notes (in git history).
+- Performance comparisons use only the Redmi `2f7cbe2e`, pinned as described in the pin-verification record (in git history): reboot-clean, same thermal window, paired A/B. Performance work after P13 uses the `dev` build as its "before" baseline (user, 2026-10-07).

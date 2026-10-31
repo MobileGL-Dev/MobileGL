@@ -179,7 +179,7 @@ namespace {
             GTEST_SKIP() << "asserts are live in this configuration; see AssertIsLiveInDebugBuilds";
         } else {
             // If MOBILEGL_ASSERT were live here this would TRAP and take the process
-            // down, which is the behavioural half of the contract.
+            // down, which is the behavioral half of the contract.
             MOBILEGL_ASSERT(false, "this assert must be compiled out at %s", "INFO");
             SUCCEED();
         }

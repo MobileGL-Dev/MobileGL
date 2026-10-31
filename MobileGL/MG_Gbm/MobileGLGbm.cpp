@@ -7,7 +7,7 @@
 // End of Source File Header
 
 // mobilegl_gbm.so: a GBM backend (the loader's backend ABI, gbm_backend_abi.h) whose buffer
-// objects are MobileGL shared images - colour buffers the MobileGL server allocates and exports
+// objects are MobileGL shared images - color buffers the MobileGL server allocates and exports
 // as dma-bufs. Selected with
 // GBM_BACKEND=mobilegl; the loader then finds <dir>/mobilegl_gbm.so on its backend path.
 //
@@ -54,7 +54,7 @@ namespace {
     constexpr uint64_t kModifierLinear = 0;
     constexpr uint64_t kModifierInvalid = 0x00ffffffffffffffull;
 
-    // Usages no shared image can honour: a CPU-written cursor (bo_write), a guaranteed-linear
+    // Usages no shared image can honor: a CPU-written cursor (bo_write), a guaranteed-linear
     // layout, protected content. Scanout/rendering/texturing are accepted - every caller of
     // gbm_bo_create passes them, and a shared image serves all three.
     constexpr uint32_t kRefusedUsage = GBM_BO_USE_CURSOR | GBM_BO_USE_WRITE | GBM_BO_USE_LINEAR | GBM_BO_USE_PROTECTED;

@@ -1,29 +1,29 @@
-# MGPipe：MobileGL 前后端拆分
+# MGPipe: MobileGL frontend/backend split
 
-**做什么**：在 MobileGL 的前端（处理应用的 GL 调用）和后端（调用 GLES / Vulkan 驱动）之间立一份显式接口——前端把状态变化**推**给后端，后端不再直接读前端的内存。有了这份接口，前后端可以放在两个线程、两个进程，甚至两台机器上运行。
+**What it does**: MGPipe puts an explicit interface between MobileGL's frontend (which handles the application's GL calls) and backend (which calls the GLES / Vulkan driver) — the frontend **pushes** state changes to the backend, and the backend no longer reads the frontend's memory directly. With this interface, the frontend and backend can run on two threads, two processes, or even two machines.
 
-**做到哪了**：见 [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)。当前阶段与下一步只在那一页维护，这里不再复述。
+**How far along**: see [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md). The current phase and next steps are maintained only on that page and are not repeated here.
 
-## 一张图
+## One diagram
 
 ```
-应用的 GL 调用
-  → 前端 MG_Impl：处理 GL 语义；在每条"做事的命令"（draw、clear…）之前，把状态变化整理成记录
-  → MGPipe 接口（两张函数指针表，由调用目录 PipeCalls.def 生成）
-  → 三选一：直接调用（单线程）│ 队列 → 另一个线程 │ 队列 → 另一个进程 / 另一台机器
-  → 后端 MG_Backend：Espryt（GLES）/ Magma（Vulkan），按记录更新自己的状态并调用驱动
-  ← 反向消息（错误、GPU 写回、窗口尺寸）按顺序回到前端
+The application's GL calls
+  → frontend MG_Impl: handles GL semantics; before every command that does work (draw, clear…), turns state changes into records
+  → MGPipe interface (two function pointer tables, generated from the call catalog PipeCalls.def)
+  → one of three: direct call (single-threaded) │ queue → another thread │ queue → another process / another machine
+  → backend MG_Backend: Espryt (GLES) / Magma (Vulkan), updates its own state from the records and calls the driver
+  ← reverse messages (errors, GPU writeback, window size) come back to the frontend in order
 ```
 
-## 文档导航
+## Documentation map
 
-| 想知道 | 看 |
+| To learn | See |
 |---|---|
-| 现在做到哪、下一步 | [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md) |
-| 设计要点与各部分设计 | [`ARCHITECTURE.md`](ARCHITECTURE.md) → [`design/`](design/) |
-| 分几个阶段、每个阶段做了什么 | [`ROADMAP.md`](ROADMAP.md) |
-| 性能与验证的关键数字 | [`MEASUREMENTS.md`](MEASUREMENTS.md) |
-| 怎么构建、运行、测试 | [`guide/build-and-run.md`](guide/build-and-run.md) |
-| 代码在哪 / 术语 / 工程纪律 | [`guide/code-map.md`](guide/code-map.md)、[`guide/glossary.md`](guide/glossary.md)、[`guide/discipline.md`](guide/discipline.md) |
+| Where things stand, next steps | [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md) |
+| Key design points and the design of each part | [`ARCHITECTURE.md`](ARCHITECTURE.md) → [`design/`](design/) |
+| How many phases there are, what each phase did | [`ROADMAP.md`](ROADMAP.md) |
+| Key numbers for performance and verification | [`MEASUREMENTS.md`](MEASUREMENTS.md) |
+| How to build, run, and test | [`guide/build-and-run.md`](guide/build-and-run.md) |
+| Where the code is / terminology / engineering discipline | [`guide/code-map.md`](guide/code-map.md), [`guide/glossary.md`](guide/glossary.md), [`guide/discipline.md`](guide/discipline.md) |
 
-整理记录：2026-09-24 两次整理——顶层只留索引，设计正文拆到 `design/`，上手与参考放 `guide/`，阶段细节放 `notes/<阶段>/`（这些笔记已从树中删除，见 git 历史）；整理前的版本见提交 `1fb18d9`。更早的设计竞赛与评审稿在 git 历史（`8b31de2f`、`1794ac94`、`8349babe`、`87ee17c6`）。
+Organization history: two cleanups on 2026-09-24 — the top level keeps only indexes, the design body moved into `design/`, getting-started and reference material live in `guide/`, and phase details live in `notes/<phase>/` (those notes have been deleted from the tree; see git history); the pre-cleanup version is commit `1fb18d9`. Earlier design contests and review drafts are in git history (`8b31de2f`, `1794ac94`, `8349babe`, `87ee17c6`).

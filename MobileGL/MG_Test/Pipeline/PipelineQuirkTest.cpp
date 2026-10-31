@@ -663,7 +663,7 @@ TEST(PipelineQuirkTest, WireDepthResolveProbeKnobReplacesTheMeasurementNotTheVer
     EXPECT_FALSE(clean.preferShader);
     EXPECT_EQ(measured, 0) << "a forced verdict must not also run the device probe";
     const auto other = ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::Unrecognised, true, measure);
-    EXPECT_EQ(measured, 1) << "an unrecognised value runs the probe as if the knob were unset";
+    EXPECT_EQ(measured, 1) << "an unrecognized value runs the probe as if the knob were unset";
     EXPECT_FALSE(other.measurement.fromKnob);
     EXPECT_EQ(other.verdict, WireDepthResolveProbeVerdict::Clean);
     // `elide-subject` is the REAL probe's negative control: it decides nothing here - the device
@@ -856,11 +856,11 @@ TEST(PipelineQuirkTest, WirePlaceholderKeysArePrivatePerShapeAndUnitAndBounded) 
 }
 
 // P7 g3-blit (g3det, ~/w7/logs/g3det/VERDICT.md section 3): WHICH SAMPLER THE WIRE ARM'S SHADER
-// COLOUR BLIT USES (WireColorBlitFilter.h). GL filters only a STRETCHED blit, so a 1:1 blit is a copy
+// COLOR BLIT USES (WireColorBlitFilter.h). GL filters only a STRETCHED blit, so a 1:1 blit is a copy
 // whatever `filter` says. The wire pass sampled every GL_LINEAR blit through its linear sampler; on
 // Adreno 830 the sub-texel coordinate quantisation moved create-instancing's 1:1 GL_LINEAR blit into
 // FB 0 by 1 LSB on 712 edge pixels, while the monolith's vkCmdBlitImage copied them exactly.
-// Lavapipe samples texel centres exactly and shows the same picture on both samplers, so no host
+// Lavapipe samples texel centers exactly and shows the same picture on both samplers, so no host
 // lane can see this; the choice is pinned here instead.
 //
 // Red once (executed, reverted): WireColorBlitFilterFor reduced to the old mapping
@@ -902,7 +902,7 @@ TEST(PipelineQuirkTest, WireColorBlitSamplesNearestWhereTheBlitIsACopy) {
     };
     for (const auto& copy : copies) {
         EXPECT_TRUE(WireBlitIsUnscaled(copy.source, copy.destination)) << copy.what;
-        // A quarter turn maps logical pixel centres onto native ones (the native extent is the
+        // A quarter turn maps logical pixel centers onto native ones (the native extent is the
         // logical one swapped), so a copy is still a copy on every rotated surface.
         for (const auto transform : kExpressedTransforms) {
             EXPECT_EQ(WireColorBlitFilterFor(copy.source, copy.destination, GL_LINEAR, transform), VK_FILTER_NEAREST)

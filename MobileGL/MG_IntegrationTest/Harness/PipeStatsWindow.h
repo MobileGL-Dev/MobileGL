@@ -254,7 +254,7 @@ namespace MGITest::PipeStatsWindow {
     // One counter out of that line, by its short name ("mpr", "draws", "csom"), or -1 when the
     // line does not carry it. The search includes the SEPARATOR before the name and the `=` after
     // it, so "draws" cannot match "draws/f=" and "mpr" cannot match a longer name ending in it -
-    // a substring match here would read a neighbouring counter's value and report it as this
+    // a substring match here would read a neighboring counter's value and report it as this
     // one's, which is the one way a counter assertion can be wrong without ever failing.
     inline long long CounterOrAbsent(const Window& window, const char* shortName) {
         if (!window.found) return -1;

@@ -189,7 +189,7 @@ class Accounting(unittest.TestCase):
         `ctest -L integration-gpu -j 4` that entry and another Tcp case killed each other.
         The stub mirrors the real json-v1 shapes: the fixture's own setup entry, a sound Tcp
         case, the violator as it was registered, a Magma tcp entry that reaches the fixture
-        under another label, a labelled control with no fixture, and the device lane, whose
+        under another label, a labeled control with no fixture, and the device lane, whose
         lock is its own."""
         tally = module('junit_tally')
         parity = module('spawn_lane_parity')

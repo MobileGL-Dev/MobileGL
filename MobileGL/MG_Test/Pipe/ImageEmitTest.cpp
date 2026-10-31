@@ -12,7 +12,7 @@
 // WHAT THIS SUITE IS FOR. The image set is the one whose ContentHash has to cover more than
 // the binding: InternalFormat and Access are live glBindImageTexture state that the
 // format-less image bake keys on, so a set whose only movement is an access mode still has to
-// go out. And the zero early-out is the property an optimisation deletes by accident - it is
+// go out. And the zero early-out is the property an optimization deletes by accident - it is
 // what makes every draw of every application that never binds an image pay one integer test.
 //
 // THE SUITE IS `ImageEmit`, not `ImageEmitTest`: the file is XTest.cpp and the suite is X.
@@ -372,7 +372,7 @@ namespace {
         return name;
     }
 
-    // PROPERTY 1 OF D-G4, and it is the one an optimisation deletes: an application that never
+    // PROPERTY 1 OF D-G4, and it is the one an optimization deletes: an application that never
     // binds an image pays one integer test per draw, taken BEFORE any hash and before any
     // 192-entry walk.
     //

@@ -20,7 +20,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
 
         // Bumped whenever the SHAPE of a key changes (a field added, a field's
         // meaning changed). It is in every blob, so a stale in-memory entry from a
-        // previous shape cannot be honoured - and a future disk tier gets the same
+        // previous shape cannot be honored - and a future disk tier gets the same
         // protection for free.
         //
         // 2: L2 gained atomicCounterEsslBindingTop (wave3's atomic-counter block rebinding

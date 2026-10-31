@@ -91,7 +91,7 @@ namespace MobileGL::MG_Remote::Transport {
     // shared SEG_STAGE mapping; on StreamLink it indexes the trailing staged
     // region of the batch that carried the record. MGPBlobRef's spelling and
     // every honesty check over it (R-2) are unchanged either way - which is the
-    // property that lets the whole record catalogue cross a boundary with no
+    // property that lets the whole record catalog cross a boundary with no
     // mapping without a single record layout changing.
     struct LinkSpan {
         std::uint64_t Offset = 0;
@@ -213,14 +213,14 @@ namespace MobileGL::MG_Remote::Transport {
         // P12: DECLARE THAT THIS SEQ'S ANSWER WILL BE READ, so that a link which can retain it
         // does. Called by the producer side of the wire, in seq order, BEFORE the record is
         // published - the answer cannot arrive before that, and the reader stores under the same
-        // mutex the declaration takes, so the hand-off needs no second synchronisation.
+        // mutex the declaration takes, so the hand-off needs no second synchronization.
         //
         // WHY THE DECLARATION AND NOT "RETAIN EVERYTHING": a server that ignores the no-reply bit
         // answers ~55,903 records in one frame where this client reads ~4,501, so retain-on-arrival
         // grows ~11.3 entries per create and any cap is reached in C/11.3 creates - after which the
         // eviction wave lands on precisely the oldest WANTED answer, which is the wedge this exists
         // to avoid. Keyed on the declaration, the retained set is bounded by the CLIENT's own
-        // deferral depth instead of by the server's behaviour.
+        // deferral depth instead of by the server's behavior.
         //
         // A link with RetainsReplies false ignores it (the default), and its callers must not
         // defer: see the capability's own note.

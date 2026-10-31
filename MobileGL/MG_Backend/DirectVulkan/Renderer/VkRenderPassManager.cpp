@@ -28,7 +28,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     // ResolveAttachmentLayerCount lives in VkTextureManager.h, beside ToVulkanLevelExtent, because
     // VkClearManager needs the SAME answer: its pending-clear key's layerCount becomes a real
-    // VkImageSubresourceRange when a clear is materialised outside a render pass. See the header.
+    // VkImageSubresourceRange when a clear is materialized outside a render pass. See the header.
 
     DepthStencilAttachmentLoadInfo ResolveDepthStencilAttachmentLoadInfo(VkImageLayout trackedLayout, Bool clearDepth,
                                                                          Bool clearStencil) {

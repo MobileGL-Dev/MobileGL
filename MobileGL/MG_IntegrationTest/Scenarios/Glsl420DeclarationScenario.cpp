@@ -181,7 +181,7 @@ out vec4 o_color;
 void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
 )";
 
-        // The colour index spelled out at its default value. Says nothing that
+        // The color index spelled out at its default value. Says nothing that
         // `layout(location = 0)` alone does not, and must therefore cost nothing.
         constexpr const char* kExplicitColorIndexFS = R"(#version 420 core
 layout(location = 0, index = 0) out vec4 o_color;
@@ -215,7 +215,7 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
                 return program;
             }
 
-            // One 1x1 RGBA8 texture per element, each a colour whose channels are exactly 0 or
+            // One 1x1 RGBA8 texture per element, each a color whose channels are exactly 0 or
             // 255 so the shader's == comparisons are exact.
             void MakeElementTextures(const std::uint8_t colors[kElements][4]) {
                 m_textures.assign(kElements, 0);
@@ -242,7 +242,7 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
                 glBindBuffer(GL_UNIFORM_BUFFER, 0);
             }
 
-            // Draws the full-screen quad and hands back the centre pixel.
+            // Draws the full-screen quad and hands back the center pixel.
             Rgba8 DrawAndRead(GLuint program) {
                 HeadlessGL& gl = Gl();
                 if (m_vao == 0) glGenVertexArrays(1, &m_vao);
@@ -340,7 +340,7 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
     //
     // Deliberately weak on the pixels for that reason: what is asserted on every backend is that
     // the program builds, the draw raises no GL error, and the process survives. Where the
-    // descriptors do resolve, the colours are checked too.
+    // descriptors do resolve, the colors are checked too.
     TEST_F(Glsl420DeclarationScenario, AnArrayOfSamplerArraysIsHonouredOrDeclinedCleanly) {
         if (!Ready()) return;
 

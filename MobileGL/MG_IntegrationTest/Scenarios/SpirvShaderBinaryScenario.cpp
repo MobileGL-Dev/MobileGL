@@ -183,7 +183,7 @@ namespace MGITest {
         if (!Ready()) return;
 
         const GLuint shader = glCreateShader(GL_VERTEX_SHADER);
-        // 0x8DF9 is GL_SHADER_BINARY_FORMATS' neighbour, not a format: any value but
+        // 0x8DF9 is GL_SHADER_BINARY_FORMATS' neighbor, not a format: any value but
         // GL_SHADER_BINARY_FORMAT_SPIR_V is GL_INVALID_ENUM. The stub used to return silently.
         glShaderBinary(1, &shader, 0x8DF9, kVertexModule, sizeof(kVertexModule));
         EXPECT_EQ(FirstGLError(), static_cast<unsigned int>(GL_INVALID_ENUM));
@@ -277,7 +277,7 @@ namespace MGITest {
                             kScaleConstantId, halfBits, &log);
         ASSERT_NE(vs, 0u) << "vertex: " << log;
         // Channel 1 is green; the module's own default is 0 (red), so a specialization that did
-        // nothing paints the wrong colour.
+        // nothing paints the wrong color.
         const unsigned int fs =
             MakeSpirvShader(GL_FRAGMENT_SHADER, kFragmentModule, sizeof(kFragmentModule) / sizeof(kFragmentModule[0]),
                             kChannelConstantId, 1u, &log);
@@ -318,10 +318,10 @@ namespace MGITest {
         const Image painted = ReadPixels(width, height);
         const Rgba8 centre = painted.At(width / 2, height / 2);
         EXPECT_LT(centre.r, 32) << "the fragment module wrote the wrong channel; constant id 7 was not applied";
-        EXPECT_GT(centre.g, 224) << "the centre of a 0.5-scaled quad must be painted";
+        EXPECT_GT(centre.g, 224) << "the center of a 0.5-scaled quad must be painted";
 
         // A pixel just inside the corner is OUTSIDE the 0.5-scaled quad and must still be the
-        // clear colour - which is what proves constant id 3 reached the vertex module. At the
+        // clear color - which is what proves constant id 3 reached the vertex module. At the
         // default scale of 1.0 the quad covers the whole viewport and this pixel would be green.
         const Rgba8 corner = painted.At(1, 1);
         EXPECT_LT(corner.g, 32) << "the quad was not scaled; the vertex specialization constant was not applied";

@@ -108,7 +108,7 @@ namespace {
     // P7 OQ-8. ShaderStage -> EShLanguage, so a reflection record's `stages` mask (which is an
     // EShLanguageMask) can be tested against the stage of a snapshotted shader. Written here
     // rather than lifted into a shared header because this is the only caller and
-    // ProgramArtifacts.h's include-closure probe forbids this file's neighbours from growing a
+    // ProgramArtifacts.h's include-closure probe forbids this file's neighbors from growing a
     // dependency on ShaderStage.h. EShLangCount means "no glslang stage", which the caller
     // skips rather than guesses at.
     static EShLanguage ShaderStageToEShLanguage(MobileGL::ShaderStage stage) {
@@ -191,7 +191,7 @@ namespace {
     // counters declared at the same binding AND the same offset therefore linked cleanly.
     //
     // The offsets themselves survive that lowering (reflection and the SPIR-V generator both
-    // honour layoutOffset), so the check belongs here, over the same model the GL queries answer
+    // honor layoutOffset), so the check belongs here, over the same model the GL queries answer
     // from. Returns the info-log line for an illegal layout, empty for a legal one.
     static MobileGL::String ValidateAtomicCounterLayout(glslang::TProgram& reflection) {
         using MobileGL::Bool;
@@ -632,7 +632,7 @@ namespace {
 namespace MobileGL::MG_State::GLState {
     namespace {
         // The artifacts of a compile that ran to completion, or the never-compiled defaults.
-        // A node that was abandoned (cancelled at teardown, or whose body threw) published
+        // A node that was abandoned (canceled at teardown, or whose body threw) published
         // nothing, so it reads exactly like "never compiled" - which is the same collapse
         // ShaderObject's join gate performs, and is what keeps the link's view of a shader
         // identical whether it went through the object or through the snapshot.
@@ -854,7 +854,7 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
-        // The last two are OUT parameters that mapIO fills, not requests it honours: the IO
+        // The last two are OUT parameters that mapIO fills, not requests it honors: the IO
         // mapper's collect callback is the last point at which a resource's qualifier still
         // says what the SHADER declared rather than what glslang assigned, so both captures
         // have to be taken from inside the link. See TMglGlslIoResolver::reserverResourceSlot.
@@ -1066,7 +1066,7 @@ namespace MobileGL::MG_State::GLState {
         // three dumps are the same bytes (md5 39ffa10d5186a4d37be82d0b42297a8d). The order
         // does not perturb SPIR-V on this pin, including on the exact flow 0d052719 feared.
         //
-        // Not a licence to stop measuring: 0d052719's observation was real once, and the
+        // Not a license to stop measuring: 0d052719's observation was real once, and the
         // method (per-module hashes, both orders) is cheap. Re-run it on any glslang bump.
         //
         // So the order is now the other way round, and deliberately: reflection, fragment
@@ -1547,7 +1547,7 @@ namespace MobileGL::MG_State::GLState {
         // "this opaque uniform has no location" as well.
         constexpr Uint kNoLocation = ~static_cast<Uint>(0);
         // The ceiling glGetIntegerv(GL_MAX_UNIFORM_LOCATIONS) advertises, which is what the
-        // allocator below has to honour: locations 0..kMaxUniformLocations-1 and no others.
+        // allocator below has to honor: locations 0..kMaxUniformLocations-1 and no others.
         constexpr Uint kMaxUniformLocations = static_cast<Uint>(ProgramObject::MAX_UNIFORM_LOCATIONS);
         Vector<Uint> effectiveLocation(tProgramUniformCount, kNoLocation);
         Vector<Bool> locationIsSourceExplicit(tProgramUniformCount, false);
@@ -2043,7 +2043,7 @@ namespace MobileGL::MG_State::GLState {
     //
     //   for each SPIR-V module, IN LINKED-STAGE ORDER
     //       take its STORAGE_BUFFER descriptors
-    //       sorted by (normalised block name, binding)
+    //       sorted by (normalized block name, binding)
     //       appending any name not already present
     //
     // Every clause is reproducible from what phase A already owns. `in.shaders` is the linked
@@ -2051,7 +2051,7 @@ namespace MobileGL::MG_State::GLState {
     // the same order, that ProgramSpirvTask turns into `generatedSpirv` one module per entry -
     // so iterating it iterates the modules. `blockReflection[].stages` is an EShLanguageMask,
     // which is what says whether a given block is one of a given module's descriptors. The
-    // name normalisation is StripArrayElementSuffix, which is the same "[k]" strip
+    // name normalization is StripArrayElementSuffix, which is the same "[k]" strip
     // NormalizeDescriptorName does to the SPIR-V type name: glslang expands an INSTANCE ARRAY
     // into one reflection entry per element ("Foo[0]", "Foo[1]") while SPIR-V carries one
     // descriptor with a count, so stripping is what makes the two agree on ONE entry named
@@ -2088,7 +2088,7 @@ namespace MobileGL::MG_State::GLState {
                 if ((block.stages & stageBit) == 0) continue;
                 ofThisStage.push_back(&block);
             }
-            // STABLE, so two entries that normalise to one name keep their declaration order
+            // STABLE, so two entries that normalize to one name keep their declaration order
             // and the FIRST (element 0, the base binding) is the one that survives the dedupe -
             // which is the element SPIRV-Reflect's single descriptor reports.
             std::stable_sort(ofThisStage.begin(), ofThisStage.end(),
@@ -2230,7 +2230,7 @@ namespace MobileGL::MG_State::GLState {
     // every declared block of every stage BEFORE the write-back above happens - so "declared no
     // binding" is a fact read off the AST, not a guess made about the text. The lexical scanner
     // this replaced could only report positively, dropping any declaration whose grammar it did
-    // not fully recognise, and could not read `binding = SOME_MACRO` at all (it ran on
+    // not fully recognize, and could not read `binding = SOME_MACRO` at all (it ran on
     // macro-unexpanded source, and reading "no literal" as "no binding" once aliased eight
     // Flywheel storage blocks onto 0).
     //
@@ -2266,7 +2266,7 @@ namespace MobileGL::MG_State::GLState {
         // them to the draw-buffer range fails the link of every such program.
         if (artifacts.program->getIntermediate(EShLangFragment) == nullptr) return true;
 
-        // Keyed on (colour number, COLOUR INDEX), not on the colour number alone. Two fragment
+        // Keyed on (color number, COLOR INDEX), not on the color number alone. Two fragment
         // outputs may share a location as long as their index differs - that pair IS dual-source
         // blending (GL 4.6 core 11.1.3 / ARB_blend_func_extended, core since 3.3), spelled either
         // `layout(location = 0, index = 0)` + `layout(location = 0, index = 1)` in the shader or
@@ -2285,7 +2285,7 @@ namespace MobileGL::MG_State::GLState {
             const Int location = explicitLocation != in.explicitFragDataLocation.end()
                                      ? static_cast<Int>(explicitLocation->second)
                                      : static_cast<Int>(output.layoutLocation());
-            // The colour INDEX, under the one precedence rule the whole codebase uses: a NON-ZERO
+            // The color INDEX, under the one precedence rule the whole codebase uses: a NON-ZERO
             // glBindFragDataLocationIndexed index wins, and a zero (or absent) one falls back to
             // the shader's own layout(index = N).
             //

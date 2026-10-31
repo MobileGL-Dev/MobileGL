@@ -62,7 +62,7 @@
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Impl/Pipe/Tracker.h>
 #include <MG_Pipe/PipeApply.h>
-// The applier takes the two artefact structs BY POINTER beside the record, so a case that
+// The applier takes the two artifact structs BY POINTER beside the record, so a case that
 // drives create_shader_state needs their definitions - the applier's own header deliberately
 // only forward-declares them.
 #include <MG_State/GLState/ProgramState/ProgramArtifacts.h>
@@ -217,7 +217,7 @@ namespace {
         desc.PointSizeDemoted = 1;
         desc.EnableSpirvValidation = 1;
         // ALL SEVEN BLOB REFS ARE DECLARED WITH Size 0 - "this record does not declare its
-        // blob" - which is exactly what a monolith emission is: the artefacts ride beside the
+        // blob" - which is exactly what a monolith emission is: the artifacts ride beside the
         // record through the two companion pointers and the codec is never called.
         return desc;
     }
@@ -283,7 +283,7 @@ TEST(ProgramEmit, ACreateStoresTheDescriptorAndARelinkCountsUpAndDropsTheBlockKe
     EXPECT_EQ(ProgramRecordOf(5).Desc.StageMask, 0x1u);
 }
 
-// The three refusals a create can produce: no artefacts at all behind seven undeclared blobs, a
+// The three refusals a create can produce: no artifacts at all behind seven undeclared blobs, a
 // default uniform block no program can have, and a slot outside the record table's bound.
 TEST(ProgramEmit, ACreateWithNoArtefactsAnOversizedBlockOrACorruptSlotIsRefusedNamingTheProgram) {
     ApplierGuard guard;
@@ -292,10 +292,10 @@ TEST(ProgramEmit, ACreateWithNoArtefactsAnOversizedBlockOrACorruptSlotIsRefusedN
 
     const MGPProgramDesc desc = ProgramDesc(MGPipeHandle{4, 1}, 0x3u, 0);
     ExpectRefusedNaming("create_shader_state {slot=4, gen=1}: the record declares no blobs and carries no "
-                        "artefacts",
+                        "artifacts",
                         [&desc, &spirv]() { MGPipeApplyCreateShaderState(desc, nullptr, &spirv, nullptr); });
     ExpectRefusedNaming("create_shader_state {slot=4, gen=1}: the record declares no blobs and carries no "
-                        "artefacts",
+                        "artifacts",
                         [&desc, &link]() { MGPipeApplyCreateShaderState(desc, &link, nullptr, nullptr); });
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty());
 
@@ -568,7 +568,7 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); }
     // PINNED AS A PREDICATE rather than by driving the counter to ~0u, and the reason is
     // written down instead of hidden: reaching that value takes four billion
     // MarkUBOContentDirty calls, which is not a test. The predicate is the thing
-    // EmitGlobalConstants consults, so pinning it pins the behaviour, and a deletion of the
+    // EmitGlobalConstants consults, so pinning it pins the behavior, and a deletion of the
     // guard is a compile error here.
     TEST(ProgramEmit, TheNeverUploadedSentinelIsNeverEmitted) {
         EmitterScope scope;
@@ -1050,7 +1050,7 @@ void main() { gl_Position = u_a + u_b + u_c + u_d; }
                "the frontend reports unlinked";
         EXPECT_EQ(Emitter().LastProgramDesc().LinkStatus, 0u) << "the re-issue claims the program linked";
         EXPECT_TRUE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, cso))
-            << "a failed relink must never be modelled as an object_death";
+            << "a failed relink must never be modeled as an object_death";
     }
 
     // The frame, both ways round. SpirvArtifacts carries no stage list and MGPProgramDesc::

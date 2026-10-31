@@ -33,7 +33,7 @@
 //   both arms
 //       The PIXELS must not move. The quad is drawn with alpha 1.0 through
 //       GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA, so the blended and unblended draws produce the
-//       same colour by construction and the readback is the same image in both arms and after
+//       same color by construction and the readback is the same image in both arms and after
 //       every toggle. "The counters moved and the picture did not" is the whole claim.
 //
 // HOW THE COUNTERS ARE READ. MG_Util::PipeStats is internal to the library and this module cannot
@@ -42,7 +42,7 @@
 // so each lane sets MOBILEGL_PIPE_STATS=1, MOBILEGL_PIPE_STATS_PERIOD=1 - one line per
 // eglSwapBuffers - and a MOBILEGL_LOG_FILE_PATH of its OWN. The log path has to be private: the
 // library opens it fopen(path, "w"), so every process in a lane truncates it, and a whole-file
-// read in a shared lane races a neighbour's bring-up. That is the same rule, and the same
+// read in a shared lane races a neighbor's bring-up. That is the same rule, and the same
 // remedy, as PipeVerifyArmingScenario's arming lane.
 //
 // The window a summary line reports is "since the previous line" (PipeStats::FormatWindowLine), so

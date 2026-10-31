@@ -149,7 +149,7 @@ namespace MobileGL::MG_Pipe {
     Bool MGPipeEmitRenderbufferDestroyAndFree(Uint64 lifetimeId);
     // NO WIRE CALL AT ALL (D-I2). PipeCalls.def has no framebuffer delete, because a
     // framebuffer is not a resource and is not a CSO - it is STATE, and set_framebuffer_state
-    // is the only call that names one - and the catalogue is closed, so P4a does not invent a
+    // is the only call that names one - and the catalog is closed, so P4a does not invent a
     // row. The handle is minted and freed entirely client-side and this helper does steps 2
     // and 3 only. A recycled framebuffer handle is distinguished by Gen, which is inside the
     // record's ContentHash, so it can never be suppressed against its predecessor's record.
@@ -363,7 +363,7 @@ namespace MobileGL::MG_Pipe {
     // Entry points MGPipeSamplerEmitter must provide, returning void:
     //   EmitSamplerCso(SamplerObject&)     - D-F1's content-addressed mint-or-share at
     //                                        capacity 256, hashed field-wise over a canonical
-    //                                        zero-initialised copy, behind the version-first
+    //                                        zero-initialized copy, behind the version-first
     //                                        skip. The HANDLE RULE FOR THIS KIND IS THE
     //                                        EMITTER'S, not this file's: two identical
     //                                        samplers share one CSO, so there is deliberately

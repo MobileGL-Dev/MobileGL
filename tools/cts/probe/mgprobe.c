@@ -338,7 +338,7 @@ int main(int argc, char** argv) {
         printf("  user-FBO incomplete status=0x%x\n", fbst);
     }
 
-    /* FBO with a RENDERBUFFER colour attachment. This is what dEQP's
+    /* FBO with a RENDERBUFFER color attachment. This is what dEQP's
      * FboRenderContext allocates for --deqp-surface-type=fbo, so it is the path
      * that actually decides a conformance run - a texture-attached FBO working
      * says nothing about it. */

@@ -18,7 +18,7 @@ surface as a silently absent field - the exact failure the revision was added to
 
 This script pins the two together. protocol_revision_pins.json beside it is a table
 {revision: sha256(protocol.fbs)} of the schema each revision was minted for. The check reads the
-header's current revision, hashes protocol.fbs (line endings normalised, so a CRLF checkout hashes
+header's current revision, hashes protocol.fbs (line endings normalized, so a CRLF checkout hashes
 the same bytes as an LF one) and refuses when the current revision has no row or its row is not
 the file's digest. Both directions are covered: a schema edit that forgot the bump is red (stale
 row), and a bump that forgot the table is red (no row), so the table cannot fall behind the header.

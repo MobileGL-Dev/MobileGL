@@ -73,7 +73,7 @@ def _list_property(test, name):
 
 def tcp_lock_violations(document):
     """Entries of a ctest --show-only=json-v1 document that reach the loopback TCP supervisor -
-    FIXTURES_REQUIRED names mobilegl-tcp, or the entry is labelled exactly integration-tcp - and do
+    FIXTURES_REQUIRED names mobilegl-tcp, or the entry is labeled exactly integration-tcp - and do
     not hold RESOURCE_LOCK mobilegl-tcp. Sorted names; empty when the registration is sound."""
     bad = []
     for test in document.get('tests', []):
@@ -121,7 +121,7 @@ def require_entries_passed(path, names):
 
     `TcpLane.SupervisorProtocolControls` is registered with SKIP_RETURN_CODE 77 because the
     script it runs needs flatc, which is deliberately not in the build graph. That is the right
-    behaviour for a developer who has not built one; it is the wrong behaviour for CI, where the
+    behavior for a developer who has not built one; it is the wrong behavior for CI, where the
     lane's whole job is to run the supervisor's protocol controls and "skipped" is
     indistinguishable from the three commits the entry did not exist. The workflow builds flatc
     and then names the entry here, so a CI run in which the tool went missing reds by name

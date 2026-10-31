@@ -1,49 +1,59 @@
-# 在宿主 APK 中嵌入 split server
+# Embedding the split server in a host APK
 
-宿主应用可直接加载 `libMobileGL.so`，把自己持有的 `ANativeWindow` 交给 server。
-窗口、输入和 Android Service 的生命周期由宿主 APK 管理；不需要安装 MobileGL plugin APK。
-公共接口是 [`EmbeddedServer.h`](../../../MobileGL/MG_Remote/Server/EmbeddedServer.h)，
-只使用 C 类型，也可通过 `dlsym` 调用。构建必须开启 `MOBILEGL_BUILD_DISAGGREGATED`。
+A host application can load `libMobileGL.so` directly and hand the server an `ANativeWindow` it owns.
+The window, input and the Android Service lifecycle stay with the host APK; no MobileGL plugin APK is
+needed. The public interface is
+[`EmbeddedServer.h`](../../../MobileGL/MG_Remote/Server/EmbeddedServer.h), uses only C types, and can
+also be called through `dlsym`. The build must enable `MOBILEGL_BUILD_DISAGGREGATED`.
 
-## 有窗口的合成器服务
+## Compositor service with a window
 
-在加载库前设置 `MOBILEGL_IPC_ROLE=server`、`MOBILEGL_IPC_DIAL=no`，清除
-`MOBILEGL_TRANSPORT`、`MOBILEGL_IPC_SERVER_PATH`、`MOBILEGL_IPC_RING_MB` 和
-`MOBILEGL_IPC_STAGE_MB`。建议放在宿主 APK 的独立服务进程中，以免渲染故障结束 UI 进程。
+Before loading the library, set `MOBILEGL_IPC_ROLE=server` and `MOBILEGL_IPC_DIAL=no`, and clear
+`MOBILEGL_TRANSPORT`, `MOBILEGL_IPC_SERVER_PATH`, `MOBILEGL_IPC_RING_MB` and
+`MOBILEGL_IPC_STAGE_MB`. Running in a separate service process of the host APK is recommended, so that
+a rendering fault does not take down the UI process.
 
-1. 调用 `mobilegl_server_display_install_android(request_geometry, user)`。
-   回调可为空；有回调时，它在 apply 线程运行，必须快速返回，把尺寸变更交给宿主线程。
-2. 从宿主的 `Surface` 获取 `ANativeWindow`，调用
-   `mobilegl_server_display_attach_android(window, width, height)`。
-   server 独立持有引用，调用者随后释放自己的引用。同一窗口再次 attach 只更新尺寸。
-3. 在服务线程调用 `mobilegl_server_serve_inprocess("@anland-mobilegl-compositor")`。
-   这会在当前进程接受一个 client 会话。AF_UNIX 控制连接用 `SCM_RIGHTS` 传递共享内存段，
-   数据通过 SHM 环传输。客户端设置 `MOBILEGL_TRANSPORT=spawn`、
-   `MOBILEGL_IPC_CONTROL=unix:@anland-mobilegl-compositor`、`MOBILEGL_IPC_DATA=shm` 和
-   `MOBILEGL_IPC_SURFACE=server`。
-4. Surface 销毁时调用 `mobilegl_server_display_detach(3000)`。
-   返回值 `0/1/2/3` 分别为无窗口、直接释放、会话释放后完成、超时。
-   超时会保留引用，直到 apply 线程停止使用窗口；当前失窗会结束活动会话。
-5. 服务停止时调用 `mobilegl_server_stop_inprocess()`，等待 serve 线程返回，再调用
-   `mobilegl_server_display_uninstall(3000)`。几何回调的 user 对象应至少活到此时。
+1. Call `mobilegl_server_display_install_android(request_geometry, user)`.
+   The callback may be null; when present it runs on the apply thread, must return quickly, and hands
+   size changes to the host thread.
+2. Take an `ANativeWindow` from the host's `Surface` and call
+   `mobilegl_server_display_attach_android(window, width, height)`.
+   The server holds its own reference; the caller then releases its own. Attaching the same window
+   again only updates the size.
+3. On the service thread, call `mobilegl_server_serve_inprocess("@anland-mobilegl-compositor")`.
+   This accepts one client session in the current process. The AF_UNIX control connection passes the
+   shared-memory segment with `SCM_RIGHTS`, and data travels over a SHM ring. The client sets
+   `MOBILEGL_TRANSPORT=spawn`, `MOBILEGL_IPC_CONTROL=unix:@anland-mobilegl-compositor`,
+   `MOBILEGL_IPC_DATA=shm` and `MOBILEGL_IPC_SURFACE=server`.
+4. When the Surface is destroyed, call `mobilegl_server_display_detach(3000)`.
+   The return values `0/1/2/3` mean no window, released directly, completed after the session
+   released it, and timed out. On timeout the reference is kept until the apply thread stops using the
+   window; losing the window currently ends the active session.
+5. When the service stops, call `mobilegl_server_stop_inprocess()`, wait for the serve thread to
+   return, then call `mobilegl_server_display_uninstall(3000)`. The geometry callback's user object
+   must live at least until then.
 
-`width/height` 为零时，Android attach 从 `ANativeWindow` 查询尺寸。几何回调收到正尺寸表示
-请求固定缓冲尺寸，收到 `0/0` 表示恢复宿主布局尺寸；宿主应通过后续 attach 报告实际结果。
-安装、attach、detach 和 uninstall 由宿主串行调用。库拒绝替换已安装的 display 或尚未结束
-的旧窗口租约，避免晚到的释放使用另一组引用回调。
+When `width/height` are zero, the Android attach queries the size from the `ANativeWindow`. A positive
+size in the geometry callback requests fixed buffer dimensions; `0/0` means restore the host's layout
+size, and the host reports the actual result through a later attach. Install, attach, detach and
+uninstall are serialized by the host. The library refuses to replace an installed display or an old
+window lease that has not ended, so that a late release cannot use another set of reference callbacks.
 
-## 并发的离屏应用服务
+## Concurrent off-screen application service
 
-一个进程仍只有一套 backend/GL 状态。有窗口的服务只接一个合成器；其他 EGL client 可连接
-宿主 APK 打包的 `libMobileGLServer.so` 可执行文件，由另一个服务进程负责启动和结束：
+A process still has only one set of backend / GL state. A service with a window accepts a single
+compositor; other EGL clients can connect to the `libMobileGLServer.so` executable packaged by the
+host APK, which another service process starts and stops:
 
 ```text
 <nativeLibraryDir>/libMobileGLServer.so @anland-mobilegl --serve --max-sessions 16
 ```
 
-`--max-sessions` 是活动会话上限，接受 `1..64`，默认仍为 `1`。大于 `1` 只适用于
-AF_UNIX 的 `--serve` 离屏 supervisor。每个 client 单独 fork worker，拥有独立 backend，
-共享内存与其他会话隔离；worker 退出后归还名额，supervisor 结束时所有 worker 一起结束。
-这些 worker 没有 display，客户端应清除 `MOBILEGL_IPC_SURFACE`，由客户端 WSI 提交窗口图像。
+`--max-sessions` is the limit on active sessions; it accepts `1..64` and still defaults to `1`. Values
+above `1` apply only to the AF_UNIX `--serve` off-screen supervisor. Each client forks its own worker
+with an independent backend, isolated from other sessions in shared memory; a worker returning frees
+its slot, and all workers end when the supervisor ends. These workers have no display; the client
+should clear `MOBILEGL_IPC_SURFACE` and submit window images through its own WSI.
 
-进程隔离解决多个应用同时连接的问题；同一应用中的真正多 context/share-group 支持仍需另行实现。
+Process isolation solves multiple applications connecting at the same time; true multi-context /
+share-group support inside one application still needs separate work.

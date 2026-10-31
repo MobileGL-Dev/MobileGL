@@ -27,7 +27,7 @@
 // dEQP/GL-CTS multisample cases leave exactly these masks behind. That is the MSAA-then-present
 // shape every application uses.
 //
-// The cases below are single-sample by construction (the scenario harness's colour FBO), so each
+// The cases below are single-sample by construction (the scenario harness's color FBO), so each
 // one asserts that the mask changed nothing.
 
 #include <string>

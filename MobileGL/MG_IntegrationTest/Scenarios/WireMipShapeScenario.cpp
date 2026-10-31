@@ -14,7 +14,7 @@
 //     ignores layerCount, so the PIXELS below are right with or without the fix on this host; what
 //     goes red on the host is the validation layer, which the `.Mip3DValidation.` entry runs this
 //     case under (inproc, so the server's Vulkan instance is this process and its stdout is ours).
-//     The pixel half runs on both backends and every arm, and is what a driver that honours
+//     The pixel half runs on both backends and every arm, and is what a driver that honors
 //     layerCount would fail.
 //   * A 1D DEPTH chain with no native blit. The depth shader arm renders 2D views, which a 1D image
 //     does not admit; the wire arm handed it the chain anyway. It is now the named decline
@@ -76,7 +76,7 @@ namespace MGITest {
         };
 
         // A 3D RGBA8 chain, 8x8x8 with its full storage, whose level-0 slices come in PAIRS of one
-        // colour: level 1's slice k is then pair k's colour exactly, and every level below is the
+        // color: level 1's slice k is then pair k's color exactly, and every level below is the
         // average of two slices of the level above. A blit that loses the z axis (one slice only,
         // or slices read as array layers of a 2D image) cannot produce those numbers.
         TEST_F(WireMipShapeScenario, VolumeChainIsGeneratedAlongItsDepth) {

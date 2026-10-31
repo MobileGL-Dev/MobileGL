@@ -55,7 +55,7 @@ TEST(ServerContextLiveTest, OneSessionsReleaseDoesNotKillANeighboursContext) {
     Bool appLive = true;
     OnSessionThread(*kwinBlock, [&] { kwinLive = MG_Pipe::MGPipeServerContextIsLive(); });
     OnSessionThread(*appBlock, [&] { appLive = MG_Pipe::MGPipeServerContextIsLive(); });
-    EXPECT_TRUE(kwinLive) << "a neighbour session's release marked this session's context dead";
+    EXPECT_TRUE(kwinLive) << "a neighbor session's release marked this session's context dead";
     EXPECT_FALSE(appLive);
 
     MG_Pipe::g_pipeInputsThreadResolver = previous;

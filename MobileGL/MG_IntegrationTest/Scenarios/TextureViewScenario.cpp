@@ -249,7 +249,7 @@ void main() {
                 glDrawArrays(GL_TRIANGLES, 0, 6);
             }
 
-            // Reads the colour texture currently attached to `fbo` as COLOR_ATTACHMENT0.
+            // Reads the color texture currently attached to `fbo` as COLOR_ATTACHMENT0.
             Image ReadFbo(GLuint fbo, int width, int height) {
                 glBindFramebuffer(GL_FRAMEBUFFER, fbo);
                 glReadBuffer(GL_COLOR_ATTACHMENT0);
@@ -258,7 +258,7 @@ void main() {
 
             // Every pixel of the inclusive region must match `expected` within `tolerance` per
             // channel. Whole-region rather than a spot check, for the reason HeadlessGL.h gives:
-            // three of four vertices carrying stale data still paints a correct centre pixel.
+            // three of four vertices carrying stale data still paints a correct center pixel.
             void ExpectRegion(const Image& image, int x0, int x1, int y0, int y1, Rgba8 expected, int tolerance,
                               const char* what) {
                 int offenders = 0;
@@ -400,7 +400,7 @@ void main() {
             glDepthMask(GL_TRUE);
             glEnable(GL_DEPTH_TEST);
             glDisable(GL_STENCIL_TEST);
-            // The mod's own indexed/non-indexed colour-mask pair (OpenGLRenderer.java:411-412).
+            // The mod's own indexed/non-indexed color-mask pair (OpenGLRenderer.java:411-412).
             glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
             glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
@@ -490,7 +490,7 @@ void main() {
 
             // GL_RGBA8 and GL_R32UI are both VIEW_CLASS_32_BITS, so one may be viewed as the
             // other. Filling the RGBA8 storage with a known byte pattern makes the R32UI view's
-            // answer a fact about the BITS rather than about the colour.
+            // answer a fact about the BITS rather than about the color.
             const GLuint storage = MakeImmutable2D(GL_RGBA8, 1, kSize, kSize);
             std::vector<std::uint8_t> texels(static_cast<std::size_t>(kSize) * kSize * 4);
             for (std::size_t i = 0; i < texels.size(); i += 4) {
@@ -532,7 +532,7 @@ void main() {
             // A REAL GL_R32UI texture holding the very word the storage's bytes spell. The
             // assertion below is that the view and this texture sample IDENTICALLY.
             //
-            // Comparing against a reference texture rather than against a hard-coded colour is
+            // Comparing against a reference texture rather than against a hard-coded color is
             // deliberate. Sampling a 32-bit integer texture is not itself what this scenario is
             // about, and llvmpipe's ES driver does it inconsistently (verified outside MobileGL,
             // with a raw-EGL program that reproduces the same wrong decode with NO view in play).
@@ -586,8 +586,8 @@ void main() {
             }
             EXPECT_EQ(mismatches, 0u)
                 << "the GL_R32UI view of GL_RGBA8 storage must sample exactly what a real GL_R32UI texture "
-                   "holding the same word does; view centre is "
-                << Describe(throughView.At(kSize / 2, kSize / 2)) << ", reference centre is "
+                   "holding the same word does; view center is "
+                << Describe(throughView.At(kSize / 2, kSize / 2)) << ", reference center is "
                 << Describe(referenceTexel);
             DestroyColorFbo(destination);
         }
@@ -654,7 +654,7 @@ void main() {
             glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
 
-            // A different colour per layer, so a view that lost its layer offset reads the wrong
+            // A different color per layer, so a view that lost its layer offset reads the wrong
             // one rather than merely reading nothing.
             const GLuint seedFbo = MakeFbo();
             glBindFramebuffer(GL_FRAMEBUFFER, seedFbo);
@@ -940,8 +940,8 @@ void main() {
             constexpr int kViewNumLevels = 3;
             constexpr int kViewMinLayer = 1;
             constexpr int kViewNumLayers = 2;
-            // One colour per level, so a level that was redefined from the view's base extent reads
-            // as another level's colour rather than as a plausible one.
+            // One color per level, so a level that was redefined from the view's base extent reads
+            // as another level's color rather than as a plausible one.
             const Rgba8 levelColour[kLevels] = {
                 {255, 0, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255}, {255, 0, 255, 255}, {0, 255, 255, 255}};
 
@@ -974,7 +974,7 @@ void main() {
             glTextureParameteri(view, GL_TEXTURE_MAX_LEVEL, 2);
 
             // The generation's source is the view's base level, the owner's level 2. Writing it in
-            // GREEN on the GPU gives the source and the level generated from it the same colour, so
+            // GREEN on the GPU gives the source and the level generated from it the same color, so
             // losing either one is visible below.
             const GLuint fbo = MakeFbo();
             glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -1060,8 +1060,8 @@ void main() {
             constexpr int kViewMinLayer = 1;
             constexpr int kViewNumLayers = 2;
             constexpr std::uint8_t kCanaryByte = 0xAB;
-            // One colour per storage layer, so a lost layer origin and a read past the window are
-            // both visible as another layer's colour rather than as a plausible one.
+            // One color per storage layer, so a lost layer origin and a read past the window are
+            // both visible as another layer's color rather than as a plausible one.
             const auto layerColour = [](int layer) {
                 return Rgba8{static_cast<std::uint8_t>(10 * (layer + 1)), 40, 7, 255};
             };

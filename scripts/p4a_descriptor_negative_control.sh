@@ -40,11 +40,11 @@
 #      rather than in the code because excluding the hash copy would mean hard-coding another
 #      package's helper name into a regex that deliberately does not know one.
 #   2. SamplerParameters::borderColorForm stops being copied in MG_Impl/Pipe/SamplerEmit.h. All
-#      four border-colour VALUES still cross; what is lost is which of the three forms
+#      four border-color VALUES still cross; what is lost is which of the three forms
 #      (float / int / uint) they are to be read as, and D-F4 is explicit that the form crosses and
 #      that all four values are compared. The failure it models is IntegerBorderColorScenario's:
-#      an integer border colour read as floats is not an error anywhere, it is just the wrong
-#      colour at the clamped edge of every sampled texture.
+#      an integer border color read as floats is not an error anywhere, it is just the wrong
+#      color at the clamped edge of every sampled texture.
 #
 # Each patch is applied by REGEX rather than by an exact line, because both headers belong to OTHER
 # PACKAGES (C.7: FramebufferEmit.h is package B's, SamplerEmit.h is package C's) and their spelling

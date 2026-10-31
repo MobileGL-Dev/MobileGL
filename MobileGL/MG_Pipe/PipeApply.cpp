@@ -25,7 +25,7 @@
 // build only. In monolith the archive does not travel - MGPProgramDesc's seven blob refs are
 // declared with Size 0 and the two structs ride beside the record through the entry point's
 // companion pointers - so a push build pays nothing for it and the header keeps its forward
-// declarations. The verify build serialises, deserialises and compares before storing, which
+// declarations. The verify build serializes, deserialises and compares before storing, which
 // makes the codec LIVE CODE WITH A GATE rather than dead code with a unit test.
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #endif
@@ -897,7 +897,7 @@ namespace MobileGL::MG_Pipe {
             return &record;
         }
 
-        // Null means "this is not a resource target this catalogue names", which is a corrupt
+        // Null means "this is not a resource target this catalog names", which is a corrupt
         // descriptor rather than an unknown object: acting on the wrong table would create,
         // respecify or destroy an unrelated LIVE object that happens to hold the same slot in
         // another kind's space, and that is the "act outside its own storage" class.
@@ -1574,7 +1574,7 @@ namespace MobileGL::MG_Pipe {
 
 #if MOBILEGL_PIPE_VERIFY
         // THE ARCHIVE'S ROUND TRIP, and it is a VERIFY-ONLY gate on a path that does not
-        // serialise anything in a shipped build. What it asks is the question a transport will
+        // serialize anything in a shipped build. What it asks is the question a transport will
         // ask on the first day it exists and nobody can ask afterwards: does the archive this
         // client is publishing survive being turned into bytes and back? A field the codec
         // skips in BOTH directions round-trips perfectly, which is why the unit suite reads the
@@ -1589,7 +1589,7 @@ namespace MobileGL::MG_Pipe {
             Vector<Uint8> reencoded;
             const char* fault = nullptr;
             if (encoded.empty()) {
-                fault = "the encoder produced no bytes for a program that has artefacts";
+                fault = "the encoder produced no bytes for a program that has artifacts";
             } else if (!MG_State::GLState::DecodeProgramArtifacts(encoded.data(), encoded.size(), decodedLink,
                                                                   decodedSpirv)) {
                 fault = "the archive this client would put on the wire does not decode";
@@ -2366,7 +2366,7 @@ namespace MobileGL::MG_Pipe {
     // resource_readback and map_persistent resolve through ResolveResource - i.e. against
     // MGPipeApplier().Resources and never the texture or renderbuffer table - which is right, because
     // a mapped range, a readback and a persistent donation exist for buffers only. They are
-    // buffer-only BY CATALOGUE and not by check: MGPFlushRange and MGPReadback carry no kind
+    // buffer-only BY CATALOG and not by check: MGPFlushRange and MGPReadback carry no kind
     // at all, and map_persistent's MGPHandleOnly is not asked for one, so there is nothing here
     // to compare and a mistyped record can only be caught where a discriminator exists.
     // unmap_persistent is that place, and it Fatals - see there. If a later phase gives any of
@@ -2405,7 +2405,7 @@ namespace MobileGL::MG_Pipe {
         ++stored->Serial;
 
         // record.AccessFlags are the application's REAL mapping flags and this applier does
-        // not normalise them: the backend reads INVALIDATE_RANGE / INVALIDATE_BUFFER /
+        // not normalize them: the backend reads INVALIDATE_RANGE / INVALIDATE_BUFFER /
         // UNSYNCHRONIZED per call to choose its upload shape, and merging them here would take
         // that choice away from the side that pays for it.
         if (g_resourceOps != nullptr && g_resourceOps->FlushRange != nullptr) {
@@ -2909,20 +2909,20 @@ namespace MobileGL::MG_Pipe {
             fault = "the framebuffer slot is outside the record table's bound";
         }
         // THE DRAW-BUFFER ARRAY IS AN INDEX INTO THIS RECORD'S OWN Color[], and -1 is NONE. An
-        // entry outside that range would have the server read a colour attachment the record
+        // entry outside that range would have the server read a color attachment the record
         // does not carry: the wire array is 8 wide, the driver's MaxColorAttachments is not
         // clamped to it, and a truncated record arriving here as a plausible index is exactly
         // what the framebuffer subsystem's cap refusal exists to prevent upstream.
         for (Uint32 i = 0; fault == nullptr && i < kMGPipeMaxColorAttachments; ++i) {
             if (state.DrawBuffers[i] < -1 || state.DrawBuffers[i] >= static_cast<Int8>(kMGPipeMaxColorAttachments)) {
-                fault = "a draw-buffer entry names a colour attachment outside the record's own array";
+                fault = "a draw-buffer entry names a color attachment outside the record's own array";
             }
         }
         if (fault != nullptr) {
             MGP_TRIP_WIRE_REPORT(
                 "MGPipe: " MGP_TRIP_WIRE_TAG(
                     "ProtocolCorruption") " set_framebuffer_state {slot=%u, gen=%u, target=%u}: %s (the record "
-                                          "carries %u colour attachments)",
+                                          "carries %u color attachments)",
                 state.Fbo.Slot, state.Fbo.Gen, state.Target, fault, kMGPipeMaxColorAttachments);
             return;
         }
@@ -3466,7 +3466,7 @@ namespace MobileGL::MG_Pipe {
     //
     // The server never re-links: SPIR-V and the reflection archive cross, never source, and
     // GL_LINK_STATUS is answered by the client from its ProgramObject (ARCHITECTURE.md §7).
-    // The other inputs a backend program is specialised on (framebuffer clamp masks, storage
+    // The other inputs a backend program is specialized on (framebuffer clamp masks, storage
     // binding signature, image formats, patch parameters) arrive through other records.
     // ================================================================================
 
@@ -3477,7 +3477,7 @@ namespace MobileGL::MG_Pipe {
         if (desc.Cso.Slot < kMGPipeFirstAllocatableSlot) return;
 
         // THE ONE BLOB RULE, over seven blob refs at once. All seven are declared with Size 0 in
-        // monolith - "this record does not declare its blob" - and the artefacts ride beside the
+        // monolith - "this record does not declare its blob" - and the artifacts ride beside the
         // record through the two companion pointers, so a record that declares nothing AND
         // carries nothing describes a program with no reflection and no SPIR-V, which is not a
         // program. The declared lengths themselves cross-check nothing here: no other field of
@@ -3486,7 +3486,7 @@ namespace MobileGL::MG_Pipe {
         // the transport that fills those refs in lands with the splitter that owns them.
         const char* fault = nullptr;
         if (link == nullptr || spirv == nullptr) {
-            fault = "the record declares no blobs and carries no artefacts";
+            fault = "the record declares no blobs and carries no artifacts";
         } else if (desc.GlobalUboSize > kMGPipeMaxGlobalConstantsBytes) {
             fault = "the default uniform block is larger than any program may declare";
         }
@@ -3540,7 +3540,7 @@ namespace MobileGL::MG_Pipe {
             ++record.GlobalConstantsSerial;
         }
         record.Live = true;
-        // The DESCRIPTOR is what is stored, and the artefacts are not: in monolith the backend
+        // The DESCRIPTOR is what is stored, and the artifacts are not: in monolith the backend
         // reads the frontend's own archive, and under split the descriptor is what the
         // deserialised archive is attached to. Either way the applier owns identity, extent and
         // order, and never content.
@@ -3552,7 +3552,7 @@ namespace MobileGL::MG_Pipe {
         // change (MGPipeApplierReset keeps the CSO table - a program lives in a share group)
         // and a stale archive is worse than none.
         //
-        // AFTER Desc, so a reader that sees the new descriptor sees the artefacts it describes;
+        // AFTER Desc, so a reader that sees the new descriptor sees the artifacts it describes;
         // the apply thread is the only writer and the only reader, so ordering here is about
         // reading this function rather than about memory visibility.
         record.Archive = Move(archive);

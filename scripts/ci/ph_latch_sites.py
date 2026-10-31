@@ -53,7 +53,7 @@ FILES = {
 }
 
 # (file, a substring of the site's line) -> why no peer byte reaches it. The site is converted
-# anyway - it is on the decode path and returns like its neighbours - and the reason names the
+# anyway - it is on the decode path and returns like its neighbors - and the reason names the
 # earlier check that refuses the same bytes first.
 UNREACHABLE = [
     ("PipeWireCodec.cpp", '"segment-resolve"',

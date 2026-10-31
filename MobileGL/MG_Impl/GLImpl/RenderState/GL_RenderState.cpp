@@ -372,7 +372,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     // GL_EXT_fragment_shading_rate 14.X.1: the only error is a rate outside table X.1, and the
-    // state is left untouched by it. Whether the device can honour the rate is not an error -
+    // state is left untouched by it. Whether the device can honor the rate is not an error -
     // an unsupported rate is clamped at rasterization, which the backends leave to the driver.
     void ShadingRateEXT_State(GLenum rate) {
         const Uint8 packed = MGPackShadingRate(rate);

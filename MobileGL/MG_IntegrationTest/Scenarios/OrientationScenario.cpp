@@ -18,17 +18,17 @@
 // unflipped flags and the whole frame rendered upside down (retrace SSIM 0.052,
 // deterministic; flickering clouds on device).
 //
-// What pins it: a pattern asymmetric in BOTH axes - four quadrants, coloured
+// What pins it: a pattern asymmetric in BOTH axes - four quadrants, colored
 //
 //        top-left  RED  | WHITE  top-right
 //     bottom-left BLUE  | GREEN  bottom-right
 //
 // - drawn to a target, read back with glReadPixels, and reduced to the four
-// quadrant-centre colours in the fixed order bottom-left, bottom-right,
+// quadrant-center colors in the fixed order bottom-left, bottom-right,
 // top-left, top-right.
 //
 // Four quadrants rather than the three horizontal stripes this scenario used to
-// draw, because stripes only pin ONE axis. Stripes read down the centre line
+// draw, because stripes only pin ONE axis. Stripes read down the center line
 // are unchanged by an X flip, by a transpose, and by a 180 rotation composed
 // with a Y flip: all three of those bugs would have rendered a green stripe
 // between a blue one and a red one and passed. Every one of the eight
@@ -45,7 +45,7 @@
 //
 // The assertions then go further than the signature: every quadrant is checked
 // pixel by pixel over its whole area (RegionIsMostly), so a partial or torn
-// draw cannot pass by having the four sampled centres come out right.
+// draw cannot pass by having the four sampled centers come out right.
 //
 // Both orderings are covered, because the memo is poisoned by whichever pass
 // runs first and these tests share one process:
@@ -102,7 +102,7 @@ void main() {
         // "every single pixel" an achievable (and therefore useful) demand.
         constexpr int kQuadrantInset = 2;
 
-        // A deliberately asymmetric sub-rect of the 128x96 surface: neither centred nor
+        // A deliberately asymmetric sub-rect of the 128x96 surface: neither centered nor
         // full-extent in either axis, mirroring the conformance suite's randomised
         // sub-viewport geometry (glcShaderRenderCase.cpp:735-741). Asymmetry is the whole
         // point - y == H - y - h is exactly the case an unconverted Y origin gets right by
@@ -223,7 +223,7 @@ void main() {
             }
 
             // The signature says WHICH transform went wrong; this says the whole
-            // image is right, not merely its four sampled centres.
+            // image is right, not merely its four sampled centers.
             void ExpectUprightQuadrants(const Image& image, const std::string& when) {
                 const int w = image.Width();
                 const int h = image.Height();
@@ -333,8 +333,8 @@ void main() {
 
             const int w = upright.Width();
             const int h = upright.Height();
-            // Transposes are expressed on the largest centred square the readback
-            // contains, which is enough for the four quadrant centres to move.
+            // Transposes are expressed on the largest centered square the readback
+            // contains, which is enough for the four quadrant centers to move.
             const int side = std::min(w, h);
             const int ox = (w - side) / 2;
             const int oy = (h - side) / 2;
@@ -373,7 +373,7 @@ void main() {
             }
 
             // The four symmetries that move the axes into each other. They only
-            // make sense on a square, so they run on the largest centred one.
+            // make sense on a square, so they run on the largest centered one.
             struct SquareSymmetry {
                 const char* name;
                 const char* expected;
@@ -430,7 +430,7 @@ void main() {
         // shape where the two cancel.
 
         // Placement: a sub-viewport draw must land in GL rows [y0, y0+h), not mirrored about the
-        // surface centre. Read back full-extent, which is the path that already worked, so a
+        // surface center. Read back full-extent, which is the path that already worked, so a
         // failure here can only be the viewport's Y origin.
         TEST_F(OrientationScenario, SubViewportDrawLandsWhereGLPutsIt) {
             BindDefaultFramebuffer();

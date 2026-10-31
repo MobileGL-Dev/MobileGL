@@ -18,7 +18,7 @@
 //   * the verb session (MG_Record::SetVerbSessionResolver), i.e. every verb record the emitters
 //     in MG_Impl/Pipe/Verb plan - the same bytes a transport would carry.
 //
-// Each record is NORMALISED (the one thing in a payload that is not a function of the GL calls is
+// Each record is NORMALIZED (the one thing in a payload that is not a function of the GL calls is
 // an address: an MGPBlobRef / MGHostSpan naming caller memory - zeroed, the size kept; the bytes
 // they name are hashed instead) and hashed with its companion bytes and tails. The golden is one
 // line per record - index, call name, size, hash - in goldens/recorder/<fixture>.txt, small enough
@@ -100,7 +100,7 @@ namespace {
         g_stream->push_back(Record{op, bytes, hash.Value});
     }
 
-    // ---- normalisation: addresses out, sizes kept --------------------------------------------------
+    // ---- normalization: addresses out, sizes kept --------------------------------------------------
 
     void Scrub(MGPBlobRef& blob) {
         if (blob.Seg == kMGHostSpanSegNone) blob.Offset = 0;
@@ -210,7 +210,7 @@ namespace {
         return HashRest(hash, op, blob, blobBytes) + HashRest(hash, op, tail, count);
     }
 
-    // ---- the table wrappers, one per catalogue row -------------------------------------------------
+    // ---- the table wrappers, one per catalog row -------------------------------------------------
 
     template <const char* Name, typename Fn>
     struct Wrap;

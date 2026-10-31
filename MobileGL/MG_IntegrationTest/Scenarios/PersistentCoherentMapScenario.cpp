@@ -102,7 +102,7 @@ void main() { oColor = vec4(vColor, 1.0); }
             float r, g, b;
         };
 
-        // A full-viewport quad as two triangles, flat-coloured: one region readback then speaks
+        // A full-viewport quad as two triangles, flat-colored: one region readback then speaks
         // for the whole draw, and an offender pixel is a real disagreement rather than an
         // interpolation difference between two drivers.
         std::array<Vertex, 6> Quad(float r, float g, float b) {
@@ -415,7 +415,7 @@ void main() { oColor = vec4(vColor, 1.0); }
         EXPECT_TRUE(WholeSurfaceIs(afterSecond, "red",
                                    "the SECOND write through the same mapping, announced by nothing: "
                                    "this is exit gate E3(b), and a 'push on the next explicit buffer "
-                                   "operation' implementation reads back the FIRST write's colour here"));
+                                   "operation' implementation reads back the FIRST write's color here"));
         // E3(d) again, AFTER the draws: b1-v1.md 4.1 item 5 asks that the arm hold across the
         // whole scenario, not only at the map. A late adoption - the owner declining once and
         // minting on a later validate point - would leave the first assertion true and this one

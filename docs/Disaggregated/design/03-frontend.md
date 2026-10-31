@@ -1,121 +1,121 @@
-# 前端：state tracker、纹理上传、着色器（原 ARCHITECTURE §5–§7）
+# Frontend: state tracker, texture upload, shaders (formerly ARCHITECTURE §5–§7)
 
-> 设计细节。设计要点与全部章节的索引见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)。章节编号沿用原 `ARCHITECTURE.md`，代码注释里的 `ARCHITECTURE.md §N` 按编号在这里找到。
+> Design details. The design highlights and an index of all sections are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Section numbers follow the original `ARCHITECTURE.md`; `ARCHITECTURE.md §N` in code comments resolves by number here.
 
-## 5. 前端 state tracker（`MG_Impl/Pipe/Tracker`）
+## 5. Frontend state tracker (`MG_Impl/Pipe/Tracker`)
 
-### 5.1 推送发生在 verb 之前的 validate 时刻，不在 GL setter 里
+### 5.1 Pushing happens at validate time before a verb, not in GL setters
 
-per-setter 推送会把 Blaze3D 每个 batch 的冗余 `glEnable/glDisable` 变成接口调用，严格慢于今天；正确形态是 gallium `st_validate_state`。落地为唯一的 `MGPipeValidateForVerb(MGPipeVerb)`（九个 validate 类，`FillPoints.def`），恰在每次经表调用之前、每个提前返回之后。只有今天就在 GL 调用时刻分发的资源 op（`BufferBackendOps` 的七个 hook）在调用时刻推送。
+Per-setter pushing would turn Blaze3D's redundant `glEnable/glDisable` in every batch into interface calls, strictly slower than today; the correct form is gallium's `st_validate_state`. It lands as the single `MGPipeValidateForVerb(MGPipeVerb)` (nine validate classes, `FillPoints.def`), exactly before every call through the tables and after every early return. Only the resource ops that are already dispatched at GL call time today (the seven hooks of `BufferBackendOps`) push at call time.
 
-### 5.2 dirty 位：值类零新增记账，对象类 5 个聚合世代
+### 5.2 Dirty bits: zero new bookkeeping for value classes, five aggregate generations for object classes
 
-- 值类组（render state、pixel pack、patch、attrib defaults、shader bindings …）直接复用既有版本计数器作快门。
-- 对象类组（vertex buffers、framebuffer、sampler views / samplers / images、const / shader buffers、SO targets）靠 5 个**聚合世代**把快门降成一次 `Uint64` 比较——没有聚合就回答不了"有没有哪张已绑定纹理动了"。
-- 完整性由 `scripts/gen_pipe_dirty_surface.py` 保证（每个 mutator → 必须 bump 的世代，`--check` + `--self-test` 进 CI）。**快门看不见自己的主体**是踩过三次的坑：新增字段必须带"记录字段 → setter → 快门"一行，优先混入已有世代（新计数器会撑大 pull 对象，G1 不允许）。
+- Value-class groups (render state, pixel pack, patch, attrib defaults, shader bindings …) reuse the existing version counters directly as the shutter.
+- Object-class groups (vertex buffers, framebuffer, sampler views / samplers / images, const / shader buffers, SO targets) reduce the shutter to a single `Uint64` comparison through five **aggregate generations** — without aggregation there is no way to answer "did any bound texture move".
+- Completeness is guaranteed by `scripts/gen_pipe_dirty_surface.py` (every mutator → the generation that must be bumped, `--check` + `--self-test` in CI). **A shutter that cannot see its own subject** is a trap we have hit three times: a new field must come with a "record field → setter → shutter" line, and mixing it into an existing generation is preferred (a new counter would bloat the pull object, which G1 does not allow).
 
-#### 5.2.1 dirty-surface 映射的答案（`DirtySurface.def`）
+#### 5.2.1 Answers of the dirty-surface mapping (`DirtySurface.def`)
 
-`DirtySurface.def` 为每个后端可观察的前端 mutator 写明"谁发布这次修改"。漏发布不报错、只会静默渲染陈旧状态，所以清单由 `scripts/gen_pipe_dirty_surface.py` 机械枚举：扫描 `MG_Impl/GLImpl` 与 `MG_State/GLState` 里按 `MUTATOR_PREFIXES` 匹配的 `pGLContext->` 调用和 `MGP_NOTE_MUTATION` 站点（后者带字段名，行写在外层函数上），`--check` 双向核对行集。
+`DirtySurface.def` states, for every frontend mutator observable by the backend, "who publishes this change". A missing publication does not error, it only silently renders stale state, so the list is mechanically enumerated by `scripts/gen_pipe_dirty_surface.py`: it scans `MG_Impl/GLImpl` and `MG_State/GLState` for `pGLContext->` calls matching `MUTATOR_PREFIXES` and for `MGP_NOTE_MUTATION` sites (the latter carry a field name, and the line is written on the enclosing function); `--check` cross-checks the line set in both directions.
 
-答案只列在**每条发生修改的路径**上都触发的发布者（值未变而提前返回不算修改）；只在部分路径触发的位若单列，按表构造的快门会欠触发，而欠触发是危险方向。
-- `NEW_*`：`Tracker.h` 的 dirty 位，下一个 verb 发布；`kImmediate`：同一函数体直达后端；`kReverseChannel`：后端写回前端；`kNoBackendRead`：没有后端读点。
-- `kExplicitDestroy`：最后一个引用释放时，client 的 `MGPipeEmit*DestroyAndFree` 依次做 wire 删除（该类有删除行时）、后端通知、释放 slot；`kUnpublishedDestroy`：program pipeline 与 shader 没有 wire 句柄，无从删除。
-- `kPulledEveryVerb`：没有位移动，字段在其 verb 类的 may-read 表里，残余填充每个 verb 都拷贝；`kPulledPartialShutter|NEW_*`：同样靠拉取兜底，所附的位只在部分修改路径上触发。
+The answers list only publishers that fire on **every path that makes a modification** (an early return with an unchanged value does not count as a modification); a bit that fires only on some paths, if listed separately, would make the table-constructed shutter under-trigger, and under-triggering is the dangerous direction.
+- `NEW_*`: a dirty bit in `Tracker.h`, published at the next verb; `kImmediate`: straight to the backend from the same function body; `kReverseChannel`: the backend writes back to the frontend; `kNoBackendRead`: there is no backend read site.
+- `kExplicitDestroy`: when the last reference is released, the client's `MGPipeEmit*DestroyAndFree` in turn does the wire delete (when the class has a delete line), the backend notification, and frees the slot; `kUnpublishedDestroy`: program pipelines and shaders have no wire handle, so there is nothing to delete.
+- `kPulledEveryVerb`: no bit movement; the field is in the may-read table of its verb class, and the residual fill copies it at every verb; `kPulledPartialShutter|NEW_*`: likewise backed by the pull, with the attached bit firing only on some modification paths.
 
-位答案由脚本推导：RenderState 族与 `RenderState.cpp` 双向比对（`BumpVersions()` 动两个计数器，裸 `++m_version` 只动 `NEW_RENDER_STATE`）；其余位把快门读的成员 / 字段与 mutator 传递写入的成员 / 字段求交，只能查出"该位的快门在任何路径上都不动"这一种错答，证明不了每条路径都动。写入根定位不了的函数被污染，依赖它的答案为 UNDECIDED，须列入 `MGP_DIRTY_SURFACE_UNDECIDED_LIST`，列了却已可判定同样报红。散文答案不经推导（`kPulledPartialShutter` 所附的位除外）；扫描器按文本匹配函数体，lambda 里的 mutator 记到外层函数上，经 helper 发布的修改读作延迟发布，语义证明仍是 `MOBILEGL_PIPE_VERIFY`。
+Bit answers are derived by the script: the RenderState family is compared both ways with `RenderState.cpp` (`BumpVersions()` moves two counters, a bare `++m_version` moves only `NEW_RENDER_STATE`); for the remaining bits, the members / fields the shutter reads are intersected with those the mutator transitively writes, which can only detect the one wrong answer "this bit's shutter never moves on any path", and cannot prove that every path moves. Functions whose write root cannot be located are tainted, and answers that depend on them are UNDECIDED and must be listed in `MGP_DIRTY_SURFACE_UNDECIDED_LIST`; listing one that is already decidable also turns red. Prose answers are not derived (except the bits attached to `kPulledPartialShutter`); the scanner matches function bodies by text, mutators inside lambdas are attributed to the enclosing function, and a change published through a helper is read as a deferred publication; the semantic proof is still `MOBILEGL_PIPE_VERIFY`.
 
-#### 5.2.2 记录字段 → setter → 快门对照表
+#### 5.2.2 Record field → setter → shutter table
 
-由 `Tracker.h` 的 dirty 位触发的每条记录，其每个字段只能经由会推动该位快门输入的 setter 改变，否则必须在 setter 处无条件发射（`resource_*` 族、`set_texture_params`）。`DirtySurface.def` 只把 mutator 映射到位，看不出派生字段依赖另一族的 mutator，所以下表手工维护；记录新增字段时在此加一行。
+Every field of a record triggered by a dirty bit in `Tracker.h` may only change through a setter that moves that bit's shutter input; otherwise it must be emitted unconditionally at the setter (the `resource_*` family, `set_texture_params`). `DirtySurface.def` only maps mutators to bits and cannot see that a derived field depends on a mutator of another family, so the table below is maintained by hand; when a record gains a field, add a row here.
 
-| 位 | 记录与字段 | 改变字段的 setter | 快门输入 |
+| Bit | Record and fields | Setters that change the fields | Shutter inputs |
 |---|---|---|---|
-| 6 | `create/bind_shader_state`、`set_draw/dispatch_program`：Cso、StageMask、GlobalUboSize、artefact blob ref、两个已绑定句柄 | `glUseProgram`、`glLinkProgram`、`glBindProgramPipeline`、`glUseProgramStages` | lifetime id × link version；pipeline 下为 `stageLinks`（pipeline 名 × 各 stage 的 lifetime id 与 link version） |
-| 7 | program 绑定：image unit、block binding、uniform 写集合 | opaque uniform 上的 `glUniform1i`、`glUniformBlockBinding`、`glShaderStorageBlockBinding`、任意 `glUniform*` | 四个 per-program 计数器；pipeline 下再混入 `stageLinks` |
-| 8 | `set_global_constants`：ShaderCso、Version、默认 uniform 块镜像 | 默认块上的 `glUniform*`、`glUseProgram` | lifetime id × UBO content version；pipeline 下为 `stageState` |
-| 11 | `set_framebuffer_state`：Fbo、Color[8]/Depth/Stencil/ReadSurface（Res、Kind、InternalFormat、TextureTarget、Layered、Level、Layer、UploadTarget）、DrawBuffers[8]、Width/Height/Layers/Samples/FixedSampleLocations、IsDefault、Complete、Target | `glFramebufferTexture*`、`glFramebufferRenderbuffer`、`glDrawBuffer(s)`、`glReadBuffer`、`glFramebufferParameteri`、`glBindFramebuffer`；已挂接纹理或 renderbuffer 的存储重定义（格式、纹理目标、尺寸、采样数、完备性在发射时内联，所以 `PipePublishDescriptor` bump attachment 聚合） | attachment 聚合 × draw / read 绑定槽版本 |
-| 12 | `set_sampler_views`：每单元 {View, Texture} | `glBindTexture`、`glActiveTexture`、纹理或 sampler 参数、定义 level 的上传、默认纹理出现；在用 program（`glUseProgram`、relink、sampler uniform 的 `glUniform1i`） | content × params × bind generation × `opaqueUnits` |
-| 13 | `bind_sampler_states`：每单元 sampler CSO 句柄 | `glBindSampler`、`glDeleteSamplers`、`glSamplerParameter*`、`glTexParameter*` | params × sampling resolution × bind generation |
-| 14 | `set_shader_images`：program image-unit 窗口内每单元 {Res, InternalFormat, Layer, Level, Layered, Access} | `glBindImageTexture`、纹理 content / params、image uniform 的 `glUniform1i`；在用 program（`glUseProgram`、relink） | content × params × bind generation × `programImages` |
+| 6 | `create/bind_shader_state`, `set_draw/dispatch_program`: Cso, StageMask, GlobalUboSize, artifact blob ref, the two bound handles | `glUseProgram`, `glLinkProgram`, `glBindProgramPipeline`, `glUseProgramStages` | lifetime id × link version; under a pipeline, `stageLinks` (pipeline name × each stage's lifetime id and link version) |
+| 7 | program bindings: image units, block bindings, uniform write set | `glUniform1i` on opaque uniforms, `glUniformBlockBinding`, `glShaderStorageBlockBinding`, any `glUniform*` | the four per-program counters; under a pipeline, `stageLinks` is mixed in as well |
+| 8 | `set_global_constants`: ShaderCso, Version, default uniform block mirror | `glUniform*` on the default block, `glUseProgram` | lifetime id × UBO content version; under a pipeline, `stageState` |
+| 11 | `set_framebuffer_state`: Fbo, Color[8]/Depth/Stencil/ReadSurface (Res, Kind, InternalFormat, TextureTarget, Layered, Level, Layer, UploadTarget), DrawBuffers[8], Width/Height/Layers/Samples/FixedSampleLocations, IsDefault, Complete, Target | `glFramebufferTexture*`, `glFramebufferRenderbuffer`, `glDrawBuffer(s)`, `glReadBuffer`, `glFramebufferParameteri`, `glBindFramebuffer`; storage redefinition of an attached texture or renderbuffer (format, texture target, size, sample count, completeness are inlined at emission, so `PipePublishDescriptor` bumps the attachment aggregate) | attachment aggregate × draw / read binding slot version |
+| 12 | `set_sampler_views`: per unit {View, Texture} | `glBindTexture`, `glActiveTexture`, texture or sampler parameters, uploads defining a level, appearance of the default texture; the program in use (`glUseProgram`, relink, `glUniform1i` of a sampler uniform) | content × params × bind generation × `opaqueUnits` |
+| 13 | `bind_sampler_states`: per unit, the sampler CSO handle | `glBindSampler`, `glDeleteSamplers`, `glSamplerParameter*`, `glTexParameter*` | params × sampling resolution × bind generation |
+| 14 | `set_shader_images`: per unit within the program's image-unit window, {Res, InternalFormat, Layer, Level, Layered, Access} | `glBindImageTexture`, texture content / params, `glUniform1i` of an image uniform; the program in use (`glUseProgram`, relink) | content × params × bind generation × `programImages` |
 
-位 11–14 还在 share group 的孪生聚合时钟变化时触发（setter 经兄弟 context 调用）；最大触及纹理单元变化时 12、13 也触发。
+Bits 11–14 also fire when the share group's twin aggregate clock changes (the setter is invoked through a sibling context); when the maximum touched texture unit changes, 12 and 13 also fire.
 
-### 5.3 渲染状态：整块 blob 过线，身份只取 pipeline 子集（D-B1）
+### 5.3 Render state: one whole blob crosses the wire, identity takes only the pipeline subset (D-B1)
 
 ```
-create_render_state(cso, pipelineSubsetChunks)   // 只带 pipeline 子集
-bind_render_state(cso, version, pipelineVersion) // 稳态 12 B
-set_dynamic_state(dynamicChunks, version)        // 只带变化的动态 chunk
+create_render_state(cso, pipelineSubsetChunks)   // pipeline subset only
+bind_render_state(cso, version, pipelineVersion) // 12 B in steady state
+set_dynamic_state(dynamicChunks, version)        // only the changed dynamic chunks
 ```
 
-- `RenderStateParameters`（1168 B）整块过线：Espryt 做三段 memcmp，字段顺序承重；拆成多个 CSO 要手工维护 ~150 字段划分且无绊线。
-- 身份只取 pipeline 子集，否则 `glViewport` / `glScissor` 每次都铸新 CSO、冲掉 server 的 pipeline memo。划分只写在一处：`MGPipeRenderStateSpans` 的 chunk 表（7 pipeline chunk 396 B + 8 dynamic chunk 772 B，`static_assert` 完整性），G7 断言"子集 hash 变 ⟺ `m_pipelineStateVersion` 变"。
-- Espryt 的 `SyncRenderState` 一行不动；Magma 的 pipeline memo 键是 `cso.slot`。
+- `RenderStateParameters` (1168 B) crosses as one whole block: Espryt does a three-segment memcmp, and field order is load-bearing; splitting it into several CSOs would require hand-maintaining a ~150-field partition with no tripwire.
+- Identity takes only the pipeline subset, otherwise `glViewport` / `glScissor` would mint a new CSO every time and flush the server's pipeline memo. The partition is written in one place only: the chunk table in `MGPipeRenderStateSpans` (7 pipeline chunks 396 B + 8 dynamic chunks 772 B, `static_assert` completeness), and G7 asserts "the subset hash changes ⟺ `m_pipelineStateVersion` changes".
+- Espryt's `SyncRenderState` is untouched; Magma's pipeline memo key is `cso.slot`.
 
-### 5.4 验证不变式、合并与抑制器
+### 5.4 Validation invariants, merging and suppressors
 
-规范（D-B3）：**一条 verb 的全部 `set_*` / `bind_*` 在该 verb 之前完成；server 在 verb 处从已推送状态惰性特化 shader 与 pipeline。**除"资源 create 先于对它的 bind"外，`set_*` 之间无顺序要求。合并：整块优于逐字段；高水位直接是 `count` 实参；只发 program 解析过的集合；**集合 hash 抑制器**在 client 侧去抖（原先在后端的 ~175 行）。
+The rule (D-B3): **all `set_*` / `bind_*` of a verb complete before that verb; the server lazily specializes shaders and pipelines at the verb from the pushed state.** Apart from "a resource is created before it is bound", there is no ordering requirement among `set_*`. Merging: whole blocks beat per-field; the high-water mark is directly the `count` argument; only the sets the program resolved are sent; the **set hash suppressor** debounces on the client side (previously ~175 lines in the backend).
 
-### 5.5 sampler view 在 client 侧解析
+### 5.5 Sampler views are resolved on the client
 
-shader 看见哪个纹理取决于 sampler uniform 类型、mipmap 完备性与未定义默认纹理；解析留在 client（带 memo），gallium "每槽一个 view" 就是解析后的形态。两处后端特定后处理留在 server：Espryt 的 raw-depth-fetch sampler 替换、Magma 的 feedback-loop 检测。
+Which texture a shader sees depends on the sampler uniform type, mipmap completeness and the undefined default texture; resolution stays on the client (with a memo), and gallium's "one view per slot" is the resolved form. Two backend-specific post-processing steps stay on the server: Espryt's raw-depth-fetch sampler substitution and Magma's feedback-loop detection.
 
-### 5.6 生命周期、共享组、composite program
+### 5.6 Lifetime, share groups, composite programs
 
-- `resource_create` 在前端对象构造时发，存储由 `resource_respecify` 惰性定义，`resource_destroy` 在析构时发；死亡转发给每个 emitter（只释放 slot 曾导致 UAF）。view 先于存储属主销毁、FBO attachment 钉住纹理、buffer texture 钉住 buffer。
-- program pipeline 合成体（`CompositeResolver`）完全在前端合成、推一个句柄；释放恰好一次（resolver 换掉或 `~ProgramObject`，D-H7）；记忆按 `(ContextId, 管线 GL 名)` 键控。
+- `resource_create` is sent when the frontend object is constructed, storage is lazily defined by `resource_respecify`, and `resource_destroy` is sent at destruction; the death is forwarded to every emitter (freeing only the slot previously caused a UAF). A view is destroyed before its storage owner, an FBO attachment pins its texture, and a buffer texture pins its buffer.
+- The program pipeline composite (`CompositeResolver`) is fully composed on the frontend and pushes a single handle; it is released exactly once (the resolver swaps it out, or `~ProgramObject`, D-H7); the memo is keyed by `(ContextId, pipeline GL name)`.
 
-#### 5.6.1 program pipeline 合成体的句柄、释放与记忆键
+#### 5.6.1 Handle, release and memo key of the program pipeline composite
 
-- 合成体由 `GLContext::GetProgramForDraw()` 在前端合成、缓存在各自的 `ProgramPipelineObject` 里；program 发射器按合成体自己的 lifetime id 从 `ShaderCso` 保留高段（§2.1）给它一个句柄，照普通 program 发 `create_shader_state`，server 不知道它是合成体。`MGPipeSlotAllocator::Allocate` 拒绝该段，`AllocateComposite` 是唯一入口；用保留段而不用句柄 flag，是因为 flag 要被两侧每个 `ShaderCso` 消费者携带和屏蔽，而保留段让"普通 program 拿不到合成体 slot"由分配器保证。
-- slot 有两条释放路径：签名变化时 `MGPipeCompositeResolver::Observe` 释放旧合成体，以及合成体自己的 `~ProgramObject`。两条都走 `MGPipeEmitShaderCsoDestroyAndFree`，后到的一条是空操作（`MGPipeSlotAllocator::Free` 拒绝不在该世代 live 的 slot，也不推进世代）。只靠析构不够：前端一旦多持一份引用，签名变化时析构就不会先到。
-- 签名取 `ComputeDrawProgramSignature()`（每个图形 stage 的 lifetime id 与 link version），不含 `GetBackendStateVersion()`：后者在 sampler uniform 的 `glUniform1i` 时也会变，会让合成体每次 draw 都重新编译。`Tracker.h` 的位 6 快门读同一组值。
-- 记忆键是 `(GLContext::GetTextureContextId(), 管线 GL 名)`：resolver 是进程单例，而 pipeline 名按 context 分配，只按名键控会在 make-current 后命中另一 context 的同名项、释放一个仍活着的合成体，每次切换都重建 program；context 地址也不行，销毁重建的 context 会落在旧地址上，而这个 id 永不复用。
-- context 销毁时其合成体经 `~ProgramObject` 释放，残留项再也查不到；make-current 时的 `Reset()` 丢弃它们而不释放，表长因此只受合成体 slot 仍 live 的项限制。
+- The composite is composed on the frontend by `GLContext::GetProgramForDraw()` and cached in its own `ProgramPipelineObject`; the program emitter reserves the high segment of `ShaderCso` by the composite's own lifetime id (§2.1) and gives it a handle, sending `create_shader_state` like an ordinary program, and the server does not know it is a composite. `MGPipeSlotAllocator::Allocate` rejects that segment and `AllocateComposite` is the only entry; the reserved segment is used instead of a handle flag because a flag would have to be carried and masked by every `ShaderCso` consumer on both sides, whereas the reserved segment makes "an ordinary program cannot get a composite slot" guaranteed by the allocator.
+- A slot has two release paths: `MGPipeCompositeResolver::Observe` releases the old composite when the signature changes, and the composite's own `~ProgramObject`. Both go through `MGPipeEmitShaderCsoDestroyAndFree`, and the later one is a no-op (`MGPipeSlotAllocator::Free` rejects a slot not live in that generation and does not advance the generation either). Relying on the destructor alone is not enough: once the frontend holds an extra reference, the destructor will not come first when the signature changes.
+- The signature is `ComputeDrawProgramSignature()` (each graphics stage's lifetime id and link version), excluding `GetBackendStateVersion()`: the latter also changes on `glUniform1i` of a sampler uniform, which would make the composite recompile on every draw. Bit 6's shutter in `Tracker.h` reads the same set of values.
+- The memo key is `(GLContext::GetTextureContextId(), pipeline GL name)`: the resolver is a process singleton, while pipeline names are allocated per context; keying by name alone would hit the same-named entry of another context after make-current and release a composite that is still alive, rebuilding the program on every switch; the context address is also wrong, because a destroyed and recreated context can land at the old address, whereas this id is never reused.
+- When a context is destroyed, its composite is released through `~ProgramObject`, and leftover entries can never be found again; `Reset()` at make-current discards them without releasing, so the table length is bounded only by the entries whose composite slots are still live.
 
-### 5.7 emulation 的归属
+### 5.7 Ownership of emulation
 
-规则：**驱动表达不了的变换在 tracker 里 lowering，硬件 / 驱动强加的变换在 driver 里 lowering。**
+Rule: **transformations the driver cannot express are lowered in the tracker; transformations forced by the hardware / driver are lowered in the driver.**
 
-| 归 client（读前端字节的纯 CPU 变换） | 归 server |
+| Falls to the client (pure CPU transformations that read frontend bytes) | Falls to the server |
 |---|---|
-| client 顶点 / 索引数组（字节过线，永不是指针）、最大索引扫描、`*IndirectCount` 计数解析、CopyImage shadow 镜像、XFB CPU 图元计数、压缩纹理 / unpack 规整 | primitive-restart 重写、multi-draw 分档与展平（从索引宿主镜像读，§10.3）、viewport-array 回放、fp64 顶点窄化、image-bindable 存储加宽、生成 mipmap（client 分配 level 存储） |
+| client vertex / index arrays (bytes cross the wire, never pointers), maximum index scan, `*IndirectCount` count resolution, CopyImage shadow mirror, XFB CPU primitive count, compressed texture / unpack normalization | primitive-restart rewriting, multi-draw tiering and flattening (read from the index host mirror, §10.3), viewport-array replay, fp64 vertex narrowing, image-bindable storage widening, mipmap generation (the client allocates level storage) |
 
-**陈旧索引纪律是逐站点表**：client 侧扫描前的 reconcile 必须逐字复现 monolith 的集合（最大索引扫描 = `SyncPersistentMappedRange()` + `SyncGpuWrites()`；`*IndirectCount` 只前者）。
+**Stale index discipline is a per-site table**: the reconcile before a client-side scan must reproduce monolith's set verbatim (maximum index scan = `SyncPersistentMappedRange()` + `SyncGpuWrites()`; `*IndirectCount` only the former).
 
-## 6. 纹理 subdata 与 dirty 归属
+## 6. Texture subdata and dirty ownership
 
-- 纹理上传由 Espryt 在 sync 时刻按**累积**区域做（Mali 按作业数计价，~100 个 rect 对一个 union box 实测 +6 ms/帧），逐 `glTexSubImage` 发记录会复现这个悬崖。
-- 因此 client 在自己的 rect 模型里累积，在下一个 validate / flush 点发**一条** `ResourceSubData`，同时携带 union box 与 region 列表，**由 server 选上传形状**（决策留在付 GPU 代价的一侧）。步长显式携带，不再靠指针比较。
-- **dirty 归属反转**：client 维护发射游标、发射后清自己的标志；清 dirty 要等 applier 的 acceptance（被拒的 level 留在脏表里）；server 自己的重新变脏是 server 的事。
-- `TextureUploadShapeScenario` 把上传形状录成金标（P3b/P4b D2 起是门；Mali 帧时增量无设备，按 Adreno 记录）。
+- Texture uploads are done by Espryt at sync time over the **accumulated** region (Mali prices by job count; ~100 rects against one union box measured +6 ms/frame), so sending a record per `glTexSubImage` would reproduce this cliff.
+- So the client accumulates in its own rect model and sends **one** `ResourceSubData` at the next validate / flush point, carrying both the union box and the region list, and **the server picks the upload shape** (the decision stays on the side that pays the GPU cost). The stride is carried explicitly, no longer relying on pointer comparison.
+- **Dirty ownership is reversed**: the client maintains the emission cursor and clears its own flags after emission; clearing dirty waits for the applier's acceptance (a rejected level stays in the dirty table); the server's own re-dirtying is the server's business.
+- `TextureUploadShapeScenario` records the upload shape as golden (a gate since P3b/P4b D2; Mali frame-time deltas have no device here, recorded on Adreno).
 
-### 6.1 server 侧待上传集合
+### 6.1 Server-side pending upload set
 
-- client 在 applier 接受某 level 的 `ResourceSubData` 时就清掉自己的 dirty 标志；后端的上传循环有提前返回的臂（Espryt：纹理不完备、multisample 目标只刷新），所以已接受的形状由 applier 按 `(uploadTarget, level)` 累积在 `MGPipeResourceRecord::PendingUploads`，只在后端真正上传处消费并清除，任意次 bail 都不丢纹素。
-- 累积沿用 client 的 rect 模型：union box 取并、rect 列表拼接；任一侧只有 box，或列表将超过 `kMGPipeMaxPendingUploadRegions`，该项退化为只有 box（仍覆盖全部纹素，只多传空隙）。
-- respecify 只丢弃它替换掉的那份存储上的待上传（盒子在那份存储的坐标系里，跨缩小保留会越界上传）：
-  - level 为空 = 整资源重定义（`glBufferData` / `glBufferStorage`、`glTexStorage*`、纹理视图），全部清空；
-  - 具名 level = 一次 `glTexImage*D`，只丢该 `(uploadTarget, level)`，与描述符是否变化无关。整体清空会丢掉别的 level 已被接受、尚未上传的纹素：`glTexImage2D(0)` → draw（纹理不完备，后端 bail）→ `glTexImage2D(1)`；
-  - 只换元数据（`RespecifyRedefinesNoStorage`：sticky 的 `BindMask` / `ImageBindableHint` 变化时重发的描述符）不丢任何项。
-- buffer 没有待上传项，也永远不算只换元数据。
+- The client clears its dirty flag for a level as soon as the applier accepts that level's `ResourceSubData`; the backend's upload loop has early-return arms (Espryt: incomplete texture, multisample target only refreshes), so accepted shapes are accumulated by the applier per `(uploadTarget, level)` in `MGPipeResourceRecord::PendingUploads`, consumed and cleared only where the backend actually uploads, and no number of bails loses texels.
+- Accumulation reuses the client's rect model: the union box is taken as a union, rect lists are concatenated; if either side has only a box, or the list would exceed `kMGPipeMaxPendingUploadRegions`, that entry degrades to a box-only entry (still covering every texel, just transferring extra gaps).
+- respecify discards only the pending uploads on the storage it replaces (the boxes are in that storage's coordinate system; preserving them across a shrink would upload out of bounds):
+  - an empty level = a whole-resource redefinition (`glBufferData` / `glBufferStorage`, `glTexStorage*`, texture views), clearing everything;
+  - a named level = one `glTexImage*D`, dropping only that `(uploadTarget, level)`, regardless of whether the descriptor changed. Clearing everything would lose texels of other levels that were already accepted but not yet uploaded: `glTexImage2D(0)` → draw (texture incomplete, backend bails) → `glTexImage2D(1)`;
+  - a metadata-only change (`RespecifyRedefinesNoStorage`: the descriptor re-sent when the sticky `BindMask` / `ImageBindableHint` changes) drops nothing.
+- A buffer has no pending uploads and never counts as metadata-only either.
 
-#### 6.1.1 region 列表是精确脏足迹
+#### 6.1.1 The region list is the exact dirty footprint
 
-纹理 `resource_subdata` 的 region 列表是该 level 自上次变干净以来的**精确脏足迹**：互不相交的盒子，覆盖每个写过的纹素，不多一个（`MGPipeTextureEmitter::EmitOneLevel`）。原因：server 端图像一旦可能含 GPU 写入，超出应用写入范围的上传就会盖掉它们。Magma 总把列表当作要上传的纹素；Espryt 在驱动纹理可能含 GPU 写入时同样如此，否则仍自己在 box 与 rect 之间选上传形状（Mali 作业数照旧由 server 决定）。
-- `RegionCount == 0` 只表示整 level 写；其余写入一律带盒子（只有一个也带），所以 applier 的累积不会因为某一侧「只有 box」而把精确贡献放宽成并集盒。
-- 例外：足迹超过一条记录能带的 `kMGPipeMaxPendingUploadRegions` 个盒子时，退回存储的 rect 列表（只保证覆盖，日志记一次）；该列表又被扣下（rect 填满并集盒的 3/4）时，0 是一个**不精确**的部分盒。把「只有 box」读作「client 拥有盒内每个纹素」的读者（`AdoptDriverLevelIntoShadow` 的覆盖盒规则）只在这种情况下不精确。
+The region list of a texture `resource_subdata` is the **exact dirty footprint** of that level since it last became clean: disjoint boxes that cover every written texel and not one more (`MGPipeTextureEmitter::EmitOneLevel`). Reason: once a server-side image may contain GPU writes, an upload beyond the application's write range would overwrite them. Magma always treats the list as the texels to upload; Espryt does the same when the driver texture may contain GPU writes, and otherwise still chooses the upload shape itself between the box and the rects (the Mali job count is still decided by the server).
+- `RegionCount == 0` only means a whole-level write; every other write carries boxes (even a single one), so the applier's accumulation never relaxes an exact contribution into a union box because one side is "box only".
+- Exception: when the footprint exceeds the `kMGPipeMaxPendingUploadRegions` boxes one record can carry, it falls back to the storage's rect list (coverage only, logged once); when that list is in turn withheld (the rects fill 3/4 of the union box), 0 is an **inexact** partial box. Readers that read "box only" as "the client owns every texel in the box" (the coverage-box rule of `AdoptDriverLevelIntoShadow`) are inexact only in this case.
 
-#### 6.1.2 纹理视图的上传记在存储属主上
+#### 6.1.2 Texture view uploads are recorded on the storage owner
 
-`glTextureView` 与源纹理共用纹素，所以 client 把经视图或经属主名字做的每次上传都记在**存储属主**上：`TextureObjectView` 把 dirty 标记换算成属主坐标（`ToOwnerLevel` / `ToOwnerUploadTarget` / `ToOwnerRegionOffset`）转给属主，`TextureEmit.h` 的排空列表按（存储属主, upload target, level）键控，每条纹理 `resource_subdata` 都指向属主句柄；applier 因此只推进属主记录的 `Serial` 与 `PendingUploads`。
-- Espryt 的逐纹理 clean 门 `BackendTextureObject::IsDrawSyncCleanByRecord` 对两个存储条款读 `Desc.ViewOf` 指向的属主记录（`PipeTextureStorageRecordForRecord`），三个参数条款仍读视图自己的记录：视图有自己的纹理参数与内建 sampler。这与前端 `TextureObjectView::GetContentVersion()` 转发给属主是同一条规则。
-- 若存储条款读视图自己的记录，视图第一次被采样之后，经属主名字的上传在视图上永不可见。门是 `TextureViewAliasScenario.TheOwnerUploadDrainRunsAgainAfterADrawBoundary`，monolith 与三个传输臂都跑。
+`glTextureView` shares texels with the source texture, so the client records every upload made through a view or through the owner's name on the **storage owner**: `TextureObjectView` converts the dirty mark into owner coordinates (`ToOwnerLevel` / `ToOwnerUploadTarget` / `ToOwnerRegionOffset`) and forwards it to the owner, the drain list in `TextureEmit.h` is keyed by (storage owner, upload target, level), and every texture `resource_subdata` points at the owner handle; the applier therefore advances only the owner record's `Serial` and `PendingUploads`.
+- Espryt's per-texture clean gate `BackendTextureObject::IsDrawSyncCleanByRecord` reads the owner record pointed to by `Desc.ViewOf` (`PipeTextureStorageRecordForRecord`) for the two storage clauses, while the three parameter clauses still read the view's own record: a view has its own texture parameters and built-in sampler. This is the same rule as the frontend's `TextureObjectView::GetContentVersion()` forwarding to the owner.
+- If the storage clauses read the view's own record, uploads through the owner's name would never become visible on the view after it is first sampled. The gate is `TextureViewAliasScenario.TheOwnerUploadDrainRunsAgainAfterADrawBoundary`, run under monolith and all three transport arms.
 
-## 7. Shader state = SPIR-V + 反射归档
+## 7. Shader state = SPIR-V + reflection archive
 
-- `CreateShaderState` 过线的是逐 stage SPIR-V + 反射归档，**不是源码**：glslang 全在 client、SPIRV-Cross 全在 server，文件级切割；server 侧无编译池。归档序列化器 `ProgramArtifactsCodec`，monolith 只在 verify 构建里调它（D-H3）。
-- server 在 verb 时刻从已推送状态**惰性特化**（D-B2：draw FBO clamp mask、fragColor 广播数、storage-block 绑定签名、image 格式、patch 参数等）——正是两个后端原来的做法。
-- link / compile 失败不需要同步返回：`GL_LINK_STATUS` 由 client 从 `ProgramObject` 回答，后端失败以 server 日志的 ≥ERROR 行（控制面 `LogLine`，无损，`MG_Remote/Transport/LogForward.h`）呈现。
-- 内部 shader（颜色 blit、深度 mip、multisample resolve）烘焙成签进树的 SPIR-V（`Wire*Spirv.h`），新鲜度门 `MOBILEGL_BAKED_INTERNAL_SHADERS`（`MG_Test/SelfTest/BakedInternalShadersTest.cpp`）重跑树内 glslang 逐字节比对（P7）。
+- `CreateShaderState` sends per-stage SPIR-V + a reflection archive across the wire, **not source**: glslang entirely on the client, SPIRV-Cross entirely on the server, a file-level split; no compile pool on the server. The archive serializer is `ProgramArtifactsCodec`, and monolith calls it only in verify builds (D-H3).
+- The server **lazily specializes** at the verb from the pushed state (D-B2: draw FBO clamp mask, fragColor broadcast count, storage-block binding signature, image formats, patch parameters, etc.) — exactly what the two backends did before.
+- link / compile failure needs no synchronous return: `GL_LINK_STATUS` is answered by the client from the `ProgramObject`, and backend failures surface as ≥ERROR lines in the server log (control-plane `LogLine`, lossless, `MG_Remote/Transport/LogForward.h`).
+- Internal shaders (color blit, depth mip, multisample resolve) are baked into SPIR-V signed into the tree (`Wire*Spirv.h`), and the freshness gate `MOBILEGL_BAKED_INTERNAL_SHADERS` (`MG_Test/SelfTest/BakedInternalShadersTest.cpp`) reruns in-tree glslang and compares byte for byte (P7).

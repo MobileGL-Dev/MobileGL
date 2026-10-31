@@ -296,7 +296,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // `defaultFramebufferOrientation` is set only when the source is the swapchain's
         // depth/stencil image, which this renderer stores display-side-up: the copy rect then
         // has to be mapped out of GL's bottom-origin space and the copied rows re-oriented on
-        // the way back, exactly as the colour ReadPixels path does.
+        // the way back, exactly as the color ReadPixels path does.
         // `sourceLayerCount` above 1 says the `height` rows the client is owed are stored as that
         // many ARRAY LAYERS of a one-row image rather than as rows of one layer - the shape a GL
         // 1D array has in Vulkan. The two produce byte-identical tightly-packed readbacks, so
@@ -651,7 +651,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // and the default draw framebuffer alike. The CAPABILITY decline inside
         // ResolveWireDepthStencil (a stencil-only resolve without VK_EXT_shader_stencil_export
         // on a device without VK_KHR_depth_stencil_resolve) is still decided per aspect, after
-        // colour ran; rule I (a) accepts that (§2.10).
+        // color ran; rule I (a) accepts that (§2.10).
         Bool DeclineWireDepthStencilResolveShape(const WireImage& source, const WireImage& destination, GLint sx0,
                                                  GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1,
                                                  GLint dy1);
@@ -682,7 +682,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_wireAhbImport = false;
         void* m_wireGetAhbProperties = nullptr;
         // YUV shared images (WireYuvImage.cpp): the device enabled samplerYcbcrConversion, and the
-        // conversion pipelines made so far (one per buffer format and colour conversion).
+        // conversion pipelines made so far (one per buffer format and color conversion).
         Bool m_samplerYcbcrConversion = false;
         struct WireYuvResources;
         WireYuvResources* m_wireYuvResources = nullptr;
@@ -704,7 +704,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UnorderedMap<Uint64, SharedImagePresentTarget> m_sharedImagePresentTargets;
         void DestroySharedImagePresentTargets(Bool onlyDead);
 
-        // SHARED-IMAGE SYNCHRONISATION (WireSharedImage.cpp). The sync_file fences other sessions
+        // SHARED-IMAGE SYNCHRONIZATION (WireSharedImage.cpp). The sync_file fences other sessions
         // publish become binary semaphores: a temporary SYNC_FD import is a WAIT, an exportable
         // semaphore a SIGNAL, of the next frame submission - whichever of SubmitPendingCommandBuffer
         // and Present's submit comes first, which is the one carrying what was recorded since.
@@ -1185,9 +1185,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // VK_EXT_custom_border_color. Vulkan's four predefined VkBorderColor values cover only
         // transparent/opaque black and opaque white; GL_TEXTURE_BORDER_COLOR is an arbitrary vec4 (or
         // an arbitrary ivec4/uvec4 through the "I" entry points). Without this extension a border
-        // colour outside the palette has to be snapped to the nearest predefined one. Both features
+        // color outside the palette has to be snapped to the nearest predefined one. Both features
         // are required together: customBorderColorWithoutFormat is what lets a sampler carry a custom
-        // colour without naming the image format it will be paired with, which GL's sampler objects
+        // color without naming the image format it will be paired with, which GL's sampler objects
         // cannot know. maxCustomBorderColorSamplers is a real device limit, so the sampler cache has
         // to be able to fall back to the snapped value once it is reached.
         Bool m_customBorderColorFeatureEnabled = false;
@@ -1249,7 +1249,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // pipeline from asking for LAST on a device that cannot preserve a fan's provoking vertex.
         Bool m_provokingVertexXfbPreserveEnabled = false;
         // provokingVertexModePerPipeline: when VK_FALSE every pipeline in one render pass instance
-        // must agree on the mode, so glProvokingVertex(GL_FIRST_VERTEX_CONVENTION) cannot be honoured
+        // must agree on the mode, so glProvokingVertex(GL_FIRST_VERTEX_CONVENTION) cannot be honored
         // per draw and every pipeline takes GL's default (LAST) instead.
         Bool m_provokingVertexModePerPipeline = false;
         // transformFeedbackPreservesTriangleFanProvokingVertex.

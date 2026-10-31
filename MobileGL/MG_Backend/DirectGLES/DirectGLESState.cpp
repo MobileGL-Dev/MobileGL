@@ -30,7 +30,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     //
     // The cache stays on the LEGACY arm, gated on the same subsystem bit as the rest of this
     // slice, so that MOBILEGL_PIPE_PUSH=0 keeps being the faithful all-subsystems-pull control
-    // ConfigLoader.cpp documents - "reproduces P1's behaviour exactly" has to include this
+    // ConfigLoader.cpp documents - "reproduces P1's behavior exactly" has to include this
     // path, or the integrator's A/B measures e4 on both arms and attributes it to neither. In
     // the pull build gPipeInputs is the live GLContext, there is no poison to bypass and the
     // frontend getter still linear-scans, so the cache is exactly the code it was.
@@ -339,9 +339,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // direct_state_access.renderbuffers_storage. One unconditional push settles the whole
         // block rather than the one cap that happened to be noticed.
         static Bool g_forceFullRenderStateResync = true;
-        // Which draw buffers' alpha channel the colour mask last pushed to the driver had forced
+        // Which draw buffers' alpha channel the color mask last pushed to the driver had forced
         // OFF - i.e. the value of `appliedWidenMask` in the last SyncRenderState that reached the
-        // colour-mask block. NOT derivable from the frontend parameter block: it depends on the
+        // color-mask block. NOT derivable from the frontend parameter block: it depends on the
         // bound DRAW framebuffer's attachment formats and on whether the caller is a draw or a
         // clear, neither of which bumps the frontend render-state version. Without it a
         // clear-then-draw pair on an unchanged parameter block early-outs and the draw inherits
@@ -405,7 +405,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint16 currentRenderStateVersion = MG_Pipe::gPipeInputs->GetRenderStateParametersVersion();
             const Bool forceFullPush = g_forceFullRenderStateResync;
             g_forceFullRenderStateResync = false;
-            // The alpha discipline for widened colour attachments (see the header comment on
+            // The alpha discipline for widened color attachments (see the header comment on
             // SyncRenderState): a DRAW must not be able to move the stored alpha off 1.0, a CLEAR
             // is what puts it there. So the draw path masks alpha off on every widened draw
             // buffer and the clear path masks nothing.
@@ -539,7 +539,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             { // sRGB framebuffer writes. GLES core always encodes a write into an sRGB attachment,
               // while GL_FRAMEBUFFER_SRGB is disabled by default in desktop GL and the frontend
               // never turns it on, so the driver has to be told to write raw. Without this a render
-              // into an sRGB colour buffer comes back encoded once too often (the shader's own
+              // into an sRGB color buffer comes back encoded once too often (the shader's own
               // decode on the next fetch then leaves the value one conversion short).
                 const Bool srgbWrites = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
                 if (g_GLESCapabilities.SupportsSrgbWriteControl &&
@@ -853,7 +853,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // framebuffer, so a widened draw buffer 0 costs every other buffer its
                         // alpha writes. ES 3.2 makes glColorMaski core and ES 3.1 has it as
                         // EXT/OES; the only devices that reach this line are ES 3.0-class, where
-                        // MRT with a mixed widened/native colour attachment set is already rare.
+                        // MRT with a mixed widened/native color attachment set is already rare.
                         const BoolVec4& m = driverMask0;
                         g_GLESFuncs.glColorMask(ToGLBoolean(m.x()), ToGLBoolean(m.y()), ToGLBoolean(m.z()),
                                                 ToGLBoolean(m.w()));

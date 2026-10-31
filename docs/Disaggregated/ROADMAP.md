@@ -1,46 +1,46 @@
-# 路线图（索引）
+# Roadmap (index)
 
-> **2026-10-07**：P0 到 P7、P12、P9、P10、P11、P8、**P13** 已完成——拆分路线与单进程路线都走完。P13（退役 pull 路径）：单进程也只走记录臂，pull / push 两套构建、`MOBILEGL_PIPE_PUSH` 与 `MOBILEGL_PIPE_LEGACY_MEMOS` 编译期开关、残余值块和后端的前端对象臂全部删除；库拆成按 link ratchet 分区的七个模块，split 构建里 server 一半单独真链接；G1 退役，由零 `MG_Remote` 符号、skip 普查与 recorder 金标接班；性能工作排在其后，基线是 `dev` 构建。下一项是 **P14**（状态归属）。每个阶段的计划、验收结果、实测与报告见 git 历史。
+> **2026-10-07**: P0 through P7, P12, P9, P10, P11, P8, and **P13** are done — both the split route and the monolith route are complete. P13 (retire the pull path): the monolith also runs only on the record arm; the pull / push builds, the `MOBILEGL_PIPE_PUSH` and `MOBILEGL_PIPE_LEGACY_MEMOS` compile-time switches, the residual value blocks, and the backend's frontend-object arm are all deleted; the library splits into seven modules partitioned by the link ratchet, and in the split build the server half is truly linked on its own; G1 is retired, succeeded by zero `MG_Remote` symbols, the skip census, and the recorder golden. Performance work is queued after it, with the `dev` build as baseline. The next item is **P14** (state ownership). The plan, acceptance results, measured results, and reports for each phase are in git history.
 
-## 目标
+## Goals
 
-client（跑应用的一方）与 server（跑驱动的一方）可以在**不同机器、不同系统**上经 TCP 相连；在同一台机器上则用两个进程 + 共享内存。传输分控制面与数据面两层，可各自选择、混搭。
+The client (the side that runs the application) and the server (the side that runs the driver) can connect over TCP across **different machines and different operating systems**; on the same machine they use two processes + shared memory. The transport has two layers, control plane and data plane, each independently selectable and mixable.
 
-## 两条路线
+## Two routes
 
-- **单进程路线**：先把接口建起来，让单进程版本也受益（后端拥有自己的状态、可以挪到渲染线程）。P0 → P0.5 → P1 → P2 → P3a → P4a → P3b/P4b → P7 → P8 → **P13**（走完）。
-- **拆分路线**：在接口之上逐步拆开前后端。P5 → P5b → P5c → P5d → P5e → P5f → P6 → P6.5 → Ph → P12 → P9 → P10 → **P11**（走完）。
+- **Monolith route**: build the interface first, so the monolith benefits too (the backend owns its own state and can move to the render thread). P0 → P0.5 → P1 → P2 → P3a → P4a → P3b/P4b → P7 → P8 → **P13** (complete).
+- **Split route**: split the frontend and backend step by step on top of the interface. P5 → P5b → P5c → P5d → P5e → P5f → P6 → P6.5 → Ph → P12 → P9 → P10 → **P11** (complete).
 
-## 阶段一览
+## Phase list
 
-| 阶段 | 做什么 | 状态 |
+| Phase | What it does | Status |
 |---|---|---|
-| P0 | 打地基：计数器、调用目录与生成器、CI 门；验证 Android 能拉起第二个进程 | ✅ 09-05 |
-| P0.5 | 抽出前后端共用的数据类型头，切断后端对前端头文件的依赖 | ✅ |
-| P1 | 后端改读一个"输入块"，并能逐 draw 核对它与前端真实状态一致 | ✅ |
-| P2 | 前端开始主动推送渲染状态；接口代价实测 +6–12%，决定继续 | ✅ 09-08 |
-| P3a | GLES 后端的 buffer、顶点数组改用句柄 | ✅ 09-08 |
-| P4a | GLES 后端的帧缓冲、纹理、sampler、program 改用句柄 | ✅ 09-08 |
-| P5 | 第一次拆成两线程：命令队列 + 后端线程（每条命令都等） | ✅ 09-16 |
-| P5b | 把剩余命令迁到队列上；真机首次以独立后端线程跑通目标游戏 | ✅ 09-16 |
-| P5c | 两线程之间不再偷偷共享内存，只经队列交换 | ✅ 09-17 |
-| P5d | 两线程版本的性能：游戏内 7–13 fps → 103–106 fps | ✅ 09-18 |
-| P5e | client 发完就走，不再每条命令等后端；重负载下与单线程持平 | ✅ 09-19 |
-| P5f | 所有状态都经队列传递，为拆进程扫清最后障碍；Vulkan 后端也能发完就走 | ✅ 09-20 |
-| P6 | 拆成两个进程；真机上两进程与两线程成本持平 | ✅ 09-22 |
-| P6.5 | 传输分控制面 / 数据面；电脑当 client、手机当 server 经 TCP 跑通 | 第一波 ✅，余项交 CI |
-| Ph | server 能安全地接受外来连接：令牌、限额、坏数据不致崩溃 | 必需项 ✅（随 P7） |
-| P3b / P4b | GLES 后端的深化与收尾 | 大部分 ✅，余项并行 |
-| P7 | Vulkan 后端完整迁移；真机画面检查 36/36 通过 | ✅ 09-23 |
-| **P12** | **server 自己开窗口上屏，client 不需要窗口** | ✅ 09-29：出口门 B（跨机 TCP）✅ 09-28、A（FCL + 杀 server）✅ 09-29；契约见 git 历史；G1 成立；余项进 [`DEBTS.md`](DEBTS.md) |
-| **P8** | ~~把剩余的仿真路径挪到正确的一侧，补齐协议~~ → **补齐 server 侧仿真缺口与 split 覆盖** | ✅ 09-30：重定界（原 10 项里 6 项前序已完成）；Espryt 生成 mip / 暂存副本与 GPU 写 / 驱动拒读、Magma wire 原生 indirect 与 dispatch；246 例登上 split 三臂（`split_coverage.py`）；Create 在 Adreno 上的丢拷贝修到 dev 与 feat；契约见 git 历史；余项进 [`DEBTS.md`](DEBTS.md) |
-| **P9** | **反向通道：回读、日志、重铸不再同步等待 client** | ✅ 09-29：PACK-PBO 回读 fire-and-forget（两后端）、日志分级转发、重铸无拉取（`OnLog` / `OnTexturePullRequest` 删，回调 9 → 7），F1 / F2；契约见 git 历史；G1 成立；事件量批处理无实测需求不做；余项进 [`DEBTS.md`](DEBTS.md) |
-| **P10** | **同步对象、查询与帧节奏** | ✅ 09-29：fence 轮询由 server 报告本地作答（`kEventFenceSignaled`、`MOBILEGL_IPC_POLL_ESCALATE`；主机 Magma·tcp −37%，Adreno 830 上两后端 0 次往返）；`SetSwapInterval` 转发、class C 清零；query / XFB / AsyncCompile 登记 split 各臂；credit 1/2/3 设备 loopback 在噪声内；契约见 git 历史；G1 成立；余项进 [`DEBTS.md`](DEBTS.md) |
-| **P11** | **同机大缓冲零拷贝共享** | ✅ 09-29：T0 零拷贝导入（两后端，默认开，自测不过或 Stream 上静默退回 T2）；同机外部 client 经 helper + 令牌 broker 走共享内存（B1）；连接按 `PairBind` nonce 配对（修订 5）；采纳档位在握手时定；契约见 git 历史；余项进 [`DEBTS.md`](DEBTS.md) |
-| **P13** | **删掉旧的"后端直接读前端"路径** | ✅ 10-07：单进程只走记录臂；pull / push 构建与 `PIPE_PUSH` / `LEGACY_MEMOS` 编译期开关、残余值块、后端前端对象臂删除；七个 OBJECT 模块与 server-only 真链接；link ratchet 172 → 27 具名债务；recorder 金标；G1 退役；FCL 真机两后端冒烟通过；性能轮（基线 `dev`）与余项进 [`DEBTS.md`](DEBTS.md) |
-| **P14** | **状态归属：同进程多 session / 多 context / share group**（统一 server 的前提，anland 内置渲染器不做按进程隔离） | 设计 ✅ [`design/11-state-ownership.md`](design/11-state-ownership.md)，实现待做 |
+| P0 | Lay the foundation: counters, call catalog and generators, CI gates; verify Android can launch a second process | ✅ 09-05 |
+| P0.5 | Extract the data type header shared by frontend and backend, cutting the backend's dependency on frontend headers | ✅ |
+| P1 | The backend reads an "input block" instead, and can verify per draw that it matches the frontend's real state | ✅ |
+| P2 | The frontend starts actively pushing render state; interface cost measured at +6–12%, decision to continue | ✅ 09-08 |
+| P3a | GLES backend's buffers and vertex arrays switch to handles | ✅ 09-08 |
+| P4a | GLES backend's framebuffers, textures, samplers, programs switch to handles | ✅ 09-08 |
+| P5 | First split into two threads: command queue + backend thread (every command waits) | ✅ 09-16 |
+| P5b | Move the remaining commands onto the queue; first on-device run of the target game with a separate backend thread | ✅ 09-16 |
+| P5c | The two threads no longer secretly share memory; they exchange only through the queue | ✅ 09-17 |
+| P5d | Two-thread performance: in-game 7–13 fps → 103–106 fps | ✅ 09-18 |
+| P5e | The client runs ahead and no longer waits for the backend on every command; matches single-threaded under heavy load | ✅ 09-19 |
+| P5f | All state passes through the queue, clearing the last obstacle to splitting into processes; the Vulkan backend also runs ahead | ✅ 09-20 |
+| P6 | Split into two processes; on device the two-process cost matches two-thread | ✅ 09-22 |
+| P6.5 | Transport splits into control plane / data plane; a PC as client and a phone as server run over TCP | first wave ✅, remainder to CI |
+| Ph | The server safely accepts external connections: token, quotas, bad data does not crash | required items ✅ (with P7) |
+| P3b / P4b | Deepening and wrap-up of the GLES backend | mostly ✅, remainder in parallel |
+| P7 | Full Vulkan backend migration; on-device frame check 36/36 passes | ✅ 09-23 |
+| **P12** | **The server opens its own window and presents on screen; the client needs no window** | ✅ 09-29: exit gate B (cross-machine TCP) ✅ 09-28, A (FCL + killing the server) ✅ 09-29; contract in git history; G1 holds; remainder into [`DEBTS.md`](DEBTS.md) |
+| **P8** | ~~Move the remaining emulation paths to the correct side and complete the protocol~~ → **Close the server-side emulation gaps and split coverage** | ✅ 09-30: re-scoped (6 of the original 10 items were already done as prerequisites); Espryt mip generation / staging copies with GPU writes / driver refusing reads, Magma wire-native indirect and dispatch; 246 cases brought onto the split three arms (`split_coverage.py`); the Create dropped-copy fix on Adreno landed in dev and feat; contract in git history; remainder into [`DEBTS.md`](DEBTS.md) |
+| **P9** | **Reverse channel: readback, logs, and re-mint no longer wait synchronously for the client** | ✅ 09-29: PACK-PBO readback fire-and-forget (both backends), graded log forwarding, re-mint without pull (`OnLog` / `OnTexturePullRequest` deleted, callbacks 9 → 7), F1 / F2; contract in git history; G1 holds; event-volume batching not done, no measured need; remainder into [`DEBTS.md`](DEBTS.md) |
+| **P10** | **Synchronization objects, queries, and frame pacing** | ✅ 09-29: fence polling answered locally by the server's own report (`kEventFenceSignaled`, `MOBILEGL_IPC_POLL_ESCALATE`; host Magma·tcp −37%, zero round trips for both backends on Adreno 830); `SetSwapInterval` forwarded, class C zeroed; query / XFB / AsyncCompile registered on each split arm; credit 1/2/3 device loopback within noise; contract in git history; G1 holds; remainder into [`DEBTS.md`](DEBTS.md) |
+| **P11** | **Same-machine large-buffer zero-copy sharing** | ✅ 09-29: T0 zero-copy import (both backends, on by default, silently falls back to T2 when the self-test fails or on Stream); same-machine external client goes through shared memory via helper + token broker (B1); connections paired by `PairBind` nonce (revision 5); adoption tier fixed at handshake; contract in git history; remainder into [`DEBTS.md`](DEBTS.md) |
+| **P13** | **Delete the old "backend reads the frontend directly" path** | ✅ 10-07: the monolith runs only on the record arm; the pull / push builds and the `PIPE_PUSH` / `LEGACY_MEMOS` compile-time switches, the residual value blocks, and the backend's frontend-object arm are deleted; seven OBJECT modules and server-only real linking; link ratchet 172 → 27 named debts; recorder golden; G1 retired; FCL on-device smoke passes on both backends; performance round (baseline `dev`) and remainder into [`DEBTS.md`](DEBTS.md) |
+| **P14** | **State ownership: multiple sessions / multiple contexts / share groups in one process** (prerequisite for a unified server; anland's built-in renderer does not isolate per process) | design ✅ [`design/11-state-ownership.md`](design/11-state-ownership.md), implementation pending |
 
-## 另见
+## See also
 
-- 工程纪律与验证门：[`guide/discipline.md`](guide/discipline.md)
-- 仍开放的债务：[`docs/Disaggregated/DEBTS.md`](DEBTS.md)；开放问题：[`docs/Disaggregated/OPEN-QUESTIONS.md`](OPEN-QUESTIONS.md)
+- Engineering discipline and verification gates: [`guide/discipline.md`](guide/discipline.md)
+- Still-open debts: [`docs/Disaggregated/DEBTS.md`](DEBTS.md); open questions: [`docs/Disaggregated/OPEN-QUESTIONS.md`](OPEN-QUESTIONS.md)

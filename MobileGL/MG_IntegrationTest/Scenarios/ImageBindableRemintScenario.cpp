@@ -202,7 +202,7 @@ void main() { o_color = texelFetch(u_tex, ivec2(gl_FragCoord.xy) % 4, 0); }
                 EXPECT_EQ(linked, GL_TRUE) << "the copy program did not link";
                 glUseProgram(program);
                 // P11 M: A BARRIER THE SPEC DOES NOT ASK FOR, pinned for the reason
-                // TextureRemintPullScenario's twin gives (ID-P9-11, DEBTS "待归因"): on llvmpipe the
+                // TextureRemintPullScenario's twin gives (ID-P9-11, DEBTS "to be attributed"): on llvmpipe the
                 // kept-allocation case (GpuClearOverAnImmutableUploadSurvives - no re-mint to
                 // serialize anything) read the pre-clear upload once on the push-monolith arm under
                 // load, the same shape P9 measured 3/30 on the split arm. The cases ask what the
@@ -502,7 +502,7 @@ void main() { o_color = texelFetch(u_tex, ivec2(gl_FragCoord.xy) % 4, 0); }
             ExpectImage(ImageCopy(t, 0, GL_RG8, "rg8"), kEdge, Solid(kEdge, 0x33, 0x99, 0, 255), 2);
         }
 
-        // Control: a signed-normalized level (not colour-renderable on every ES driver, so its
+        // Control: a signed-normalized level (not color-renderable on every ES driver, so its
         // readback may be refused and the shadow used instead), uploaded only.
         TEST_F(ImageBindableRemintScenario, SnormUploadSurvives) {
             if (!Ready()) return;

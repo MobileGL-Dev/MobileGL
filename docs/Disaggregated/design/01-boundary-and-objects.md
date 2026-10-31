@@ -1,58 +1,58 @@
-# 边界与对象模型（原 ARCHITECTURE §1–§2）
+# Boundary and Object Model (formerly ARCHITECTURE §1–§2)
 
-> 设计细节。设计要点与全部章节的索引见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)。章节编号沿用原 `ARCHITECTURE.md`，代码注释里的 `ARCHITECTURE.md §N` 按编号在这里找到。
+> Design details. The design highlights and an index of all sections are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Section numbers follow the original `ARCHITECTURE.md`; `ARCHITECTURE.md §N` in code comments resolves by number here.
 
-## 1. 边界
+## 1. Boundary
 
-### 1.1 一句话
+### 1.1 In one sentence
 
-`MG_Backend` 本来就是一台贴着目标 API 的状态机（Espryt = DirectGLES，Magma = DirectVulkan），缺的是一份"我被告知了什么"的显式声明。MGPipe 就是这份声明：前端在每条 verb 之前把变化**推**过去，后端不再拉 `MG_State::pGLContext`。接口从两个后端自己维护的关键结构反推（`SetupDrawSnapshot`、`DrawTextureSyncKeys`、`ResolvedVertexBindings`、`g_syncedRenderStateParameters`、`BufferBackendOps` …）；gallium 是词汇的目的地，不是推导前提。
+`MG_Backend` was already a state machine glued to the target API (Espryt = DirectGLES, Magma = DirectVulkan); what it lacked was an explicit declaration of "what I was told". MGPipe is that declaration: the frontend **pushes** changes across before every verb, and the backend no longer pulls `MG_State::pGLContext`. The interface is derived backward from the key structures the two backends maintain themselves (`SetupDrawSnapshot`, `DrawTextureSyncKeys`, `ResolvedVertexBindings`, `g_syncedRenderStateParameters`, `BufferBackendOps` …); gallium is where the vocabulary is headed, not a premise of the derivation.
 
-### 1.2 两张函数指针表
+### 1.2 Two function pointer tables
 
-`MGPipeScreen`（share-group 作用域：caps、resource、persistent map、fence）与 `MGPipeContext`（其余全部），由 `PipeCalls.def` 生成。
+`MGPipeScreen` (share-group scope: caps, resource, persistent map, fence) and `MGPipeContext` (everything else), generated from `PipeCalls.def`.
 
-- 函数指针 struct 而非虚基类：null 项已表示"未实现，前端回退"，`MG_Test` 整表替换即可 mock。
-- 两张表从第一天分开，事后拆会给记录重新编号；v1 只有一个 screen、一个 context、一条 flow。
-- EGL 生命周期与 caps 面留在 `pActiveBackendObject` 的虚函数上（罕见路径，走控制面）。
+- A struct of function pointers instead of a virtual base class: a null entry already means "not implemented, the frontend falls back", and `MG_Test` can mock the whole thing by replacing the table.
+- The two tables are separate from day one; splitting them later would renumber the records; v1 has only one screen, one context and one flow.
+- EGL lifecycle and the caps side stay on the virtual functions of `pActiveBackendObject` (a rare path, on the control plane).
 
-### 1.3 三种形态，一份后端
+### 1.3 Three forms, one backend
 
-| 形态 | 表里装的是什么 | 用途 |
+| Form | What the tables hold | Purpose |
 |---|---|---|
-| `monolith`（默认） | 后端自己的函数，回调直调 `MG_State` | 出货 |
-| `inproc` | 发射器 → 同进程第二个线程上的 applier | CI 主验收；也就是 monolith 的**渲染线程** |
-| `spawn` | 发射器 → 数据面 → 另一个进程的 applier → 同一批后端函数 | 两进程形态；控制面可以是 `fork` / `unix:` / `tcp://`（§11.9），server 可在另一台机器上 |
+| `monolith` (default) | the backend's own functions; callbacks call `MG_State` directly | ship |
+| `inproc` | emitter → applier on a second thread in the same process | CI main acceptance; that is, the monolith **render thread** |
+| `spawn` | emitter → data plane → applier in another process → the same set of backend functions | two-process form; the control plane can be `fork` / `unix:` / `tcp://` (§11.9), and the server can be on another machine |
 
-唯一 hook 点是 `MG_Backend::Init()` 里一个 `#if MOBILEGL_BUILD_DISAGGREGATED` 分支：`MG_Config::Transport != Monolith` 时装 `MG_Remote::BackendObject_Remote`。`MG_Impl` 的边界调用点零 `#ifdef`。
+The only hook point is one `#if MOBILEGL_BUILD_DISAGGREGATED` branch inside `MG_Backend::Init()`: when `MG_Config::Transport != Monolith` it installs `MG_Remote::BackendObject_Remote`. Zero `#ifdef`s at `MG_Impl`'s boundary call sites.
 
-## 2. 对象模型
+## 2. Object model
 
-### 2.1 句柄 = `{slot, gen}`（`MG_Pipe/MGPipeHandles.h`）
+### 2.1 Handle = `{slot, gen}` (`MG_Pipe/MGPipeHandles.h`)
 
-- 8 字节 POD；**client 铸造，server 永不返回句柄** → 整份目录零创建 round trip（对 gallium 的偏离 D1）。
-- slot 按 kind 稠密分配（free list + 高水位），server 对象表是数组；`gen` 只在 slot 复用时 ++。
-- kind：`Buffer, Texture, Renderbuffer, Framebuffer, Xfb, RenderStateCso, VertexElementsCso, SamplerCso, SamplerViewCso, ShaderCso, Fence, Query, Context`。保留：`{0,0}` = null；`Framebuffer {0,1}` = 默认帧缓冲；`ShaderCso` 高段给 program pipeline 合成体。
-- GL name 只作诊断（`GlNameForDiag`），永不做身份、memo 键或 content hash。
+- An 8-byte POD; **the client mints it, the server never returns a handle** → the whole catalog has zero creation round trips (deviation D1 from gallium).
+- Slots are allocated densely per kind (free list + high-water mark), the server's object table is an array; `gen` is incremented only when a slot is reused.
+- kind: `Buffer, Texture, Renderbuffer, Framebuffer, Xfb, RenderStateCso, VertexElementsCso, SamplerCso, SamplerViewCso, ShaderCso, Fence, Query, Context`. Reserved: `{0,0}` = null; `Framebuffer {0,1}` = the default framebuffer; the high segment of `ShaderCso` is for program pipeline composites.
+- GL names are for diagnostics only (`GlNameForDiag`), never for identity, memo keys or content hashes.
 
-### 2.2 两种世代，严格分开
+### 2.2 Two kinds of generation, strictly separated
 
-| | 拥有者 | 回答 | 过线 |
+| | Owner | Answers | Crosses the wire |
 |---|---|---|---|
-| `MGPipeHandle::Gen` | client | "还是同一个 GL 对象吗？" | 是 |
-| `MGGen`（后端纪元，如 `g_bufferMutationEpoch`） | server | "我自己是否重铸了驱动对象？" | **永不**（只以纹理拉取请求的形式出现，§8.4） |
+| `MGPipeHandle::Gen` | client | "Is it still the same GL object?" | yes |
+| `MGGen` (backend epoch, e.g. `g_bufferMutationEpoch`) | server | "Did I re-mint the driver object myself?" | **never** (it appears only in the form of a texture pull request, §8.4) |
 
-client 的回绕 `Uint16` 版本计数器永远不是新鲜度的唯一证明：过线时要么加宽，要么与 `{slot, gen}` 同行。
+The client's wrapping `Uint16` version counter is never the sole proof of freshness: when it crosses the wire, either widen it or send it alongside `{slot, gen}`.
 
-### 2.3 CSO 与可变对象
+### 2.3 CSO and mutable objects
 
-- CSO（render state、vertex elements、sampler、sampler view、shader）在 **client 侧内容寻址**（Mesa `cso_cache` 先例），LRU 淘汰时发 `delete_*`；render-state 容量 64（P13 重调）、sampler state 256。
-- Buffer / Texture / Renderbuffer 走 create / respecify / subdata / destroy；Framebuffer / Xfb 是 per-context 身份 + `set_*` payload。
-- 两条偏离：**D-G1** Espryt 的 vertex-elements 按 VAO 身份寻址（twin 持驱动 VAO 名，不能共享）；**D-F2** Espryt 的 sampler view 按纹理身份寻址，sampler state 内容寻址且带引用计数（被 `BuiltinSampler` 指着的项不许被 LRU 挤掉）。
+- CSO (render state, vertex elements, sampler, sampler view, shader) is **content-addressed on the client side** (Mesa `cso_cache` precedent), and sends `delete_*` on LRU eviction; render-state capacity 64 (retuned in P13), sampler state 256.
+- Buffer / Texture / Renderbuffer go through create / respecify / subdata / destroy; Framebuffer / Xfb are per-context identity + `set_*` payload.
+- Two deviations: **D-G1** Espryt's vertex elements are addressed by VAO identity (the twin holds the driver VAO name and cannot be shared); **D-F2** Espryt's sampler view is addressed by texture identity, sampler state is content-addressed and reference-counted (an entry pointed to by a `BuiltinSampler` must not be evicted by the LRU).
 
-#### 2.3.1 sampler state 缓存：引用计数与值生命周期
+#### 2.3.1 sampler state cache: reference counting and value lifetime
 
-sampler state 在 client 侧按值寻址（`MGPipeSamplerCsoCache`，容量 256）：哈希、探测、再 memcmp 确认；只凭 64 位哈希相等会把两种状态并进一个 CSO，造成没有门看得见的错误过滤。
-- 活句柄躲开 LRU 靠引用计数而不是容量：已发布的 `MGPTextureParams` 在纹理参数不动时一直指着它的 `BuiltinSampler`，applier 不解析这个句柄，而淘汰不算参数变化，既不会重发也没人拒绝。所以每次 `Acquire` 取一个引用、`Release` 还一个；LRU 只考虑引用为 0 的项；全被钉住时超容量铸造并计入 `OverCapacityMints`（多一个槽费内存，句柄被抽走费正确性）。
-- 持有引用的是纹理的内建 sampler（纹理死亡或参数变化重取时释放）和 `bind_sampler_states` 当前绑定的每个 CSO；凡在返回后还会指名该句柄的调用方都必须持有。容量大于 `kMGPipeMaxTextureUnits` 只是尺寸界：装不下一整轮发射的缓存会每轮都超容量铸造。
-- 槽不带 lifetime id：CSO 属于值而不属于前端对象（别的 `SamplerObject` 可能持有同值），`~SamplerObject` 不释放任何槽，唯一死亡路径是 client 侧的 LRU 淘汰。因此来自 `~SamplerObject` 的 `NotifyStateObjectDestroyed(SamplerCso, lifetimeId)` 背后永远没有句柄；后端不得按 `SamplerObject` 的 lifetime id 键控 sampler twin，twin 的生命只是 `create_sampler_state` 到 LRU 发出的 `delete_sampler_state`。
+sampler state is value-addressed on the client side (`MGPipeSamplerCsoCache`, capacity 256): hash, probe, then confirm with memcmp; trusting a 64-bit hash match alone would merge two states into one CSO, causing incorrect filtering that no gate can see.
+- Live handles avoid the LRU by reference count rather than by capacity: a published `MGPTextureParams` keeps pointing at its `BuiltinSampler` while the texture parameters do not change, the applier does not resolve this handle, and eviction does not count as a parameter change, so the handle is neither re-sent nor rejected. Therefore every `Acquire` takes a reference and `Release` returns one; the LRU considers only entries with zero references; when everything is pinned and capacity is exceeded, mint beyond capacity and count it in `OverCapacityMints` (an extra slot costs memory, a stolen handle costs correctness).
+- The holders are the texture's built-in sampler (released when the texture dies or when parameters change and it re-acquires) and every CSO currently bound by `bind_sampler_states`; any caller that will still name the handle after returning must hold one. Capacity greater than `kMGPipeMaxTextureUnits` is only a size bound: a cache that cannot hold one full round of emission will mint beyond capacity every round.
+- Slots carry no lifetime id: a CSO belongs to a value, not to a frontend object (another `SamplerObject` may hold the same value), `~SamplerObject` frees no slot, and the only death path is client-side LRU eviction. So a `NotifyStateObjectDestroyed(SamplerCso, lifetimeId)` coming from `~SamplerObject` never has a handle behind it; the backend must not key sampler twins by a `SamplerObject`'s lifetime id; a twin's life is only from `create_sampler_state` to the `delete_sampler_state` issued by the LRU.

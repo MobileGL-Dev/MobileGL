@@ -106,7 +106,7 @@ namespace MobileGL::MG_Util::Async {
         catch (const std::exception& e) {
             // Asio propagates an exception escaping a handler out of thread_pool::run(),
             // which means std::terminate for the whole process. Every job boundary contains
-            // it and reports the job as Cancelled; the joining GL thread then sees a node
+            // it and reports the job as Canceled; the joining GL thread then sees a node
             // that produced no result, which is the same shape as an abandoned node.
             diagnostics.logLines.push_back({MOBILEGL_LOG_LEVEL_DEBUG, std::format("Job body threw: {}", e.what())});
             TryTransition(JobState::Running, JobState::Cancelled);

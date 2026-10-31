@@ -33,11 +33,11 @@
 //    MG_Impl - it is reached only through eglSwapBuffers -> BackendObject::SwapEGLBuffers - so a
 //    scenario that never swaps never touches it, and B would then exercise a STRICT SUBSET of
 //    what ClearThenReadPixelsScenario already covers. BRIEF-P5 4.B lists Present(67) among the
-//    catalogue rows this target needs, so the frame boundary is here on purpose: B is A's slot
+//    catalog rows this target needs, so the frame boundary is here on purpose: B is A's slot
 //    set plus DrawArrays, not minus Present.
 //
 // 4. THE SECOND CASE REDRAWS ACROSS A FRAME BOUNDARY WITHOUT REBUILDING ANYTHING. The VBO, the
-//    program and the VAO outlive the swap and only the clear colour changes. Under split that
+//    program and the VAO outlive the swap and only the clear color changes. Under split that
 //    is the difference between "the client re-declares every object every frame" (which would
 //    pass a single-frame test and be the whole cost of the design) and a steady state; under
 //    monolith it is the backend's per-frame retire/aging path, which is exactly where P3a's
@@ -91,7 +91,7 @@ void main() { oColor = vec4(vColor, 1.0); }
         // A single triangle with its base at y = -0.8 and its apex at y = +0.8, so the
         // interior box the cases assert on (the middle 10% of the width, a fifth of the way up)
         // is far from every edge and the corner box they assert the CLEAR on is far outside it.
-        // Flat green: one colour over the whole primitive means an offender pixel is a real
+        // Flat green: one color over the whole primitive means an offender pixel is a real
         // disagreement rather than an interpolation rounding difference between two drivers.
         constexpr Vertex kTriangle[3] = {
             {-0.8f, -0.8f, 0.0f, 1.0f, 0.0f},
@@ -215,7 +215,7 @@ void main() { oColor = vec4(vColor, 1.0); }
         Gl().EndFrame();
     }
 
-    // Steady state: the same VBO, program and VAO across a swap, with only the clear colour
+    // Steady state: the same VBO, program and VAO across a swap, with only the clear color
     // changing. Nothing is re-created, so a client that re-declared its objects every frame and
     // a backend that lost them at the frame boundary both show up here and in no single-frame
     // case.

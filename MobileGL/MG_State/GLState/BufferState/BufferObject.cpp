@@ -118,7 +118,7 @@ namespace MobileGL::MG_State::GLState {
             const std::lock_guard<std::recursive_mutex> lock(g_persistentReadMapsMutex);
             g_livePersistentReadMaps.erase(m_lifetimeId);
         }
-        // P3a D-L: the buffer's death crosses as resource_destroy, which is the catalogue
+        // P3a D-L: the buffer's death crosses as resource_destroy, which is the catalog
         // call for it - no seventh NotifyStateObjectDestroyed raiser is added, because that
         // header exists for kinds that have no such call. The emit-then-free ORDER is fixed
         // inside the helper and is not negotiable.
@@ -322,7 +322,7 @@ namespace MobileGL::MG_State::GLState {
                     // skipped for a resident store; residency now also comes from a
                     // shader storage binding (EnsureGpuResidentStorage at draw time) and
                     // from large-store adoption (TryAdoptLargeStorage), both of which an
-                    // application then re-initialises through an ordinary map/write/unmap.
+                    // application then re-initializes through an ordinary map/write/unmap.
                     // Skipping the copy-back dropped every one of those writes. Land the
                     // staged bytes through the same route glBufferSubData takes into an
                     // adopted store - the backend's flush op is for stores it keeps a

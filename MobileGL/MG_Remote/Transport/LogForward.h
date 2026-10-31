@@ -88,7 +88,7 @@ namespace MobileGL::MG_Remote::Transport {
         // One line, `level` a MOBILEGL_LOG_LEVEL_* value. Never blocks on the peer below FATAL.
         void Offer(int level, const char* line);
         // A whole CtrlEnvelope frame, written after every line offered before it and never dropped
-        // or paced (the LogFlush acknowledgement).
+        // or paced (the LogFlush acknowledgment).
         void OfferControlFrame(std::vector<std::uint8_t> frame);
         // Stops taking lines, drains within closeDrainMs, stops the sender. Idempotent; returns the
         // final counters.

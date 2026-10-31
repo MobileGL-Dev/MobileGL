@@ -90,7 +90,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         // Whether `name` currently names an object of `identifier`'s type. GL 4.6 core 20.5 makes
-        // labelling something that does not exist INVALID_VALUE, and every type KHR_debug lists
+        // labeling something that does not exist INVALID_VALUE, and every type KHR_debug lists
         // has a frontend name check - so this is answered exactly rather than waved through.
         // GL_DISPLAY_LIST is deliberately absent: it exists only in the compatibility profile,
         // which MobileGL does not expose, so it falls to the INVALID_ENUM path below.

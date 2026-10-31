@@ -571,7 +571,7 @@ namespace MobileGL::MG_Pipe {
     // A draw or dispatch wrote these ranges. ARCHITECTURE.md 7.1 calls this a NARROWING
     // channel - the client builds a conservative pending set at its own emission points and
     // the callback only ever removes from it - so P3a's implementation marks exactly what
-    // the three Espryt MarkGpuWritten sites mark today and the observable behaviour is
+    // the three Espryt MarkGpuWritten sites mark today and the observable behavior is
     // unchanged. The narrowing itself is P8/P9's.
     inline void MGPipeClientOnGpuWritten(MGPipeHandle res, Uint rangeCount, const MGPRange* ranges) {
         // THE SHAPE IS A CONTRACT POINT, not a formality: the announcement is ONE range

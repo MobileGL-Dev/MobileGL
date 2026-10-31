@@ -26,7 +26,7 @@ namespace MobileGL {
             // This pass demotes the ViewportIndex OUTPUT to a plain Private global named
             // mg_ViewportIndex, so the decompiled ESSL declares an ordinary global the shader
             // still writes and nothing reads. The program compiles and rendering degrades to
-            // viewport 0 - which is the single-viewport behaviour MG_IntegrationTest's
+            // viewport 0 - which is the single-viewport behavior MG_IntegrationTest's
             // ViewportArrayScenario already documents for this backend - instead of the whole
             // program becoming a no-op. Only meant for the DirectGLES transpile path; the Vulkan
             // backend keeps the native builtin and routes it for real.

@@ -377,7 +377,7 @@ TEST(FramebufferEmit, OneObjectBoundToBothTargetsEmitsOneRecordWithTargetBoth) {
 // array, at the verb, from the framebuffer state it then holds - precisely so a program can
 // relink inside the same draw. A hash that did not cover the array would let a suppressed
 // set_framebuffer_state mean "the draw buffers did not move" when they had, and the shader
-// would be specialised for the previous output shape.
+// would be specialized for the previous output shape.
 TEST(FramebufferEmit, ADrawBufferChangeAloneStillMovesTheContentHash) {
     FramebufferScope scope;
     const auto color0 = MakeColorTexture(6, 32);
@@ -472,21 +472,21 @@ TEST(FramebufferEmit, EveryAttachmentFieldSurvivesTheSurfaceConversion) {
         const MGPSurface& surface = record.Color[i];
         const MGPipeHandle expected =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, attachment.GetTexture()->GetLifetimeId());
-        EXPECT_TRUE(surface.Res == expected) << "MGPSurface::Res at colour point " << i;
-        EXPECT_EQ(surface.Kind, kMGPipeSurfaceKindTexture) << "MGPSurface::Kind at colour point " << i;
+        EXPECT_TRUE(surface.Res == expected) << "MGPSurface::Res at color point " << i;
+        EXPECT_EQ(surface.Kind, kMGPipeSurfaceKindTexture) << "MGPSurface::Kind at color point " << i;
         EXPECT_EQ(surface.InternalFormat, static_cast<Uint32>(attachment.GetTexture()->GetFormat()))
-            << "MGPSurface::InternalFormat at colour point " << i;
+            << "MGPSurface::InternalFormat at color point " << i;
         EXPECT_EQ(surface.Level, static_cast<Uint16>(attachment.GetTextureLevel()))
-            << "MGPSurface::Level at colour point " << i;
+            << "MGPSurface::Level at color point " << i;
         EXPECT_EQ(surface.Layer, static_cast<Uint32>(attachment.GetTextureLayer()))
-            << "MGPSurface::Layer at colour point " << i;
-        EXPECT_EQ(surface.Layered, attachment.IsLayered() ? 1 : 0) << "MGPSurface::Layered at colour point " << i;
+            << "MGPSurface::Layer at color point " << i;
+        EXPECT_EQ(surface.Layered, attachment.IsLayered() ? 1 : 0) << "MGPSurface::Layered at color point " << i;
         EXPECT_EQ(surface.UploadTarget, static_cast<Uint16>(TextureUploadTarget::Texture2D))
-            << "MGPSurface::UploadTarget at colour point " << i;
+            << "MGPSurface::UploadTarget at color point " << i;
         // ID-12 DV-5: three of the four cross-object masks reduce to (format, TEXTURE TARGET)
         // and no TextureUploadTarget -> TextureTarget inverse exists anywhere in the tree.
         EXPECT_EQ(surface.TextureTarget, static_cast<Uint16>(attachment.GetTexture()->GetTarget()))
-            << "MGPSurface::TextureTarget at colour point " << i;
+            << "MGPSurface::TextureTarget at color point " << i;
     }
 
     EXPECT_EQ(record.Depth.Kind, kMGPipeSurfaceKindRenderbuffer) << "MGPSurface::Kind on the depth point";
@@ -552,7 +552,7 @@ TEST(FramebufferEmit, AnAttachmentPointAboveTheWireWidthIsRefusedNotTruncated) {
 // THE SERVER TWIN of AnAttachmentPointAboveTheWireWidthIsRefusedNotTruncated above.
 //
 // That case pins the CLIENT half: a framebuffer holding a point at or above the wire width is
-// refused rather than truncated. P5e turns that refusal into a licence the server SPENDS - the
+// refused rather than truncated. P5e turns that refusal into a license the server SPENDS - the
 // by-handle attachment walk stopped iterating the frontend's 41 points and now walks
 // Color[0..7] + Depth + Stencil and nothing else, on the argument that the record's eleven
 // surfaces ARE the point set. So the statement the server relies on needs a case of its own,
@@ -566,7 +566,7 @@ TEST(FramebufferEmit, AnAttachmentPointAboveTheWireWidthIsRefusedNotTruncated) {
 //
 // Half 2 is the one that would go quiet on its own. A truncating emitter would still refuse
 // nothing, publish a record, and leave the server's walk perfectly self-consistent over eight
-// colour points while one attachment silently stopped existing.
+// color points while one attachment silently stopped existing.
 TEST(FramebufferEmit, TheRecordsElevenSurfacesAreTheWholePointSetTheServerReads) {
     FramebufferScope scope;
     const auto fbo = MakeShared<FramebufferObject>(21);
@@ -589,7 +589,7 @@ TEST(FramebufferEmit, TheRecordsElevenSurfacesAreTheWholePointSetTheServerReads)
     Framebuffers().EmitFramebufferState(Ctx());
     ASSERT_EQ(Framebuffers().RefusedCount(), 0u) << "a full but legal framebuffer was refused";
 
-    // The wire's colour width and the server's walk width are ONE number.
+    // The wire's color width and the server's walk width are ONE number.
     static_assert(std::size(MGPFramebufferState{}.Color) == kMGPipeMaxColorAttachments,
                   "the server walks Color[0..kMGPipeMaxColorAttachments); the array must be that wide");
 
@@ -597,9 +597,9 @@ TEST(FramebufferEmit, TheRecordsElevenSurfacesAreTheWholePointSetTheServerReads)
     ASSERT_NE(applied, nullptr);
     for (Uint i = 0; i < kMGPipeMaxColorAttachments; ++i) {
         const MGPipeHandle expected = MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, colors[i]->GetLifetimeId());
-        EXPECT_FALSE(MGPipeHandleIsNull(expected)) << "colour point " << i << " minted no handle";
-        EXPECT_TRUE(applied->Color[i].Res == expected) << "colour point " << i << " did not reach the server's record";
-        EXPECT_EQ(applied->Color[i].Kind, kMGPipeSurfaceKindTexture) << "at colour point " << i;
+        EXPECT_FALSE(MGPipeHandleIsNull(expected)) << "color point " << i << " minted no handle";
+        EXPECT_TRUE(applied->Color[i].Res == expected) << "color point " << i << " did not reach the server's record";
+        EXPECT_EQ(applied->Color[i].Kind, kMGPipeSurfaceKindTexture) << "at color point " << i;
     }
     EXPECT_EQ(applied->Depth.Kind, kMGPipeSurfaceKindRenderbuffer) << "the Depth point";
     EXPECT_EQ(applied->Stencil.Kind, kMGPipeSurfaceKindRenderbuffer) << "the Stencil point";
@@ -634,7 +634,7 @@ TEST(FramebufferEmit, TheRecordsElevenSurfacesAreTheWholePointSetTheServerReads)
 // (ClientSession's surface-changed consumer -> TextureObjectBase::PipePublishLevelDescriptor ->
 // MGP_NOTE_AGGREGATE(FramebufferAttachment) -> the framebuffer shutter) and told fb to pin it.
 //
-// THE CASE DRIVES THE CONSUMER'S OWN CALL, not a synthetic bump: AllocateStorage on the colour
+// THE CASE DRIVES THE CONSUMER'S OWN CALL, not a synthetic bump: AllocateStorage on the color
 // attachment at the new extent is literally what ClientSession does when the swapchain
 // publishes a new size. No rebind, no re-attach, no draw-buffer edit - which is exactly the
 // shape that would have been suppressed.
@@ -696,8 +696,8 @@ TEST(FramebufferEmit, TheDefaultFramebuffersRecordNamesNoSurfaceAShareGroupWould
     ASSERT_NE(applied, nullptr) << "the default framebuffer's record did not reach the applier";
     EXPECT_EQ(applied->IsDefault, 1) << "MGPFramebufferState::IsDefault";
     for (Uint i = 0; i < kMGPipeMaxColorAttachments; ++i) {
-        EXPECT_EQ(applied->Color[i].Kind, kMGPipeSurfaceKindNone) << "MGPSurface::Kind at colour point " << i;
-        EXPECT_TRUE(MGPipeHandleIsNull(applied->Color[i].Res)) << "MGPSurface::Res at colour point " << i;
+        EXPECT_EQ(applied->Color[i].Kind, kMGPipeSurfaceKindNone) << "MGPSurface::Kind at color point " << i;
+        EXPECT_TRUE(MGPipeHandleIsNull(applied->Color[i].Res)) << "MGPSurface::Res at color point " << i;
     }
     EXPECT_EQ(applied->Depth.Kind, kMGPipeSurfaceKindNone) << "MGPSurface::Kind on the depth point";
     EXPECT_EQ(applied->Stencil.Kind, kMGPipeSurfaceKindNone) << "MGPSurface::Kind on the stencil point";
@@ -836,7 +836,7 @@ TEST(FramebufferEmit, ADrawBufferTokenAboveTheWireWidthIsRefusedNotTruncated) {
                                                                  static_cast<Int>(kMGPipeMaxColorAttachments) + 2));
     Framebuffers().EmitFramebufferState(Ctx());
     EXPECT_EQ(Framebuffers().EmissionCount(), 1u)
-        << "a draw-buffer token naming a colour point at or above the wire width was truncated "
+        << "a draw-buffer token naming a color point at or above the wire width was truncated "
            "into a record instead of refused";
     EXPECT_GE(Framebuffers().RefusedCount(), 1u) << "the refusal was not counted";
 }
@@ -882,7 +882,7 @@ TEST(FramebufferEmit, EveryNonTexturePointCarriesTheUnknownSentinelsRatherThanZe
     Framebuffers().EmitFramebufferState(Ctx());
     const MGPFramebufferState& record = Framebuffers().LastDraw();
 
-    // The RENDERBUFFER point, the EMPTY colour points and the STENCIL point that names nothing.
+    // The RENDERBUFFER point, the EMPTY color points and the STENCIL point that names nothing.
     for (const MGPSurface* surface : {&record.Depth, &record.Stencil, &record.Color[1]}) {
         EXPECT_NE(surface->Kind, kMGPipeSurfaceKindTexture);
         EXPECT_EQ(surface->UploadTarget, static_cast<Uint16>(TextureUploadTarget::Unknown))
@@ -1001,7 +1001,7 @@ TEST(FramebufferEmit, ATargetOutsideTheThreeBindingsIsRefusedNamingTheRecord) {
 }
 
 // The draw-buffer array is an INDEX into this record's own Color[], and -1 is NONE. An entry
-// outside that range would have the server read a colour attachment the record does not carry,
+// outside that range would have the server read a color attachment the record does not carry,
 // which is the truncation the wire width's cap refusal exists to prevent upstream.
 TEST(FramebufferEmit, ADrawBufferEntryOutsideTheRecordsOwnArrayIsRefusedRatherThanRead) {
     ApplierGuard guard;
@@ -1018,13 +1018,13 @@ TEST(FramebufferEmit, ADrawBufferEntryOutsideTheRecordsOwnArrayIsRefusedRatherTh
     MGPFramebufferState past = FramebufferRecord(MGPipeHandle{8, 1}, MGPipeFramebufferTarget::Draw, 111);
     past.DrawBuffers[3] = static_cast<Int8>(kMGPipeMaxColorAttachments);
     ExpectRefusedNaming("set_framebuffer_state {slot=8, gen=1, target=0}: a draw-buffer entry names a "
-                        "colour attachment outside the record's own array",
+                        "color attachment outside the record's own array",
                         [&past]() { MGPipeApplySetFramebufferState(past); });
 
     MGPFramebufferState negative = FramebufferRecord(MGPipeHandle{8, 1}, MGPipeFramebufferTarget::Draw, 222);
     negative.DrawBuffers[0] = -2;
     ExpectRefusedNaming("set_framebuffer_state {slot=8, gen=1, target=0}: a draw-buffer entry names a "
-                        "colour attachment outside the record's own array",
+                        "color attachment outside the record's own array",
                         [&negative]() { MGPipeApplySetFramebufferState(negative); });
 
     ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
@@ -1179,7 +1179,7 @@ TEST(FramebufferEmit, ANamedRecordDescribesTheFramebufferItNamesWithoutMovingEit
 // never destroyed on the wire, so its slot is simply overwritten by its successor - and until
 // that successor describes itself, a handle naming the DEAD one must be refused rather than
 // answered with the predecessor's attachments. That answer would be a blit or a clear into
-// somebody else's colour buffer. It is LOUD (counted, and logged once) because the only way to
+// somebody else's color buffer. It is LOUD (counted, and logged once) because the only way to
 // reach it is an emitter defect, and it is counted APART from RefusedObjectCalls because this is
 // a read by the server's own sync path and not a call the applier refused.
 TEST(FramebufferEmit, AFramebufferHandleWhoseGenerationHasMovedOnIsRefusedRatherThanAnswered) {

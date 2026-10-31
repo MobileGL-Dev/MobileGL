@@ -31,7 +31,7 @@ namespace MobileGL::MG_State::GLState {
     // page-aligned shadow (page-granular in SIZE as well, in a split build - see
     // ShadowAllocationBytesFor) owns every byte of every page it occupies, which is what
     // lets the persistent-map mprotect tracker write-protect the mapped range's containing
-    // pages without ever covering a neighbour allocation's byte (a foreign thread with
+    // pages without ever covering a neighbor allocation's byte (a foreign thread with
     // signals blocked faulting on a shared page is a process kill).
     // GL_MIN_MAP_BUFFER_ALIGNMENT keeps answering 64 - over-aligning an allocation is
     // invisible to the application, and a glMapBufferRange base that is page-aligned is

@@ -189,7 +189,7 @@ void main() {
                     const float expected = static_cast<float>(point) + static_cast<float>(component);
                     const float got = record[component];
                     // isfinite first: every ordered comparison against a NaN is false, so a
-                    // pair of one-sided range tests REPORTS SUCCESS for uninitialised storage
+                    // pair of one-sided range tests REPORTS SUCCESS for uninitialized storage
                     // that happens to read as NaN.
                     if (!std::isfinite(got) || std::fabs(got - expected) > 0.01f) {
                         return ::testing::AssertionFailure()

@@ -21,8 +21,8 @@
 // decodes each record and calls the same ones. bind_render_state and set_dynamic_state scatter
 // their chunks straight into PipeInputs::m_renderState, the block Espryt's SyncRenderState
 // reads, so the verify comparator checks the assembled block against live state at every read.
-// PipeInputs and the program artefact types are only forward-declared (MG_Pipe sits below
-// MG_Backend): entry points take artefacts by pointer and a record holds its archive by
+// PipeInputs and the program artifact types are only forward-declared (MG_Pipe sits below
+// MG_Backend): entry points take artifacts by pointer and a record holds its archive by
 // SharedPtr, whose deleter is captured where it is built; users include ProgramArtifactsCodec.h.
 namespace MobileGL::MG_State::GLState {
     struct LinkArtifacts;
@@ -74,7 +74,7 @@ namespace MobileGL::MG_Pipe {
         void* (*MapPersistent)(MGPipeHandle res, Uint64 size, const void* seedBytes);
         void (*UnmapPersistent)(MGPipeHandle res);
         // P5c (tx): the TEXTURE half of the resource family, appended so every positional
-        // initialiser of the nine P3a members keeps its meaning. TextureSubData is called
+        // initializer of the nine P3a members keeps its meaning. TextureSubData is called
         // from ApplyTextureUpload AFTER the gate, the accumulation and the serial, while
         // `bytes` still names the staged run (SEG_STAGE retires when the record does, so an
         // adoption anywhere later would read dead bytes - rule C); the backend copies the
@@ -330,7 +330,7 @@ namespace MobileGL::MG_Pipe {
     };
 
     // create/bind/delete_shader_state, plus set_global_constants' per-program half. The record
-    // stores the descriptor and adopts the link's artefacts as Archive (see
+    // stores the descriptor and adopts the link's artifacts as Archive (see
     // MGPipeApplyCreateShaderState). GlobalConstants is bounded by Desc.GlobalUboSize and written
     // at most once per program per frame, keyed by (ShaderCso, Version).
     // MGPipeProgramStorageOverride is one entry of set_program_bindings' storage-override tail as
@@ -353,12 +353,12 @@ namespace MobileGL::MG_Pipe {
         Uint64 Serial = 0;
 
         // ---- The program archive the record owns -----------------------------------------
-        // A snapshot of this link's artefacts, so every reflection read by the program twin is
-        // of memory the record owns: ProgramObject::Link() replaces the frontend's artefacts in
+        // A snapshot of this link's artifacts, so every reflection read by the program twin is
+        // of memory the record owns: ProgramObject::Link() replaces the frontend's artifacts in
         // place, and a client running ahead may already have relinked. Under a transport the
         // decoder deserialises it from SEG_STAGE; in one process PipeRoute copies it without the
         // codec. A SharedPtr because a program-pipeline composite and its stage programs share
-        // one link's artefacts and the twin holds it across a build. Every create replaces it.
+        // one link's artifacts and the twin holds it across a build. Every create replaces it.
         SharedPtr<const MG_State::GLState::ProgramArchive> Archive;
 
         // ---- P5e's set_program_bindings tails (CONTRACT-P5E.md §1, §5.5) -------------------
@@ -463,7 +463,7 @@ namespace MobileGL::MG_Pipe {
 
     // set_framebuffer_state's record, HELD PER FRAMEBUFFER OBJECT and indexed by the handle's
     // slot (ID-19(b)). It is the one record kind in this file whose object has NO WIRE LIFETIME:
-    // the catalogue has no framebuffer create and no framebuffer destroy, because a framebuffer
+    // the catalog has no framebuffer create and no framebuffer destroy, because a framebuffer
     // is state and set_framebuffer_state is the only call that names one (D-I2). So there is
     // nothing to mark dead and nothing to refuse against, and a slot is simply OVERWRITTEN by
     // its successor's record - which is correct rather than merely tolerable, since the record
@@ -877,7 +877,7 @@ namespace MobileGL::MG_Pipe {
     // session's CURRENT CONTEXT's working state bound to its share group's object records; on
     // every other thread - the client process, the in-process client+server shape, a unit case,
     // the whole monolith - it is the process-wide applier, which is what it has always been and
-    // is byte-for-byte the old behaviour.
+    // is byte-for-byte the old behavior.
     //
     // P14: INLINE, because the backends ask it per state read (dozens of times per draw): in a
     // process that serves no session - the whole monolith - no resolver is installed and the
@@ -937,7 +937,7 @@ namespace MobileGL::MG_Pipe {
     // The observables that make the keying testable without reading a private map: how many
     // groups one context's session holds, and how many object records the group the CALLING
     // thread is in holds. Both are the numbers a case asserts on to tell "isolated" from
-    // "shared" apart from the behaviour they exist to explain.
+    // "shared" apart from the behavior they exist to explain.
     Uint64 MGPipeApplierShareGroupCountForTesting(Uint64 sessionKey);
 
     // P14 S6: THE SHARE-GROUP BUCKET A {session, context token} PAIR IS FILED UNDER, answered
@@ -1166,7 +1166,7 @@ namespace MobileGL::MG_Pipe {
     // valid for the duration of the call only. The op-table entry may be null.
     void MGPipeApplyBufferSubDataResident(const MGPSubData& record, const void* bytes);
     // resource_flush_range: record.AccessFlags are the application's REAL mapping flags, not
-    // a normalised subset - the backend reads them per call to choose its upload shape.
+    // a normalized subset - the backend reads them per call to choose its upload shape.
     void MGPipeApplyResourceFlushRange(const MGPFlushRange& record, const void* bytes);
     // resource_readback: whole-buffer by contract. The answer travels back through the
     // reverse channel, and the writeback happens BEFORE the mutation epoch bumps, never
@@ -1302,11 +1302,11 @@ namespace MobileGL::MG_Pipe {
                                        const MGPProgramStorageOverride* storageOverrides,
                                        const char* const* storageOverrideNames);
 
-    // create_shader_state. `link` and `spirv` are the program's artefacts and `archive` is the
+    // create_shader_state. `link` and `spirv` are the program's artifacts and `archive` is the
     // snapshot the record adopts (a null clears the previous one); desc's blob refs are not
     // read. Under a transport the decoder passes its deserialised archive and pointers into it;
-    // in one process PipeRoute copies the frontend's artefacts into a new archive without the
-    // codec. The verify build round-trips the artefacts through the codec before storing, and a
+    // in one process PipeRoute copies the frontend's artifacts into a new archive without the
+    // codec. The verify build round-trips the artifacts through the codec before storing, and a
     // mismatch is Fatal{PipeVerifyDiffer, "program-archive"}. `archive` has no default so that a
     // caller holding one cannot silently omit it.
     void MGPipeApplyCreateShaderState(const MGPProgramDesc& desc, const MG_State::GLState::LinkArtifacts* link,
@@ -1328,7 +1328,7 @@ namespace MobileGL::MG_Pipe {
     // P4a: the named, greppable unmigrated emulations (D-M)
     // ---------------------------------------------------------------------------------
     //
-    // ROADMAP.md's P4a row ends "emulation 在 split 下显式 Fatal 直到 P8". In monolith the
+    // ROADMAP.md's P4a row ends "emulations are an explicit Fatal under split until P8". In monolith the
     // code paths keep running exactly as today - the Fatal is a SPLIT-only arm - so this costs
     // P4a a named call site per unmigrated emulation and nothing else. P5/P8 give it teeth: a
     // split server that reaches one of these has no client address space to read and must

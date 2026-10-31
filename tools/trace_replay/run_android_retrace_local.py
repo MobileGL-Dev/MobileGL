@@ -65,7 +65,7 @@ BACKENDS = {
 # canonical id - signed by whichever key was current when it was made - otherwise has to have that
 # install destroyed before an A/B can run, which is destructive and, on a shared bench, rude.
 #
-# ABSENT MEANS THE CANONICAL ID, so every existing caller keeps the behaviour it had. What the
+# ABSENT MEANS THE CANONICAL ID, so every existing caller keeps the behavior it had. What the
 # override does NOT change: the Activity class, the intent action, the extras, the on-device app dir
 # and the arm-proof markers all stay identical, so the lane under test is the real lane. The one
 # thing that must move with it is `--package` in the same command, because trace-replay-ci.sh drives
@@ -292,7 +292,7 @@ def run_case(case, backend, extra_args=None, timeout_seconds=None, env_overrides
 # P7-7 repeat archiving.
 #
 # WHY IT IS NOT OPTIONAL FOR E0. `.trace-work/android-retrace-result/<case>-<backend>/` is keyed
-# by case and backend and by nothing else, so repeat 2 overwrites repeat 1 and the only artefact
+# by case and backend and by nothing else, so repeat 2 overwrites repeat 1 and the only artifact
 # that survives a three-repeat run is the last one. That makes "is this case's divergence
 # REPRODUCIBLE, and are the three repeats the same picture?" - the first question P7-7 E0 asks -
 # unanswerable after the fact, and the device window is the one place where re-running to find
@@ -446,8 +446,8 @@ def cpu_tail(report):
 
     benchmark.json carries the WHOLE frameCpuTimesMs[] array precisely so that p99 - which the
     device does not compute, and which the paired A/B publishes beside p50 - is a host-side
-    reduction over an artefact that already exists. The window is the same trailing tailFrames the
-    device summarised, so the numbers below sit beside the device's own without being about a
+    reduction over an artifact that already exists. The window is the same trailing tailFrames the
+    device summarized, so the numbers below sit beside the device's own without being about a
     different set of frames; p50 is recomputed here by the device's own median rule, so it agrees
     with medianFrameCpuMs on the same run rather than merely sitting next to it.
     """
@@ -700,9 +700,9 @@ def main():
         return 2
     if args.benchmark and args.transport != "monolith":
         # REFUSED RATHER THAN RUN UNDER A NAME THAT LIES. run_benchmark_case passes args.env
-        # alone, so --benchmark --transport spawn has always produced a MONOLITH run labelled
+        # alone, so --benchmark --transport spawn has always produced a MONOLITH run labeled
         # spawn (tools/device_bench/p6/README.md records the same pitfall). The knob the
-        # benchmark path does honour is --env, so say that instead of silently ignoring this.
+        # benchmark path does honor is --env, so say that instead of silently ignoring this.
         print("--benchmark ignores --transport; pass the arm explicitly, e.g. "
               f"--env MOBILEGL_TRANSPORT={args.transport} "
               "--env MOBILEGL_IPC_ROLE_SPLIT_STATE=1 --env MOBILEGL_IPC_STRICT_ERRORS=1 "

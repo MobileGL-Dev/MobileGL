@@ -74,7 +74,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     //
     // Rectangles were never converted. The viewport, the scissor and the ReadPixels copy offset
     // all used the GL bottom-origin Y verbatim as a Vulkan top-origin Y, which is correct only
-    // when y == H - y - h (full height, or vertically centred) - and full height is the only case
+    // when y == H - y - h (full height, or vertically centered) - and full height is the only case
     // any test ever exercised. In the conformance suite the errors CANCEL in placement (the draw
     // lands in Vulkan rows [y, y+h) and the readback copies the same rows back) and compose into
     // an exact vertical flip: 1,759 of Magma's 1,793 non-passing cases, 861 vertical flips and
@@ -155,7 +155,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // The GL viewport rect, expressed against the default framebuffer's stored orientation.
         // A full-height viewport is unchanged by this, which is why every existing scenario keeps
-        // its exact behaviour.
+        // its exact behavior.
         if (isDefaultFramebuffer) {
             const DefaultFramebufferRectMapping mapping = GetDefaultFramebufferRectMapping(preTransform);
             viewportX = MapDefaultFramebufferRectAxis(viewportX, viewportWidth, framebufferExtent.x(), mapping.mirrorX);
@@ -338,7 +338,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             static_cast<Uint32>(std::max<Int>(0, rawY1 - rawY0)),
         };
         // A quarter turn maps to {false, false}, so this is a no-op today; it is here so the
-        // branch cannot drift away from the identity/180 one when quarter turns are modelled.
+        // branch cannot drift away from the identity/180 one when quarter turns are modeled.
         return MapScissorRectToDefaultFramebuffer(scissor, framebufferExtent, preTransform);
     }
 
@@ -670,8 +670,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     //   - patch vertices, polygon mode, cull face mode, depth func, logic op,
     //     min sample shading, the glSampleMaski word
     //   - front/back stencil ops + compare funcs (ref/mask are dynamic state)
-    //   - per draw buffer up to the render pass's colour span: indexed blend enable,
-    //     blend factors/equations, indexed colour write mask (broadcast from index 0
+    //   - per draw buffer up to the render pass's color span: indexed blend enable,
+    //     blend factors/equations, indexed color write mask (broadcast from index 0
     //     when the device lacks independentBlend - the same read the payload does)
     // FBO-derived payload inputs (attachment presence/formats/draw-buffer gating) are
     // pinned by the render-pass hash key, exactly as the version-keyed memo relied on.
@@ -1078,7 +1078,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // is an OVER-count, which breaks the lower-bound contract every other tally keeps.
             //
             // The 15 are: the six capability reads (cull face, depth test, polygon offset
-            // fill, rasterizer discard, colour logic op, stencil test), the draw-FBO slot
+            // fill, rasterizer discard, color logic op, stencil test), the draw-FBO slot
             // read that gates depth/stencil, the two stencil face states, the polygon mode,
             // the min sample shading value, the patch vertex count, the depth mask, the depth
             // func, and the second draw-FBO slot read below. The sample-shading CAPABILITY
@@ -1103,7 +1103,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .sampleShadingEnable = m_sampleRateShadingFeatureEnabled &&
                                    MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::SampleShading),
             .minSampleShading = MG_Pipe::gPipeInputs->GetMinSampleShadingValue(),
-            // Word 1 keeps its all-ones initialiser: GL has no state for samples 32..63.
+            // Word 1 keeps its all-ones initializer: GL has no state for samples 32..63.
             .sampleMask = {ResolveEffectiveSampleMask(renderPassEntry.sampleCount), 0xffffffffu},
             .subpass = 0,
             .topology = vkTopology,
@@ -1121,7 +1121,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // over the same rows), and a Y-negated position - the default framebuffer's flip or
             // an upper-left clip origin - reverses the winding once more. Expressed as the front
             // face rather than as swapped cull bits so gl_FrontFacing agrees with culling, and
-            // so glFrontFace(GL_CW) is honoured.
+            // so glFrontFace(GL_CW) is honored.
             .frontFace = ((MG_Pipe::gPipeInputs->GetRenderStateParameters().FrontFaceModeSetting ==
                            FrontFaceMode::Clockwise) != invertClockwise)
                              ? VK_FRONT_FACE_COUNTER_CLOCKWISE
@@ -1164,7 +1164,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // attached and CreatePipeline refuses the pipeline, which skips the draw.
         //
         // Gated on the PATCH topology as well, and that gate is load-bearing rather than an
-        // optimisation: patchControlPoints is only meaningful for a patch draw, and a pipeline
+        // optimization: patchControlPoints is only meaningful for a patch draw, and a pipeline
         // that carries tessellation stages while its topology is anything else violates
         // VUID-VkGraphicsPipelineCreateInfo-topology-00737 - the same class of invalid input as
         // the missing control stage, on the same driver. Such a draw is illegal in GL too (a
@@ -1217,7 +1217,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             payload.backStencilCompareOp = VK_COMPARE_OP_ALWAYS;
         }
         const Uint32 fragmentOutputMask = programObj.activeFragmentOutputLocationMask;
-        // Outputs at locations past the render pass's trimmed colour span are
+        // Outputs at locations past the render pass's trimmed color span are
         // simply discarded - GL's semantic for a fragment output whose draw
         // buffer is GL_NONE (the trailing UNUSED slots no longer occupy
         // references, see GetOrCreateRenderPass).
@@ -1340,7 +1340,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // VUID-VkPipelineColorBlendAttachmentState-srcColorBlendFactor-00608 and its three
             // siblings forbid a VK_BLEND_FACTOR_SRC1_* in the struct without the feature whatever
             // blendEnable says, so clearing only the enable would still be invalid pipeline state.
-            // The previous behaviour, throwing, took the whole process down over one unsupported
+            // The previous behavior, throwing, took the whole process down over one unsupported
             // blend factor; this is defined, survivable and visible in the log, and it matches what
             // the non-blendable-format arm above already does.
             if (!m_dualSrcBlendFeatureEnabled &&

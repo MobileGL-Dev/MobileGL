@@ -147,12 +147,12 @@ namespace MobileGL::MG_Remote::Wire {
                   "MGPWireRecHeader::Size and RingRecordHeader::size are the same four bytes");
 
     // ---------------------------------------------------------------------------------
-    // The catalogue, once. Name and payload type per opcode.
+    // The catalog, once. Name and payload type per opcode.
     // ---------------------------------------------------------------------------------
     //
     // ONE LIST, THREE READERS: the name table (Fatal lines), the payload-size table (the tail
     // arithmetic's base) and the decoder's own completeness assertion. Hand-maintained lists
-    // that say the same thing three times are how a catalogue edit lands in two of them.
+    // that say the same thing three times are how a catalog edit lands in two of them.
     // gen_pipe.py owns PipeCalls.def and PipeWire.inc; this list is held to them by the
     // kOpCount assertion under it, which is the strongest statement a non-generated file can
     // make about a generated enum.
@@ -253,7 +253,7 @@ namespace MobileGL::MG_Remote::Wire {
         constexpr const char* kWireOpNames[] = {"<kInvalid>", MGPW_FOR_EACH_CALL(MGPW_NAME_ROW)};
 #undef MGPW_NAME_ROW
 
-        // The catalogue grew or shrank. Add the new opcode to MGPW_FOR_EACH_CALL, give it an
+        // The catalog grew or shrank. Add the new opcode to MGPW_FOR_EACH_CALL, give it an
         // arm in ApplyChecked, and decide in CONTRACT-P5.md table 1 whether it carries bytes.
         static_assert(sizeof(kWireOpNames) / sizeof(kWireOpNames[0]) == static_cast<SizeT>(MGPWireOp::kOpCount),
                       "PipeCalls.def and this file's call list disagree");
@@ -783,7 +783,7 @@ namespace MobileGL::MG_Remote::Wire {
             break;
         }
         case MGPWireOp::BufferSubDataResident: {
-            // NO TAIL, because its catalogue row has no kVarTail (PipeCalls.def gives it
+            // NO TAIL, because its catalog row has no kVarTail (PipeCalls.def gives it
             // kHasBlob|kOptional) and MGPipeApplyBufferSubDataResident takes no regions. The
             // layout used to share ResourceSubData's arm, which meant a record with
             // RegionCount = 2 was REQUIRED to carry 80 bytes the arm then dropped on the
@@ -1416,7 +1416,7 @@ namespace MobileGL::MG_Remote::Wire {
     PipeWireDecoder::PipeWireDecoder(Transport::RingControl* control, SegmentTable* segments, ReplySink* replies)
         : m_valid(control != nullptr), m_segments(segments), m_replies(replies) {
         m_auditPoison = MG_Config::Ipc.Audit;
-        // Once, at construction, beside the resolver it is modelled on - not per record from
+        // Once, at construction, beside the resolver it is modeled on - not per record from
         // the apply thread. The thunk is inert without a decoder on the calling thread, so an
         // early install changes nothing for a monolith caller of MGPipeApplyWireRecord.
         InstallApplyHook();
@@ -1490,7 +1490,7 @@ namespace MobileGL::MG_Remote::Wire {
         if ((MGPipeCallFlagsFor(op) & static_cast<Uint32>(kReplySlot)) == 0) {
             SessionFail(MGFatalFamily::ProtocolCorruption,
                         "MGPipe: Fatal{ProtocolCorruption, \"%s\"} the decoder tried to answer into "
-                        "a reply slot for a call the catalogue gives no kReplySlot; s1 sizes "
+                        "a reply slot for a call the catalog gives no kReplySlot; s1 sizes "
                         "ReplyPool from MGPipeCallFlagsFor and reserved none",
                         WireOpName(op));
         }
@@ -1927,7 +1927,7 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::CreateSamplerState: {
             const auto& desc = *static_cast<const MGPSamplerDesc*>(payload);
             // R-13.1 gave this call its kHasBlob. The serialization IS the memcpy - a POD -
-            // and borderColorForm must survive BYTE FOR BYTE, because all three colour
+            // and borderColorForm must survive BYTE FOR BYTE, because all three color
             // representations are always numerically populated and it is the only thing that
             // says which one the backend must use (MGPSamplerDesc in MGPipeTypes.h).
             if (!RequireDeclaredBlob(op, desc.Parameters, *m_segments)) return false;
@@ -1961,10 +1961,10 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::CreateShaderState: {
             const auto& desc = *static_cast<const MGPProgramDesc*>(payload);
             // ONE ARCHIVE, NOT SEVEN RUNS - w1's ruling, and the cheapest one available.
-            // EncodeProgramArtifacts already serialises SpirvArtifacts::generatedSpirv, i.e.
+            // EncodeProgramArtifacts already serializes SpirvArtifacts::generatedSpirv, i.e.
             // every stage module, so Reflection names the WHOLE archive and Spirv[0..5] stay
             // undeclared. Shipping the modules a second time would double the largest record
-            // in the catalogue for no reader at all: MGPipeApplyCreateShaderState takes
+            // in the catalog for no reader at all: MGPipeApplyCreateShaderState takes
             // (desc, link*, spirv*) and reads the modules out of spirv->generatedSpirv -
             // PipeApply.cpp touches neither desc.Spirv[] nor desc.Reflection.
             //
@@ -2090,7 +2090,7 @@ namespace MobileGL::MG_Remote::Wire {
                     std::memcpy(&span, reinterpret_cast<const Uint8*>(spans) + i * sizeof(MGHostSpan),
                                 sizeof(MGHostSpan));
                     // ALL FOUR ARMS, the segment-range one included: this row and DrawVbo are
-                    // the only two host-span carriers in the catalogue, and an out-of-segment
+                    // the only two host-span carriers in the catalog, and an out-of-segment
                     // span used to pass every check here.
                     if (!CheckHostSpanIsHonest(span, *m_segments)) return false;
                 }
@@ -2277,7 +2277,7 @@ namespace MobileGL::MG_Remote::Wire {
             // drives rewrites its range from the AUTHORITATIVE SHADOW, which rule C makes
             // server-owned, so resource_subdata is already the only way bytes reach it and a
             // second way would be a forgeable one. AccessFlags cross verbatim, never
-            // normalised (MGPipeApplyResourceFlushRange in PipeApply.h).
+            // normalized (MGPipeApplyResourceFlushRange in PipeApply.h).
             MGPipeApplyResourceFlushRange(*static_cast<const MGPFlushRange*>(payload), nullptr);
             return true;
 

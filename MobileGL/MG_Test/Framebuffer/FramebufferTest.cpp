@@ -843,7 +843,7 @@ TEST_F(FramebufferTest, NonRenderableColorFormatsReportUnsupportedFramebuffer) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_FRAMEBUFFER_OPERATION);
 }
 
-// ---- Three-channel colour attachments: the Complementary Reimagined / Iris load failure --------
+// ---- Three-channel color attachments: the Complementary Reimagined / Iris load failure --------
 //
 // Complementary declares colortex1 = RGB8_SNORM and colortex2 = RGB16F. No real OpenGL ES driver
 // renders to a three-channel image (EXT_render_snorm covers R/RG/RGBA only; EXT_color_buffer_float
@@ -929,7 +929,7 @@ namespace {
 } // namespace
 
 TEST_F(FramebufferTest, ThreeChannelColorAttachmentsAreUnsupportedWithoutTheWidenedSubstitution) {
-    // The pre-fix behaviour, pinned so a regression is a red test rather than a shaderpack that
+    // The pre-fix behavior, pinned so a regression is a red test rather than a shaderpack that
     // silently stops loading: no caveat capability, so nothing makes these renderable.
     ScopedBackendOverride backend(MakeUnique<ThreeChannelAttachmentBackend>(/*substituted=*/false));
 
@@ -987,7 +987,7 @@ TEST_F(FramebufferTest, TwoAttachmentCompositeFramebufferMatchesIrisComplementar
 // buffer's alpha write mask forced off so nothing can move it again.
 //
 // These cases pin the two halves of that pairing at the seam where they are visible - what the ES
-// driver is actually handed - and pin the invariant that the application's own colour mask is
+// driver is actually handed - and pin the invariant that the application's own color mask is
 // never touched.
 namespace {
     struct RecordedColorMask {
@@ -1246,7 +1246,7 @@ TEST_F(FramebufferTest, ClearIntoAWidenedDrawBufferKeepsAlphaWritableAndSubstitu
         MG_Test::ScopedPipeVerb clear(MG_Pipe::MGPipeVerb::Clear);
         MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/true);
     }
-    ASSERT_TRUE(g_driverIndexedColorMasks[1].seen) << "the clear must re-push the colour mask";
+    ASSERT_TRUE(g_driverIndexedColorMasks[1].seen) << "the clear must re-push the color mask";
     EXPECT_EQ(g_driverIndexedColorMasks[1].a, GL_TRUE) << "a clear is what puts the 1.0 in the stored alpha";
 
     // The value that clear writes: the application's RGB, alpha replaced by the 1.0 the
@@ -1446,7 +1446,7 @@ TEST_F(FramebufferTest, DualSourceFactorsAreDeclinedEvenWithBlendingDisabled) {
     }
 
     // A clear reaches the same block by the same route (SyncRenderState(forColorClear=true)), and
-    // the flag only steers the alpha-widen colour mask, so it must not reopen this either.
+    // the flag only steers the alpha-widen color mask, so it must not reopen this either.
     MG_Impl::GLImpl::BlendFunc(GL_SRC1_COLOR, GL_ONE_MINUS_SRC1_COLOR);
     ResetRecordedBlend();
     {
@@ -1529,7 +1529,7 @@ TEST_F(FramebufferTest, FramebufferTextureRejectsAColourAttachmentPastTheLimit) 
             ? static_cast<GLint>(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxColorAttachments)
             : static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
     ASSERT_GT(limit, 0);
-    ASSERT_LT(limit, 32) << "the test needs a colour attachment enum past the limit to exist";
+    ASSERT_LT(limit, 32) << "the test needs a color attachment enum past the limit to exist";
 
     MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER, static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit), texture,
                                         0);
@@ -1584,7 +1584,7 @@ TEST_F(FramebufferTest, FramebufferTextureRejectsALevelTheTextureDoesNotHave) {
 // than through the shared helper - so each of them has to be asked separately or one entry point
 // answers differently from its aliases. glFramebufferTexture2D is the most-used of the five, and
 // the default-framebuffer case is the damaging one: the attach used to succeed and replace
-// framebuffer 0's colour attachment, which nothing ever puts back.
+// framebuffer 0's color attachment, which nothing ever puts back.
 
 TEST_F(FramebufferTest, FramebufferTexture2DRejectsTheDefaultFramebufferAndBadAttachments) {
     GLuint texture = 0;
@@ -1606,7 +1606,7 @@ TEST_F(FramebufferTest, FramebufferTexture2DRejectsTheDefaultFramebufferAndBadAt
     EXPECT_EQ(colorAfter.IsTexture(), hadTextureBefore);
     if (colorAfter.IsTexture() && hadTextureBefore) {
         EXPECT_NE(colorAfter.GetTexture()->GetExternalIndex(), texture)
-            << "the refused attach must not have replaced framebuffer 0's colour attachment";
+            << "the refused attach must not have replaced framebuffer 0's color attachment";
     }
 
     GLuint framebuffer = 0;

@@ -7,7 +7,7 @@
 // End of Source File Header
 
 // P12 (on-screen server window), END TO END ON THE HOST: a real MobileGL client - the EGL entry
-// points, MobileGL's own initialisation, the spawn/tcp session - against a real `--serve` supervisor
+// points, MobileGL's own initialization, the spawn/tcp session - against a real `--serve` supervisor
 // that, like every host server, owns NO display.
 //
 // What is proven, each on both sides of the wire:

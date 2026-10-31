@@ -605,7 +605,7 @@ static void case_mc_use_program(int frame, long a, long b) {
 
 /* ---- the case table both harnesses iterate --------------------------------
  * a/b are the case's own knobs; opsPerFrame is what one bench frame is
- * normalised by, so ns_per_op compares across renderers. The mc_* rates are
+ * normalized by, so ns_per_op compares across renderers. The mc_* rates are
  * the per-frame call counts measured from the captured traces.
  */
 typedef void (*bench_case_fn)(int frame, long a, long b);

@@ -55,7 +55,7 @@
         // Returns the pack buffer's handle when a read into it may skip the reply: the read
         // then crosses as read_pixels_to_buffer / get_texture_image_to_buffer, lands
         // server-side, and the buffer is marked GPU-written. Returns null, selecting the
-        // reply-slot form, when that mark could not be honoured: MOBILEGL_IPC_PBO_READBACK_SYNC=1;
+        // reply-slot form, when that mark could not be honored: MOBILEGL_IPC_PBO_READBACK_SYNC=1;
         // no readback route (BufferWritebackIsReachable); a mapped buffer, whose persistent
         // reader never goes through SyncGpuWrites; an `end` (last byte past the application
         // offset) above MGPSubData's 2^31-1 offset limit; or a buffer with no handle yet.

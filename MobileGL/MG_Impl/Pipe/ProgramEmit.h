@@ -395,7 +395,7 @@ namespace MobileGL::MG_Pipe {
             m_lastDesc.ReservedNumSamplesOffset = static_cast<Uint32>(spirv.reservedNumSamplesOffset);
             m_lastDesc.SpirvStatus = spirv.spirvStatus ? 1 : 0;
             // P5e (pg), ID-88 / ruling 9: THE FAILED RELINK OF A BOUND PROGRAM, and the ruling
-            // asked this package to verify the frontend's actual behaviour rather than assume
+            // asked this package to verify the frontend's actual behavior rather than assume
             // it. VERIFIED, at ProgramObject.cpp:510-531: `Link()`'s PROLOGUE bumps
             // m_linkVersion and then assigns `m_artifacts = {}` - "the complete not-linked
             // state" in its own words - before the link body runs, and every failure arm of

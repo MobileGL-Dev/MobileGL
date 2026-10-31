@@ -67,7 +67,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         // glTexParameteriv(GL_TEXTURE_BORDER_COLOR): GL 4.6 core 8.10 sends the components through
-        // equation 2.2 into the floating-point border colour. glGetTexParameteriv reverses it with
+        // equation 2.2 into the floating-point border color. glGetTexParameteriv reverses it with
         // equation 2.3; the two live in one header so they cannot drift apart.
         void SetTextureBorderColorFromInts(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                            const GLint* params) {
@@ -582,7 +582,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // AT the category limit (BackendObject_DirectGLES's ProbeTextureSampleCounts) so its
             // head can never exceed it, and max() therefore always collapsed to the category
             // value. A format whose 4- and 2-sample probes fail inside a 4-sample category - a
-            // float colour format under EXT_color_buffer_float is the natural instance - was
+            // float color format under EXT_color_buffer_float is the natural instance - was
             // still accepted at 4, silently squeezed to 1 by ClampSamplesToBackendSupport, and
             // then reported as 4 by GL_TEXTURE_SAMPLES while glGetInternalformativ said 1.
             const Int probedMaxSamples = GetProbedMaxTextureSamples(textureTarget, textureInternalFormat);
@@ -672,7 +672,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         // Redefining level 0 of a texture that already had a base image drops the rest of the chain,
         // which is exactly what AllocateLevel used to do implicitly for every level. Keeping that
-        // behaviour for level 0 - and only for level 0 - is what makes the grow-only change safe:
+        // behavior for level 0 - and only for level 0 - is what makes the grow-only change safe:
         // any level-0 respecification leaves the chain in precisely the state it would have had
         // before, while an upload to level N no longer destroys the levels beneath it.
         //
@@ -1002,7 +1002,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return true;
         }
         // GL 4.6 core 8.6: CopyTexSubImage* is not affected by pixel-store state or by a bound
-        // pack buffer, but the backend readback this borrows honours both. Neutralise them for the
+        // pack buffer, but the backend readback this borrows honors both. Neutralise them for the
         // duration of the read and put them back afterwards.
         class ScopedNeutralPackState {
         public:
@@ -1203,7 +1203,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         // The six pnames a texture object shares with a sampler object carry an enum VALUE, and an
-        // unrecognised one is INVALID_ENUM. The texture path used to hand the value straight to
+        // unrecognized one is INVALID_ENUM. The texture path used to hand the value straight to
         // ConvertGLEnumToSamplerWrapMode / ...FilterMode and throw the Unknown away, so
         // glTexParameteri(GL_TEXTURE_WRAP_S, GL_RED) was silently accepted. Sampler objects have had
         // exactly this validator all along; calling it here rather than writing a second one is also
@@ -1348,7 +1348,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // every setter reaches" - and MGPTextureParams takes MinLod, MaxLod and LodBias off that
         // object, so every glTexParameter that writes GL_TEXTURE_MIN_LOD / MAX_LOD / LOD_BIAS
         // landed on state nothing watched and the applier's record kept saying MinLod = 0.
-        // Wrong pixels, not a lost optimisation.
+        // Wrong pixels, not a lost optimization.
         //
         // THE HOOK IS HERE RATHER THAN ON BumpVersion because MG_State/GLState/SamplerState is
         // package C's after the tag; C.7 grants this file for exactly this class of path ("the
@@ -1462,7 +1462,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // every setter reaches" - and MGPTextureParams takes MinLod, MaxLod and LodBias off that
         // object, so every glTexParameter that writes GL_TEXTURE_MIN_LOD / MAX_LOD / LOD_BIAS
         // landed on state nothing watched and the applier's record kept saying MinLod = 0.
-        // Wrong pixels, not a lost optimisation.
+        // Wrong pixels, not a lost optimization.
         //
         // THE HOOK IS HERE RATHER THAN ON BumpVersion because MG_State/GLState/SamplerState is
         // package C's after the tag; C.7 grants this file for exactly this class of path ("the
@@ -2700,9 +2700,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         return MG_State::pGLContext->ValidateTextureObject(texture) ? GL_TRUE : GL_FALSE;
     }
 
-    // Every texture parameter but the border colour, for one resolved texture: up to four values,
+    // Every texture parameter but the border color, for one resolved texture: up to four values,
     // as doubles because a double holds each enum, level and float this state stores exactly. False
-    // after recording an error. The border colour converts differently for each query type (GL 4.6
+    // after recording an error. The border color converts differently for each query type (GL 4.6
     // core 8.11.2), so each form answers it itself.
     static Bool QueryTextureParameter(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, GLenum pname,
                                       Double (&values)[4], Uint& count, const char* caller) {
@@ -2819,7 +2819,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                   GLenum pname, GLint* params, const char* caller) {
         if (pname == GL_TEXTURE_BORDER_COLOR) {
             // The inverse of glTexParameteriv: GL 4.6 core equation 2.3 against equation 2.2 on the
-            // write side (SetTextureBorderColorFromInts). The raw integer colour is the Iiv query's.
+            // write side (SetTextureBorderColorFromInts). The raw integer color is the Iiv query's.
             const auto& borderColor = textureObject->GetBorderColor();
             for (int i = 0; i < 4; ++i)
                 params[i] = MG_Util::FloatToSignedNormalizedInt32(borderColor[i]);
@@ -3302,7 +3302,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     namespace {
         // The eleven targets GL 4.6 core 18.3.2 accepts. GL_TEXTURE_BUFFER, the six cube FACE
-        // enums and every PROXY enum all convert to a TextureTarget this frontend recognises,
+        // enums and every PROXY enum all convert to a TextureTarget this frontend recognizes,
         // so ValidateTextureTarget lets them through; here they are INVALID_ENUM.
         Bool ValidateCopyImageTarget(GLenum target, const char* endpointName) {
             switch (target) {
@@ -3786,7 +3786,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             const Int z = cubeFaces ? 0 : offset.z();
             const Int depth = cubeFaces ? 1 : size.z();
             // Subtractions rather than sums: offset + extent are application-supplied GLints, and a
-            // signed overflow is undefined behaviour a compiler may resolve by assuming the check passes.
+            // signed overflow is undefined behavior a compiler may resolve by assuming the check passes.
             if (offset.x() < 0 || offset.y() < 0 || z < 0 || size.x() > levelSize.x() - offset.x() ||
                 size.y() > levelSize.y() - offset.y() || depth > levelDepth - z) {
                 MG_State::pGLContext->RecordError(
@@ -4421,7 +4421,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     //
     // ProcessTexturePixelsDataPack performs NO format or type conversion: it sizes every texel with
     // GetInternalBytesPerPixel(the TEXTURE's internal format) and memcpys the shadow rows verbatim,
-    // and it carries a standing TODO for the pixel-store parameters, so it honours only SwapBytes and
+    // and it carries a standing TODO for the pixel-store parameters, so it honors only SwapBytes and
     // the bitmap LSBFirst path. Both facts are invisible from the outside, and both are dangerous:
     //
     //   * a (format, type) narrower than the shadow's own texel makes the copy write MORE bytes than
@@ -4432,7 +4432,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     //     overflow but is still wrong data.
     //   * a pack state that puts padding, a row-length override or a skip offset between rows is
     //     ignored outright, so the rows land at the wrong destination strides - while the GPU
-    //     readback path (DirectGLES StoreClientRows, and DirectVulkan through it) honours all of it.
+    //     readback path (DirectGLES StoreClientRows, and DirectVulkan through it) honors all of it.
     //     Same glGetTexImage call, two different destination layouts, decided by whether the texture
     //     happens to have a GPU image.
     //
@@ -4475,7 +4475,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", caller,
-                    "The CPU-shadow readback path packs rows tightly and cannot honour a pixel-store state that "
+                    "The CPU-shadow readback path packs rows tightly and cannot honor a pixel-store state that "
                     "adds row padding, a row-length override or a skip offset."));
             return false;
         }
@@ -6100,7 +6100,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         // The backend publishes where its device really places the samples of each count (a
         // shader's gl_SamplePosition reads the same places). A count it could not determine keeps
-        // answering the pixel centre.
+        // answering the pixel center.
         Float position[2] = {0.5f, 0.5f};
         if (MG_Backend::pActiveBackendObject != nullptr) {
             MG_Backend::pActiveBackendObject->GetDynamicParameters().GetSamplePosition(samples, static_cast<Int>(index),

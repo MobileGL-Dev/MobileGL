@@ -344,7 +344,7 @@ void main() {
     }
 
     // glVertexBindingDivisor is per BINDING POINT: it has to reach every attribute
-    // pointed at that binding, and the instance step must honour the divisor rather
+    // pointed at that binding, and the instance step must honor the divisor rather
     // than advancing once per instance.
     TEST_F(VertexAttribBindingScenario, BindingDivisorAppliesToEveryAttributeOnThePoint) {
         if (!Ready()) GTEST_SKIP();

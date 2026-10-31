@@ -27,7 +27,7 @@ namespace MobileGL::MG_State::GLState {
         // P4a D-I2: A FRAMEBUFFER HAS A HANDLE AND NO WIRE LIFETIME. PipeCalls.def carries
         // resource_destroy and five delete_* rows and NO framebuffer delete, because a
         // framebuffer is not a resource and is not a CSO - it is STATE, and
-        // set_framebuffer_state is the only call that names one - and the catalogue is closed,
+        // set_framebuffer_state is the only call that names one - and the catalog is closed,
         // so P4a invents no row. The helper is therefore steps 2 and 3 only: the death notice,
         // raised while the handle still resolves (this is the P2 step-e2 announcement that used
         // to stand here alone - the last SharedPtr to this object dropping, not the glDelete*

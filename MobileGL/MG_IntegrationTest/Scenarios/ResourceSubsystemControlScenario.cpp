@@ -33,8 +33,8 @@
 //       fails: with bit 7 ignored, this arm would report the same non-zero count as the other one.
 //
 //   both arms
-//       THE PIXELS MUST NOT MOVE. The arena is filled with one solid-colour quad and drawn, and
-//       both arms must read back that colour. "The counters moved and the picture did not" is the
+//       THE PIXELS MUST NOT MOVE. The arena is filled with one solid-color quad and drawn, and
+//       both arms must read back that color. "The counters moved and the picture did not" is the
 //       whole claim - a switch that changed what is drawn would not be an A/B, it would be a bug.
 //
 // WHY IT CAN SKIP. The counter is emitted by the client-side resource tracker (P3a package B), and
@@ -310,12 +310,12 @@ void main() { oColor = vec4(vColor, 1.0); }
                     << window.line;
             } else {
                 FAIL() << "unknown " << kLaneMarker << " value '" << m_lane
-                       << "': the arms are on / off. Reading an unrecognised name as either would make "
+                       << "': the arms are on / off. Reading an unrecognized name as either would make "
                           "this lane assert the other arm's expectation while claiming to test this one.";
             }
 
             // ... and the picture is the same whichever arm ran. The arena is drawn with one solid
-            // colour, so both arms must read back exactly that.
+            // color, so both arms must read back exactly that.
             EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, "green",
                                        0.0, "the arena draw [" + m_lane + "]"))
                 << "the subsystem bits changed what is DRAWN, which is not an A/B - the handle path and "

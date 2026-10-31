@@ -197,7 +197,7 @@ def parse_ownership(text=None):
 
 def parse_ops_and_verbs(calls_text=None, fill_points_text=None):
     """The two name spaces the stamp map joins, read from the files that define them: the
-    catalogue's calls (PipeCalls.def, which IS the MGPWireOp enum, with each call's KIND) and
+    catalog's calls (PipeCalls.def, which IS the MGPWireOp enum, with each call's KIND) and
     the verb set (FillPoints.def, which IS MG_Backend::GLFunctionsTable's member list)."""
     calls_text = read(PIPE_CALLS) if calls_text is None else calls_text
     fill_points_text = read(FILL_POINTS) if fill_points_text is None else fill_points_text
@@ -213,7 +213,7 @@ def parse_ops_and_verbs(calls_text=None, fill_points_text=None):
 
 
 def array_block(text, declaration):
-    """The braced initialiser of a generated `... <declaration> = {` table, comments KEPT.
+    """The braced initializer of a generated `... <declaration> = {` table, comments KEPT.
 
     The generated tables carry the row's name in a trailing comment (`// DrawArrays`) and in a
     leading one (`/* 58 ReadPixels */`), and those comments are the only place the row's NAME
@@ -236,7 +236,7 @@ def array_block(text, declaration):
             if depth == 0:
                 return text[open_at + 1:i]
         i += 1
-    sys.exit("gen_pipe_field_ownership: %r never closes its initialiser" % declaration)
+    sys.exit("gen_pipe_field_ownership: %r never closes its initializer" % declaration)
 
 
 WAIT_ROW_RE = re.compile(r"/\*\s*\d+\s+(\w+)\s*\*/\s*static_cast<Uint8>\(\s*(k\w+)\s*\)")
@@ -386,7 +386,7 @@ def build_admitted(accessors, ownership, phase, verbs, verb_ops, waits, verb_cla
 
 def verb_shaped_calls(calls, verbs):
     """The calls that MUST have a stamp row or an exemption, by two derived tests: the
-    catalogue's own kind (kCtxVerb) and a name that is also a verb's. Neither can see a call
+    catalog's own kind (kCtxVerb) and a name that is also a verb's. Neither can see a call
     that is a verb boundary, is not kCtxVerb and is renamed - FieldOwnership.def names the one
     such call in the tree and says the phase that emits it writes its row."""
     verbSet = set(verbs)
@@ -946,7 +946,7 @@ def self_test():
     #     alone and control 12 would pass for the wrong reason. Renaming the kind is the cheapest
     #     way to prove the kind is actually being read.
     kindless = read(PIPE_CALLS).replace("kCtxVerb", "kCtxVerbb")
-    controls.append(("the catalogue's kCtxVerb kind renamed away",
+    controls.append(("the catalog's kCtxVerb kind renamed away",
                      "is exempted from the stamp map but is not verb-shaped",
                      lambda: run(calls_text=kindless)))
 

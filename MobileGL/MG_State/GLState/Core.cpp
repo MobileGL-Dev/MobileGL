@@ -594,7 +594,7 @@ namespace MobileGL::MG_State {
                         continue;
                     }
                     // Stop at the end of EITHER side's array rather than walking onto the
-                    // neighbouring uniform of whichever program has the shorter one.
+                    // neighboring uniform of whichever program has the shorter one.
                     if (!source.UniformLocationsAliasSameUniform(sourceBase, sourceLocation) ||
                         !destination.UniformLocationsAliasSameUniform(destinationBase, destinationLocation)) {
                         break;
@@ -616,7 +616,7 @@ namespace MobileGL::MG_State {
                     const Uint sourceOffset = source.GetUniformOffset(sourceLocation);
                     const Uint destinationOffset = destination.GetUniformOffset(destinationLocation);
                     // Either side can legitimately lack backing storage: the optimizer deletes a
-                    // uniform nothing reads, and a program whose SPIR-V phase settled cancelled
+                    // uniform nothing reads, and a program whose SPIR-V phase settled canceled
                     // has no shadow at all. Both report kInvalidUniformOffset / a null shadow.
                     if (sourceUbo == nullptr || destinationUbo == nullptr ||
                         sourceOffset == ProgramObject::kInvalidUniformOffset ||
@@ -1402,7 +1402,7 @@ namespace MobileGL::MG_State {
         }
 
         Uint64 GLContext::AllocateTransformFeedbackLifetimeId() {
-            // Starts at 1 so a zero-initialised backend slot can never carry a live object's id.
+            // Starts at 1 so a zero-initialized backend slot can never carry a live object's id.
             static std::atomic<Uint64> nextId{1};
             return nextId.fetch_add(1, std::memory_order_relaxed);
         }
@@ -1420,7 +1420,7 @@ namespace MobileGL::MG_State {
             // A second context in the group makes the dirty walk read the share clocks.
             m_shareGroup->NoteContextAttached();
             // The default transform feedback object (name 0) exists from the start of the context
-            // (GL 4.6 core 13.2.1), but nothing binds it, so nothing else would materialise it.
+            // (GL 4.6 core 13.2.1), but nothing binds it, so nothing else would materialize it.
             // Materialising it here is what lets GetBoundTransformFeedbackLifetimeId() be a plain
             // const read instead of an operator[] insert on the draw path.
             m_boundTransformFeedbackLifetimeId = m_transformFeedbackObjects[0].lifetimeId;

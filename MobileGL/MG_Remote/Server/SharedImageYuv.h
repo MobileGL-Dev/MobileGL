@@ -7,12 +7,12 @@
 // End of Source File Header
 
 // YUV SHARED IMAGES: the pure parts - plane copies and the YCbCr -> RGB conversion an image's
-// colour hints select - kept free of Android and of any backend so the host tests can check them.
+// color hints select - kept free of Android and of any backend so the host tests can check them.
 //
 // A YUV image is sampled as RGBA: whoever binds it to a texture gets the image CONVERTED into the
 // texture's own RGBA8 storage at its first use in each of the reader's frames (the backends do
 // that on the GPU, from the image's AHardwareBuffer). The conversion is the one the EGLImage's
-// EGL_EXT_image_dma_buf_import hints name - colour space, sample range and chroma siting - with
+// EGL_EXT_image_dma_buf_import hints name - color space, sample range and chroma siting - with
 // that extension's defaults (ITU-R BT.601, narrow range, siting 0) where a hint is absent.
 
 #pragma once

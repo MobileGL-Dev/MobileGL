@@ -10,7 +10,7 @@
 // the phase notes).
 //
 // The formats are the ones an ES driver keeps as texture-only storage: GL_RGB16 (EXT_texture_norm16
-// makes the three-channel spelling sampleable, never colour-renderable) and the 16-bit SNORM family
+// makes the three-channel spelling sampleable, never color-renderable) and the 16-bit SNORM family
 // (renderable only with EXT_render_snorm, which Adreno does not have). Their glGetTexImage cannot go
 // through a framebuffer on such a driver, so something other than the GPU image has to answer it:
 // the CPU shadow on the monolith arm, the server's staged store on a split one. A copy writes the
@@ -25,7 +25,7 @@
 // has no store route to exercise.
 //
 // THE KNOB. MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=<w>x<h> is read BY THE ESPRYT SERVER
-// (DirectGLESReadback.cpp, ReadTextureImageWire): a colour level of exactly that extent is
+// (DirectGLESReadback.cpp, ReadTextureImageWire): a color level of exactly that extent is
 // treated as a level the driver refused to attach - what a driver without EXT_texture_norm16 /
 // EXT_render_snorm does for these formats (an Adreno 750, which has both, reads them all back
 // through the GPU; measured in P13), and what llvmpipe can be made to do no other way. The
@@ -88,7 +88,7 @@ namespace MGITest {
             return format.components == 0 ? 4 : format.components * 2;
         }
 
-        // Every word differs from its neighbours and from the other patterns, so a mis-addressed
+        // Every word differs from its neighbors and from the other patterns, so a mis-addressed
         // row, a swapped endpoint or a copy that never happened cannot cancel out. SNORM never
         // gets -32768: it and -32767 are the same value (-1.0), and a read that goes through a
         // normalized float is entitled to answer either.

@@ -28,7 +28,7 @@
 // decides the shape for a texture uploaded through a VIEW - is the next phase's", and gating a
 // shape the phase had not finished deciding would have pinned a non-answer. THAT WORK LANDED:
 // the cursor is keyed on the storage owner (TextureEmit.h's drain list), the remap is
-// TextureObjectView::ToOwner*, and TextureViewAliasScenario is its behavioural gate. So the
+// TextureObjectView::ToOwner*, and TextureViewAliasScenario is its behavioral gate. So the
 // numbers are no longer provisional and the RecordProperty block became EXPECT_EQ against the
 // table below.
 //

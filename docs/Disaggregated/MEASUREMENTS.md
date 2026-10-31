@@ -1,53 +1,53 @@
-# 实测（索引）
+# Measured results (index)
 
-> 这一页只有结论和去向；完整的表、命令、协议与读法在各阶段的"实测"节（原文见 git 历史）。代码和旧笔记里的 `MEASUREMENTS.md §N` 按下表"§"列找到对应阶段（小节编号在那里原样保留）。
+> This page holds only conclusions and pointers; the full tables, commands, protocols, and how to read them are in each phase's "measured results" section (originals in git history). `MEASUREMENTS.md §N` in code and old notes maps to the phase in the "§" column below (subsection numbering is preserved there as-is).
 
-**口径**：性能只记录、不设门；看**逐线程 CPU 时间**，不看整机帧率。性能对比只用一台手机（Redmi `2f7cbe2e`，Adreno 830），定频、同热窗口、两臂交替跑（[`guide/pin-verification-2026-09-07.md`](guide/pin-verification-2026-09-07.md)）。
+**Basis**: performance is recorded only, never gated; look at **per-thread CPU time**, not whole-machine frame rate. Performance comparisons use only one phone (Redmi `2f7cbe2e`, Adreno 830), with pinned clocks, the same thermal window, and the two arms run alternately ([`guide/pin-verification-2026-09-07.md`](guide/pin-verification-2026-09-07.md)).
 
-## 关键结论
+## Key conclusions
 
-- **接口本身的代价**：单进程里改成"前端推、后端收"，CPU 多约 6–12%（P2），已接受；顶点数组切换密集的场景更高（P3a，+27–30%）。
-- **拆成两线程**：起初游戏里只有 7–13 fps；优化后 103–106 fps（P5d）；client 发完就走以后，重负载（渲染距离 32）下与单线程持平（P5e）。
-- **拆成两进程**：真机上与两线程成本持平；两者的 GL 线程 CPU 都比单线程少约 30%（后端工作挪到了另一线程 / 进程）（P6）。
-- **跨机**：电脑经 TCP 连手机，102 个集成用例全过；server 被杀后 133 ms、Wi-Fi 断开后约 5 s 干净报"设备丢失"（P6.5）。
-- **纹理上传的等待粒度（P12，handoff §4）**：wire 臂上纹理那半 `resource_subdata` 不再逐条买回包，等待点从「每条记录」落到「SEG_STAGE 窗口用尽」。
-  单条纯上传占用的回包等待 **1 → 0**（`wait_replies`，正是 §3.2 里"一帧 55,428"的那个计数器）。
-  按形状实测（`RemoteClientControls.ReplyWaitsByOpForAnAtlasShapedLoad`，主机 inproc，按 op 计数）：**图集拼接**（一张 level 上 64 次 `glTexSubImage2D`）**64 → 0** 次回包等待；
-  **每 sprite 一张纹理**（64 张纹理 + 256 次 `glTexParameteri`）**384 → 320**，剩下的全是 per-resource / per-call 的三条 row（create 76 / respecify 130 / params 130）——
-  **这两条后来被"首次使用确认"取代了**（见下面那条）：对象的存在性由它自己的 create 确认为事实之后，
-  params 与 texture respecify 都不再逐条买答案，而是只在**首次使用**时付一次阻塞的 create。
-  同一帧的累计实测：**43,232 waits / 221.5 s → 4,543 waits / 31.3 s（7.1×）**，staged 字节与发出的记录数（103,094）都不变。
-  真机（TrebleDroid GSI，MC 26.2 经 TCP 入世界）那一帧的构成为 `ResourceRespecify` 20,633 + `SetTextureParams` 18,056 + `ResourceCreate` 4,536 条**各等一次**，
-  而 `ResourceSubData` 12,671 条**零等待**（B 的实机证据）；这些记录都是真实状态变化，客户端没有可去重的（同一值的 `glTexParameteri` 本来就不产生记录）。
-- **单次往返那 ~5 ms 是设备侧的深度空闲退出，不是链路也不是客户端**（P12，本轮实测）：同一帧、同一批记录，
-  客户端自旋 40× 只快 ~10%；换 `adb forward`（USB）快 ~25–30%；而把设备 8 核钉 `performance` 并关掉 `cpuoff_l`/`clusteroff_l`/`mcusysoff`/`s2idle` 后，
-  单次等待 **5,040 → 3,715 µs**、那一帧墙钟 **221.5 s → 166.5 s（−25%）**——记录数与字节数都不变。
-  这解释了 handoff §3.6「换快 3.4 倍的链路墙钟不变」：钱花在设备每次唤醒上；handoff §3.2 那 249 s 是在**未定频**的机器上取的，含这份空闲税。
-  **同一个诊断给出一条可移植修法**：把服务端的自旋预算调大（Activity 的 `env` extra → `MOBILEGL_IPC_SPIN_US=2000`，不需要 root、不需要改代码），
-  那一帧 **221.5 s → 182.8 s（−17%）**；设备定频+关深度空闲则是 **166.5 s（−25%）**。服务端日志会打印 `spin 2000 us` 自证。
-  见 git 历史 §2.6–2.10。
-- **画面正确**：Vulkan 后端真机画面检查 36/36 通过，CTS 五块相对基线没有超过 0.5 个百分点的退步、没有新崩溃（P7）；server 自有窗口上屏两后端 SSIM 1.0（P12）。
-- **五臂传输对比（2026-09-28，未定频交错 A/B）**：重负载（rd12）下 inproc ≈ spawn+shm 比 monolith **快约 1/3**（run-ahead 流水线并行 + applier 路径探针更少），轻负载（openra）下 split 只付固定开销；**tcp localhost 慢 ~8 倍，瓶颈是 present credit=1 的串行等待（~74%）+ futex 唤醒税**，`MOBILEGL_IPC_SPIN_US=2000` 单项实测 21.7→63.6 fps；跨主机 TCP 的「`eglMakeCurrent` hang」**是测试环境造成的**（主机 v2rayN `xray_tun` 代理终结 TCP 后中继卡住，不是源码 bug）；绕开后 P12 出口门 (b) 通过：WSL client 经 Wi-Fi 重放 rd12 世界内 trace，ssim 0.999883，稳态 17–22 fps（`PRESENT_CREDIT` 1/2/3 = 16.9 / 21.3 / 22.1），openra 稳态 105–133 fps；加载帧 2.7 GB 受带宽约束（server 实测 52 MB/s），稳态受往返延迟（20–24 MB/s）。全文见 git 历史。
+- **Cost of the interface itself**: in the monolith, changing to "frontend pushes, backend receives" costs about 6–12% more CPU (P2), which was accepted; scenes with dense vertex-array switching are higher (P3a, +27–30%).
+- **Split into two threads**: at first only 7–13 fps in the game; after optimization 103–106 fps (P5d); after the client runs ahead, under heavy load (render distance 32) it matches single-threaded (P5e).
+- **Split into two processes**: on device the cost matches two-thread; the GL thread CPU of both is about 30% lower than single-threaded (backend work moved to the other thread / process) (P6).
+- **Cross-machine**: a PC connects to the phone over TCP, all 102 integration cases pass; after the server is killed, 133 ms; after Wi-Fi disconnects, about 5 s to cleanly report "device lost" (P6.5).
+- **Texture upload wait granularity (P12, handoff §4)**: on the wire arm, the texture half of `resource_subdata` no longer buys a reply per record; the wait point moves from "every record" to "SEG_STAGE window exhausted".
+  A single pure upload occupies a reply wait of **1 → 0** (`wait_replies`, exactly the counter that was "55,428 per frame" in §3.2).
+  Measured by shape (`RemoteClientControls.ReplyWaitsByOpForAnAtlasShapedLoad`, host inproc, counted per op): **atlas assembly** (64 `glTexSubImage2D` calls on one level) **64 → 0** reply waits;
+  **one texture per sprite** (64 textures + 256 `glTexParameteri` calls) **384 → 320**, and the rest is entirely the three per-resource / per-call rows (create 76 / respecify 130 / params 130) —
+  **these two were later replaced by "first-use confirmation"** (see the item below): once an object's existence is confirmed as fact by its own create,
+  params and texture respecify no longer buy an answer per row; instead a blocking create is paid once at **first use**.
+  Cumulative measured result for the same frame: **43,232 waits / 221.5 s → 4,543 waits / 31.3 s (7.1×)**, with staged bytes and the number of records sent (103,094) both unchanged.
+  On device (TrebleDroid GSI, MC 26.2 entering the world over TCP), that frame consisted of `ResourceRespecify` 20,633 + `SetTextureParams` 18,056 + `ResourceCreate` 4,536 records **each waiting once**,
+  while `ResourceSubData` 12,671 records **waited zero times** (B's on-device evidence); these records are all real state changes, and the client had nothing to deduplicate (a `glTexParameteri` with the same value produces no record in the first place).
+- **The ~5 ms per round trip is the device-side deep idle exit, not the link and not the client** (P12, this round's measured result): same frame, same set of records,
+  the client spinning 40× was only ~10% faster; switching to `adb forward` (USB) was ~25–30% faster; and after pinning the device's 8 cores to `performance` and turning off `cpuoff_l`/`clusteroff_l`/`mcusysoff`/`s2idle`,
+  a single wait went **5,040 → 3,715 µs** and that frame's wall time **221.5 s → 166.5 s (−25%)** — with record count and byte count unchanged.
+  This explains handoff §3.6 "switching to a link 3.4× faster leaves wall time unchanged": the money is spent on each wake-up of the device; the 249 s in handoff §3.2 was taken on a machine **without pinned clocks** and includes this idle tax.
+  **The same diagnosis yields a portable fix**: raise the server's spin budget (the Activity's `env` extra → `MOBILEGL_IPC_SPIN_US=2000`, no root and no code change needed),
+  and that frame goes **221.5 s → 182.8 s (−17%)**; pinning device clocks + turning off deep idle gives **166.5 s (−25%)**. The server log prints `spin 2000 us` as proof.
+  See git history §2.6–2.10.
+- **Frames are correct**: the Vulkan backend's on-device frame check passes 36/36; the five CTS blocks show no regression beyond 0.5 percentage points against baseline and no new crashes (P7); on-screen presentation in the server's own window gives SSIM 1.0 on both backends (P12).
+- **Five-arm transport comparison (2026-09-28, unpinned-clock interleaved A/B)**: under heavy load (rd12) inproc ≈ spawn+shm is **about 1/3 faster** than monolith (run-ahead pipeline parallelism + fewer applier-path probes); under light load (openra) split pays only fixed overhead; **tcp localhost is ~8× slower, the bottleneck being present credit=1 serial waiting (~74%) + futex wake-up tax**, `MOBILEGL_IPC_SPIN_US=2000` alone measured 21.7→63.6 fps; the cross-host TCP "`eglMakeCurrent` hang" **was caused by the test environment** (the host's v2rayN `xray_tun` proxy terminated TCP and the relay hung, not a source bug); after bypassing it P12 exit gate (b) passes: the WSL client replays an in-world rd12 trace over Wi-Fi, ssim 0.999883, steady state 17–22 fps (`PRESENT_CREDIT` 1/2/3 = 16.9 / 21.3 / 22.1), openra steady state 105–133 fps; the 2.7 GB loading frame is bandwidth-bound (server measured 52 MB/s), steady state is round-trip-latency-bound (20–24 MB/s). Full text in git history.
 
-## 按阶段
+## By phase
 
-| § | 阶段 | 一句结论 | 全文 |
+| § | Phase | One-line conclusion | Full text |
 |---|---|---|---|
-| 1 | P0 | 能从应用进程拉起第二个进程；跨进程共享 GPU 内存只有一条路在所有设备上可用 | git 历史 |
-| 2 | P1 | 逐 draw 核对推送状态，79 条 trace 零分歧 | git 历史 |
-| 3 | P2 | 桌面基准：新 tracker 比它替掉的旧填充更便宜 | git 历史 |
-| 4 | P3a | 两机真机 Release：接口代价 +6–12%，VAO 切换密集的场景 +27–30% | git 历史 |
-| 5 | P4a | 换到 Redmi；P4a 自己只加 3–6 个百分点 | git 历史 |
-| 6 | P5 | 两线程第一帧画对；真机两线程臂还跑不完 | git 历史 |
-| 7 | P5b | 真机两线程跑通四条游戏 trace；两线程额外代价 +6–18% | git 历史 |
-| 8 | P5c | 两线程之间零共享内存后，全部测试仍绿 | git 历史 |
-| 9 | P5d | 游戏内 7–13 → 103–106 fps，client CPU 15.0 → 9.2 ms/帧 | git 历史 |
-| 10–11 | P5e | 发完就走比每条都等快 69%；重负载下与单线程持平 | git 历史 |
-| 12 | P6 | 两进程与两线程持平；每帧数据量与记录数首次实测 | git 历史 |
-| 13 | P3b/P4b | 纹理上传形状在四种拓扑下完全一致 | git 历史 |
-| 14 | P6.5 | 跨机 TCP 102/102；断线约 5 s 检测到 | git 历史 |
-| 15 | P7 | 真机画面 36/36；server 内存无界增长收住（主机 825 → 546 MiB） | git 历史 |
-| 16 | P12 | 审查后真机复测：Espryt SSIM 1.0；Magma 1.0 / 0.999999511；P12 定向 CTest 46/46；纹理上传回包等待 1→0（主机机制门，真机墙钟待测）；**P12 已收官（09-29）**：跨机 TCP 门 (b) 通过（rd12 ssim 0.999883、稳态 17–22 fps）；FCL 门 (a) 通过（Minecraft 上屏到 render server 窗口，杀 server 后 33–54 ms 闩住 device-lost） | git 历史 |
-| 17 | 五臂传输测量（2026-09-28，非阶段） | inproc/shm 重负载比 monolith 快 ~1/3；tcp localhost 瓶颈是 credit=1 + 唤醒税（SPIN_US=2000 → 2.9×）；跨主机 hang 实为主机 xray TUN 代理造成；直连 Wi-Fi 稳态 rd12 17–22 fps、openra 105–133 fps | git 历史 |
-| 18 | P11 | 同机零拷贝（T0）MC 26.3 峰值内存 Espryt −41–42%、Magma −18–26%，ssim / 帧时 / CPU 不变；外部 client 走共享内存 rd12 Espryt 约 119 fps（TCP 40–53）；split T2 相对单进程采纳 p99 Espryt +37–42%、Magma 约 2.5×。未量：M2 后 split server 上纹理无 GPU 写时 Espryt 自己按存储阈值取舍精确写入框，非 ring 路径可能多发几个小框 | git 历史 |
-| 19 | P8 | 真实内容只 Magma wire indirect 命中（MC 26.3 × Magma inproc 1,300 万 draw CPU 展开）→ 原生后 create-indirect 每次整 GPU 等待 321 → 0；红米 create-instancing × Espryt × monolith 0.870 → 0.99998（Adreno 丢排队环形拷贝，dev + feat 两条阶梯）；最大 program archive 355 KB = arena/4 的 4.2 %（不分片）；出口设备矩阵 77 格 / 臂无一变差 | git 历史 |
+| 1 | P0 | A second process can be launched from the application process; cross-process GPU memory sharing has only one path available on all devices | git history |
+| 2 | P1 | Verify pushed state per draw; 79 traces with zero divergence | git history |
+| 3 | P2 | Desktop benchmark: the new tracker is cheaper than the old fill it replaced | git history |
+| 4 | P3a | Two devices, on-device Release: interface cost +6–12%, scenes with dense VAO switching +27–30% | git history |
+| 5 | P4a | Switched to Redmi; P4a itself adds only 3–6 percentage points | git history |
+| 6 | P5 | The first frame draws correctly in two threads; the on-device two-thread arm still cannot run to completion | git history |
+| 7 | P5b | Four game traces run to completion in two threads on device; two-thread extra cost +6–18% | git history |
+| 8 | P5c | With zero shared memory between the two threads, all tests still green | git history |
+| 9 | P5d | In-game 7–13 → 103–106 fps, client CPU 15.0 → 9.2 ms/frame | git history |
+| 10–11 | P5e | Running ahead is 69% faster than waiting on every command; matches single-threaded under heavy load | git history |
+| 12 | P6 | Two-process matches two-thread; first measured data volume and record count per frame | git history |
+| 13 | P3b/P4b | Texture upload shapes are identical under all four topologies | git history |
+| 14 | P6.5 | Cross-machine TCP 102/102; disconnect detected in about 5 s | git history |
+| 15 | P7 | On-device frames 36/36; unbounded server memory growth reined in (host 825 → 546 MiB) | git history |
+| 16 | P12 | On-device retest after review: Espryt SSIM 1.0; Magma 1.0 / 0.999999511; P12 targeted CTest 46/46; texture upload reply waits 1→0 (host mechanism gate, on-device wall time pending); **P12 closed (09-29)**: cross-machine TCP gate (b) passes (rd12 ssim 0.999883, steady state 17–22 fps); FCL gate (a) passes (Minecraft presented on screen in the render server window; after killing the server, device-lost latches in 33–54 ms) | git history |
+| 17 | Five-arm transport measurement (2026-09-28, not a phase) | inproc/shm under heavy load is ~1/3 faster than monolith; tcp localhost bottleneck is credit=1 + wake-up tax (SPIN_US=2000 → 2.9×); the cross-host hang was actually caused by the host's xray TUN proxy; direct Wi-Fi steady state rd12 17–22 fps, openra 105–133 fps | git history |
+| 18 | P11 | Same-machine zero-copy (T0) MC 26.3 peak memory Espryt −41–42%, Magma −18–26%, ssim / frame time / CPU unchanged; external client over shared memory rd12 Espryt about 119 fps (TCP 40–53); split T2 relative to monolith adoption p99 Espryt +37–42%, Magma about 2.5×. Not measured: after M2, on the split server, when a texture has no GPU writes, Espryt chooses the precise write box by its own storage threshold; the non-ring path may send a few extra small boxes | git history |
+| 19 | P8 | On real content only Magma wire indirect hit (MC 26.3 × Magma inproc 13 million draws expanded on CPU) → after going native, the per-create-indirect full-GPU wait 321 → 0; Redmi create-instancing × Espryt × monolith 0.870 → 0.99998 (Adreno drops queued ring copies, the dev + feat two ladders); largest program archive 355 KB = 4.2% of arena/4 (no chunking); exit device matrix 77 cells / arms, none worse | git history |

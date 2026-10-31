@@ -218,7 +218,7 @@ namespace MobileGL::MG_Remote::Client {
             return;
         }
         // NOT MGLOG_W AND CARRY ON. The whole defect this closes is that carrying on was
-        // indistinguishable, in every downstream artefact, from a server that genuinely
+        // indistinguishable, in every downstream artifact, from a server that genuinely
         // consumes nothing: same absence of records, same cleared dirty flags, same green
         // lane. A death names the family, publishes a SessionFault to a peer if one is
         // connected, and lands in the census like every other one.
