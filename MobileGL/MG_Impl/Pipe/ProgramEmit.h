@@ -106,7 +106,7 @@ namespace MobileGL::MG_Pipe {
             // published ahead of it are wiped by the create that follows. What the draft was
             // protecting - "a rebuild inside the verb must already see the bindings" - is
             // satisfied by both records going out at the SAME validate point, ahead of the verb,
-            // which is what this ordering does. See docs/archive/contracts/CONTRACT-P5E.md §5.5 and the
+            // which is what this ordering does. See the contract §5.5 and the
             // record's own comment in PipeApply.h.
             if (drawProgram) bytes += EmitProgramBindings(*drawProgram, drawCso);
             // THE COMPOSITE'S SECOND RELEASE PATH is spoken here, not in a destructor: when the

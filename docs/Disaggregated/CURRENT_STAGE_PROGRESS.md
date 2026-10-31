@@ -1,6 +1,6 @@
 # 当前阶段：P13 已收官（2026-10-07）；下一阶段 P14
 
-> **更新 2026-10-07**。这一页只有摘要；计划与裁定在 [`docs/archive/notes/p13/PLAN-P13.md`](../archive/notes/p13/PLAN-P13.md)、[`docs/archive/notes/p13/INTEGRATOR-DECISIONS-P13.md`](../archive/notes/p13/INTEGRATOR-DECISIONS-P13.md)，逐波记录在 [`docs/archive/notes/p13/README.md`](../archive/notes/p13/README.md)。上一阶段 P8 于 09-30 收官，见 [`docs/archive/notes/p8/README.md`](../archive/notes/p8/README.md)。
+> **更新 2026-10-07**。这一页只有摘要；计划与裁定见 git 历史。上一阶段 P8 于 09-30 收官。
 
 ## 目标
 
@@ -23,4 +23,4 @@
 
 **P14**：状态归属（同进程多 session / 多 context / share group），设计见 [`design/11-state-ownership.md`](design/11-state-ownership.md)。性能轮（基线 `dev` 构建，定频，FCL MC + anland glmark2，两后端）也排在 P13 之后。
 
-**待用户决策**：[`DEBTS.md`](DEBTS.md) 中「需裁定」各项；FCL 无声死亡留给用户（`docs/archive/notes/p13/fcl-soak/README.md`）。
+**待用户决策**：[`DEBTS.md`](DEBTS.md) 中「需裁定」各项；FCL 无声死亡留给用户（细节见 git 历史）。

@@ -75,7 +75,7 @@ namespace MobileGL::MG_State::GLState {
         void NoteBufferChanged() { ++m_anyBufferChangeGeneration; }
         Uint64 GetAnyBufferChangeGeneration() const { return m_anyBufferChangeGeneration; }
 
-        // P5e (sb, docs/archive/contracts/CONTRACT-P5E.md §1, §5.6). "DID ANY INDEXED BINDING POINT OF THIS
+        // P5e (sb §1, §5.6). "DID ANY INDEXED BINDING POINT OF THIS
         // TARGET MOVE" - one counter per BufferBindPointTargets entry, and it is the P4b hole
         // closed rather than a new convenience.
         //

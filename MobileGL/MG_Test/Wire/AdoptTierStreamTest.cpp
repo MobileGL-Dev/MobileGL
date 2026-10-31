@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P11 A1 (docs/archive/contracts/CONTRACT-P11.md §1): MOBILEGL_IPC_ADOPT_TIER=0/1 ON A STREAM DATA PLANE.
+// P11 A1 (§1): MOBILEGL_IPC_ADOPT_TIER=0/1 ON A STREAM DATA PLANE.
 //
 // Real servers on loopback TCP and forked peers (P12ServerRig.h), so the session is the product's
 // two-process tcp session and each side reads its OWN knob, as on the tcp lane:

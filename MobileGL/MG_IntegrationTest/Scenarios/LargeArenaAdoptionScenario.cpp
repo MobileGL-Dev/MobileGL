@@ -611,7 +611,7 @@ void main() { word = 0xC0FFEEu; }
             << window.line;
     }
 
-    // P11 A2 (docs/archive/contracts/CONTRACT-P11.md §2): WHICH TIER THE ARENA REALLY LANDED IN. The cases above
+    // P11 A2 (§2): WHICH TIER THE ARENA REALLY LANDED IN. The cases above
     // are green whether the arena adopted or stayed emulated, so the lane declares the arm
     // (MGITEST_PERSISTENT_MAP_ARM) and this case asserts it, the way
     // PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares does for a sub-16-MiB map.
@@ -666,7 +666,7 @@ void main() { word = 0xC0FFEEu; }
         ExpectDeclaredArm(declared, "after a frame of draws, an SSBO binding and a dispatch");
     }
 
-    // P11 A1 (docs/archive/contracts/CONTRACT-P11.md §1): THE TCP LANE WITH MOBILEGL_IPC_ADOPT_TIER=0. A stream
+    // P11 A1 (§1): THE TCP LANE WITH MOBILEGL_IPC_ADOPT_TIER=0. A stream
     // data plane has no memory the two sides share, so the client refuses the knob by name at its
     // handshake - exactly one `Refuse{AdoptTierOnStream, "T0"}` line in its log - and the session
     // runs T2: the other cases in the same `.AdoptTier0.` lane are green and the arena is emulated.
@@ -703,7 +703,7 @@ void main() { word = 0xC0FFEEu; }
         EXPECT_EQ(log.find("Fatal{UnimplementedAdoptTier"), std::string::npos) << log;
     }
 
-    // P11 B2 (docs/archive/contracts/CONTRACT-P11.md B2): A SHARED-SEGMENT SESSION THAT ASKS T0 AND CANNOT RUN IT.
+    // P11 B2 (B2): A SHARED-SEGMENT SESSION THAT ASKS T0 AND CANNOT RUN IT.
     // MOBILEGL_IPC_ADOPT_TIER=0 over shared segments asks T0 in the Hello (A1 made it die at the
     // handshake; ruling ID-P11-14 made it this). The lane's server cannot grant it - a host has no
     // AHardwareBuffer, or `.AdoptT0Disallowed.` turned its allow switch off - so it refuses by name

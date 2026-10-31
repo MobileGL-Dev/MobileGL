@@ -1105,7 +1105,7 @@ namespace MobileGL::MG_Remote::Server {
                                                std::memory_order_relaxed);
     }
 
-    // ---- P11 B2: T0 (docs/archive/contracts/CONTRACT-P11.md B2) ------------------------------------------
+    // ---- P11 B2: T0 (B2) ------------------------------------------
 
     namespace {
         // THE POST VERDICT IS THE PROCESS'S, like DriverPost's: the driver and the device do not

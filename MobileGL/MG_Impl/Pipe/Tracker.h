@@ -156,18 +156,18 @@ namespace MobileGL::MG_Pipe {
         case MGPipeDirty::NewSamplers:
         case MGPipeDirty::NewShaderImages:
             return kMGPipeSubsystemSamplers;
-        // P5e's three, one subsystem (docs/archive/contracts/CONTRACT-P5E.md §1): the indexed buffer
-        // binding points. Bits 15/16/17 have been computed and counted since P2 and have named
-        // no subsystem since - "the remaining bits have no call of their own until P4b", which
-        // the default arm below used to say for them. set_shader_buffers is the call, and
-        // set_stream_output_targets stays unemitted while riding the same A/B bit, for the
-        // reason kMGPipeDirtyEmittedAtP5e states.
-        //
-        // NAMING THE SUBSYSTEM IS NOT THE SAME AS EMITTING. The emission gate is five
-        // conjuncts (PipeFill.cpp's `wants()`), one of which is kMGPipeWiredSubsystems - and
-        // the buffer-binding family's wired constant is 0 until the package that gives the
-        // emitter its body sets it, exactly as P4a's four families were. So this map moves
-        // here, inert, and nothing is emitted and no field is skipped on its account yet.
+            // P5e's three, one subsystem (§1): the indexed buffer
+            // binding points. Bits 15/16/17 have been computed and counted since P2 and have named
+            // no subsystem since - "the remaining bits have no call of their own until P4b", which
+            // the default arm below used to say for them. set_shader_buffers is the call, and
+            // set_stream_output_targets stays unemitted while riding the same A/B bit, for the
+            // reason kMGPipeDirtyEmittedAtP5e states.
+            //
+            // NAMING THE SUBSYSTEM IS NOT THE SAME AS EMITTING. The emission gate is five
+            // conjuncts (PipeFill.cpp's `wants()`), one of which is kMGPipeWiredSubsystems - and
+            // the buffer-binding family's wired constant is 0 until the package that gives the
+            // emitter its body sets it, exactly as P4a's four families were. So this map moves
+            // here, inert, and nothing is emitted and no field is skipped on its account yet.
         case MGPipeDirty::NewConstBuffers:
         case MGPipeDirty::NewShaderBuffers:
         case MGPipeDirty::NewSoTargets:

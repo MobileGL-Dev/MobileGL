@@ -352,7 +352,7 @@ namespace {
         // the loop above, because "these three, together" is the phase's own scope statement.
         //
         // set_stream_output_targets stays UNEMITTED for the whole of P5e (XFB is lockstep by
-        // escalation, docs/archive/contracts/CONTRACT-P5E.md §5.7) and still names the subsystem, for the
+        // escalation, the contract §5.7) and still names the subsystem, for the
         // same reason: the bit answers "which A/B switch owns this family's legacy arm", not
         // "is there a record on the wire for me today".
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewConstBuffers), kMGPipeSubsystemBufferBindings);

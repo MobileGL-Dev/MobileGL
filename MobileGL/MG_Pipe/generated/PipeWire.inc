@@ -379,7 +379,7 @@ inline constexpr MGPipeCallClass MGPipeCallClassFor(MGPWireOp op) {
                    : kCallClassCount;
 }
 
-// P5e (docs/archive/contracts/CONTRACT-P5E.md 2.2): THE WAIT CLASS OF EVERY OPCODE, indexed the same way.
+// P5e (2.2): THE WAIT CLASS OF EVERY OPCODE, indexed the same way.
 // Index 0 is kWaitClassCount - never a real class - for the flags table's reason: the one
 // caller that can pass an opcode this catalogue never produced is a decoder holding bytes off
 // a stream, and it must reach its own Fatal{ProtocolCorruption} rather than a wait decision.

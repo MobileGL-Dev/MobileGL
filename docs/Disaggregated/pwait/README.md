@@ -5,8 +5,8 @@ with a 165 Hz display (6.06 ms per vsync). Espryt = DirectGLES, Magma = DirectVu
 thread records and applies. Inproc: the GL thread records and `mgl-srv-apply` applies and presents.
 
 The timelines and latency below come from one 4.9 s Perfetto run per arm (`pwlat`, with frametimeline).
-The fps numbers come from the 3-rep A/B in [SCOREBOARD.md](../../archive/notes/perf-p15/SCOREBOARD.md) (section pwab).
-The mechanism is analysed in depth in [PRESENT-WAIT.md](../../archive/notes/perf-p15/PRESENT-WAIT.md).
+The fps numbers come from the 3-rep A/B in SCOREBOARD.md (section pwab).
+The mechanism is analysed in depth in PRESENT-WAIT.md.
 
 ## Summary
 

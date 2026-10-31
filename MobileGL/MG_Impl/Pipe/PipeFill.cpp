@@ -2113,13 +2113,13 @@ namespace MobileGL::MG_Pipe {
             // emission gate is the subsystem bit plus the whole-record hash and nothing else.
             case MGPipeFieldEmitter::SetContextValues:
                 return kMGPipeSubsystemResidualValues;
-            // P5e's one emitted row (docs/archive/contracts/CONTRACT-P5E.md §5.6): the indexed buffer
-            // binding points. Written HERE at the contract commit, with the Coverage.def row
-            // and EmittedCallSuppliesTheWholeField's arm beside it, for the reason
-            // kMGPipeWiredSubsystems' block states one paragraph down - this file belongs to
-            // the contract package for the whole phase, and an emitter enumerator whose
-            // dispatch arm lived in the family's own worktree is the merge trap that block
-            // exists to close. It is inert until that family's wired constant leaves 0.
+                // P5e's one emitted row (§5.6): the indexed buffer
+                // binding points. Written HERE at the contract commit, with the Coverage.def row
+                // and EmittedCallSuppliesTheWholeField's arm beside it, for the reason
+                // kMGPipeWiredSubsystems' block states one paragraph down - this file belongs to
+                // the contract package for the whole phase, and an emitter enumerator whose
+                // dispatch arm lived in the family's own worktree is the merge trap that block
+                // exists to close. It is inert until that family's wired constant leaves 0.
             case MGPipeFieldEmitter::SetShaderBuffers:
                 return kMGPipeSubsystemBufferBindings;
             case MGPipeFieldEmitter::kNone:
@@ -2175,7 +2175,7 @@ namespace MobileGL::MG_Pipe {
         static_assert(kMGPipeMaxVertexAttribs == MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS,
                       "the MGPipe vertex-attribute capacity and the frontend's have drifted");
 
-        // P5e (docs/archive/contracts/CONTRACT-P5E.md §1, ruling 10), pinned here for the same reason and in
+        // P5e (§1, ruling 10), pinned here for the same reason and in
         // the same place: this translation unit sees the frontend constant and the MG_Pipe one,
         // and nothing else does. 84 is what the emitter may describe and what the wire carries;
         // the BACKEND clamps to the device's real GL_MAX_UNIFORM_BUFFER_BINDINGS, as it does

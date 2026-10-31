@@ -33,7 +33,7 @@
 // table below.
 //
 // THE CLIENT EMITTER LANDED TOO, and three places in the tree said otherwise until this commit:
-// this header, the CMake probe's comment, and docs/archive/notes/p4a/p4a-results/gates-v1.md's re-run table.
+// this header, the CMake probe's comment, and the phase notes' re-run table.
 // MG_Impl/Pipe/TextureEmit.h's EmitOneLevel increments CallClass::ClientTextureUploadEmissions on
 // every piece it emits, so `ctu=` is a live reading and `ctu == emit` is a live assertion. The
 // CMake probe's `else()` arm is kept - it is what makes the arming decision falsifiable - but it

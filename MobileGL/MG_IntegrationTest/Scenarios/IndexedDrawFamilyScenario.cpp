@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// Scenario - THE DRAW FAMILY P5b's d1 PUTS ON THE WIRE (docs/archive/contracts/CONTRACT-P5B.md §2 d1): one
+// Scenario - THE DRAW FAMILY P5b's d1 PUTS ON THE WIRE (§2 d1): one
 // VBO, one EBO, one program, one VAO, and one picture per draw entry point whose correctness
 // DEPENDS on the fields that entry point adds to draw_vbo. Two quads live in the vertex buffer,
 // a left one and a right one, and every case draws exactly one of them or both through a

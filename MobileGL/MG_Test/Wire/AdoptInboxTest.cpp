@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P11 B2 (docs/archive/contracts/CONTRACT-P11.md B2). Server::AdoptInbox - T0's Offers matched to their
+// P11 B2 (B2). Server::AdoptInbox - T0's Offers matched to their
 // map_persistent records BY SEQ, never by arrival order - over both aux channels the product has:
 // the in-process queue (inproc) and a real socket pair with SCM_RIGHTS (fork spawn / unix / fd:).
 //

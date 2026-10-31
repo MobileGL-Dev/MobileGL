@@ -8,7 +8,7 @@
 
 #pragma once
 
-// WHEN glFlush IS A SHARED-IMAGE BOUNDARY (docs/archive/notes/anland/plan-x11-gpu.md).
+// WHEN glFlush IS A SHARED-IMAGE BOUNDARY.
 //
 // A dma-buf producer that renders into its buffers and hands them on after a glFlush (an X
 // server's glamor committing a window pixmap) relies on implicit sync: whoever samples the buffer

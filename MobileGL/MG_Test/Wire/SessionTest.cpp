@@ -564,7 +564,7 @@ TEST(SessionTest, PresentAckSerialIsWaitedOnWithGreaterOrEqualAndWakesThroughThe
 }
 
 // ---------------------------------------------------------------------------
-// P5e (ra) - SEG_EVENT flow control (docs/archive/contracts/CONTRACT-P5E.md §2.6)
+// P5e (ra) - SEG_EVENT flow control (§2.6)
 // ---------------------------------------------------------------------------
 //
 // THE DEADLOCK THE CONTRACT ARGUES AWAY HAS TWO HALVES AND THIS IS THE FIRST. A run-ahead

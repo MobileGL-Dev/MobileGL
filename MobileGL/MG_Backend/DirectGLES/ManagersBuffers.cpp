@@ -1727,7 +1727,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const Uint16 uploadTarget = MG_Pipe::MGPipeSubDataUploadTargetOf(record.Target);
                 const IntVec3 extent = MG_Record::StagedTextureUploadExtent(stored->Desc, record);
                 const SizeT runBytes = static_cast<SizeT>(record.Blob.Size);
-                // P8-E (docs/archive/notes/p8/E.md): THE LEVEL HOLDS A COPY THE CLIENT NEVER SAW
+                // P8-E: THE LEVEL HOLDS A COPY THE CLIENT NEVER SAW
                 // (FollowCopyImageInStagedStore). The run is the client's shadow, stale everywhere it
                 // did not write, so only the texels it names land - its regions, or its union box
                 // when it carries none (D-D3's "the box is the whole story"). A run the store cannot

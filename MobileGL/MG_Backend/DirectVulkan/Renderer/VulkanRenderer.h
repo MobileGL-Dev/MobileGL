@@ -651,7 +651,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // and the default draw framebuffer alike. The CAPABILITY decline inside
         // ResolveWireDepthStencil (a stencil-only resolve without VK_EXT_shader_stencil_export
         // on a device without VK_KHR_depth_stencil_resolve) is still decided per aspect, after
-        // colour ran; rule I (a) accepts that (docs/archive/notes/p7/magma-b2.md §2.10).
+        // colour ran; rule I (a) accepts that (§2.10).
         Bool DeclineWireDepthStencilResolveShape(const WireImage& source, const WireImage& destination, GLint sx0,
                                                  GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1,
                                                  GLint dy1);

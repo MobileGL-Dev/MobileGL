@@ -73,7 +73,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (MG_Remote::Client::EmitObjectDeathRecord, CONTRACT-P5C §5.2).
         //
         // WHY THAT MATTERS, measured rather than argued (package L's probe,
-        // docs/archive/notes/p7/magma-two-process-first-run.md §6): under SPAWN the client process has no
+        // the phase notes §6): under SPAWN the client process has no
         // DirectVulkan backend at all, so InstallClientWireTables' own emitter already
         // answered the notice and CtWireScenario's two death cases PASSED. Under INPROC the
         // server role's backend is a thread of this process, Transport is Split rather than
@@ -247,7 +247,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // SPIRV-Reflect rebuild and `ClearProgramResourceCaches`, verbatim; only this build drops
     // them - and with them the rehash hazard the ordering comment below the block-binding
     // setter documents. Retiring the pull half is the day the member stops needing its guard,
-    // which is a G1/P13 decision and not a wave-2 one; recorded in docs/archive/notes/p7/magma-c.md.
+    // which is a G1/P13 decision and not a wave-2 one; recorded in the phase notes.
     void ClearProgramResourceCaches() {
         // Nothing to clear: there is no cache in this build. Kept as an entry point so
         // BackendObject_DirectVulkan's two EGL-teardown call sites stay statement for

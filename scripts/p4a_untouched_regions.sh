@@ -93,7 +93,7 @@
 # expected shape of a #if/#else pair that re-spells one of these bodies beside an untouched copy -
 # a finding, not a limitation, because two ladders drift (ID-11, ID-15).
 #
-# A SHARED TEMPLATE OVER AN ACCESSOR INTERFACE IS REJECTED (ID-13 in docs/archive/notes/p3a/INTEGRATOR-DECISIONS.md): it resizes
+# A SHARED TEMPLATE OVER AN ACCESSOR INTERFACE IS REJECTED (ID-13): it resizes
 # pull symbols and breaks G1. If a P4a arm needs a variant of one of the seventeen it gets its own
 # `#if MOBILEGL_PIPE_PUSH` function with its own name and its own pinned sha - the
 # FlushPendingRangesFrom shape.

@@ -130,7 +130,7 @@ namespace MobileGL::MG_Pipe {
         // caps adoption after Start; a later snapshot may only disarm it, because records already
         // published without a wait cannot be taken back.
         kCapRunAheadApply = 1ull << 10,
-        // P11 B2 (docs/archive/contracts/CONTRACT-P11.md B2). THIS SESSION MAY RUN T0: the client asked for
+        // P11 B2 (B2). THIS SESSION MAY RUN T0: the client asked for
         // it in its Hello (LinkTerms.adoptTier = 0) on a shared-segment plane, the server's
         // allow switch is on, this platform has AHardwareBuffer, and the backend's POST
         // self-test of the sustained-lock pattern passed on its live context. Never set in the
@@ -906,7 +906,7 @@ namespace MobileGL::MG_Pipe {
     // 0, or Count for the Uniform class under kCapNeedsHostUboBytes (RESERVED, P8-F: 0 today;
     // a range with nothing to ship carries an empty span, so the two arrays stay aligned).
     // MGPShaderBuffers::Class's three values, and the ONLY spelling of them (P5e,
-    // docs/archive/contracts/CONTRACT-P5E.md §1). The payload's comment has named them since P4a and
+    // the contract §1). The payload's comment has named them since P4a and
     // nothing numbered them, so the emitter and the applier were one literal each away from
     // disagreeing. Uniform is 0 so a zeroed record describes the uniform binding points, which
     // is the class every workload has.
@@ -1520,8 +1520,8 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPFlush, 8);
 
-    // DAMAGE ON THE WIRE (eglSwapBuffersWithDamage, docs/archive/notes/anland/plan-ahb-dmabuf.md
-    // item 5). At most kMGPMaxDamageRects rectangles, each x, y, width, height in GL window
+    // DAMAGE ON THE WIRE (eglSwapBuffersWithDamage, item 5). At most kMGPMaxDamageRects
+    // rectangles, each x, y, width, height in GL window
     // coordinates - origin at the bottom-left, as EGL hands them over. A count of 0 means the whole
     // surface, which is also what every record from a client that sends no damage says.
     inline constexpr Uint32 kMGPMaxDamageRects = 16;
@@ -1642,7 +1642,7 @@ namespace MobileGL::MG_Pipe {
     MGP_ASSERT_POD(MGPCopyFromFramebuffer, 48);
 
     // ---------------------------------------------------------------------------------
-    // P5c: the three appended rows (docs/archive/contracts/CONTRACT-P5C.md §5). APPENDED, never inserted:
+    // P5c: the three appended rows (§5). APPENDED, never inserted:
     // applier_reset is opcode 77, object_death opcode 78, and set_context_values (rv, §5.3)
     // opcode 79 - and no earlier opcode moved.
     //

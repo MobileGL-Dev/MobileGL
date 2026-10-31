@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// Scenario - A TEXTURE RE-MINT NEEDS NO BYTE FROM THE CLIENT (P9 W2, docs/archive/notes/p9/W2-REMINT.md).
+// Scenario - A TEXTURE RE-MINT NEEDS NO BYTE FROM THE CLIENT (P9 W2).
 //
 // The name is the ROADMAP's: P4a named `texture-remint-pull` the one new stall class of the
 // split - a texture first bound to an image unit AFTER the backend allocated it has to be

@@ -1559,7 +1559,7 @@ TEST(RemoteClientControls, ARefusedCreateUnlatchesItsObjectAndItsNextCreateBlock
 //
 // THE ASSERTIONS BELOW ARE THEREFORE A DEBT, NOT A SPEC, and they are written to be LOUD about it:
 // they pin today's numbers so that whoever lands the signal sees THIS case go red and knows the
-// repair started working. docs/archive/notes/p12/UNPUBLISH-GUARD-SIGNALS.md §4-§6 has the rest.
+// repair started working. The phase notes §4-§6 have the rest.
 TEST(RemoteClientControls, DroppedApplierRecordsAreNotRepairedTodayAndThisCaseIsTheDebt) {
     const auto child = RunInChild([] {
         ::setenv("MOBILEGL_PIPE_STATS", "1", 1);

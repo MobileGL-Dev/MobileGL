@@ -358,7 +358,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // server process has no frontend at all, so pDefaultFramebufferInfo is null there. Gating on
         // it returned before the post, the client kept Init.cpp's GL_DEPTH32F_STENCIL8 guess for a
         // D24S8 pbuffer, and a blit into a buffer allocated from that guess lost depth and stencil
-        // (docs/archive/notes/p8/SE.md). Inproc only passed because client and server share the process.
+        // Inproc only passed because client and server share the process.
         if (!g_GLESFuncs.glGetFramebufferAttachmentParameteriv) return;
         if (!defaultFBOInfo && MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged == nullptr) return;
 

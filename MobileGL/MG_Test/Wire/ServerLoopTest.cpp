@@ -2537,7 +2537,7 @@ TEST(StagedShadowProductionTest, TheStreamingIdiomThroughAPoolReuseIsUploadedNot
 
 // =====================================================================================
 // P5b d1: a draw_vbo record of every d1 shape crosses to the REAL ServerVerbSink with its
-// fields intact (docs/archive/contracts/CONTRACT-P5B.md §2 d1). No backend object lives in this process,
+// fields intact (§2 d1). No backend object lives in this process,
 // so each record is DECLINED after the sink has witnessed it - which is exactly the point:
 // the witness is taken before the backend is consulted, so these cases pin the wire's fields
 // and not a backend call. The emitter half (GL args -> these fields) is RemoteClientTest's

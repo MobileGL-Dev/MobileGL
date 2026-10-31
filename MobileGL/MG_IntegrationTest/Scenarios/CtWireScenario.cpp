@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P5c ct (docs/archive/contracts/CONTRACT-P5C.md §5): the two control records, end to end over inproc.
+// P5c ct (§5): the two control records, end to end over inproc.
 //
 // applier_reset (§5.1): this process's first validate primes the pipe tracker, and the
 // FreshlyPrimed edge is the record's producer (MG_Impl/Pipe/PipeFill.cpp). What the scenario
@@ -167,7 +167,7 @@ namespace MGITest {
             // (DirectVulkan.cpp, CONTRACT-P7 §5.5) and emits the same `object_death`. Package L
             // measured that the SPAWN arm already passed once the WireTables install condition
             // went backend-agnostic and that the INPROC arm failed here with `deaths` 0 vs 0
-            // (docs/archive/notes/p7/magma-two-process-first-run.md §6); the table is what closes the inproc
+            // (§6); the table is what closes the inproc
             // half, and this case is the gate on it. It is also the RED-ONCE for that table: with
             // the install site short-circuited, both cases red on their `od` assertions below.
             const GLubyte red[4] = {255, 0, 0, 255};
@@ -242,7 +242,7 @@ namespace MGITest {
         // "A SPLIT BUILD RUNS AT TIER T2 AND DECLINES EVERY ACQUISITION, ALWAYS"; T0/T1 are
         // unimplemented, refused by name at the handshake since P11 A1). So the capability is wired
         // AHEAD of its consumer on purpose, and `rsd=` on the PipeStats line is the counter that
-        // will show the records the day P11 lands a tier that adopts. See docs/archive/notes/p7/magma-c.md.
+        // will show the records the day P11 lands a tier that adopts. See the phase notes.
         TEST_F(CtWireScenario, TheServerPublishesTheResidentSubDataCapabilityFromItsOwnTable) {
             if (!Ready()) return;
             // A REAL WORKLOAD FIRST, and it is not decoration: ScenarioFixture's arming rule

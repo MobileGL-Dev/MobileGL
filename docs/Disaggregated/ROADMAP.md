@@ -1,6 +1,6 @@
 # 路线图（索引）
 
-> **2026-10-07**：P0 到 P7、P12、P9、P10、P11、P8、**P13** 已完成——拆分路线与单进程路线都走完。P13（退役 pull 路径）：单进程也只走记录臂，pull / push 两套构建、`MOBILEGL_PIPE_PUSH` 与 `MOBILEGL_PIPE_LEGACY_MEMOS` 编译期开关、残余值块和后端的前端对象臂全部删除；库拆成按 link ratchet 分区的七个模块，split 构建里 server 一半单独真链接；G1 退役，由零 `MG_Remote` 符号、skip 普查与 recorder 金标接班；性能工作排在其后，基线是 `dev` 构建。下一项是 **P14**（状态归属）。每个阶段的计划、验收结果、实测与报告在 `docs/archive/notes/<阶段>/`（点阶段名进入）。
+> **2026-10-07**：P0 到 P7、P12、P9、P10、P11、P8、**P13** 已完成——拆分路线与单进程路线都走完。P13（退役 pull 路径）：单进程也只走记录臂，pull / push 两套构建、`MOBILEGL_PIPE_PUSH` 与 `MOBILEGL_PIPE_LEGACY_MEMOS` 编译期开关、残余值块和后端的前端对象臂全部删除；库拆成按 link ratchet 分区的七个模块，split 构建里 server 一半单独真链接；G1 退役，由零 `MG_Remote` 符号、skip 普查与 recorder 金标接班；性能工作排在其后，基线是 `dev` 构建。下一项是 **P14**（状态归属）。每个阶段的计划、验收结果、实测与报告见 git 历史。
 
 ## 目标
 
@@ -15,29 +15,29 @@ client（跑应用的一方）与 server（跑驱动的一方）可以在**不�
 
 | 阶段 | 做什么 | 状态 |
 |---|---|---|
-| [P0](../archive/notes/p0/README.md) | 打地基：计数器、调用目录与生成器、CI 门；验证 Android 能拉起第二个进程 | ✅ 09-05 |
-| [P0.5](../archive/notes/p05/README.md) | 抽出前后端共用的数据类型头，切断后端对前端头文件的依赖 | ✅ |
-| [P1](../archive/notes/p1/README.md) | 后端改读一个"输入块"，并能逐 draw 核对它与前端真实状态一致 | ✅ |
-| [P2](../archive/notes/p2/README.md) | 前端开始主动推送渲染状态；接口代价实测 +6–12%，决定继续 | ✅ 09-08 |
-| [P3a](../archive/notes/p3a/README.md) | GLES 后端的 buffer、顶点数组改用句柄 | ✅ 09-08 |
-| [P4a](../archive/notes/p4a/README.md) | GLES 后端的帧缓冲、纹理、sampler、program 改用句柄 | ✅ 09-08 |
-| [P5](../archive/notes/p5/README.md) | 第一次拆成两线程：命令队列 + 后端线程（每条命令都等） | ✅ 09-16 |
-| [P5b](../archive/notes/p5b/README.md) | 把剩余命令迁到队列上；真机首次以独立后端线程跑通目标游戏 | ✅ 09-16 |
-| [P5c](../archive/notes/p5c/README.md) | 两线程之间不再偷偷共享内存，只经队列交换 | ✅ 09-17 |
-| [P5d](../archive/notes/p5d/README.md) | 两线程版本的性能：游戏内 7–13 fps → 103–106 fps | ✅ 09-18 |
-| [P5e](../archive/notes/p5e/README.md) | client 发完就走，不再每条命令等后端；重负载下与单线程持平 | ✅ 09-19 |
-| [P5f](../archive/notes/p5f/README.md) | 所有状态都经队列传递，为拆进程扫清最后障碍；Vulkan 后端也能发完就走 | ✅ 09-20 |
-| [P6](../archive/notes/p6/README.md) | 拆成两个进程；真机上两进程与两线程成本持平 | ✅ 09-22 |
-| [P6.5](../archive/notes/p65/README.md) | 传输分控制面 / 数据面；电脑当 client、手机当 server 经 TCP 跑通 | 第一波 ✅，余项交 CI |
-| [Ph](../archive/notes/p7/README.md) | server 能安全地接受外来连接：令牌、限额、坏数据不致崩溃 | 必需项 ✅（随 P7） |
-| [P3b / P4b](../archive/notes/p34b/README.md) | GLES 后端的深化与收尾 | 大部分 ✅，余项并行 |
-| [P7](../archive/notes/p7/README.md) | Vulkan 后端完整迁移；真机画面检查 36/36 通过 | ✅ 09-23 |
-| [**P12**](../archive/notes/p12/README.md) | **server 自己开窗口上屏，client 不需要窗口** | ✅ 09-29：出口门 B（跨机 TCP）✅ 09-28、A（FCL + 杀 server）✅ 09-29；契约 `docs/archive/contracts/CONTRACT-P12.md`；G1 成立；余项进 [`DEBTS.md`](DEBTS.md) |
-| [**P8**](../archive/notes/p8/README.md) | ~~把剩余的仿真路径挪到正确的一侧，补齐协议~~ → **补齐 server 侧仿真缺口与 split 覆盖** | ✅ 09-30：重定界（原 10 项里 6 项前序已完成）；Espryt 生成 mip / 暂存副本与 GPU 写 / 驱动拒读、Magma wire 原生 indirect 与 dispatch；246 例登上 split 三臂（`split_coverage.py`）；Create 在 Adreno 上的丢拷贝修到 dev 与 feat；契约 `docs/archive/contracts/CONTRACT-P8.md`；余项进 [`DEBTS.md`](DEBTS.md) |
-| [**P9**](../archive/notes/p9/README.md) | **反向通道：回读、日志、重铸不再同步等待 client** | ✅ 09-29：PACK-PBO 回读 fire-and-forget（两后端）、日志分级转发、重铸无拉取（`OnLog` / `OnTexturePullRequest` 删，回调 9 → 7），F1 / F2；契约 `docs/archive/contracts/CONTRACT-P9.md`；G1 成立；事件量批处理无实测需求不做；余项进 [`DEBTS.md`](DEBTS.md) |
-| [**P10**](../archive/notes/p10/README.md) | **同步对象、查询与帧节奏** | ✅ 09-29：fence 轮询由 server 报告本地作答（`kEventFenceSignaled`、`MOBILEGL_IPC_POLL_ESCALATE`；主机 Magma·tcp −37%，Adreno 830 上两后端 0 次往返）；`SetSwapInterval` 转发、class C 清零；query / XFB / AsyncCompile 登记 split 各臂；credit 1/2/3 设备 loopback 在噪声内；契约 `docs/archive/contracts/CONTRACT-P10.md`；G1 成立；余项进 [`DEBTS.md`](DEBTS.md) |
-| [**P11**](../archive/notes/p11/README.md) | **同机大缓冲零拷贝共享** | ✅ 09-29：T0 零拷贝导入（两后端，默认开，自测不过或 Stream 上静默退回 T2）；同机外部 client 经 helper + 令牌 broker 走共享内存（B1）；连接按 `PairBind` nonce 配对（修订 5）；采纳档位在握手时定；契约 `docs/archive/contracts/CONTRACT-P11.md`；余项进 [`DEBTS.md`](DEBTS.md) |
-| [**P13**](../archive/notes/p13/README.md) | **删掉旧的"后端直接读前端"路径** | ✅ 10-07：单进程只走记录臂；pull / push 构建与 `PIPE_PUSH` / `LEGACY_MEMOS` 编译期开关、残余值块、后端前端对象臂删除；七个 OBJECT 模块与 server-only 真链接；link ratchet 172 → 27 具名债务；recorder 金标；G1 退役；FCL 真机两后端冒烟通过；性能轮（基线 `dev`）与余项进 [`DEBTS.md`](DEBTS.md) |
+| P0 | 打地基：计数器、调用目录与生成器、CI 门；验证 Android 能拉起第二个进程 | ✅ 09-05 |
+| P0.5 | 抽出前后端共用的数据类型头，切断后端对前端头文件的依赖 | ✅ |
+| P1 | 后端改读一个"输入块"，并能逐 draw 核对它与前端真实状态一致 | ✅ |
+| P2 | 前端开始主动推送渲染状态；接口代价实测 +6–12%，决定继续 | ✅ 09-08 |
+| P3a | GLES 后端的 buffer、顶点数组改用句柄 | ✅ 09-08 |
+| P4a | GLES 后端的帧缓冲、纹理、sampler、program 改用句柄 | ✅ 09-08 |
+| P5 | 第一次拆成两线程：命令队列 + 后端线程（每条命令都等） | ✅ 09-16 |
+| P5b | 把剩余命令迁到队列上；真机首次以独立后端线程跑通目标游戏 | ✅ 09-16 |
+| P5c | 两线程之间不再偷偷共享内存，只经队列交换 | ✅ 09-17 |
+| P5d | 两线程版本的性能：游戏内 7–13 fps → 103–106 fps | ✅ 09-18 |
+| P5e | client 发完就走，不再每条命令等后端；重负载下与单线程持平 | ✅ 09-19 |
+| P5f | 所有状态都经队列传递，为拆进程扫清最后障碍；Vulkan 后端也能发完就走 | ✅ 09-20 |
+| P6 | 拆成两个进程；真机上两进程与两线程成本持平 | ✅ 09-22 |
+| P6.5 | 传输分控制面 / 数据面；电脑当 client、手机当 server 经 TCP 跑通 | 第一波 ✅，余项交 CI |
+| Ph | server 能安全地接受外来连接：令牌、限额、坏数据不致崩溃 | 必需项 ✅（随 P7） |
+| P3b / P4b | GLES 后端的深化与收尾 | 大部分 ✅，余项并行 |
+| P7 | Vulkan 后端完整迁移；真机画面检查 36/36 通过 | ✅ 09-23 |
+| **P12** | **server 自己开窗口上屏，client 不需要窗口** | ✅ 09-29：出口门 B（跨机 TCP）✅ 09-28、A（FCL + 杀 server）✅ 09-29；契约见 git 历史；G1 成立；余项进 [`DEBTS.md`](DEBTS.md) |
+| **P8** | ~~把剩余的仿真路径挪到正确的一侧，补齐协议~~ → **补齐 server 侧仿真缺口与 split 覆盖** | ✅ 09-30：重定界（原 10 项里 6 项前序已完成）；Espryt 生成 mip / 暂存副本与 GPU 写 / 驱动拒读、Magma wire 原生 indirect 与 dispatch；246 例登上 split 三臂（`split_coverage.py`）；Create 在 Adreno 上的丢拷贝修到 dev 与 feat；契约见 git 历史；余项进 [`DEBTS.md`](DEBTS.md) |
+| **P9** | **反向通道：回读、日志、重铸不再同步等待 client** | ✅ 09-29：PACK-PBO 回读 fire-and-forget（两后端）、日志分级转发、重铸无拉取（`OnLog` / `OnTexturePullRequest` 删，回调 9 → 7），F1 / F2；契约见 git 历史；G1 成立；事件量批处理无实测需求不做；余项进 [`DEBTS.md`](DEBTS.md) |
+| **P10** | **同步对象、查询与帧节奏** | ✅ 09-29：fence 轮询由 server 报告本地作答（`kEventFenceSignaled`、`MOBILEGL_IPC_POLL_ESCALATE`；主机 Magma·tcp −37%，Adreno 830 上两后端 0 次往返）；`SetSwapInterval` 转发、class C 清零；query / XFB / AsyncCompile 登记 split 各臂；credit 1/2/3 设备 loopback 在噪声内；契约见 git 历史；G1 成立；余项进 [`DEBTS.md`](DEBTS.md) |
+| **P11** | **同机大缓冲零拷贝共享** | ✅ 09-29：T0 零拷贝导入（两后端，默认开，自测不过或 Stream 上静默退回 T2）；同机外部 client 经 helper + 令牌 broker 走共享内存（B1）；连接按 `PairBind` nonce 配对（修订 5）；采纳档位在握手时定；契约见 git 历史；余项进 [`DEBTS.md`](DEBTS.md) |
+| **P13** | **删掉旧的"后端直接读前端"路径** | ✅ 10-07：单进程只走记录臂；pull / push 构建与 `PIPE_PUSH` / `LEGACY_MEMOS` 编译期开关、残余值块、后端前端对象臂删除；七个 OBJECT 模块与 server-only 真链接；link ratchet 172 → 27 具名债务；recorder 金标；G1 退役；FCL 真机两后端冒烟通过；性能轮（基线 `dev`）与余项进 [`DEBTS.md`](DEBTS.md) |
 | **P14** | **状态归属：同进程多 session / 多 context / share group**（统一 server 的前提，anland 内置渲染器不做按进程隔离） | 设计 ✅ [`design/11-state-ownership.md`](design/11-state-ownership.md)，实现待做 |
 
 ## 另见

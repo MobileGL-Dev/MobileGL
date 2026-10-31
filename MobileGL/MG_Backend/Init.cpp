@@ -85,7 +85,7 @@ namespace MobileGL::MG_Backend {
         // (VkBufferManager::RegisterWireResourceOps, VkBufferManager.cpp): under a transport it
         // owns buffer stores and claims bit 7 (the P4a mask, see ConsumedSubsystemsFor below);
         // under monolith it registers none and its buffers keep the legacy BufferBackendOps path.
-        // P5e (docs/archive/contracts/CONTRACT-P5E.md §6.2). THE ONE CONSTANT THE WHOLE PHASE HANGS ON.
+        // P5e (§6.2). THE ONE CONSTANT THE WHOLE PHASE HANGS ON.
         //
         // kCapRunAheadApply says "this server applies an unbarriered record without reading
         // client memory". That is only true once EVERY per-draw family reads records instead

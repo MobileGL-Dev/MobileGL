@@ -10,7 +10,7 @@
 
 namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
-    // ---- SHARED IMAGES (DirectGLES.h; docs/archive/notes/anland/plan-ahb-dmabuf.md) ------
+    // ---- SHARED IMAGES (DirectGLES.h) ------
 
     namespace SharedImageImpl {
 #if defined(__ANDROID__)

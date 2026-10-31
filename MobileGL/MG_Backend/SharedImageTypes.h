@@ -10,7 +10,7 @@
 #include <Includes.h>
 
 namespace MobileGL::MG_Backend {
-    // SHARED IMAGES (docs/archive/notes/anland/plan-ahb-dmabuf.md): server-allocated colour
+    // SHARED IMAGES: server-allocated colour
     // buffers exported to clients as dma-buf descriptors.
     //
     // The server-side view of one image, as a backend sees it: `NativeBuffer` is the image's

@@ -92,4 +92,4 @@ fence 完成度必须来自真的逐 fence 退休，不是 present 水位（Dire
 - 两端是不同二进制：`wireFingerprint`（`PipeFields.def` 派生的逐成员布局摘要 + 目录摘要 + 字节序 / 指针宽度）永远比较；`buildFingerprint` 只在 `Dial == Fork`（或 `MOBILEGL_IPC_REQUIRE_SAME_BUILD=1`）下比较；不一致是 `Refuse`，不是 abort。
 - TCP 上每条 `kWaitReply` 就是一个 RTT、`SEG_STAGE` 字节对的是 30–100 MB/s 的链路：这两列从"记录项"变成可行性数（开放问题 19、20）。
 
-第一波（全 TCP 控制 + stream 数据）已落地；同机混搭（nd `auto` / sd）是第二波。细节 [`docs/archive/notes/p65/README.md`](../../archive/notes/p65/README.md)，契约 `docs/archive/contracts/CONTRACT-P65.md`。
+第一波（全 TCP 控制 + stream 数据）已落地；同机混搭（nd `auto` / sd）是第二波。细节与契约见 git 历史。

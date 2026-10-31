@@ -61,7 +61,7 @@ namespace MobileGL::MG_Backend {
             (void)region;
             return true;
         }
-        // IMPLICIT SYNC BY FLUSH (docs/archive/notes/anland/plan-x11-gpu.md): the session
+        // IMPLICIT SYNC BY FLUSH: the session
         // on this (the apply) thread ends a frame at a glFlush. Every shared image it used since
         // its last boundary is published as written and read by one fence of everything it
         // submitted (SharedImages::ReadTracker::PublishFrameAsWrite), and from now on its first

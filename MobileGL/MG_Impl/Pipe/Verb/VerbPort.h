@@ -152,7 +152,7 @@ namespace MobileGL::MG_Record {
     Bool ReadbackReplyIsComplete(Int32 status, Uint64 replySize, Uint64 expected);
 
     // =============================================================================
-    // P5b d1 - the draw family's record plan (docs/archive/contracts/CONTRACT-P5B.md §2 d1)
+    // P5b d1 - the draw family's record plan (§2 d1)
     // =============================================================================
     //
     // The nineteen indexed / instanced / multi-draw / indirect entry points all ride draw_vbo

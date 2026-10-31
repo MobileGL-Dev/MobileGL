@@ -544,7 +544,7 @@ namespace MGITest {
     // THE CASE IS ARMED ON THE MAGMA WIRE ARM ONLY, and the two gates below say which of the
     // other arms that discover it (the suite is registered whole on the monolith DirectVulkan
     // arm and on every DirectGLES arm) owe this picture and do not yet produce it. Both are
-    // recorded debts (docs/archive/notes/p7/magma-b2.md §6), not agreements with the wrong answer:
+    // recorded debts (§6), not agreements with the wrong answer:
     //   - Espryt (DirectGLES, monolith and split alike): the flipped resolve writes nothing and
     //     raises no error, and the scaled one raises no error either. P3b/P4b.
     //   - the monolith DirectVulkan arm: `VulkanRenderer.cpp` refuses a depth blit with a
@@ -573,16 +573,15 @@ namespace MGITest {
             GTEST_SKIP() << "Espryt (" << Gl().BackendName()
                          << ") does not produce this picture yet: a "
                             "flipped multisample depth resolve writes nothing with no error and a scaled "
-                            "one raises no INVALID_OPERATION - a P3b/P4b debt (docs/archive/notes/p7/magma-b2.md §6)";
+                            "one raises no INVALID_OPERATION - a P3b/P4b debt (§6)";
         }
         if (!PeekSplitRuntime().transportResolved) {
-            GTEST_SKIP()
-                << "the monolith DirectVulkan transport (this process resolved no split "
-                   "transport, so BlitFramebuffer takes the monolith arm) refuses a flipped "
-                   "depth blit (\"depth blits with flipped rectangles are not supported yet\", "
-                   "destination untouched, no error) and scales a multisample depth blit GL "
-                   "calls INVALID_OPERATION - a wire-vs-monolith divergence where the wire arm "
-                   "is the correct one; the monolith fix is P13/G1-bound (docs/archive/notes/p7/magma-b2.md §6)";
+            GTEST_SKIP() << "the monolith DirectVulkan transport (this process resolved no split "
+                            "transport, so BlitFramebuffer takes the monolith arm) refuses a flipped "
+                            "depth blit (\"depth blits with flipped rectangles are not supported yet\", "
+                            "destination untouched, no error) and scales a multisample depth blit GL "
+                            "calls INVALID_OPERATION - a wire-vs-monolith divergence where the wire arm "
+                            "is the correct one; the monolith fix is P13/G1-bound (§6)";
         }
         DepthSource multisampled = MakeRenderbufferSource(GL_DEPTH24_STENCIL8, 4);
         if (!SourceIsUsable()) {

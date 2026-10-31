@@ -116,7 +116,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // attribute whose base offsets cannot be added is one Vulkan cannot fetch, the
             // monolith arm never computes that sum at all, and masking is strictly safer than
             // a Fatal for a number no application can reach on purpose. Recorded in
-            // docs/archive/notes/p7/magma-c.md rather than silently reconciled.
+            // the phase notes rather than silently reconciled.
             const auto describe = [&](const char* reason, VkFormat format) {
                 MGLOG_E_ONCE("Magma wire vertex layout: %s location=%u type=%u size=%u normalized=%u integer=%u "
                              "long=%u bgra=%u stride=%d offset=%llu format=%d bufferWindow=%u+%u activeMask=0x%x",

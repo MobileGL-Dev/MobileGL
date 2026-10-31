@@ -226,8 +226,7 @@ Android device. With MobileGL:
 
 The app, its container scripts and the compositor patch belong to the anland project, not to this
 repository. Build the server library with the Android NDK and the client with an aarch64 glibc cross
-toolchain ([building.md](building.md)). The developer runbook for this exact setup is
-`docs/archive/notes/anland/runbook-plasma.md`.
+toolchain ([building.md](building.md)). The developer runbook for this exact setup is in the git history.
 
 ## Monolith on a Linux desktop
 

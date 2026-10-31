@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// P8-SV: TWO glGenerateMipmap SHAPES THE MAGMA WIRE ARM GOT WRONG (docs/archive/notes/p8/SV.md).
+// P8-SV: TWO glGenerateMipmap SHAPES THE MAGMA WIRE ARM GOT WRONG.
 //
 //   * A 3D chain through the NATIVE blit. The wire arm passed the level's depth as the blit's
 //     subresource layerCount on an image with one array layer (VUID-vkCmdBlitImage-srcImage-00240,

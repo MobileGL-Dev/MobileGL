@@ -3270,7 +3270,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ---------------------------------------------------------------------------------
-    // P5e's two entry points, DECLARED BY c0e (docs/archive/contracts/CONTRACT-P5E.md §1)
+    // P5e's two entry points, DECLARED BY c0e (§1)
     // ---------------------------------------------------------------------------------
     //
     // set_shader_buffers HAS ITS BODY (package sb); set_program_bindings still refuses by name

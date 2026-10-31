@@ -2,8 +2,7 @@
 
 Measured 2026-09-26 on the split stack (client and server in separate processes). These are the numbers
 that used to live in the comment above `IpcTable::CreateWindow` in `MobileGL/Config.h`. The longer record,
-with the logs and the attempts that failed, is
-[`docs/archive/notes/p12/CREATE-WINDOW-MEASURED.md`](../archive/notes/p12/CREATE-WINDOW-MEASURED.md) (in Chinese).
+with the logs and the attempts that failed, is in the git history (in Chinese).
 
 ## What the knob does
 

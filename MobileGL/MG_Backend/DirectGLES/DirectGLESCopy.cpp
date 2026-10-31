@@ -1458,7 +1458,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // format, not only the redundant-encoding ones this mirror serves, and marks the store
         // driver-written where it cannot. The store is what answers a split glGetTexImage the
         // driver refuses to read back (DirectGLESReadback.cpp's store route); every other split
-        // read of the destination reads the GPU level itself (docs/archive/notes/p8/E.md).
+        // read of the destination reads the GPU level itself.
         //
         // BEHIND #if MOBILEGL_BUILD_DISAGGREGATED so the pull build's code does not move (G1),
         // and the arm is the TRANSPORT and not the build - build-split runs its unit and
@@ -1491,7 +1491,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E_ONCE("%s: source or destination image failed to sync; declining the copy", __func__);
             return;
         }
-        // P8-E (docs/archive/notes/p8/E.md): THE SERVER'S STAGED STORE FOLLOWS THE COPY. Both endpoints are synced,
+        // P8-E: THE SERVER'S STAGED STORE FOLLOWS THE COPY. Both endpoints are synced,
         // so every byte the store holds for them is on the driver, and the copy below is a raw
         // texel-block move - the store makes the same move, which keeps the destination level
         // answerable from here when the driver will not read it back (ReadTextureImageWire's store

@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// P10 (A, docs/archive/contracts/CONTRACT-P10.md §1): FENCE POLLS ANSWERED FROM THE REVERSE CHANNEL.
+// P10 (A §1): FENCE POLLS ANSWERED FROM THE REVERSE CHANNEL.
 //
 // A glClientWaitSync / glGetSynciv(GL_SYNC_STATUS) used to be a kWaitReply record: its answer
 // came back only after the server had applied every record before it, so a poll was a full

@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// P9 (W1, docs/archive/contracts/CONTRACT-P9.md §1): READS INTO A PIXEL PACK BUFFER ARE ANSWERED BY NOTHING.
+// P9 (W1 §1): READS INTO A PIXEL PACK BUFFER ARE ANSWERED BY NOTHING.
 //
 // Under a transport a glReadPixels / glGetTexImage whose destination is a bound
 // GL_PIXEL_PACK_BUFFER no longer waits for its pixels: it crosses as read_pixels_to_buffer /

@@ -43,7 +43,7 @@ namespace MobileGL::MG_Record {
         Bool OnDrawVbo(const MG_Pipe::MGPDrawInfo& info, const MG_Pipe::MGPDrawRange* ranges,
                        const MG_Pipe::MGHostSpan* userIndices, const MG_Pipe::MGPDrawIndirect* indirect) override;
 
-        // ---- P5b (docs/archive/contracts/CONTRACT-P5B.md): one override per row a migration package owns.
+        // ---- P5b: one override per row a migration package owns.
         // At the contract commit EVERY BODY BELOW IS A STUB that dies
         // Fatal{UnmigratedVerb, "<GL slot>"} by the slot's own name - the same line the client's
         // class-C table raises and the census greps - so a client flipped ahead of its server

@@ -584,7 +584,7 @@ namespace MobileGL::MG_Remote::Client {
             // willReadReply IS TRUE AND THAT IS THE WHOLE POINT OF THE WINDOW: this record does
             // not wait for its answer, and the drain above reads it later. A P12 no-reply bit
             // keyed on wantReply would tell the server to skip the very answer this row comes
-            // back for (docs/.../p12/CREATE-WINDOW-MEASURED.md section 7).
+            // back for.
             const Uint64 seq =
                 session.EmitAndWaitTails(MGPWireOp::ResourceCreate, payload, sizeof(*payload), nullptr, 0, nullptr, 0,
                                          &status, nullptr, /*wantReply=*/false, /*willReadReply=*/true);

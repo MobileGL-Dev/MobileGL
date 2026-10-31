@@ -7,7 +7,7 @@
 // End of Source File Header
 //
 // Scenario - glCopyImageSubData INTO A LEVEL THE DRIVER WILL NOT READ BACK (P8-E,
-// docs/archive/notes/p8/E.md).
+// the phase notes).
 //
 // The formats are the ones an ES driver keeps as texture-only storage: GL_RGB16 (EXT_texture_norm16
 // makes the three-channel spelling sampleable, never colour-renderable) and the 16-bit SNORM family

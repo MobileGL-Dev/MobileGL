@@ -7,7 +7,7 @@
 // End of Source File Header
 //
 // P8-SV: THE MAGMA WIRE ARM ISSUES glDispatchComputeIndirect FROM THE WIRE STORE, AS THE MONOLITH
-// ARM DOES (docs/archive/notes/p8/SV.md).
+// ARM DOES.
 //
 // Before P8-SV the wire arm read the three group counts through ReadWireBuffer and dispatched them
 // from the CPU, so a dispatch buffer a shader had written cost a whole-GPU wait per call - the

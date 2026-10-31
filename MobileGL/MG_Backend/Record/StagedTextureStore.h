@@ -519,7 +519,7 @@ namespace MobileGL::MG_Record {
             EraseSession(m_driverWritten, session);
         }
 
-        // ---- P8-E (docs/archive/notes/p8/E.md): WHEN THESE BYTES ARE THE LEVEL'S CONTENT ----
+        // ---- P8-E: WHEN THESE BYTES ARE THE LEVEL'S CONTENT ----
         //
         // The store holds what the client uploaded. It is also the only CPU copy of a level the
         // server has, so a readback the driver refuses (a format the ES driver will not attach -

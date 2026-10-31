@@ -9,7 +9,7 @@
 #include "VulkanRendererInternal.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-    // SHARED IMAGES (docs/archive/notes/anland/plan-ahb-dmabuf.md). The present side's copy is
+    // SHARED IMAGES. The present side's copy is
     // WireFramebuffer.cpp's readback, into an image: the same flush, the same write-visibility
     // barrier, the same transition of the default framebuffer's image.
     //

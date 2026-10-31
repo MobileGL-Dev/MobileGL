@@ -9,8 +9,8 @@
 """The link-closure ratchet: which frontend symbols would a server-only image still need?
 
 CONTRACT-P6.md 12.1 records the debt as 184 symbols and says "a ratchet recomputes the 184
-in CI and asserts it only ever falls". This is that ratchet. The measurement is a6's
-(docs/archive/notes/p6/a6-link-experiment.md), mechanised:
+in CI and asserts it only ever falls". This is that ratchet. The measurement is a6's,
+mechanised here:
 
     (SERVER undefined) - (SERVER defined) - (SHARED defined)  intersect  (FRONTEND defined)
 

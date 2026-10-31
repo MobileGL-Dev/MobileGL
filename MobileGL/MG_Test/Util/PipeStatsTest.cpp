@@ -568,7 +568,7 @@ namespace {
     }
 
     // P8-D: the Magma wire arm's indirect-draw bracket. Its short names are what the create
-    // fixtures' measurement (docs/archive/notes/p8/D.md) reads off the server's line, and its long names are
+    // fixtures' measurement reads off the server's line, and its long names are
     // what Harness/WireIndirectPeek.cpp's readers expect in the JSON dump.
     TEST_F(PipeStatsTest, WireIndirectCountersPrintInTheirOwnBracket) {
         PS::AddCalls(PS::CallClass::WireIndirectNativeDraws, 3);

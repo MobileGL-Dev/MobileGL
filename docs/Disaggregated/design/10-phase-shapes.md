@@ -8,10 +8,10 @@
 
 | 原节 | 主题 | 仍生效的规则 | 全文 |
 |---|---|---|---|
-| 17.1 | verb barrier 与诚实的同地址空间传输（P5） | 同地址空间不得成为旁路（R-2）：encoder 把 `MGHostSpan::Ptr` 恒写 `nullptr`；reply 以记录序号为 slot id（R-3）；等待看门狗 120 s 只判死锁，不是性能门 | [`docs/archive/notes/p5/README.md`](../../archive/notes/p5/README.md) |
+| 17.1 | verb barrier 与诚实的同地址空间传输（P5） | 同地址空间不得成为旁路（R-2）：encoder 把 `MGHostSpan::Ptr` 恒写 `nullptr`；reply 以记录序号为 slot id（R-3）；等待看门狗 120 s 只判死锁，不是性能门 | git 历史 |
 | 17.2 | 后端槽三类、caps、tight readback（P5） | A 本地答 / B 发射 / C 具名拒绝，永不回落 monolith（R-4）；能力只读 `CallMask`（R-8）；`ReadPixels` 线上恒 tight，client 按自己的 pack state 散射 | 同上 |
 | 17.3 | server 角色、shadow 与退出（P5） | apply 线程终身持有 native context，EGL 罕见操作经控制邮箱进 apply 线程；staged shadow 只交 server-owned 拷贝；有界退出顺序 | 同上 |
 | 17.4 | lane 隔离（P5） | 每条 split 条目私有日志；E1 与 E3(a) 的对照是常驻用例（`RemoteWaitBoundaryControl.AnUnwaitedPublishIsSeenAsNoWait`、`PersistentCoherentMapScenario.ThePushIsTheOnlyRouteAWriteTakesToTheServer`），不重跑 lane | 同上 |
-| 17.5 | class-C verb 迁移（P5b） | 迁移顺序由动态普查决定；一次迁移 = 一个发射器 + 一个 sink 体；记录逐字带 GL 调用参数，未测量的形式按名拒绝（规则 D） | [`docs/archive/notes/p5b/README.md`](../../archive/notes/p5b/README.md) |
-| 17.6 | 共享地址空间访问归零（P5c） | server 端纹理 staged shadow；`SEG_EVENT` 是唯一反向通道；sink / twin 按记录句柄解析；`applier_reset` / `object_death` 控制记录；角色守卫 `Fatal{RoleViolation}` | [`docs/archive/notes/p5c/README.md`](../../archive/notes/p5c/README.md) |
-| 17.7 | run-ahead（P5e） | 规则 F：unbarriered 记录的 apply 不读任何 client 内存（违反即具名 Fatal，与 strict 开关无关）；`gPipeInputs` 是 server 角色内存；`RunAheadArmed()` 在首次 caps 采纳时锁存，只能关不能开；`RUN_AHEAD=0` 是 A/B 对照 | [`docs/archive/notes/p5e/README.md`](../../archive/notes/p5e/README.md) |
+| 17.5 | class-C verb 迁移（P5b） | 迁移顺序由动态普查决定；一次迁移 = 一个发射器 + 一个 sink 体；记录逐字带 GL 调用参数，未测量的形式按名拒绝（规则 D） | git 历史 |
+| 17.6 | 共享地址空间访问归零（P5c） | server 端纹理 staged shadow；`SEG_EVENT` 是唯一反向通道；sink / twin 按记录句柄解析；`applier_reset` / `object_death` 控制记录；角色守卫 `Fatal{RoleViolation}` | git 历史 |
+| 17.7 | run-ahead（P5e） | 规则 F：unbarriered 记录的 apply 不读任何 client 内存（违反即具名 Fatal，与 strict 开关无关）；`gPipeInputs` 是 server 角色内存；`RunAheadArmed()` 在首次 caps 采纳时锁存，只能关不能开；`RUN_AHEAD=0` 是 A/B 对照 | git 历史 |

@@ -301,7 +301,7 @@ namespace MobileGL::MG_Record {
         return false;
     }
 
-    // ---- P9 (W1, docs/archive/contracts/CONTRACT-P9.md §1): the pack-buffer readbacks ------------------------
+    // ---- P9 (W1 §1): the pack-buffer readbacks ------------------------
     //
     // WHY THE ROWS GO THROUGH THE APPLIER'S BUFFER-WRITE GATE AND NOT THROUGH THE DRIVER'S OWN
     // PBO READ. Monolith binds the driver buffer as GL_PIXEL_PACK_BUFFER and lets glReadPixels
@@ -504,7 +504,7 @@ namespace MobileGL::MG_Record {
             slot);
     }
 
-    // P5b d1 (docs/archive/contracts/CONTRACT-P5B.md §2 d1): draw_vbo's whole cross product. The record
+    // P5b d1 (§2 d1): draw_vbo's whole cross product. The record
     // carries the GL call verbatim (rule D) and this body reproduces the backend call the
     // monolith makes for that shape, reading only the record and the backend's own
     // barrier-pulled state; the twenty GL entry points collapse onto the arms below:
@@ -815,7 +815,7 @@ namespace MobileGL::MG_Record {
     }
 
     // -----------------------------------------------------------------------------------
-    // P5b: the stubs the four migration packages replace (docs/archive/contracts/CONTRACT-P5B.md).
+    // P5b: the stubs the four migration packages replace.
     //
     // Each dies by the GL slot's own name. The record has crossed and been validated by the
     // codec by the time one of these runs, so the only thing missing is the backend call, and
@@ -824,7 +824,7 @@ namespace MobileGL::MG_Record {
     // in the same words), the call, and a tally the lane can assert moved.
     // -----------------------------------------------------------------------------------
 
-    // ---- i1 ---- (docs/archive/contracts/CONTRACT-P5B.md §2 i1; landed by package p5b/i1)
+    // ---- i1 ---- (§2 i1; landed by package p5b/i1)
     //
     // RULE D IN FIVE BODIES. Each reproduces the backend call the monolith makes, from the
     // record and from server state, and NOTHING ELSE: the backend goes on reading the frontend
@@ -974,7 +974,7 @@ namespace MobileGL::MG_Record {
         return true;
     }
 
-    // ---- t2 ---- (docs/archive/contracts/CONTRACT-P5B.md §2 t2)
+    // ---- t2 ---- (§2 t2)
     //
     // SIX BODIES, SIX BACKEND CALLS, NO STATE OF THEIR OWN. Rule D: the record IS the call, and
     // everything the backend reads around it - the capture program, the capture-buffer

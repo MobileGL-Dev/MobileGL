@@ -397,7 +397,7 @@ TEST(StagedTextureStoreTest, TheGpuDirtyMarkIsTheServersOwnDirtyAnswer) {
     EXPECT_EQ(monolithStore.TrackedResources(), 0u);
 }
 
-// ---- P8-E (docs/archive/notes/p8/E.md): the store follows glCopyImageSubData -----------
+// ---- P8-E: the store follows glCopyImageSubData -----------
 //
 // Two 4x4 RGBA8 levels (four bytes a texel), each adopted whole with a distinct byte pattern so a
 // mis-addressed row or a swapped endpoint shows as a wrong byte, not a coincidentally right one.

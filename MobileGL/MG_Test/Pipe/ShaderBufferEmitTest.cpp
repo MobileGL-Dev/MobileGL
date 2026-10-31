@@ -7,7 +7,7 @@
 // End of Source File Header
 
 // P5e's set_shader_buffers - the INDEXED BUFFER BINDING POINTS - on both sides of the call
-// (docs/archive/contracts/CONTRACT-P5E.md §5.6, rulings 10 and 11; package sb).
+// (§5.6, rulings 10 and 11; package sb).
 //
 // WHAT THIS SUITE IS FOR. Three properties of this family are invisible in a picture and are
 // exactly what an optimisation or a merge deletes:

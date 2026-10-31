@@ -13,7 +13,7 @@ Its first use was `CONTRACT-P6.md` section 9 item 7 (the paired device gate) and
 doorbell ledger), and it is not specific to those: the thing it computes is "N transports, one
 thermal window, identical protocol" for any transport/backend/case triple the runner accepts.
 Everything it does is a step of the protocol in docs/Disaggregated/MEASUREMENTS.md sections 4.4 / 9
-/ 11 plus docs/archive/notes/p5f/device-report.md.
+/ 11 plus the phase notes.
 
 Why it is a script and not a shell transcript: a run that wants to be quotable needs the CPU
 samples, the pin evidence and the library's own wait ledger to come from the SAME window, and the
@@ -26,7 +26,7 @@ WHAT IT DELIBERATELY DOES NOT DO.
 - It does not decide anything about correctness. Benchmark mode takes no snapshot and compares no
   golden (--benchmark replays the whole trace for timing), so an SSIM column here would be a
   fabrication. Correctness on this device is section 3 of the P6 closing snapshot
-  (docs/archive/notes/p6/README.md) and the retrace lanes.
+  and the retrace lanes.
 - It does not read `MOBILEGL_TRANSPORT` out of `--transport` on the runner. That flag is applied by
   run_android_retrace_local.py's run_case() path only; run_benchmark_case() passes `args.env`
   alone, so `--transport spawn` alongside `--benchmark` is silently ignored and the arm runs
@@ -821,7 +821,7 @@ def main():
 
     # The fan is a CONSTANT of the protocol, not a treatment: both arms run under the same airflow,
     # and on this device it is the difference between a 60 s cool-down between arms and a 20-minute
-    # one (docs/archive/notes/p4a/INTEGRATOR-DECISIONS.md). `real_speed` is read back because target_level alone
+    # one. `real_speed` is read back because target_level alone
     # is a request, not a fact.
     fan = "/sys/class/xm_power/hw_monitor/pwm_fan"
     adb.su(f"echo {args.fan_level} > {fan}/target_level")

@@ -1255,7 +1255,7 @@ void main() { color = value + tail; }
         // The sibling of ShortUniformBufferRangePadsMissingBytes whose bound range does NOT
         // end on a four-byte boundary. That window is what `uniform-buffer-byte-tail`
         // used to refuse (a named Fatal that took the whole session with it), and it is the
-        // live boundary the Redmi Minecraft run reported (docs/archive/notes/p5f/magma-inproc-fix.md #5).
+        // live boundary the Redmi Minecraft run reported.
         //
         // Only the SIZE can land off a word here. glBindBufferRange constrains the offset to
         // GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT and records GL_INVALID_VALUE otherwise

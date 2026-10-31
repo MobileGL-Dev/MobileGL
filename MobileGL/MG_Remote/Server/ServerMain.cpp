@@ -331,7 +331,7 @@ namespace {
 
     // P12 (D8). A FORKED SESSION CHILD DIES WITH ITS SUPERVISOR. The child used to outlive a supervisor
     // that was killed (MobileGLServerService.onDestroy destroys only the supervisor), holding its client
-    // and its GPU context until that client went away (docs/archive/notes/p65/code-review-findings.md:9). With the
+    // and its GPU context until that client went away. With the
     // parent-death signal the kernel SIGKILLs it the moment the supervisor goes - and the getppid()
     // check closes the race of a supervisor that died between fork() and the prctl. Linux (and Android)
     // only; the signal fires when the THREAD that forked exits, and both fork sites run on the

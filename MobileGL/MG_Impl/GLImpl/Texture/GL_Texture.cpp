@@ -46,7 +46,7 @@
 // call sites below are declarations only, exactly as the frontend's mutators are.
 #include <MG_Pipe/PipeMutation.h>
 
-// P9 (W1, docs/archive/contracts/CONTRACT-P9.md §1): AN UNPACK SOURCE IS READ FROM THE BUFFER'S CLIENT SHADOW,
+// P9 (W1 §1): AN UNPACK SOURCE IS READ FROM THE BUFFER'S CLIENT SHADOW,
 // and under a transport a GPU write into that buffer - a read_pixels_to_buffer, which is how a
 // glReadPixels into a pack buffer now crosses, or a shader store - reaches the shadow only through
 // SyncGpuWrites, exactly as glMapBufferRange and glGetBufferSubData already do. Monolith keeps its

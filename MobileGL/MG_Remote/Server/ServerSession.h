@@ -246,7 +246,7 @@ namespace MobileGL::MG_Remote::Server {
         Transport::RoleMemorySample SampleMemory() const;
         void LogMemory(const char* phase) const;
 
-        // ---- P11 B2: T0 (docs/archive/contracts/CONTRACT-P11.md B2) --------------------------------------
+        // ---- P11 B2: T0 (B2) --------------------------------------
         //
         // The client's Hello asked T0 (LinkTerms.adoptTier = 0 over shared segments).
         Bool AdoptT0Asked() const { return m_adoptT0Asked; }
@@ -281,7 +281,7 @@ namespace MobileGL::MG_Remote::Server {
         Bool AdoptT0Quiet() const { return m_adoptT0Quiet; }
         AdoptInbox& T0Inbox() { return m_adoptInbox; }
 
-        // ---- shared images (docs/archive/notes/anland/plan-ahb-dmabuf.md) -------------
+        // ---- shared images -------------
         // The images this session allocated or imported and has not released; emptied when the
         // session closes. The control transport is where an allocation's descriptor goes out.
         SharedImages::SessionHolder& SharedImageHolder() { return m_sharedImages; }

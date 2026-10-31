@@ -57,7 +57,7 @@ namespace MobileGL::MG_Remote::Client {
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
 
-        // ---- shared images (docs/archive/notes/anland/plan-ahb-dmabuf.md) -------------
+        // ---- shared images -------------
         Bool AllocateSharedImage(Uint32 width, Uint32 height, Uint32 fourcc,
                                  MG_Backend::SharedImageExport* out) override;
         Bool ImportSharedImage(int fd, Uint32 width, Uint32 height, Uint32 fourcc, Uint64* outId) override;
