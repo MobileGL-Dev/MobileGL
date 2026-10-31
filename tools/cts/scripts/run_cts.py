@@ -1,4 +1,12 @@
 #!/usr/bin/env python
+# MobileGL - tools/cts/scripts/run_cts.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """Drive a glcts run on a device, resuming across crashes.
 
 MobileGL crashes on some cases, and glcts takes the whole process down with it.

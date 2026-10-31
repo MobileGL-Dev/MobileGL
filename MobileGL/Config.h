@@ -8,13 +8,13 @@
 
 #pragma once
 #include <Includes.h>
-#include <MG_Backend/BackendObjects.h>
+#include <BackendCaps.h>
 
 namespace MobileGL::MG_Config {
     inline const String ProjectName = "MobileGL";
     inline const String CoreName = "MobileGL Core";
     inline const String CoreVendor = "MobileGL-Dev (BZLZHH, Swung0x48, Tungsten)";
-    inline const Version CoreVersion = {26, 8, 0, "-dev", VersionType::Development};
+    inline const Version CoreVersion = {26, 10, 0, "-dev", VersionType::Development};
     inline const VersionStringFormatAttrib DefaultVersionStringFormatAttrib = {2, 2, 0, true, true};
     inline const Uint64 CacheVersion = 0;
 
@@ -85,41 +85,57 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_TRACE_ANGLE_VARIANT: signed trace-APK ANGLE build short hash.
         String TraceAngleVariant;
 #endif
-        // MOBILEGL_MAGMA_DISABLE_SUBGROUP: force-disable Vulkan shader subgroup support,
-        // including the opt-in emulated compute path below.
-        Bool MagmaDisableSubgroup = false;
-        // MOBILEGL_MAGMA_EMULATE_SUBGROUP: implement GL_KHR_shader_subgroup's compute
-        // stage on a 32-lane VIRTUAL subgroup lowered to workgroup-shared memory
-        // (ShaderTranspiler::EmulateSubgroupsPass). Strictly a last resort: it only ever
-        // engages when this flag is set AND the device has no native subgroup support at
-        // all - a device with real subgroup operations always uses them natively,
-        // whatever their width (the known iterationRP defect is patched by
-        // MagmaFixIterationRPSubgroupScratch below instead). Off by default.
-        Bool MagmaEmulateSubgroup = false;
-        // MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: patch iterationRP's own bug - the
-        // pack declares `shared vec2 prefixSumCache[32]` for a 512-invocation exposure
-        // reduction and indexes it by gl_SubgroupID, so any device with sub-16-lane
-        // subgroups (8-lane lavapipe -> 64 subgroups) writes shared memory out of
-        // bounds. The pass grows that one array to what the device's topology needs and
-        // touches nothing else; it only rewrites modules positively matching the pack's
-        // reduction fingerprint (ShaderTranspiler::FixIterationRPSubgroupScratchPass),
-        // so every other shader passes through byte-identical - as does iterationRP
-        // itself on >= 16-lane devices. Auto is ON; ForceOff replays the pack's bug
-        // verbatim.
-        QuirkOverride MagmaFixIterationRPSubgroupScratch = QuirkOverride::Auto;
-        // MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: repair Program 203's missing workgroup
-        // rendezvous between its two reductions over prefixSumCache. Off by default and
-        // fingerprint-gated by FixIterationRPBarrierPass when enabled.
-        Bool MagmaIterationRPFixBarrier = false;
-        // MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS: replace compute gl_NumSubgroups loads with
-        // ceil(workgroup invocations / gl_SubgroupSize) on the NATIVE subgroup path
-        // (ShaderTranspiler::DeriveNumSubgroupsPass). Auto is ON: GL requires
-        // gl_SubgroupID < gl_NumSubgroups, Adreno's builtin reports 1 while the same
-        // dispatch emits IDs 0..7, and the derived value is the one Vulkan guarantees
-        // whenever the pipeline can request REQUIRE_FULL_SUBGROUPS (which the renderer
-        // does whenever local_size_x is a multiple of the native width). ForceOff returns
-        // to the raw driver builtin.
-        QuirkOverride MagmaDeriveNumSubgroups = QuirkOverride::Auto;
+        // MOBILEGL_SUBGROUP_EMULATION: how either backend implements GL_KHR_shader_subgroup
+        // (MG_Backend/SubgroupImplementation.h). Auto (the default) uses the driver's own subgroup
+        // operations natively whenever it has them, at whatever width (8/16/32/64/128 lanes), and
+        // otherwise emulates the compute stage on a 32-lane VIRTUAL subgroup in workgroup-shared
+        // memory (ShaderTranspiler::EmulateSubgroupsPass). ForceOn emulates even over native
+        // support, so the emulation can be exercised on any device; ForceOff never emulates,
+        // leaving a driver without subgroups without the extension.
+        QuirkOverride SubgroupEmulation = QuirkOverride::Auto;
+        // MOBILEGL_ITRP_FIX: the iterationRP shaderpack's two compute-shader bugs, repaired by
+        // fingerprint-gated passes that leave every other module byte-identical
+        // (MG_Backend/SubgroupImplementation.h):
+        //   * FixIterationRPSubgroupScratchPass - the pack declares `shared vec2
+        //     prefixSumCache[32]` for a 512-invocation reduction indexed by gl_SubgroupID, so a
+        //     sub-16-lane device (8-lane lavapipe -> 64 subgroups) writes shared memory out of
+        //     bounds; the array grows to what the native width needs (inert at >= 16 lanes, and
+        //     under the 32-lane emulation);
+        //   * FixIterationRPBarrierPass - Program 203's second reduction overwrites that scratch
+        //     without a workgroup rendezvous after the first one's readers.
+        // Auto and ForceOn apply both; ForceOff replays the pack's bugs verbatim.
+        QuirkOverride IterationRPFix = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_INPASS_CLEAR: a wire-arm glClear / glClearBuffer* whose targets are the
+        // attachments of the draw pass for the bound framebuffer is recorded inside that pass
+        // (vkCmdClearAttachments) rather than in a render pass of its own built for the clear.
+        // Auto is ON; ForceOff restores the standalone clear for every surface.
+        QuirkOverride MagmaInPassClear = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_INPASS_CLEAR_DEFAULT: the same for the default framebuffer. Auto is OFF
+        // (an unexplained openra regression on Adreno 750, perf-p15/HANDOFF.md); ForceOn enables it.
+        QuirkOverride MagmaInPassClearDefault = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_PASS_CACHE: wire draw passes (render pass, framebuffer, views) are kept
+        // across frames while their key's image epochs hold. Auto is ON; ForceOff drops every
+        // cached pass whose last use completed at each frame begin, as before P15.
+        QuirkOverride MagmaPassCache = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_VERTEX_CONVERSION_CACHE: a wire vertex stream that needs a CPU format
+        // conversion is converted once per frame slot per (buffer content, layout) and reused by
+        // every draw that names it, instead of once per draw. Auto is ON; ForceOff converts per draw.
+        QuirkOverride MagmaVertexConversionCache = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_WRITE_RENAME: a glBufferSubData into a small wire store the GPU may still
+        // be reading gives the store a fresh buffer filled from a host shadow, instead of a staged
+        // copy that ends the render pass. Auto is ON; ForceOff keeps the staged copy.
+        QuirkOverride MagmaWriteRename = QuirkOverride::Auto;
+        // MOBILEGL_ESPRYT_VAO_SHADOW: DirectGLES emits a vertex attribute's enable flag, divisor and
+        // pointer to the driver VAO only when they differ from what that VAO already holds (a
+        // shadow on the VAO twin). Auto is ON; ForceOff re-emits the whole configuration per walk.
+        QuirkOverride EsprytVaoShadow = QuirkOverride::Auto;
+        // MOBILEGL_PIPE_VERTEX_ELEMENTS_DEDUP: a VAO configuration change whose vertex-elements
+        // record is byte-identical to the one its handle last published (a glBindVertexBuffer
+        // that only changed the buffer) re-publishes nothing. Auto is ON; ForceOff re-creates.
+        QuirkOverride PipeVertexElementsDedup = QuirkOverride::Auto;
+        // P15: the client reuses a bound framebuffer's built set_framebuffer_state while nothing it
+        // reads has moved (MGPipeFramebufferEmitter::BuildBoundFramebufferState).
+        QuirkOverride PipeFramebufferStateMemo = QuirkOverride::Auto;
         // MOBILEGL_ADVERTISE_FP64: add GL_ARB_gpu_shader_fp64 to the advertised extension
         // string. `double` in a shader always WORKS - it is narrowed to 32 bits before any
         // module reaches a backend (ShaderTranspiler::DemoteFloat64Pass) - but the extension
@@ -130,8 +146,27 @@ namespace MobileGL::MG_Config {
         Bool AdvertiseFp64 = false;
         // MOBILEGL_MAGMA_R11G11B10F_FALLBACK: use fallback format for R11G11B10F on Vulkan.
         Bool MagmaR11G11B10FFallback = false;
-        // MOBILEGL_MAGMA_FRAMESINFLIGHT: requested Magma frames in flight, defaulting to 3.
-        Uint32 MagmaFramesInFlight = 3;
+        // MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV: hand a shader module that fails SPIR-V validation to
+        // the driver anyway. Off by default: Magma declines such a program (no shader module, its
+        // draws refused by name), because a driver that accepts invalid SPIR-V may fault the GPU
+        // into device loss. For diagnosing a driver that copes with a specific module only.
+        Bool MagmaAllowInvalidSpirv = false;
+        // MOBILEGL_FRAMES_IN_FLIGHT (P15; MOBILEGL_MAGMA_FRAMESINFLIGHT is its deprecated alias):
+        // how many frames may be queued ahead of the GPU, default 3, both backends.
+        //   - Magma: its frame contexts (frame S+1 reuses S+1-N's), clamped to the surface.
+        //   - Espryt: after presenting S the backend waits for S+1-N to complete (N = 1 is a full
+        //     CPU/GPU sync; N >= 2 is what Android's own queueBuffer throttle already gives).
+        //   - inproc / spawn / TCP: the present credit, how many presents the GL thread may run
+        //     ahead of the server, is derived from it: max(1, N - 2), so the default 3 keeps the
+        //     shipped credit of 1 and N = 4 is credit 2 (one more frame of latency).
+        Uint32 FramesInFlight = 3;
+        // MOBILEGL_MAGMA_EXTRA_SWAPCHAIN_IMAGES: swapchain images Magma asks for beyond the
+        // surface's minimum (the frames-in-flight count still raises the request when it is
+        // larger), clamped to the surface's maximum. With more images, the one the display has
+        // just released is reused later, by when its release has usually signaled, so fewer
+        // frames start their window pass behind it. Each image costs a full-size color buffer
+        // plus the default framebuffer's depth/stencil buffer of the same size.
+        Uint32 MagmaExtraSwapchainImages = 0;
         // MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER: GL draws and dispatches Magma records into
         // one command buffer before it submits it and continues on a fresh one. 0 = unbounded.
         // Drivers back a command buffer with GPU memory that is only returned when the buffer is
@@ -164,6 +199,31 @@ namespace MobileGL::MG_Config {
         // lavapipe carry a located block correctly and would otherwise never run this code -
         // and ForceOff is the negative control. See StripIoBlockLocationsPass.
         QuirkOverride EsprytUnlocatedIoBlocks = QuirkOverride::Auto;
+        // MOBILEGL_ESPRYT_DEFER_GEOMETRY_EMITS: DirectGLES moves a geometry shader's
+        // EmitVertex()/EndPrimitive() behind its memory writes (DeferGeometryEmitsPass). The
+        // Adreno ES driver silently drops storage writes a geometry invocation makes after
+        // emitting; the driver POST measures that and arms this by itself, so Auto is right
+        // everywhere. ForceOn exercises the rewrite on a healthy driver; ForceOff is the
+        // negative control that replays the lost writes.
+        QuirkOverride EsprytDeferGeometryEmits = QuirkOverride::Auto;
+        // MOBILEGL_ESPRYT_ATOMIC_SUBGROUP_SCRATCH: DirectGLES's subgroup emulation reads its
+        // workgroup scratch back through atomic loads (EmulateSubgroupsPass). The Adreno ES
+        // compiler treats ordinary shared-memory loads as pure and merges or reorders them
+        // across stores and barrier(), so an emulated subgroup operation would see the lanes of
+        // an earlier one; the driver POST measures that and arms this by itself, so Auto is
+        // right everywhere. ForceOn exercises the atomic reads on a healthy driver; ForceOff is
+        // the negative control.
+        QuirkOverride EsprytAtomicSubgroupScratch = QuirkOverride::Auto;
+        // MOBILEGL_ESPRYT_INVALID_IMAGE_PLACEHOLDER: DirectGLES binds an image unit GL 4.6 8.26
+        // calls invalid (a level the texture does not have) to a zeroed 1x1 texture of the bind's
+        // shape instead of leaving it empty. The Adreno ES driver answers a load through an EMPTY
+        // unit with alpha 1 where GL says 0, and ANGLE faults on any use of an empty unit; the
+        // driver POST measures the first and Auto arms this on ANGLE without probing, so Auto is
+        // right everywhere. The placeholder's one texel is real, so a store
+        // through such a unit can be read back through the same unit in the same pass - which is
+        // why a healthy driver keeps the empty unit. ForceOn exercises the placeholder on a
+        // healthy driver; ForceOff is the negative control.
+        QuirkOverride EsprytInvalidImagePlaceholder = QuirkOverride::Auto;
         // MOBILEGL_POINT_SIZE_DEMOTION: demote gl_PointSize out of tessellation/geometry
         // stages into an ordinary varying (ShaderCompiler::
         // DemoteTessellationGeometryPointSizeForProgram) instead of declining such programs
@@ -184,8 +244,6 @@ namespace MobileGL::MG_Config {
         // flush calls on rewritten maps become error-free no-ops. Non-persistent maps
         // keep spec FLUSH_EXPLICIT behavior.
         Bool CoherentAsFlush = false;
-        // MOBILEGL_TRACE_SKIP_AUTODESTROY: skip teardown in the ELF destructor (Init.cpp).
-        Bool TraceSkipAutodestroy = false;
         // MOBILEGL_ESPRYT_DISABLE_UBO_RING: force the DirectGLES global-UBO upload back to the
         // per-draw glBufferSubData path instead of the persistent-mapped ring allocator
         // (negative control / driver-bug escape hatch).
@@ -214,13 +272,16 @@ namespace MobileGL::MG_Config {
         // persistently+coherently mapped storage at definition time (negative control /
         // escape hatch). Frontend-scoped: it engages only where the active backend
         // provides AcquirePersistentMap. With adoption on, an app SubData into a busy
-        // 128MB arena is a plain memcpy into GPU-visible memory; every driver-mediated
-        // route for the same write stalls the thread or ghost-copies the whole arena on
-        // this class of Mali driver, and the arena stops costing its size again in RAM.
+        // 128MB arena lands GPU-ordered through the backend's resident-subdata op
+        // (BufferObject::LandBytesIntoResidentStore, since 0ee3384b: an in-place write
+        // tore the frames still reading the old bytes) - still no driver-mediated write
+        // into the busy mutable store, which on this class of Mali driver stalls the
+        // thread or ghost-copies the whole arena, and the arena stops costing its size
+        // again in RAM.
         Bool DisableLargeBufferAdoption = false;
         // MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION: make DirectGLES skip the native ES
         // depth/stencil reads and always go through the shader-sampling emulation. Core GL
-        // ES has no depth or stencil readback, but some drivers accept it anyway (Mesa does,
+        // ES has no depth or stencil readback, but some drivers accept it anyway (llvmpipe does,
         // Adreno does not), which means the emulation is dead code on exactly the stack the
         // headless suite runs on. This forces it live so the scenarios and the CTS can
         // exercise the path, and gives the device an A/B lever over the same choice.
@@ -255,11 +316,16 @@ namespace MobileGL::MG_Config {
         // keeps the built-in default (MG_Util::Async::kAsyncShaderCompileDefault); falsy
         // forces every glCompileShader/glLinkProgram to run synchronously on the calling
         // thread AND withdraws GL_KHR_parallel_shader_compile, so the single switch reverts
-        // both the threading and the application-visible behaviour change.
+        // both the threading and the application-visible behavior change.
         QuirkOverride AsyncShaderCompile = QuirkOverride::Auto;
         // MOBILEGL_ASYNC_SHADER_COMPILE_THREADS: shader-compile worker count. 0 (unset) means
-        // auto, which is min(4, big cores); an explicit value is honoured as given.
+        // auto, which is min(4, big cores); an explicit value is honored as given.
         Uint32 AsyncShaderCompileThreads = 0;
+        // MOBILEGL_DISABLE_SHADER_PREWARM: skip the glslang built-in table prewarm in
+        // Initialize(), which moves ~20-100 ms of table building from the first shader compiles
+        // into eglInitialize. For short-lived processes that would never repay it, such as the
+        // CI test runners; applications keep the default.
+        Bool DisableShaderPrewarm = false;
         // MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS: while a compile job is still in flight,
         // glGetShaderiv(GL_COMPILE_STATUS) answers GL_TRUE and the shader info log reads
         // empty, WITHOUT joining the job (latched per compile - see
@@ -290,7 +356,7 @@ namespace MobileGL::MG_Config {
         // extension only ever gave the SHADER a compilable name: MobileGL has never
         // programmed a driver's INDEXED viewport state (SyncRenderState pushes index 0
         // and nothing else), so on an extension-capable driver every index rasterized as
-        // index 0 exactly as it did without one. ForceOff returns to that behaviour -
+        // index 0 exactly as it did without one. ForceOff returns to that behavior -
         // the pre-emulation path, extension passthrough where it exists and
         // LowerViewportIndexPass' demote-to-a-plain-global where it does not - and is
         // the negative control the emulation is measured against.
@@ -315,7 +381,7 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE: DirectVulkan's GL_PRIMITIVES_GENERATED
         // reroute for draws made while transform feedback is INACTIVE. The stream query
         // (VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT primitivesNeeded) is defined to count
-        // them, but a Mali driver - and Mesa lavapipe - answers 0 unless a capture span is
+        // them, but a Mali driver - and lavapipe - answers 0 unless a capture span is
         // open, which is exactly the shape the CTS uses to measure the tessellator, so ~29
         // tessellation tests per tree size a capture buffer from the 0 and die on the
         // zero-length map. Auto defers to a device probe at renderer bring-up
@@ -328,6 +394,395 @@ namespace MobileGL::MG_Config {
         // immune to the probe's verdict moving), and ForceOff is the negative control that
         // replays the driver's silence.
         QuirkOverride MagmaPrimGenQueryReroute = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_E5_RAW_READS: DirectVulkan's raw read route for E5B9G9R9 textures
+        // (WireE5RawCopy.h). GL moves RGB9_E5 texel blocks bit-exactly (glGetTexImage with
+        // UNSIGNED_INT_5_9_9_9_REV, glCopyImageSubData), but Adreno 750's transfer reads of
+        // an E5B9G9R9 image larger than ~16x16 decode and re-encode, canonicalizing every
+        // non-canonical shared exponent. Auto defers to a device probe at renderer bring-up
+        // (RunWireE5TransferProbe: plain transfer read vs. a shader read through an R32_UINT
+        // view) and arms the route only where the plain read changed words; ForceOn arms it
+        // on any device (the host lanes exercise the route with it); ForceOff is the negative
+        // control that replays the canonicalization.
+        QuirkOverride MagmaE5RawReads = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_SPLIT_SLICE_COPIES: DirectVulkan's per-slice split of a cross-format
+        // glCopyImageSubData between a layered texture and a 3D one (WireCopySliceProbe.h).
+        // Adreno 750 lands only the first slice of such a vkCmdCopyImage region. Auto defers to
+        // a device probe at renderer bring-up (one region vs. per-slice regions); ForceOn splits
+        // on any device; ForceOff is the negative control that replays the dropped slices.
+        QuirkOverride MagmaSplitSliceCopies = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_REEMIT_STATE_AFTER_DISCARD: DirectVulkan sets the dynamic state again after
+        // every rasterizer-discard draw (WireDiscardStateProbe.h). On Adreno 750 a draw with a
+        // rasterizerDiscardEnable pipeline drops the dynamic viewport/scissor, and later draws that
+        // rely on it draw nothing. Auto defers to a device probe at renderer bring-up; ForceOn
+        // re-emits on any device; ForceOff is the negative control that replays the lost state.
+        QuirkOverride MagmaReemitStateAfterDiscard = QuirkOverride::Auto;
+        // --- MGPipe (the disaggregation plan's explicit frontend/backend boundary) ---
+        // MOBILEGL_PIPE_PUSH: per-subsystem bitmask selecting which state the frontend
+        // PUSHES over MGPipe instead of leaving the backend to pull it out of GLContext.
+        // 0 - the only shipped value until the migration lands - is "pull everything",
+        // i.e. exactly today's behavior, and is the default of a PULL build, where the
+        // knob is meaningless anyway. A PUSH build defaults to every subsystem migrated so
+        // far (MG_Pipe::kMGPipeSubsystemsMigratedAtP5e = 0x3fff), so MOBILEGL_PIPE_PUSH=0 in
+        // the environment is the all-pull control and 0x1fff (kMGPipeSubsystemsMigratedAtP4a)
+        // is the "everything before P5e" control P5e's A/B is run against - each phase's
+        // constant survives as the next phase's control, which is why none of them is ever
+        // edited. Accepts decimal or 0x-prefixed hex, and operators pass it as hex, so the
+        // bits are listed here (MG_Pipe/MGPipe.h owns them):
+        //   0x01 render state (create/bind_render_state + set_dynamic_state)
+        //   0x02 pixel pack        0x04 patch state      0x08 vertex attrib defaults
+        //   0x10 residual values   0x20 Espryt slots     0x40 Magma vertex input
+        //   0x80 resources (the resource_* family: the seven BufferBackendOps hooks)
+        //   0x100 vertex input (vertex elements / vertex buffers / index buffer)
+        //   0x200 framebuffer (set_framebuffer_state)              - requires 0x400
+        //   0x400 texture resources (texture + renderbuffer resource_*,
+        //         set_texture_params)                              - requires 0x80 AND 0x800
+        //         (the built-in sampler CSO a set_texture_params record names is minted by
+        //         the sampler family alone, ID-15; the four rows are MG_Impl/Pipe/PipeFill.cpp's
+        //         kMGPipeP4aFamilyDependencies, mirrored bit for bit by Espryt's resolvers)
+        //   0x800 samplers (sampler CSO, sampler view, set_sampler_views /
+        //         bind_sampler_states / set_shader_images)         - requires 0x400
+        //   0x1000 programs (shader CSO, set_draw/dispatch_program, global constants)
+        //   0x2000 buffer binding points (set_shader_buffers, the three indexed binding-point
+        //         classes and the dirty bits 15/16/17)             - requires 0x80
+        //         (every MGPBufferRange::Res names a Buffer handle; P5e)
+        //   A dependency that is not met is REFUSED with one ERROR naming both bits and the
+        //   family runs its legacy arm; it is never half-run.
+        //   1<<63 NOT a subsystem, a BEHAVIOR: turn OFF client-side content addressing of
+        //         CSOs, so every pipeline-version change mints a fresh CSO and the map is
+        //         never probed. The negative control the CSO design is measured against.
+        //   P13 W3b (ID-P13-3): bits 0-13 are FIXED ON. Their pre-handle arms are gone, so a mask
+        //   that clears one is refused by name at startup (Fatal{PipeSubsystemsFixedOn},
+        //   ConfigLoader.cpp); bit 63 is the one switch left. Everything above about "refused,
+        //   runs its legacy arm" describes code that is unreachable since then and goes in W6.
+        Uint64 PipePush = 0;
+        // MOBILEGL_PIPE_VERIFY: per-draw, per-FIELD shadow comparison of the pushed state
+        // against a snapshot taken from GLContext the old way, printing the first field
+        // that differs and the draw serial. Roughly 5-10x slower and never shipped; it is
+        // the semantic gate that replaces byte identity, and it catches the dangerous
+        // direction - a dirty bit that fires too RARELY - which no purity gate can see.
+        Bool PipeVerify = false;
+        // MOBILEGL_PIPE_VERIFY_FATAL: the first divergence aborts (default). 0 logs and
+        // counts instead, for triage and for the lane that must survive to read its own
+        // log. Tri-state parse: only an explicit falsy value turns it off. The comparator's
+        // negative control, MOBILEGL_PIPE_VERIFY_CORRUPT, has no field here: only a verify
+        // build reads it, when the comparator arms (MG_Impl/Pipe/PipeFill.cpp, ArmVerify).
+        Bool PipeVerifyFatal = true;
+        // MOBILEGL_PIPE_STATS: dump the boundary counters (bytes, calls, roundtrips,
+        // texture pulls, upload shapes, residual-block bytes, index mirror bytes).
+        Bool PipeStats = false;
+        // MOBILEGL_PIPE_INDEX_MIRROR_MB: budget for the server-side index host mirror,
+        // which is what lets primitive-restart rewriting and multi-draw flattening stay on
+        // the server without shipping index bytes per draw. Over budget it degrades to
+        // per-draw staging, counted separately in the stats.
+        Uint32 PipeIndexMirrorMb = 64;
+        // MOBILEGL_PIPE_STATS_PERIOD: frames per boundary-counter summary line. 120 is the
+        // steady-state cadence; the device retrace harness never reaches the teardown dump
+        // and a trimmed fixture (minecraft-1.21.1-neoforge-create-indirect-in-world-align1024)
+        // is shorter than 120 frames, so a run that needs its numbers at all sets this low
+        // enough to land at least one window.
+        Uint32 PipeStatsPeriod = 120;
+        // MOBILEGL_PIPE_STATS_FILE: where the boundary counters' teardown JSON dump goes.
+        // Empty (the default) means no dump; the per-120-frame summary line still goes to
+        // the log whenever PipeStats is on, so a device run needs no writable path.
+        String PipeStatsFile;
     };
     extern FeaturesTable Features;
+
+    // ---------------------------------------------------------------------------------
+    // P5: the transport selector and the MOBILEGL_IPC_* family (ARCHITECTURE.md 16, appendix A)
+    // ---------------------------------------------------------------------------------
+    //
+    // MOBILEGL_TRANSPORT = monolith | inproc | spawn | unix:<path> | pipe:<name>.
+    //
+    // WHY `Transport` IS NOT A FeaturesTable MEMBER. ARCHITECTURE.md §16 requires that with
+    // MOBILEGL_BUILD_DISAGGREGATED=OFF it be a `constexpr Monolith`, so that the single hook
+    // in MG_Backend/Init.cpp compiles away entirely rather than becoming a branch nobody can
+    // take. A FeaturesTable member is a runtime field in every build, which is the opposite
+    // of that; it would also resize MG_Config::Features and break G1 (the pull build's
+    // symbol set must not move).
+    //
+    // ONE CONSEQUENCE, STATED SO IT IS NOT REDISCOVERED: in a build without the option,
+    // MOBILEGL_TRANSPORT=inproc is ACCEPTED BY THE ENVIRONMENT AND SILENTLY IGNORED - the
+    // parser below does not exist to complain about it, and putting a complaint in the
+    // unconditional part of ConfigLoader would move a pull-build symbol. That is the exact
+    // shape of "the split lane ran monolith and went green", so the gate against it is a
+    // BUILD-level check, not a runtime one: `nm --defined-only libMobileGL.so | grep -i
+    // MG_Remote` must be non-empty in build-split (CONTRACT-P5.md table 3, and the CI job
+    // P5 adds beside build-linux-verify).
+    enum class TransportMode : Uint8 {
+        Monolith = 0,   // today's in-library backend; no MG_Remote object is constructed
+        InProcess = 1,  // P5: a real apply thread in this process, over the same G3 codec
+        Spawn = 2,      // P6: fork/exec MobileGLServer, socketpair
+        UnixSocket = 3, // P6: connect to an existing AF_UNIX endpoint (Endpoint = <path>)
+        NamedPipe = 4,  // P6: Windows named pipe (Endpoint = <name>)
+    };
+
+    // P13 W5: THE RECORD ARM'S OWN KNOBS. They kept their MOBILEGL_IPC_* names (logs, CI lanes and
+    // notes spell them so), but they tune the record arm - the persistent-map push and Magma's wire
+    // stores - which runs in a library without a transport too, so they are not IpcTable's.
+    struct RecordArmTable {
+        // MOBILEGL_IPC_WIRE_DEFERRED_MB (P7 wave 4 M2, ID-P7-32): the SERVER's budget, in MiB,
+        // for orphaned wire buffer stores - the old VkBuffer every glBufferData that crosses the
+        // wire leaves behind - that a GPU command recorded but not yet retired may still name.
+        // Stores no command names are destroyed at once and stores whose last submission has
+        // retired are destroyed at the next park; this bounds the REST. When the parked bytes
+        // exceed it after a sweep, the server flushes what it has recorded and waits for it
+        // (WaitForWireBufferHostAccess's sync point, mid-frame), which retires every one. It is
+        // not a frame count because a frame is not bounded: a snapshot-exiting pbuffer replay
+        // delivers one present for 1.3 M calls. The same sync point also fires above a fixed
+        // 1024 parked stores (VkBufferManager::kWireDeferredCountCeiling), because small
+        // orphans never reach a byte budget. 0 IS THE NEGATIVE CONTROL for both, not "unlimited
+        // by design": no forced sync, so a one-frame respecify-and-draw loop grows without bound
+        // and MagmaWireReclaimScenario's watermark cases must go red.
+        Uint32 WireDeferredMb = 64;
+        // MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS: 1 = the persistent-map push ships only
+        // blocks whose xxHash64 changed since the last push, instead of the whole mapped
+        // range every verb. 0 restores the whole-range push (A/B control).
+        Uint32 PersistentHashSuppress = 1;
+        // MOBILEGL_PIPE_PERSISTENT_MPROTECT (P13 W5): 1 (default) = the persistent-map push finds
+        // written pages through mprotect and a chained SIGSEGV handler where the platform has
+        // one (Linux, Android); 0 = no handler is ever installed and every persistent write map
+        // takes the hash scan. The switch exists for the hosts whose own SIGSEGV use the
+        // chained handler has not met yet - FCL is a JVM, whose implicit null checks fault on
+        // purpose - so a bring-up can rule the handler out without a rebuild.
+        Uint32 PersistentMprotect = 1;
+    };
+    extern RecordArmTable RecordArm;
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // Parsed once by MG_ConfigLoader::Init(). Defaults to Monolith even here: building the
+    // transport in is not the same as using it, and every existing lane of a build-split
+    // must keep running monolith unless it is asked for one.
+    extern TransportMode Transport;
+    // The <path> of `unix:` / the <name> of `pipe:`. Empty for the other three modes.
+    extern String TransportEndpoint;
+
+    // P7 F1. DID **THIS PROCESS'S OWN CONFIGURATION** ASK FOR A SPLIT TRANSPORT.
+    //
+    // `Transport` alone cannot answer that, and the difference is exactly the one the F1 gate
+    // turns on. A unit fixture assigns `Transport` by hand to put the code under test on its
+    // split arm (ServerLoopTest's main does, and says why) while building no client at all; a
+    // real run gets it from MG_ConfigLoader::Init(), and that run WILL bring a client half up.
+    // Only the second may be held to "never decide a record family's fate from a placeholder
+    // caps mirror" - in the first there is no handshake, no mirror to adopt and nothing the
+    // rule could mean.
+    //
+    // Written once, by InitTransport(), and never cleared: a process does not stop having been
+    // configured. Read by MG_Remote::Client::CapsMirror::RequireFirstSnapshot.
+    extern Bool SplitTransportRequestedByConfig;
+
+    // The MOBILEGL_IPC_* family. A separate table rather than more FeaturesTable members,
+    // for the G1 reason above and because every field here is meaningless without the
+    // transport: a build that cannot reach the MG_Remote code cannot honor one of them.
+    //
+    // P5 lands exactly the knobs P5's own packages read. A later phase's knob is added HERE,
+    // through the integrator, and not invented at its call site - ARCHITECTURE.md appendix A holds
+    // the full planned inventory (PRESENT_CREDIT, POLL_ESCALATE, SHADOW_SHM,
+    // INLINE_PAYLOADS, TRACE, ATTACH, RESPAWN, IDLE_EXIT_S), and every one of those belongs
+    // to P6 or later.
+    //
+    // P12 (on-screen server window): MOBILEGL_IPC_SURFACE's two values. See IpcTable::Surface.
+    enum class IpcSurface : Uint8 {
+        Offscreen = 0, // a window surface is the client's own window, as before (the default)
+        Server = 1,    // a window surface is the SERVER's window: WindowKind::ServerOwned
+    };
+    // IpcTable::AdoptTier when MOBILEGL_IPC_ADOPT_TIER is unset (or unparseable): T0 by default,
+    // with QUIET fallbacks. Not a tier a user can type - the knob admits 0..2.
+    inline constexpr Uint32 kAdoptTierUnset = 3;
+    struct IpcTable {
+        // MOBILEGL_IPC_SERVER_PATH: where to find libMobileGLServer. P6 consumes it; P5
+        // lands the parse because t1's ctest ENVIRONMENT blocks and add_trace_replay_test's
+        // SPLIT variant already carry it, and an environment variable that nothing parses is
+        // indistinguishable from one that is parsed and ignored.
+        String ServerPath;
+        // Control endpoint and data-plane selection are independent of topology.
+        String Control = "fork"; // fork | unix:<path> | tcp://host:port
+        String Data = "auto";    // auto | shm | stream
+        // MOBILEGL_IPC_RING_MB: SEG_CMD size. A RECORD MAY BE AT MOST HALF OF THIS
+        // (RingProducer::MaxRecordBytes), so 8 MiB caps one record at 4 MiB; R-10 makes the
+        // codec publish a max-record-bytes counter rather than assume that is enough.
+        Uint32 RingMb = 8;
+        // MOBILEGL_IPC_STAGE_MB: SEG_STAGE size. Every blob and every var-tail's bytes live
+        // here ONE BLOB AT A TIME: a row whose content can outgrow the segment cuts it at the
+        // stage chunk budget (MGPipeStageChunkBytes, a quarter of this), and a record type with
+        // no cut is Fatal{RingOverrun, "SEG_STAGE"} rather than allowed to exceed it.
+        Uint32 StageMb = 32;
+        // MOBILEGL_IPC_SPIN_US: spin before parking on a doorbell, either direction.
+        Uint32 SpinUs = 50;
+        // MOBILEGL_IPC_EVENT_WAIT_MS (PH-6, ID-P7-2): the SERVER's patience, in ms, for ONE
+        // reverse-channel event that finds SEG_EVENT full under run-ahead. The apply thread
+        // publishes, rings the client and parks until the client drains enough room; a client
+        // that has not made room when this runs out - it stopped draining (NotDraining) or it
+        // drains a slot at a time (TooSlow) - FORFEITS the reverse channel: that event and every
+        // later one is dropped and counted (eventDropped), and the session stops by the ordinary
+        // stop path rather than by Fatal{EventRingOverflow}. A peer that goes away (PeerGone) or
+        // a session that is stopped (Stopped) ends the wait at once instead, so the knob may
+        // exceed ServerLoop::Stop()'s 5000 ms join. It bounds the whole reservation, not one
+        // park, so a trickling peer cannot stretch it - nor can a shm peer that writes the
+        // (peer-writable) eventRingFull latch to 0 itself, though that one keeps the apply
+        // thread spinning rather than parked until the budget runs out. Was a 30000 ms constant
+        // spent twice. Read by the server only (ServerSpawn.cpp passes it to a spawned child);
+        // the lockstep arm (no kCapRunAheadApply, i.e. Magma) never waits and keeps P5C's Fatal.
+        Uint32 EventWaitMs = 2000;
+        // MOBILEGL_IPC_BATCH_WAITS: 1 = value-class records (kCtxState / kCtxCso / kCtxObject
+        // with no reply slot) are published without waiting for their own apply; the barrier
+        // is taken at the next pull-reading verb (kCtxVerb syncs, queries, screen rows, and
+        // every reply-slot row), which is the only place BARRIER-PULLED fields are read. 0
+        // restores the per-record barrier of R-1.
+        Uint32 BatchWaits = 1;
+        // MOBILEGL_IPC_CREATE_WINDOW: how many RESOURCE_CREATE answers may be outstanding before the
+        // client waits for one. 1 turns the window off; N > 1 lets up to N creates go out without
+        // waiting: each caller reads a provisional accept, the answers are collected in order (the
+        // oldest once the window is full), and a create that comes back declined is un-published.
+        // The window runs only on a link that keeps a declared answer until its reader takes it (the
+        // stream link); on the shared-memory link it is always 1.
+        // Default 10: on a device world-load frame the wall clock stops improving at about 6, and a
+        // deeper window costs only entries in the link's declared-answer store, so 10 sits on the
+        // flat part of the curve.
+        // Range 1..12; a value outside it is ignored with a warning. 12 is kCreateWindowMax
+        // (WireTables.cpp), half of the stream link's 24-entry answer store.
+        // Measurements: docs/Performance/ipc-create-window.md.
+        Uint32 CreateWindow = 10;
+        // MOBILEGL_IPC_PBO_READBACK_SYNC (P9 W1 §1): 1 = a glReadPixels
+        // or glGetTexImage into a bound GL_PIXEL_PACK_BUFFER takes the reply-slot form again -
+        // the client waits for the pixels and uploads them into the buffer itself, as before P9.
+        // 0 (default) sends read_pixels_to_buffer / get_texture_image_to_buffer, waits for
+        // nothing, and marks the buffer GPU-written. The 1 arm is the A/B control and the
+        // red-once of the wait-count gate (PackBufferReadbackScenario): it must show a reply
+        // wait per read.
+        Uint32 PboReadbackSync = 0;
+        // MOBILEGL_IPC_POLL_ESCALATE (P10 §1): a glClientWaitSync with a
+        // zero timeout or a glGetSynciv(GL_SYNC_STATUS) is answered by the client from what the
+        // server reported (kEventFenceSignaled) - "signaled" when it has been, "not yet" otherwise
+        // - and only the Nth "not yet" in a row on one fence crosses as a real round trip, so a
+        // poll loop cannot outlive a late report. 0 = every poll crosses, as before P10: the A/B
+        // arm and the red-once of the no-reply gate (FencePollScenario).
+        Uint32 PollEscalate = 64;
+        // MOBILEGL_IPC_RECOVER (client): 1 (default) = after a device loss ends this client's
+        // session, the application's next eglCreateContext / eglCreate*Surface / eglInitialize
+        // dials the server for a FRESH session, and contexts created from then on work. Contexts
+        // (and their objects) from before the loss stay lost, as EGL's power-management event
+        // has them; surfaces survive and are re-created on the new session when next used.
+        // 0 = the loss is final for the process (every verb DECLINED for the rest of its life).
+        Uint32 RecoverAfterLoss = 1;
+        // MOBILEGL_IPC_ADOPT_TIER, THE ZERO-COPY SWITCH (ruling ID-P11-14, CONTRACT-P11 B2):
+        // UNSET (kAdoptTierUnset, the default since 2026-09-29, the user's decision) = T0 where the
+        // session can run it, T2 QUIETLY where it cannot (MGLOG_D only, still counted);
+        // 0 = T0 asked by name - a T0 this session cannot use (a stream plane, the server's allow
+        // switch, no AHardwareBuffer, a failed server POST) is T2 plus one named line;
+        // 1 = T1, closed - refused by name, then T2; 2 = emulate (T2: the client keeps the shadow
+        // and pushes). Never a Fatal (MG_Remote/Transport/AdoptTier.h).
+        Uint32 AdoptTier = kAdoptTierUnset;
+        // MOBILEGL_IPC_ALLOW_ADOPT_T0 (server): 1 (default) = grant a client's T0 ask when this
+        // platform and the backend's POST self-test allow it; 0 = never grant it (the session
+        // runs T2 and says so). Read by the server role only; kept through ServerSpawn.
+        Uint32 AllowAdoptT0 = 1;
+        // MOBILEGL_IPC_RUN_AHEAD (P5e §1): 1 = after publishing an
+        // UNBARRIERED record the client returns immediately instead of waiting for its apply.
+        // It is one half of a conjunction and never a switch on its own - the client arms
+        // run-ahead only when the server also publishes kCapRunAheadApply, so on Magma, and on
+        // Espryt before the P5e integration commit, 1 means exactly what 0 means and logs once
+        // saying so.
+        //
+        // 0 IS THE A/B CONTROL AND NOT A NEGATIVE ONE: the server code, the fill decision and
+        // every record are identical on both arms, and the only difference is whether the
+        // client waits. That is what makes "is the picture the same" a question about the wait
+        // rule alone.
+        //
+        // Forced to 0 by MOBILEGL_PIPE_VERIFY, beside BatchWaits: the comparator needs a
+        // client-filled gPipeInputs block for every verb, and run-ahead is precisely the
+        // arm that stops filling it.
+        Uint32 RunAhead = 1;
+        // The present credit (P5e, ruling 4 / ID-92): how many presents the client may have in
+        // flight before it waits for a swap to come back. 1 = the client publishes frame N+1's
+        // records while the server applies and swaps frame N - one frame of overlap, at most one
+        // frame of added latency - and the CREDIT, never the ring's bytes, is what paces a
+        // run-ahead client. Derived from MOBILEGL_FRAMES_IN_FLIGHT (max(1, N - 2)); the
+        // MOBILEGL_IPC_PRESENT_CREDIT override stays for experiments. Credit 2 is a real trade,
+        // not a measurement arm: on FCL inproc (cpuhunt, 2026-10-08) it brought Magma 309 -> 320
+        // and Espryt 299 -> 319 fps, at one frame of added latency.
+        Uint32 PresentCredit = 1;
+        // MOBILEGL_IPC_WAIT_STATS (P15, diagnostic): every 600 presents, log how many times per
+        // frame the run-ahead client waited, by record op (applied/reply), by quiesce reason and
+        // barriered verb, for ring space and for the present credit. Off by default.
+        Bool WaitStats = false;
+        // MOBILEGL_IPC_CONTROL_TIMEOUT_MS (CONTRACT-P6 §5.4 D5b): how long a spawn/tcp client
+        // waits for the SurfaceReply to one surface-control op (eglCreate*Surface, MakeCurrent,
+        // ...) once the server's backend is up. Its expiry is NOT fatal: the doorbell's death
+        // latch decides dead (device lost) from alive-but-silent (a named diagnostic). The
+        // contract named this knob from P6 on; the client hard-coded its default until P7.
+        Uint32 ControlTimeoutMs = 5000;
+        // MOBILEGL_IPC_COLD_START_MS (P7): the same wait for the three ops a server may bring its
+        // NATIVE backend up inside - CreatePbufferSurface, CreateWindowSurface, MakeCurrent -
+        // until the session's first MakeCurrent is answered ok. The bring-up is lazy (Espryt's
+        // eglInitialize, Magma's Vulkan instance and device), ~100 ms on a workstation and more
+        // than the steady 5 s on a loaded CI runner (retrace-split spawn legs, runs 35671704873
+        // and 35706183230). Never shorter than CONTROL_TIMEOUT_MS; its expiry is the same
+        // non-fatal named answer. The default is the spawn connect budget, for the same reason:
+        // "the server has to create a backend, and a cold software rasteriser is not fast".
+        Uint32 ColdStartMs = 20000;
+        // MOBILEGL_IPC_STRICT_ERRORS: promote a BARRIER-PULLED field read - and, in a split
+        // build, the seven sticky forwards that are otherwise exempt - from "count it in
+        // rsp" to Fatal (R-7.3).
+        Bool StrictErrors = false;
+        // MOBILEGL_IPC_ROLE_SPLIT_STATE (P5f f1, P5F-WIRE-COMPLETENESS.md §4): the dual-block
+        // rehearsal. 1 = the client's residual fill writes a CLIENT-ROLE PipeInputs block and
+        // the backend/applier keep reading the SERVER-ROLE one, so every path that today works
+        // only because the two roles share one object turns into a named
+        // Fatal{UnmigratedPipeInput, "<field>@<verb>"} instead of a silent cross-role read.
+        // Meaningless under monolith transport (the two roles are one thread there, so the
+        // selection folds to the single shared block) and forced off by MOBILEGL_PIPE_VERIFY
+        // (the comparator owns the one fill block it compares against). 0 is not merely the
+        // default, it is the negative control: the lane's distinctness case must go red
+        // without it (P5F §6). P15: the default is ON (unset = on, 0 = off); the negative control
+        // sets 0 explicitly.
+        Bool RoleSplitState = true;
+        // MOBILEGL_IPC_AUDIT: after a record retires, the server fills the SEG_STAGE bytes
+        // it referenced with 0xDD (R-2.5). This is the ONLY mechanical control that an
+        // inproc implementation did not quietly keep using a pointer past its lifetime.
+        Bool Audit = false;
+        // MOBILEGL_IPC_SERVER_AFFINITY: `auto` (the default, big-core detection borrowed
+        // from ShaderCompilePool), `off`, or an explicit CPU mask. Kept as the raw string
+        // because the resolved mask is logged by whoever starts the apply thread, and the
+        // string is what an operator typed.
+        String ServerAffinity = "auto";
+        // MOBILEGL_IPC_SURFACE (P12, on-screen server window) = offscreen | server. `server` makes
+        // the client a HEADLESS one: eglCreateWindowSurface / eglCreatePlatformWindowSurface accept
+        // any native window including NULL, send ONE CreateWindowSurface naming
+        // WindowKind::ServerOwned (token 0, the size from EGL_WIDTH/EGL_HEIGHT, 0/0 = the server's
+        // own) and no SetWindowHandle, and take the surface's real geometry back from the server.
+        // Meaningful only when this client talks to a remote server (MOBILEGL_TRANSPORT=spawn, the
+        // fork or tcp:// control); under monolith / inproc it is parsed, logged as ignored, and
+        // changes nothing. `offscreen` (the default) is today's behavior byte for byte.
+        // Pbuffers stay pbuffers in both modes (D4: one mode per session, decided by the first).
+        IpcSurface Surface = IpcSurface::Offscreen;
+    };
+    extern IpcTable Ipc;
+
+    // P12: the one predicate every client-side consumer of MOBILEGL_IPC_SURFACE asks - a window
+    // surface is the server's when the knob says so AND there is a remote server to own it.
+    inline Bool ServerOwnedWindowSurfaces() {
+        return Transport == TransportMode::Spawn && Ipc.Surface == IpcSurface::Server;
+    }
+
+#else
+    // The whole point: in a build without MG_Remote this folds at compile time, so
+    // `if (MG_Config::Transport != MG_Config::TransportMode::Monolith)` in Init.cpp is a
+    // discarded statement and the pull build gains no symbol, no branch and no byte.
+    inline constexpr TransportMode Transport = TransportMode::Monolith;
+#endif
+
+    // P13: THE DATA-ARM QUESTION, ANSWERED ONCE FOR EVERY BUILD. The backends read RECORDS (the
+    // applier's twins, the staged stores, the verb's own handles), never frontend objects - over a
+    // wire and on monolith alike ("monolith is the push variant"). W4 switched monolith family by
+    // family behind MOBILEGL_PIPE_DATA_ARM; W5 built the record arm into every library; W6 deleted
+    // the frontend arm and the knob. The predicate stays as a name for the sites that read it.
+    inline constexpr Bool DataArmIsRecord() {
+        return true;
+    }
+    // ...and the record arm runs in this process over stores that ALIAS the frontend's shadows
+    // (monolith) instead of copying them (every wire).
+    inline Bool RecordArmAliasesFrontend() {
+        return Transport == TransportMode::Monolith;
+    }
 } // namespace MobileGL::MG_Config

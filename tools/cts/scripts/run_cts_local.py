@@ -1,4 +1,12 @@
 #!/usr/bin/env python
+# MobileGL - tools/cts/scripts/run_cts_local.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """Drive a glcts run on the local host, resuming across crashes.
 
 Local-host counterpart of run_cts.py: MobileGL crashes on some cases and glcts
@@ -70,7 +78,7 @@ def main():
     ap.add_argument("--max-empty-streak", type=int, default=64,
                     help="abort after this many consecutive chunks that produce no log at all")
     ap.add_argument("--chunk-timeout", type=int, default=1800,
-                    help="seconds before killing one glcts invocation (a wedged case never returns)")
+                    help="seconds without qpa log growth before killing glcts (a wedged case never returns)")
     # dEQP's watchdog aborts the process when a single case exceeds a hardcoded 30s
     # (framework/common/tcuApp.hpp), which is not a hang on a CPU rasterizer - some
     # texture_swizzle cases legitimately take ~17s each and cross it once the process is
@@ -154,18 +162,27 @@ def main():
             cmd.append(f"--deqp-gl-config-name={args.gl_config_name}")
         if args.waiver_file:
             cmd.append(f"--deqp-waiver-file={os.path.abspath(args.waiver_file)}")
+        # RLIMIT_CORE=0: MobileGL asserts abort with a core dump, and writing
+        # a multi-GB glcts core image after every crash dominates wall time.
+        proc = subprocess.Popen(cmd, cwd=workdir, env=env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                start_new_session=True,
+                                preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
+        # The timeout is idle-based: a healthy chunk of thousands of cases runs far
+        # longer than any one case may, so only a log that stops growing is a hang.
         timed_out = False
-        try:
-            # RLIMIT_CORE=0: MobileGL asserts abort with a core dump, and writing
-            # a multi-GB glcts core image after every crash dominates wall time.
-            subprocess.run(cmd, cwd=workdir, env=env, timeout=args.chunk_timeout,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           start_new_session=True,
-                           preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            print(f"[run_cts_local] chunk {chunk:04d} timed out after {args.chunk_timeout}s",
-                  file=sys.stderr)
+        last_size, last_growth = -1, time.time()
+        while proc.poll() is None:
+            time.sleep(5)
+            size = os.path.getsize(qpa) if os.path.exists(qpa) else 0
+            if size != last_size:
+                last_size, last_growth = size, time.time()
+            elif time.time() - last_growth > args.chunk_timeout:
+                timed_out = True
+                os.killpg(proc.pid, 9)
+                proc.wait()
+                print(f"[run_cts_local] chunk {chunk:04d}: no log growth for "
+                      f"{args.chunk_timeout}s", file=sys.stderr)
 
         finished, in_flight = completed_cases(qpa)
         for c in finished:

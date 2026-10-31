@@ -73,8 +73,7 @@ namespace {
     // ---------------------------------------------------------------------------------
     class AsyncModeScope {
     public:
-        explicit AsyncModeScope(const Bool async)
-            : m_saved(MG_Config::Features.AsyncShaderCompile) {
+        explicit AsyncModeScope(const Bool async) : m_saved(MG_Config::Features.AsyncShaderCompile) {
             MG_Config::Features.AsyncShaderCompile =
                 async ? MG_Config::QuirkOverride::ForceOn : MG_Config::QuirkOverride::ForceOff;
         }
@@ -98,7 +97,9 @@ namespace {
         return String(version) +
                "\n"
                "\n"
-               "out float gl_ClipDistance[" + n + "];\n"
+               "out float gl_ClipDistance[" +
+               n +
+               "];\n"
                "\n"
                "float f(int i)\n"
                "{\n"
@@ -109,7 +110,9 @@ namespace {
                "\n"
                "void main()\n"
                "{\n"
-               "    for(int i = 0; i < " + n + "; i++)\n"
+               "    for(int i = 0; i < " +
+               n +
+               "; i++)\n"
                "    {\n"
                "        gl_ClipDistance[i] = f(i);\n"
                "    }\n"
@@ -119,16 +122,15 @@ namespace {
     }
 
     String ClipDistanceFs(const char* version) {
-        return String(version) +
-               "\n"
-               "\n"
-               "\n"
-               "out highp vec4 color;\n"
-               "\n"
-               "void main()\n"
-               "{\n"
-               "    color = vec4(1.0, 0.0, 0.0, 1.0);\n"
-               "}\n";
+        return String(version) + "\n"
+                                 "\n"
+                                 "\n"
+                                 "out highp vec4 color;\n"
+                                 "\n"
+                                 "void main()\n"
+                                 "{\n"
+                                 "    color = vec4(1.0, 0.0, 0.0, 1.0);\n"
+                                 "}\n";
     }
 
     // ---------------------------------------------------------------------------------
@@ -160,18 +162,25 @@ namespace {
     }
 
     String SkipComponentsFs(const char* version) {
-        return String(version) +
-               "\n"
-               "    out vec4 fragColor;\n"
-               "    void main (void)\n"
-               "    {\n"
-               "        fragColor = vec4(0.0, 0.0, 0.0, 1.0);\n"
-               "    }\n";
+        return String(version) + "\n"
+                                 "    out vec4 fragColor;\n"
+                                 "    void main (void)\n"
+                                 "    {\n"
+                                 "        fragColor = vec4(0.0, 0.0, 0.0, 1.0);\n"
+                                 "    }\n";
     }
 
     Vector<String> SkipComponentsVaryings() {
-        return {"gl_SkipComponents1", "value1", "gl_SkipComponents2", "gl_SkipComponents1", "value2",
-                "gl_SkipComponents3", "gl_SkipComponents2", "value3", "gl_SkipComponents4", "value4"};
+        return {"gl_SkipComponents1",
+                "value1",
+                "gl_SkipComponents2",
+                "gl_SkipComponents1",
+                "value2",
+                "gl_SkipComponents3",
+                "gl_SkipComponents2",
+                "value3",
+                "gl_SkipComponents4",
+                "value4"};
     }
 
     // ---------------------------------------------------------------------------------
@@ -187,9 +196,8 @@ namespace {
         for (int i = 0; i < userVaryings; ++i) {
             const String name = "result_" + std::to_string(i);
             declarations += "out vec4 " + name + ";\n";
-            setters += "    " + name + " = vec4(" + std::to_string(i * 4) + ".0, " +
-                       std::to_string(i * 4 + 1) + ".0, " + std::to_string(i * 4 + 2) + ".0, " +
-                       std::to_string(i * 4 + 3) + ".0);\n";
+            setters += "    " + name + " = vec4(" + std::to_string(i * 4) + ".0, " + std::to_string(i * 4 + 1) +
+                       ".0, " + std::to_string(i * 4 + 2) + ".0, " + std::to_string(i * 4 + 3) + ".0);\n";
         }
         return String(version) + "\n\n" + declarations + "\n" +
                "void main()\n"
@@ -219,20 +227,20 @@ namespace {
     }
 
     String CaptureInterleavedFs(const char* version) {
-        return String(version) +
-               "\n"
-               "\n"
-               "out vec4 color;\n"
-               "\n"
-               "void main()\n"
-               "{\n"
-               "    color = vec4(0.5);\n"
-               "}\n";
+        return String(version) + "\n"
+                                 "\n"
+                                 "out vec4 color;\n"
+                                 "\n"
+                                 "void main()\n"
+                                 "{\n"
+                                 "    color = vec4(0.5);\n"
+                                 "}\n";
     }
 
     Vector<String> CaptureInterleavedVaryings(const int userVaryings) {
         Vector<String> names;
-        for (int i = 0; i < userVaryings; ++i) names.push_back("result_" + std::to_string(i));
+        for (int i = 0; i < userVaryings; ++i)
+            names.push_back("result_" + std::to_string(i));
         names.push_back("gl_Position");
         return names;
     }
@@ -254,9 +262,8 @@ namespace {
         for (int i = 0; i < userVaryings; ++i) {
             const String name = "result_" + std::to_string(i);
             declarations += "out vec4 " + name + ";\n";
-            setters += "    " + name + " = vec4(" + std::to_string(i * 4) + ".0, " +
-                       std::to_string(i * 4 + 1) + ".0, " + std::to_string(i * 4 + 2) + ".0, " +
-                       std::to_string(i * 4 + 3) + ".0);\n";
+            setters += "    " + name + " = vec4(" + std::to_string(i * 4) + ".0, " + std::to_string(i * 4 + 1) +
+                       ".0, " + std::to_string(i * 4 + 2) + ".0, " + std::to_string(i * 4 + 3) + ".0);\n";
         }
         String source = "#version 150\n"
                         "\n"
@@ -268,10 +275,9 @@ namespace {
                         declarations + "\n" +
                         "void main()\n"
                         "{\n";
-        const char* positions[] = {"vec4(-1.0 + 0.0625,  1.0 - 0.0625,  0.0,  1.0)",
-                                   "vec4( 1.0 - 0.0625,  1.0 - 0.0625,  0.0,  1.0)",
-                                   "vec4(-1.0 + 0.0625, -1.0 + 0.0625,  0.0,  1.0)",
-                                   "vec4( 1.0 - 0.0625, -1.0 + 0.0625,  0.0,  1.0)"};
+        const char* positions[] = {
+            "vec4(-1.0 + 0.0625,  1.0 - 0.0625,  0.0,  1.0)", "vec4( 1.0 - 0.0625,  1.0 - 0.0625,  0.0,  1.0)",
+            "vec4(-1.0 + 0.0625, -1.0 + 0.0625,  0.0,  1.0)", "vec4( 1.0 - 0.0625, -1.0 + 0.0625,  0.0,  1.0)"};
         for (const char* position : positions) {
             source += String("\n    gl_Position = ") + position + ";\n";
             source += setters;
@@ -296,29 +302,47 @@ namespace {
 
     const char* DecorationName(const Uint32 decoration) {
         switch (decoration) {
-        case 11: return "BuiltIn";
-        case 30: return "Location";
-        case 31: return "Component";
-        case 32: return "Index";
-        case 33: return "Binding";
-        case 34: return "DescriptorSet";
-        case 35: return "Offset";
-        case 36: return "XfbBuffer";
-        case 37: return "XfbStride";
-        case 38: return "FuncParamAttr";
-        default: return nullptr;
+        case 11:
+            return "BuiltIn";
+        case 30:
+            return "Location";
+        case 31:
+            return "Component";
+        case 32:
+            return "Index";
+        case 33:
+            return "Binding";
+        case 34:
+            return "DescriptorSet";
+        case 35:
+            return "Offset";
+        case 36:
+            return "XfbBuffer";
+        case 37:
+            return "XfbStride";
+        case 38:
+            return "FuncParamAttr";
+        default:
+            return nullptr;
         }
     }
 
     const char* BuiltInName(const Uint32 builtIn) {
         switch (builtIn) {
-        case 0: return "Position";
-        case 1: return "PointSize";
-        case 3: return "ClipDistance";
-        case 4: return "CullDistance";
-        case 5: return "VertexId";
-        case 42: return "VertexIndex";
-        default: return nullptr;
+        case 0:
+            return "Position";
+        case 1:
+            return "PointSize";
+        case 3:
+            return "ClipDistance";
+        case 4:
+            return "CullDistance";
+        case 5:
+            return "VertexId";
+        case 42:
+            return "VertexIndex";
+        default:
+            return nullptr;
         }
     }
 
@@ -401,14 +425,17 @@ namespace {
             } else if (opcode == kOpEntryPoint && wordCount >= 4) {
                 SizeT next = 0;
                 (void)ReadSpirvString(words, w + 3, w + wordCount, next);
-                for (SizeT i = next; i < w + wordCount; ++i) interfaceIds.push_back(words[i]);
+                for (SizeT i = next; i < w + wordCount; ++i)
+                    interfaceIds.push_back(words[i]);
             } else if (opcode == kOpDecorate && wordCount >= 3) {
                 PendingDecoration entry{words[w + 1], -1, words[w + 2], {}};
-                for (SizeT i = w + 3; i < w + wordCount; ++i) entry.operands.push_back(words[i]);
+                for (SizeT i = w + 3; i < w + wordCount; ++i)
+                    entry.operands.push_back(words[i]);
                 pending.push_back(Move(entry));
             } else if (opcode == kOpMemberDecorate && wordCount >= 4) {
                 PendingDecoration entry{words[w + 1], static_cast<Int>(words[w + 2]), words[w + 3], {}};
-                for (SizeT i = w + 4; i < w + wordCount; ++i) entry.operands.push_back(words[i]);
+                for (SizeT i = w + 4; i < w + wordCount; ++i)
+                    entry.operands.push_back(words[i]);
                 pending.push_back(Move(entry));
             }
             w += wordCount;
@@ -440,7 +467,8 @@ namespace {
         }
         std::sort(digest.decorations.begin(), digest.decorations.end());
 
-        for (const Uint32 id : interfaceIds) digest.interfaceNames.push_back(label(id));
+        for (const Uint32 id : interfaceIds)
+            digest.interfaceNames.push_back(label(id));
         std::sort(digest.interfaceNames.begin(), digest.interfaceNames.end());
         return digest;
     }
@@ -508,14 +536,16 @@ namespace {
             snapshot.strides.push_back(object->GetTransformFeedbackStride(static_cast<Uint32>(i)));
         }
         for (const auto& varying : object->GetTransformFeedbackVaryings()) {
-            snapshot.varyings.push_back(varying.name + " type=0x" + [&] {
-                char buffer[16];
-                std::snprintf(buffer, sizeof(buffer), "%04X", static_cast<unsigned>(varying.type));
-                return String(buffer);
-            }() + " size=" + std::to_string(varying.size) + " buf=" + std::to_string(varying.bufferIndex) +
-                                        " off=" + std::to_string(varying.offsetBytes) +
-                                        " bytes=" + std::to_string(varying.byteSize) +
-                                        " packedOff=" + std::to_string(varying.packedOffsetBytes));
+            snapshot.varyings.push_back(
+                varying.name + " type=0x" +
+                [&] {
+                    char buffer[16];
+                    std::snprintf(buffer, sizeof(buffer), "%04X", static_cast<unsigned>(varying.type));
+                    return String(buffer);
+                }() +
+                " size=" + std::to_string(varying.size) + " buf=" + std::to_string(varying.bufferIndex) +
+                " off=" + std::to_string(varying.offsetBytes) + " bytes=" + std::to_string(varying.byteSize) +
+                " packedOff=" + std::to_string(varying.packedOffsetBytes));
         }
         for (const auto& module : object->GetGeneratedSpirv()) {
             snapshot.spirv.push_back(DigestSpirv(module));
@@ -533,17 +563,21 @@ namespace {
         text += "xfbNeedsScatter  = " + std::to_string(static_cast<int>(snapshot.needsScattered)) + "\n";
         text += "xfbNameMaxLength = " + std::to_string(snapshot.varyingNameMaxLength) + "\n";
         text += "xfbStrides       =";
-        for (const Uint32 stride : snapshot.strides) text += " " + std::to_string(stride);
+        for (const Uint32 stride : snapshot.strides)
+            text += " " + std::to_string(stride);
         text += "\n";
         text += "xfbVaryings (" + std::to_string(snapshot.varyings.size()) + "):\n";
-        for (const String& varying : snapshot.varyings) text += "  " + varying + "\n";
+        for (const String& varying : snapshot.varyings)
+            text += "  " + varying + "\n";
         text += "gsInputPrimitive = " + std::to_string(snapshot.gsInputPrimitive) + "\n";
         text += "gsStripFixup     = " + std::to_string(static_cast<int>(snapshot.gsStripCaptureFixup)) + "\n";
         text += "gsStripTriangles =";
-        for (const Uint32 triangle : snapshot.gsStripTriangles) text += " " + std::to_string(triangle);
+        for (const Uint32 triangle : snapshot.gsStripTriangles)
+            text += " " + std::to_string(triangle);
         text += "\n";
         text += "uniformBlocks    = " + std::to_string(snapshot.uniformBlockCount) + " bindings:";
-        for (const Uint binding : snapshot.uniformBlockBindings) text += " " + std::to_string(binding);
+        for (const Uint binding : snapshot.uniformBlockBindings)
+            text += " " + std::to_string(binding);
         text += "\n";
         text += "maxUniformLoc    = " + std::to_string(snapshot.maxUniformLocation) + "\n";
         text += "activeAttribs    = " + std::to_string(snapshot.activeAttributes) + "\n";
@@ -553,15 +587,16 @@ namespace {
             text += "spirv[" + std::to_string(i) + "] words=" + std::to_string(digest.wordCount);
             if (includeSpirvHash) {
                 char buffer[32];
-                std::snprintf(buffer, sizeof(buffer), " hash=%016llX",
-                              static_cast<unsigned long long>(digest.hash));
+                std::snprintf(buffer, sizeof(buffer), " hash=%016llX", static_cast<unsigned long long>(digest.hash));
                 text += buffer;
             }
             text += "\n";
             text += "  interface:";
-            for (const String& name : digest.interfaceNames) text += " " + name;
+            for (const String& name : digest.interfaceNames)
+                text += " " + name;
             text += "\n";
-            for (const String& decoration : digest.decorations) text += "  " + decoration + "\n";
+            for (const String& decoration : digest.decorations)
+                text += "  " + decoration + "\n";
         }
         return text;
     }
@@ -569,8 +604,8 @@ namespace {
     // ---------------------------------------------------------------------------------
     // Program construction through the real GL entry points
     // ---------------------------------------------------------------------------------
-    GLuint BuildProgram(const String& vertexSource, const String& fragmentSource,
-                        const Vector<String>& xfbVaryings, const GLenum bufferMode) {
+    GLuint BuildProgram(const String& vertexSource, const String& fragmentSource, const Vector<String>& xfbVaryings,
+                        const GLenum bufferMode) {
         const GLuint vertexShader = CreateShader(GL_VERTEX_SHADER);
         const char* vertexText = vertexSource.c_str();
         ShaderSource(vertexShader, 1, &vertexText, nullptr);
@@ -587,7 +622,8 @@ namespace {
         if (!xfbVaryings.empty()) {
             std::vector<const GLchar*> names;
             names.reserve(xfbVaryings.size());
-            for (const String& name : xfbVaryings) names.push_back(name.c_str());
+            for (const String& name : xfbVaryings)
+                names.push_back(name.c_str());
             TransformFeedbackVaryings(program, static_cast<GLsizei>(names.size()), names.data(), bufferMode);
         }
         LinkProgram(program);
@@ -600,13 +636,12 @@ namespace {
     // setter, clip function 0). Returns the program so the caller can keep it alive, which
     // is what the CTS does too (it holds m_program across the whole case).
     GLuint LinkClipDistanceProgram(const int clipCount, const char* version) {
-        return BuildProgram(ClipDistanceVs(clipCount, version), ClipDistanceFs(version), {},
-                            GL_INTERLEAVED_ATTRIBS);
+        return BuildProgram(ClipDistanceVs(clipCount, version), ClipDistanceFs(version), {}, GL_INTERLEAVED_ATTRIBS);
     }
 
     GLuint LinkSkipComponentsProgram(const char* version, const String& salt = String()) {
-        return BuildProgram(SkipComponentsVs(version, salt), SkipComponentsFs(version),
-                            SkipComponentsVaryings(), GL_INTERLEAVED_ATTRIBS);
+        return BuildProgram(SkipComponentsVs(version, salt), SkipComponentsFs(version), SkipComponentsVaryings(),
+                            GL_INTERLEAVED_ATTRIBS);
     }
 
     GLuint LinkCaptureInterleavedProgram(const int userVaryings, const char* version) {
@@ -633,9 +668,9 @@ namespace {
         AttachShader(program, fragmentShader);
         std::vector<const GLchar*> names;
         names.reserve(xfbVaryings.size());
-        for (const String& name : xfbVaryings) names.push_back(name.c_str());
-        TransformFeedbackVaryings(program, static_cast<GLsizei>(names.size()), names.data(),
-                                  GL_INTERLEAVED_ATTRIBS);
+        for (const String& name : xfbVaryings)
+            names.push_back(name.c_str());
+        TransformFeedbackVaryings(program, static_cast<GLsizei>(names.size()), names.data(), GL_INTERLEAVED_ATTRIBS);
         LinkProgram(program);
         DeleteShader(vertexShader);
         DeleteShader(geometryShader);
@@ -645,13 +680,14 @@ namespace {
 
     GLuint LinkCaptureGeometryProgram(const int userVaryings, const char* outPrimitive) {
         return BuildProgramWithGeometry(kGeometryBlankVs, CaptureGeometryGs(userVaryings, outPrimitive),
-                                        CaptureInterleavedFs("#version 130"),
-                                        CaptureInterleavedVaryings(userVaryings));
+                                        CaptureInterleavedFs("#version 130"), CaptureInterleavedVaryings(userVaryings));
     }
 
     // Reinstalls pGLContext: new ProgramState, new P0b preprocess cache, new stage-6
     // adoption map. glslang's process globals are untouched on purpose.
-    void FreshContext() { MG_State::Init(); }
+    void FreshContext() {
+        MG_State::Init();
+    }
 
     class XfbFrontendOrderInvarianceTest : public ::testing::Test {
     protected:
@@ -665,13 +701,25 @@ namespace {
         GLuint (*link)();
     };
 
-    GLuint LinkSkip150() { return LinkSkipComponentsProgram("#version 150"); }
-    GLuint LinkCapture130() { return LinkCaptureInterleavedProgram(15, "#version 130"); }
-    GLuint LinkSkip400() { return LinkSkipComponentsProgram("#version 400"); }
-    GLuint LinkCapture400() { return LinkCaptureInterleavedProgram(15, "#version 400"); }
+    GLuint LinkSkip150() {
+        return LinkSkipComponentsProgram("#version 150");
+    }
+    GLuint LinkCapture130() {
+        return LinkCaptureInterleavedProgram(15, "#version 130");
+    }
+    GLuint LinkSkip400() {
+        return LinkSkipComponentsProgram("#version 400");
+    }
+    GLuint LinkCapture400() {
+        return LinkCaptureInterleavedProgram(15, "#version 400");
+    }
 
-    GLuint LinkGeometryPoints() { return LinkCaptureGeometryProgram(15, "points"); }
-    GLuint LinkGeometryTriangleStrip() { return LinkCaptureGeometryProgram(15, "triangle_strip"); }
+    GLuint LinkGeometryPoints() {
+        return LinkCaptureGeometryProgram(15, "points");
+    }
+    GLuint LinkGeometryTriangleStrip() {
+        return LinkCaptureGeometryProgram(15, "triangle_strip");
+    }
 
     const BCase kBCases[] = {
         {"skip_components@150", &LinkSkip150},
@@ -690,8 +738,8 @@ namespace {
         String poisoned;
     };
 
-    AbResult RunAb(const BCase& bCase, const int clipCount, const char* clipVersion,
-                   const Bool freshContextForControl, const Bool includeSpirvHash) {
+    AbResult RunAb(const BCase& bCase, const int clipCount, const char* clipVersion, const Bool freshContextForControl,
+                   const Bool includeSpirvHash) {
         AbResult result;
 
         // CONTROL: B alone, in a context that has never seen A.
@@ -735,8 +783,7 @@ TEST_F(XfbFrontendOrderInvarianceTest, AsyncOn_ClipDistanceBeforeXfbChangesNothi
             for (const char* clipVersion : {"#version 400", "#version 150", "#version 130"}) {
                 const AbResult result = RunAb(bCase, clipCount, clipVersion, true, true);
                 EXPECT_EQ(result.control, result.poisoned)
-                    << "async=1 B=" << bCase.label << " clipCount=" << clipCount
-                    << " clipVersion=" << clipVersion;
+                    << "async=1 B=" << bCase.label << " clipCount=" << clipCount << " clipVersion=" << clipVersion;
             }
         }
     }
@@ -750,8 +797,7 @@ TEST_F(XfbFrontendOrderInvarianceTest, AsyncOff_ClipDistanceBeforeXfbChangesNoth
             for (const char* clipVersion : {"#version 400", "#version 150", "#version 130"}) {
                 const AbResult result = RunAb(bCase, clipCount, clipVersion, true, true);
                 EXPECT_EQ(result.control, result.poisoned)
-                    << "async=0 B=" << bCase.label << " clipCount=" << clipCount
-                    << " clipVersion=" << clipVersion;
+                    << "async=0 B=" << bCase.label << " clipCount=" << clipCount << " clipVersion=" << clipVersion;
             }
         }
     }
@@ -798,7 +844,8 @@ TEST_F(XfbFrontendOrderInvarianceTest, NoMemoHitPossibleForB) {
         DeleteProgram(poisonedProgram);
         DeleteProgram(clipProgram);
 
-        EXPECT_EQ(control, poisoned) << "async=" << async << " (SPIR-V hash excluded: the salt comment "
+        EXPECT_EQ(control, poisoned) << "async=" << async
+                                     << " (SPIR-V hash excluded: the salt comment "
                                         "is stripped by the preprocessor but ids can still renumber)";
     }
 }
@@ -863,7 +910,8 @@ TEST_F(XfbFrontendOrderInvarianceTest, LongCaseSequenceLikeGlcts) {
             }
             keepAlive.push_back(program);
         }
-        for (const GLuint program : keepAlive) DeleteProgram(program);
+        for (const GLuint program : keepAlive)
+            DeleteProgram(program);
     }
 }
 
@@ -902,7 +950,8 @@ TEST_F(XfbFrontendOrderInvarianceTest, BLinksWhileAIsStillInFlight) {
         const String poisoned = Render(Capture(program), true);
         EXPECT_EQ(control, poisoned) << "repetition " << repetition;
         DeleteProgram(program);
-        for (const GLuint clipProgram : clipPrograms) DeleteProgram(clipProgram);
+        for (const GLuint clipProgram : clipPrograms)
+            DeleteProgram(clipProgram);
     }
 }
 
@@ -953,8 +1002,7 @@ TEST_F(XfbFrontendOrderInvarianceTest, DumpBSpirvForDisassembly) {
             const auto& object = MG_State::pGLContext->GetProgramObject(program);
             const auto& modules = object->GetGeneratedSpirv();
             for (SizeT i = 0; i < modules.size(); ++i) {
-                String path = String(directory) + "/" + dump.tag + "-" + bCase.label + "-" +
-                              std::to_string(i) + ".spv";
+                String path = String(directory) + "/" + dump.tag + "-" + bCase.label + "-" + std::to_string(i) + ".spv";
                 std::replace(path.begin() + std::strlen(directory) + 1, path.end(), '@', '_');
                 std::FILE* file = std::fopen(path.c_str(), "wb");
                 ASSERT_NE(file, nullptr) << path;

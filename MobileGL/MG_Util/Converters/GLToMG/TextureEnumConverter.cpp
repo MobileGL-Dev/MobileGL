@@ -51,6 +51,8 @@ namespace MobileGL {
             case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
             case GL_PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY:
                 return TextureTarget::Texture2DMultisampleArray;
+            case GL_TEXTURE_EXTERNAL_OES:
+                return TextureTarget::External;
             default:
                 return TextureTarget::Unknown;
             }
@@ -153,6 +155,9 @@ namespace MobileGL {
                 return TextureInternalFormat::RGBA4;
             case GL_RGB5_A1:
                 return TextureInternalFormat::RGB5A1;
+            // GL_BGRA8_EXT (EXT_texture_storage with EXT_texture_format_BGRA8888): stored as RGBA8;
+            // the BGRA byte order is the pixel transfer format's business, as on desktop GL.
+            case 0x93A1:
             case GL_RGBA8:
                 return TextureInternalFormat::RGBA8;
             case GL_RGBA8_SNORM:
@@ -254,7 +259,7 @@ namespace MobileGL {
             case GL_STENCIL_INDEX8:
                 return TextureInternalFormat::StencilIndex8;
             // The unsized stencil base format resolves to the only stencil storage there is, the
-            // same way the unsized colour and depth base formats below resolve to theirs. Returning
+            // same way the unsized color and depth base formats below resolve to theirs. Returning
             // Unknown made glTexImage2D(GL_STENCIL_INDEX) an error, which killed the negative
             // clear-texture cases in their own setup before they could reach the call they test.
             case GL_STENCIL_INDEX:
@@ -330,6 +335,9 @@ namespace MobileGL {
                 return TextureInternalFormat::RG;
             case GL_RGB:
                 return TextureInternalFormat::RGB;
+            // GL_BGRA_EXT as an unsized internal format (EXT_texture_format_BGRA8888, an ES
+            // application's spelling): the same storage as GL_RGBA.
+            case GL_BGRA:
             case GL_RGBA:
                 return TextureInternalFormat::RGBA;
             default:
@@ -469,7 +477,7 @@ namespace MobileGL {
             switch (v) {
             case GL_NEAREST:
             case GL_LINEAR:
-                return SamplerMipmapMode::None; // 无 mipmap 时
+                return SamplerMipmapMode::None; // when there is no mipmap
             case GL_NEAREST_MIPMAP_NEAREST:
             case GL_LINEAR_MIPMAP_NEAREST:
                 return SamplerMipmapMode::Nearest;
@@ -501,7 +509,7 @@ namespace MobileGL {
         SamplerCompareMode ConvertGLEnumToSamplerCompareMode(GLenum v) {
             switch (v) {
             case 0:
-                return SamplerCompareMode::None; // 无 compare
+                return SamplerCompareMode::None; // no compare
             case GL_COMPARE_REF_TO_TEXTURE:
                 return SamplerCompareMode::CompareToTexture;
             default:

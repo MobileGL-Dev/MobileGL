@@ -17,10 +17,10 @@
 
 namespace MobileGL::MG_Util::Async {
     enum class JobState : Uint8 {
-        Pending,   // constructed, not started; may still be sitting in a queue
-        Running,   // a worker is inside RunBody()
-        Complete,  // RunBody() returned normally and the node's outputs are readable
-        Cancelled, // abandoned before it started, cancelled mid-run, or threw
+        Pending,  // constructed, not started; may still be sitting in a queue
+        Running,  // a worker is inside RunBody()
+        Complete, // RunBody() returned normally and the node's outputs are readable
+        Canceled, // abandoned before it started, canceled mid-run, or threw
     };
 
     // A GL error a job body wants to raise. Nothing in the compile/link pipeline produces
@@ -53,8 +53,8 @@ namespace MobileGL::MG_Util::Async {
     };
 
     struct JobDiagnostics {
-        Vector<DeferredError> errors;      // replayed, in ascending `sequence`, by the join
-        Vector<DeferredLogLine> logLines;  // worker-side MGLOG text, flushed in order by the join
+        Vector<DeferredError> errors;     // replayed, in ascending `sequence`, by the join
+        Vector<DeferredLogLine> logLines; // worker-side MGLOG text, flushed in order by the join
     };
 
     // The scheduling primitive every asynchronous compile and link is built on. A node owns
@@ -64,10 +64,10 @@ namespace MobileGL::MG_Util::Async {
     //
     // State machine, and the only legal transitions:
     //   Pending -> Running   (a worker picked the node up)
-    //   Pending -> Cancelled (cancelled before any worker started it)
+    //   Pending -> Canceled (canceled before any worker started it)
     //   Running -> Complete  (RunBody() returned normally)
-    //   Running -> Cancelled (cancelled mid-run, or RunBody() threw)
-    // Complete and Cancelled are terminal and the node is immutable afterwards, so every
+    //   Running -> Canceled (canceled mid-run, or RunBody() threw)
+    // Complete and Canceled are terminal and the node is immutable afterwards, so every
     // reader that observed IsTerminal() may read the outputs without further synchronization.
     //
     // enable_shared_from_this because a dependency edge outlives its registrar: a node that
@@ -84,13 +84,13 @@ namespace MobileGL::MG_Util::Async {
         // Lock-free and non-blocking - safe from any thread, including a pool thread.
         Bool IsTerminal() const;
         Bool IsComplete() const; // Complete only; this is what backs GL_COMPLETION_STATUS_KHR
-        Bool IsCancelled() const; // settled AS cancelled - the outcome, not the request
+        Bool IsCanceled() const; // settled AS canceled - the outcome, not the request
         JobState State() const;
 
         // The cancellation *request*, which is what a body polls to bail out early: a
-        // running job stays Running until its body returns, so IsCancelled() is still false
-        // at that point. Kept separate from IsCancelled() precisely so the two questions
-        // ("should I stop?" and "did it end up cancelled?") cannot be confused.
+        // running job stays Running until its body returns, so IsCanceled() is still false
+        // at that point. Kept separate from IsCanceled() precisely so the two questions
+        // ("should I stop?" and "did it end up canceled?") cannot be confused.
         Bool IsCancellationRequested() const;
 
         // Blocks until the node is terminal. GL thread only: a job body that waited on
@@ -101,7 +101,7 @@ namespace MobileGL::MG_Util::Async {
 
         // Cooperative and non-blocking. A node that has not started yet goes terminal
         // immediately, so anything waiting on it or chained behind it is released rather
-        // than stranded; a running node is flagged and settles as Cancelled when its body
+        // than stranded; a running node is flagged and settles as Canceled when its body
         // returns. Because every node owns its inputs and writes only into itself, an
         // abandoned node is always safe to simply drop - the caller never waits.
         void Cancel();
@@ -142,7 +142,7 @@ namespace MobileGL::MG_Util::Async {
         mutable std::mutex m_mutex;
         std::condition_variable m_cv;
         std::atomic<JobState> m_state{JobState::Pending};
-        std::atomic<Bool> m_cancelled{false};
+        std::atomic<Bool> m_canceled{false};
         Vector<std::function<void()>> m_continuations;
     };
 

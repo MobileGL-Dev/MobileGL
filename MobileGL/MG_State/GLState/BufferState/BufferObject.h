@@ -64,68 +64,6 @@ namespace MobileGL {
         // either the CPU shadow or the backend's persistently-mapped GPU memory) live
         // in PipeResource.h.
 
-        // Immediate buffer transfer interface implemented by the active backend
-        // (the pipe_context buffer-op analogue). Ops are invoked at GL call time,
-        // right after the shadow copy has been updated; contents are always read
-        // from the shadow so ops carry only ranges and flags.
-        //
-        // Every op must tolerate bufferObject.GetBackendResource() == nullptr:
-        // resources are created lazily by the backend's draw/bind-time ensure
-        // path, which performs a full upload from the shadow and thereby covers
-        // all ops that happened before the resource existed.
-        struct BufferBackendOps {
-            // Storage (re)definition: glBufferData / glBufferStorage. The orphaning
-            // point - the backend decides (busy-tracking) whether to swap storage
-            // or write in place. Shadow already holds the new contents.
-            void (*Respecify)(BufferObject& bufferObject) = nullptr;
-            // Contents update of [offset, offset + size) from the shadow.
-            void (*SubData)(BufferObject& bufferObject, SizeT offset, SizeT size) = nullptr;
-            // Contents update of an ADOPTED (GPU-resident) store. `data` holds the app's
-            // bytes, valid for the duration of the call only (a write map's staging
-            // store is freed the moment the unmap that lands it returns); the frontend
-            // has NOT touched the resident mapping. GL orders a
-            // glBufferSubData after already-submitted GPU reads of the store, and an
-            // in-place host write into the coherent mapping tears the frames still
-            // reading the old bytes (Minecraft patches LIVE chunk sections this way -
-            // the tear shows as one-frame wrong geometry/UVs during fast movement). The
-            // backend lands the bytes on the GPU timeline instead: after in-flight
-            // readers, before the next consumer. The frontend marks the buffer
-            // gpu-write-pending so reads reconcile through ReadbackFromGpu. Backends
-            // without this op keep the legacy ordered in-place host write.
-            void (*ResidentSubData)(BufferObject& bufferObject, SizeT offset, DataPtr data) = nullptr;
-            // Write-map flush (glUnmapBuffer / glFlushMappedBufferRange). Carries the
-            // app's real mapping flags so the backend can honour INVALIDATE_* /
-            // UNSYNCHRONIZED semantics per call instead of merging them.
-            void (*FlushMappedRange)(BufferObject& bufferObject, Range1D range,
-                                     Flags<BufferMappingAccessBit> appAccess) = nullptr;
-            // Final release of the backend resource (called from ~BufferObject).
-            // The backend defers actual destruction until the GPU is done with it.
-            void (*OnDestroy)(SharedPtr<BackendBufferResource>&& resource) = nullptr;
-            // Zero-copy persistent mapping. For a coherent (non-FLUSH_EXPLICIT) persistent
-            // write map, the backend may hand back a host-visible, COHERENT, persistently
-            // mapped pointer into its own GPU storage for the whole buffer [0, size),
-            // created with every buffer usage and seeded from the shadow. From that point
-            // the GPU buffer is the single source of truth: the app writes into it
-            // directly, all reads/writes resolve against it (HostData()), and NO further
-            // backend transfer ops are dispatched for this buffer. Returns nullptr when the
-            // backend cannot back the map; the frontend then keeps the CPU-shadow model.
-            // Must be idempotent: a second call for an already-backed buffer returns the
-            // same base pointer.
-            void* (*AcquirePersistentMap)(BufferObject& bufferObject) = nullptr;
-            // Pulls the backend's current contents for the whole buffer into the shadow
-            // (through WritebackFromBackend). Only ever called for a buffer the GPU may
-            // have written behind the frontend's back - a shader storage or atomic counter
-            // binding of a draw or dispatch - because nothing else can desynchronise the
-            // shadow. Backends that cannot read their storage back leave this null; the
-            // shadow then keeps its pre-dispatch bytes, which is the old behaviour.
-            void (*ReadbackFromGpu)(BufferObject& bufferObject) = nullptr;
-        };
-
-        // Registered by the active backend at init, cleared at shutdown.
-        // Null table (unit tests, benchmarks) => shadow-only state tracking.
-        void SetBufferBackendOps(const BufferBackendOps* ops);
-        const BufferBackendOps* GetBufferBackendOps();
-
         class BufferObject {
         public:
             using TargetEnum = BufferTarget;
@@ -175,7 +113,14 @@ namespace MobileGL {
             // Shadow-only write used when the backend copies GPU results (e.g. ReadPixels
             // into a pixel-pack buffer) back into the frontend mirror. Does not issue a
             // backend op: the backend storage already holds these bytes.
-            void WritebackFromBackend(DataPtr data, SizeT atOffset);
+            //
+            // `producedAtSeq` is the command seq the bytes are current as of (the event's
+            // ProducedAtSeq); 0 means the writeback is synchronous with its request and needs
+            // no ordering. A whole-buffer writeback clears the outstanding GPU write only when
+            // it is newer than the record the latest mark was taken for - an older one (a
+            // capture's writeback drained after a later dispatch re-marked the buffer) still
+            // lands its bytes but cannot vouch for the write it predates.
+            void WritebackFromBackend(DataPtr data, SizeT atOffset, Uint64 producedAtSeq = 0);
 
             // A draw or dispatch just ran with this buffer bound where a shader can write
             // it (shader storage / atomic counter). The next read has to reconcile with
@@ -183,9 +128,74 @@ namespace MobileGL {
             // memory - wait for the work that wrote them to retire. Which of the two is
             // the backend's business; the flag only says a GPU write is outstanding.
             void MarkGpuWritten();
+            // The same mark, stamped with an explicit command seq: the mark stands for GPU
+            // work in records AFTER `orderSeq`. MarkGpuWritten stamps the session's last
+            // published seq (0 without a session).
+            void MarkGpuWrittenAfter(Uint64 orderSeq);
+            // The mark a server announces on the reverse channel (OnGpuWritten). That channel
+            // is in order with the writebacks, so every writeback drained after this mark was
+            // produced after the write it announces: the standing stamp is kept, not raised to
+            // the drain point - raising it would outrank the very readback the next read is
+            // already waiting on.
+            void MarkGpuWrittenInChannelOrder();
             // Refreshes the shadow from the backend when a GPU write is outstanding. Called
             // from every path that reads the shadow on the app's behalf.
             void SyncGpuWrites();
+
+            // ---- P5 b1: the two things a split build has to do that a monolith does not ---
+            //
+            // Everything here is behind the build option AND behind
+            // `MG_Config::Transport != Monolith` at the call site, because an extra
+            // resource_subdata record or an extra respecify on the monolith path is new
+            // behavior and D-J forbids it. The pull build compiles none of it, which is also
+            // how G1 holds over a file this central.
+
+            // ONE BLOCK of the mapped span (PersistentMapTracker::BlockBytes), emitted through
+            // the private NotifySubData - the same serial, the same defined-content flag, the
+            // same record - so the split arm and the monolith arm differ in HOW the span is
+            // cut and in nothing else. Called only by
+            // MG_Record::PersistentMapTracker, which owns the cutting.
+            void PushMappedSpanBlock(SizeT offset, SizeT size);
+
+            // Called on every event that can move the tracker's membership predicate: map,
+            // unmap, respecify, adoption, destruction. It is one call rather than an
+            // insert/erase pair on purpose - the predicate is read from this object, so a
+            // caller that had to decide which of the two to call could decide differently
+            // from IsLivePersistentMap and the set would drift from the thing it models.
+            //
+            // It also PUBLISHES the live-host-writes bit when it changes: the server must
+            // know that a write map is live, because such a map mutates the shadow with no
+            // call, no serial and no epoch, and the applier's IsBufferDrawCleanByHandle can
+            // no longer ask this object (there is no object on that side of a spawn).
+            void NotePersistentMapStateChanged();
+            // Keeps this buffer's membership in the live persistent READ map set current (see
+            // SyncPersistentReadMapsFromGpu). Called from NotePersistentMapStateChanged, so it
+            // rides every event that can move the predicate, on every transport.
+            void NotePersistentReadMapStateChanged();
+
+            // What MGPipeEmitResourceSubData and MGPipeEmitBufferSubDataResident write into
+            // MGPSubData::HasLiveHostWrites. The PUBLISHED value, not the live predicate: the
+            // two are the same by the time any content record is built, and reading the
+            // published one is what makes a record and the edge that announced it agree by
+            // construction.
+            Bool HasLiveHostWritesForWire() const;
+
+            // Is a GPU write still unreconciled? Under split this is the THIRD STATE made
+            // readable: SyncGpuWrites no longer clears optimistically, so between the readback
+            // emission and OnBufferWriteback landing this stays true, and nothing else in the
+            // object can express that. Split-only so the pull build's layout and inlining do
+            // not move (G1).
+            Bool HasOutstandingGpuWrite() const { return m_gpuWritePending; }
+
+            // The shadow allocation's own extent in bytes - page-aligned base, page-granular
+            // size, every byte this shadow's and nobody else's (PipeResource.h,
+            // ShadowAllocationBytesFor). Read by the persistent-map tracker at registration
+            // so it can protect the mapped range's containing pages OUTWARD and hash no
+            // edges; zero for an adopted store, which the tracker never registers. Split-only
+            // for G1's reason, like the rest of this block, and out of line because it is a
+            // layer-1 read of client memory like MappedData (CONTRACT-P5C rule E) and carries
+            // the same apply-thread refusal.
+            SizeT ShadowAllocationBytes() const;
 
             Bool IsMapped() const;
             Bool IsImmutableStorage() const;
@@ -213,6 +223,9 @@ namespace MobileGL {
             // glGenBuffers) and never the heap address (recycled by the allocator): both
             // let a deleted-and-recreated buffer answer to a dead one's cache entry.
             Uint64 GetLifetimeId() const { return m_lifetimeId; }
+            // P15: the pipe client's last Buffer handle for this object (MGPipeSlotAllocator::
+            // AcquireHinted). Only a hint: it is checked against the allocator on every use.
+            Uint64& PipeHandleHint() const { return m_pipeHandleHint; }
             // Monotonic counter bumped on every shadow mutation; backends use it to
             // validate cached transient slices.
             Uint64 GetChangeSerial() const;
@@ -221,9 +234,6 @@ namespace MobileGL {
             // the store undefined, so backends may (re)allocate GPU storage without
             // uploading the stale CPU shadow.
             Bool HasDefinedContent() const;
-
-            const SharedPtr<BackendBufferResource>& GetBackendResource() const;
-            void SetBackendResource(SharedPtr<BackendBufferResource> resource);
 
         private:
             // Sizes the store for a (re)definition, renewing an adopted GPU-resident
@@ -252,6 +262,7 @@ namespace MobileGL {
 
             const Uint m_externalIndex = 0;
             const Uint64 m_lifetimeId = AllocateLifetimeId();
+            mutable Uint64 m_pipeHandleHint = 0;
             SizeT m_size = 0;
             BufferUsage m_usage = BufferUsage::StaticDraw;
             // Owns the buffer's bytes (CPU shadow or backend persistent GPU map) and
@@ -264,8 +275,18 @@ namespace MobileGL {
             Uint64 m_changeSerial = 0;
             // See HasDefinedContent().
             Bool m_hasDefinedContent = true;
-            // Set by MarkGpuWritten, cleared by SyncGpuWrites once the shadow is refreshed.
+            // Set by MarkGpuWritten, cleared by SyncGpuWrites once the shadow is refreshed -
+            // and, in a split build, cleared by WritebackFromBackend instead, because there
+            // the answer arrives later than the request. See SyncGpuWrites' definition.
             Bool m_gpuWritePending = false;
+            // The command seq the latest GPU-write mark was taken after. A monotonic record
+            // seq, never a count of writebacks: only a writeback produced by a LATER record
+            // can retire the mark (WritebackFromBackend).
+            Uint64 m_gpuWriteMarkSeq = 0;
+            // The last value of MGPResourceDesc::HasLiveHostWrites this object published.
+            // Behind the option so the pull build's layout - and therefore every inlined
+            // constructor and accessor in it - does not move (G1).
+            Bool m_publishedLiveHostWrites = false;
             Range1D m_mappedRange;
             // The write-map staging store. MapAlignedData because the application is handed a
             // pointer into it, and biased by m_stagingBias because ARB_map_buffer_alignment
@@ -277,5 +298,15 @@ namespace MobileGL {
             SizeT m_stagingBias = 0;
             Bool m_ownsStagingData;
         };
+
+        // GL 4.6 core 6.2 / 7.13: GPU writes to a buffer become visible through a persistent
+        // READ map once the client has waited for them - glFinish, or a glClientWaitSync on a
+        // fence issued after them (coherent maps; a non-coherent map adds a
+        // CLIENT_MAPPED_BUFFER_BARRIER_BIT barrier before that fence). The pointer such a map
+        // hands out is the frontend shadow, which nothing else pulls the GPU's bytes into, so
+        // these two waits refresh every live persistent read map that has a GPU write
+        // outstanding. A CLIENT_MAPPED_BUFFER_BARRIER_BIT barrier refreshes them too, for an
+        // application that reads after some other wait instead of a fence.
+        void SyncPersistentReadMapsFromGpu();
     } // namespace MG_State::GLState
 } // namespace MobileGL

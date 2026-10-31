@@ -84,7 +84,7 @@ void main() {
             float r, g, b;
         };
 
-        // Four column quads spanning the viewport left to right, in four colours,
+        // Four column quads spanning the viewport left to right, in four colors,
         // so a sub-draw that lands in the wrong place, draws the wrong vertices or
         // does not draw at all changes the picture rather than hiding inside it.
         constexpr int kColumns = 4;
@@ -452,7 +452,7 @@ void main() {
         }
 
         // Same, with GL_UNSIGNED_SHORT: the sentinel a rewritten stream has to
-        // recognise is the index TYPE's all-ones value, not the rewritten stream's.
+        // recognize is the index TYPE's all-ones value, not the rewritten stream's.
         TEST_F(MultiDrawScenario, PrimitiveRestartUnsignedShortBatchMatchesUnrolledDraws) {
             if (!Ready()) return;
             constexpr int kPad = 5;
@@ -538,8 +538,7 @@ void main() {
                 EXPECT_EQ(FirstGLError(), expected) << what;
                 // FirstGLError stops at the first one; make sure nothing else is queued so the
                 // next case starts clean.
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             };
 
             glDrawElementsBaseVertex(GL_TRIANGLES, -1, GL_UNSIGNED_INT, nullptr, 0);

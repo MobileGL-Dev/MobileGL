@@ -46,6 +46,14 @@ namespace MobileGL::MG_State::GLState {
         return framebufferObject;
     }
 
+    void FramebufferState::RegisterFramebufferObject(Uint index, SharedPtr<FramebufferObject> object) {
+        if (!object) return;
+        if (index == 0 && !m_indexGenerator.IsValid(0)) {
+            m_indexGenerator.Insert(0);
+        }
+        m_framebufferObjects[index] = Move(object);
+    }
+
     BindingSlot<FramebufferObject>& FramebufferState::GetBindingSlot(FramebufferTarget target) {
         for (auto& bindingSlot : m_bindingSlots) {
             if (bindingSlot.GetTarget() == target) {
@@ -77,5 +85,14 @@ namespace MobileGL::MG_State::GLState {
 
     Bool FramebufferState::ValidateFramebufferObject(Uint index) const {
         return m_framebufferObjects.find(index) != m_framebufferObjects.end();
+    }
+
+    SharedPtr<FramebufferObject> FramebufferState::FindFramebufferObjectByLifetimeId(Uint64 lifetimeId) const {
+        for (const auto& [index, framebufferObject] : m_framebufferObjects) {
+            if (framebufferObject && framebufferObject->GetLifetimeId() == lifetimeId) {
+                return framebufferObject;
+            }
+        }
+        return nullptr;
     }
 } // namespace MobileGL::MG_State::GLState

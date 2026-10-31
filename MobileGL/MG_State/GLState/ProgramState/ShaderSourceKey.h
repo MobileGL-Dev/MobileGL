@@ -32,8 +32,8 @@ namespace MobileGL::MG_State::GLState {
         Uint64 envFingerprint = 0;
 
         Bool operator==(const ShaderSourceKey& other) const {
-            return stage == other.stage && sourceHash == other.sourceHash &&
-                   sourceLength == other.sourceLength && envFingerprint == other.envFingerprint;
+            return stage == other.stage && sourceHash == other.sourceHash && sourceLength == other.sourceLength &&
+                   envFingerprint == other.envFingerprint;
         }
     };
 

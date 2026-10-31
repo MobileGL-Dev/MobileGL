@@ -25,8 +25,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_state.pVertexAttributeDescriptions = nullptr;
     }
 
-    VertexInputStateBuilder& VertexInputStateBuilder::AddBinding(
-        Uint32 binding, Uint32 stride, VkVertexInputRate inputRate) {
+    VertexInputStateBuilder& VertexInputStateBuilder::AddBinding(Uint32 binding, Uint32 stride,
+                                                                 VkVertexInputRate inputRate) {
         VkVertexInputBindingDescription desc{};
         desc.binding = binding;
         desc.stride = stride;
@@ -35,8 +35,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return *this;
     }
 
-    VertexInputStateBuilder& VertexInputStateBuilder::AddAttribute(
-        Uint32 location, Uint32 binding, VkFormat format, Uint32 offset) {
+    VertexInputStateBuilder& VertexInputStateBuilder::AddAttribute(Uint32 location, Uint32 binding, VkFormat format,
+                                                                   Uint32 offset) {
         VkVertexInputAttributeDescription desc{};
         desc.location = location;
         desc.binding = binding;

@@ -33,8 +33,7 @@ namespace MobileGL {
                            ExplicitVarSlotMap* opaqueUniformBindings,
                            std::set<String>* storageBlocksWithoutBinding = nullptr,
                            std::set<String>* uniformBlocksWithoutBinding = nullptr,
-                           const ResourceBindingLimits* bindingLimits = nullptr,
-                           String* bindingViolation = nullptr)
+                           const ResourceBindingLimits* bindingLimits = nullptr, String* bindingViolation = nullptr)
             : TDefaultGlslIoResolver(intermediate), m_explicitVertexIns(vertexIns), m_explicitFragOuts(fragOuts),
               m_explicitFragOutIndices(fragOutIndices), m_explicitOpaqueUniformBindings(opaqueUniformBindings),
               m_storageBlocksWithoutBinding(storageBlocksWithoutBinding),
@@ -45,8 +44,7 @@ namespace MobileGL {
                            const ExplicitVarSlotMap& fragOutIndices, ExplicitVarSlotMap* opaqueUniformBindings,
                            std::set<String>* storageBlocksWithoutBinding = nullptr,
                            std::set<String>* uniformBlocksWithoutBinding = nullptr,
-                           const ResourceBindingLimits* bindingLimits = nullptr,
-                           String* bindingViolation = nullptr)
+                           const ResourceBindingLimits* bindingLimits = nullptr, String* bindingViolation = nullptr)
             : TMglGlslIoResolver(*program.getIntermediate(stage), vertexIns, fragOuts, fragOutIndices,
                                  opaqueUniformBindings, storageBlocksWithoutBinding, uniformBlocksWithoutBinding,
                                  bindingLimits, bindingViolation) {}
@@ -95,5 +93,8 @@ namespace MobileGL {
         // driver (caught by the super-duper-vanilla and chocapic retrace fixtures).
         static constexpr int kInactiveVertexInLocationTop = 15;
         int m_nextInactiveVertexInLocation = kInactiveVertexInLocationTop;
+        // The draw-buffer count every GL/ES implementation has, for an inactive fragment output
+        // when the compile carried no limit.
+        static constexpr int kMinimumDrawBuffers = 4;
     };
 } // namespace MobileGL

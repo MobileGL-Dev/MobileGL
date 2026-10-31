@@ -30,10 +30,10 @@
 //     indices  A      {0,1,2, 0,2,3}  -> the left, red quad
 //     indices  B      {4,5,6, 4,6,7}  -> the right, green quad
 //
-// A vertex-buffer test rewrites the left quad's colour red -> green and expects
+// A vertex-buffer test rewrites the left quad's color red -> green and expects
 // the left half to turn green. An index-buffer test rewrites the indices
 // A -> B and expects the picture to jump from a red left half to a green right
-// half. Either way "stale" and "fresh" are different colours in different
+// half. Either way "stale" and "fresh" are different colors in different
 // places; no thresholds, no interpretation.
 //
 // Two families of scenario live here, and they catch different halves of the
@@ -130,10 +130,10 @@ void main() {
         // Asserts the left and right halves of the viewport, with a message that
         // says what the app had asked GL to draw by then.
         //
-        // This counts EVERY pixel in each half rather than sampling its centre.
+        // This counts EVERY pixel in each half rather than sampling its center.
         // Sampling two pixels was demonstrably too weak: a draw in which three of
-        // the left quad's four vertices still carry stale data paints a centre
-        // pixel of exactly the expected colour and passed the old assertion. That
+        // the left quad's four vertices still carry stale data paints a center
+        // pixel of exactly the expected color and passed the old assertion. That
         // case is now a standing negative control - see
         // PartialStalenessIsCaughtByWholeRegionChecks below, which constructs it
         // deliberately and proves the region scan reports it.
@@ -497,21 +497,78 @@ void main() {
 
         // ---- a self-test of the assertions, not of MobileGL ------------------
         //
+        // Inside ONE frame: draw, overwrite PART of the vertex buffer, draw again. This is the
+        // immediate-mode streaming shape (Minecraft rewrites a small per-format vertex buffer from
+        // offset 0 before every batch), and the first draw is still queued when the write lands -
+        // it must keep the bytes it was issued with. DirectGLES drains this partial range of a
+        // small store by renaming the whole store rather than copying the range, so this pins that
+        // the rename is an orphan the first draw survives and that it carries the bytes OUTSIDE
+        // the written range (the right quad's vertices) into the new storage.
+        TEST_F(CrossFrameBufferScenario, APartialSubDataBetweenTwoDrawsOfOneFrameKeepsTheFirstDrawsBytes) {
+            ASSERT_NO_FATAL_FAILURE(BuildScene(/*immutable=*/false));
+            for (int frame = 0; frame < kWarmupFrames; ++frame) {
+                BeginFrame();
+                DrawScene();
+                Gl().EndFrame();
+            }
+
+            // The left quad's four vertices moved onto the right half and turned blue: 80 of the
+            // buffer's 160 bytes.
+            std::vector<Vertex> moved = SceneVertices(/*leftQuadIsGreen=*/false);
+            for (int i = 0; i < kLeftQuadVertexCount; ++i) {
+                moved[i].x += 1.0f;
+                moved[i].r = 0.0f;
+                moved[i].g = 0.0f;
+                moved[i].b = 1.0f;
+            }
+            const GLsizeiptr leftQuadBytes = GLsizeiptr(kLeftQuadVertexCount * sizeof(Vertex));
+            ASSERT_LT(leftQuadBytes, m_vertexBytes) << "the write must be a partial range of the store";
+
+            BeginFrame();
+            DrawScene();
+            glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, leftQuadBytes, moved.data());
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the partial SubData raised a GL error";
+            DrawScene();
+            const Image frame = ReadFrame();
+            Gl().EndFrame();
+
+            ExpectHalves(frame, "red", "blue",
+                         "a draw queued before a partial SubData must keep its bytes, and the draw after it "
+                         "must see the new ones");
+
+            // The next frame draws only from the rewritten store: the right quad's vertices
+            // (outside the written range) must have come along with the rename, so the second
+            // index set still reaches them.
+            BeginFrame();
+            glBindVertexArray(m_vao);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ebo);
+            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, m_indexBytes, kIndicesRightQuad);
+            glBindVertexArray(0);
+            DrawScene();
+            const Image next = ReadFrame();
+            Gl().EndFrame();
+            ExpectHalves(next, "black", "green",
+                         "the bytes outside the partial write were lost when the store was rewritten");
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+        }
+
         // Every case above leans on ExpectHalves. ExpectHalves used to sample the
-        // centre pixel of each half - two pixels for a 12288-pixel readback - and
+        // center pixel of each half - two pixels for a 12288-pixel readback - and
         // that is measurably too weak to stand behind a claim about buffer
         // freshness: a quad whose four vertices are only PARTLY updated still
-        // paints a sampled centre the expected colour, because the centre is a
+        // paints a sampled center the expected color, because the center is a
         // barycentric blend dominated by the vertices that DID update.
         //
-        // So construct that case on purpose. Update the left quad's colour to
+        // So construct that case on purpose. Update the left quad's color to
         // green in the buffer but leave exactly one of its four vertices holding
         // the old red, once for each vertex, and check two things:
         //
         //   - the whole-region scan reports every one of the four (the tightening
         //     is real, and this test fails the moment someone loosens it back to
         //     sampling);
-        //   - at least one of the four is invisible to a single centre sample
+        //   - at least one of the four is invisible to a single center sample
         //     (the blind spot was real, and this records which vertices it hid).
         //
         // Nothing here calls a memo path; it is the assertion itself under test.
@@ -522,7 +579,7 @@ void main() {
             const std::vector<Vertex> allRed = SceneVertices(/*leftQuadIsGreen=*/false);
             const GLsizeiptr leftQuadBytes = GLsizeiptr(kLeftQuadVertexCount * sizeof(Vertex));
 
-            int centreSampleMissed = 0;
+            int centerSampleMissed = 0;
             std::string missedVertices;
             for (int staleVertex = 0; staleVertex < kLeftQuadVertexCount; ++staleVertex) {
                 // Every left-quad vertex turns green except this one.
@@ -545,27 +602,27 @@ void main() {
                 const RegionScan scan =
                     ScanRegion(image, kHalfInset, w / 2 - kHalfInset, kHalfInset, h - kHalfInset, "green");
                 EXPECT_GT(scan.offenders, 0)
-                    << "vertex " << staleVertex << " of the left quad kept its stale red colour and the "
+                    << "vertex " << staleVertex << " of the left quad kept its stale red color and the "
                     << "whole-region scan saw nothing wrong across " << scan.total << " pixels - the assertion "
                     << "is not tight enough to stand behind any freshness claim in this file";
 
                 // What the old two-pixel form of ExpectHalves would have concluded.
                 if (std::strcmp(image.ColorName(w / 4, h / 2), "green") == 0) {
-                    ++centreSampleMissed;
+                    ++centerSampleMissed;
                     if (!missedVertices.empty()) missedVertices += ",";
                     missedVertices += std::to_string(staleVertex);
                 }
             }
 
-            EXPECT_GT(centreSampleMissed, 0)
-                << "no single-vertex staleness was invisible to a centre sample, so this negative control "
+            EXPECT_GT(centerSampleMissed, 0)
+                << "no single-vertex staleness was invisible to a center sample, so this negative control "
                 << "is no longer demonstrating anything - re-derive it before trusting it";
-            if (centreSampleMissed > 0) {
-                RecordProperty("centre_sample_blind_to_stale_vertices", missedVertices);
+            if (centerSampleMissed > 0) {
+                RecordProperty("center_sample_blind_to_stale_vertices", missedVertices);
                 std::fprintf(stderr,
-                             "[itest] whole-region scan caught all %d single-stale-vertex cases; a centre "
+                             "[itest] whole-region scan caught all %d single-stale-vertex cases; a center "
                              "sample alone was blind to %d of them (vertices %s)\n",
-                             kLeftQuadVertexCount, centreSampleMissed, missedVertices.c_str());
+                             kLeftQuadVertexCount, centerSampleMissed, missedVertices.c_str());
             }
             EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
         }
@@ -670,7 +727,7 @@ void main() {
             StreamedObject m_decoy;
         };
 
-        // Vertex data. Subject and decoy differ in geometry AND colour, so a
+        // Vertex data. Subject and decoy differ in geometry AND color, so a
         // subject draw that reads the decoy's arena bytes paints the decoy's quad.
         TEST_F(StreamedArenaScenario, StreamedVertexDataSurvivesArenaRecycling) {
             const std::vector<Vertex> full = SceneVertices(/*leftQuadIsGreen=*/false);
@@ -726,7 +783,7 @@ void main() {
         //
         // It stays because it is the tripwire for the change that would make the
         // EBO memo dangerous: memoise the streamed index path - the obvious next
-        // step for the same optimisation - and the reach stops being zero and this
+        // step for the same optimization - and the reach stops being zero and this
         // test fails on the first churn frame. See ResidentIndexScenario.cpp.
         TEST_F(StreamedArenaScenario, StreamedIndexDataSurvivesArenaRecycling) {
             const std::vector<Vertex> shared = SceneVertices(/*leftQuadIsGreen=*/false);

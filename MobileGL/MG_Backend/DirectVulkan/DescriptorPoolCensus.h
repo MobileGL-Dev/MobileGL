@@ -16,13 +16,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // headers. They link the static library on desktop; the shipping shared library is built with
     // hidden visibility, so on Android nothing outside the library can call GetDescriptorPoolCensus.
     struct DescriptorPoolCensus {
-        bool available = false;         // false when no Magma renderer is live (e.g. the DirectGLES backend)
+        bool available = false; // false when no Magma renderer is live (e.g. the DirectGLES backend)
         uint32_t frameSlots = 0;
-        uint32_t pools = 0;             // descriptor pools across every frame slot
+        uint32_t pools = 0; // descriptor pools across every frame slot
         uint32_t maxPoolsInOneSlot = 0;
-        uint64_t capacitySets = 0;      // sum of maxSets over those pools
-        uint64_t cachedSets = 0;        // sets allocated from them and held in the per-layout caches
-        uint64_t slotTrims = 0;         // whole-slot trims since the renderer came up
+        uint64_t capacitySets = 0; // sum of maxSets over those pools
+        uint64_t cachedSets = 0;   // sets allocated from them and held in the per-layout caches
+        uint64_t slotTrims = 0;    // whole-slot trims since the renderer came up
     };
 
     DescriptorPoolCensus GetDescriptorPoolCensus();

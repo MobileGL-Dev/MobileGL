@@ -78,9 +78,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (effective < limit) {
                 return true;
             }
-            RecordDebugError(ErrorCode::InvalidValue, caller,
-                             std::format("{} length {} is not less than the {} limit of {}.", what, effective, what,
-                                         limit));
+            RecordDebugError(
+                ErrorCode::InvalidValue, caller,
+                std::format("{} length {} is not less than the {} limit of {}.", what, effective, what, limit));
             return false;
         }
 
@@ -90,11 +90,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         // Whether `name` currently names an object of `identifier`'s type. GL 4.6 core 20.5 makes
-        // labelling something that does not exist INVALID_VALUE, and every type KHR_debug lists
+        // labeling something that does not exist INVALID_VALUE, and every type KHR_debug lists
         // has a frontend name check - so this is answered exactly rather than waved through.
         // GL_DISPLAY_LIST is deliberately absent: it exists only in the compatibility profile,
         // which MobileGL does not expose, so it falls to the INVALID_ENUM path below.
-        Bool ValidateLabelledObject(GLenum identifier, GLuint name, Bool& outIdentifierKnown) {
+        Bool ValidateLabeledObject(GLenum identifier, GLuint name, Bool& outIdentifierKnown) {
             outIdentifierKnown = true;
             auto* context = MG_State::pGLContext.get();
             switch (identifier) {
@@ -163,8 +163,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         state.groupStack.pop_back();
     }
 
-    void DebugMessageInsert(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length,
-                            const GLchar* buf) {
+    void DebugMessageInsert(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* buf) {
         static_cast<void>(id);
         if (!ValidateInjectedSource(source, __func__)) return;
         switch (type) {
@@ -180,8 +179,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         default:
             RecordDebugError(ErrorCode::InvalidEnum, __func__,
-                             std::format("type {} is not a debug message type.",
-                                         MG_Util::ConvertGLEnumToString(type)));
+                             std::format("type {} is not a debug message type.", MG_Util::ConvertGLEnumToString(type)));
             return;
         }
         switch (severity) {
@@ -191,9 +189,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_DEBUG_SEVERITY_NOTIFICATION:
             break;
         default:
-            RecordDebugError(ErrorCode::InvalidEnum, __func__,
-                             std::format("severity {} is not a debug message severity.",
-                                         MG_Util::ConvertGLEnumToString(severity)));
+            RecordDebugError(
+                ErrorCode::InvalidEnum, __func__,
+                std::format("severity {} is not a debug message severity.", MG_Util::ConvertGLEnumToString(severity)));
             return;
         }
         if (!ValidateDebugStringLength(length, buf, kMaxDebugMessageLength, __func__, "message")) return;
@@ -208,7 +206,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ObjectLabel(GLenum identifier, GLuint name, GLsizei length, const GLchar* label) {
         Bool identifierKnown = false;
-        const Bool objectExists = ValidateLabelledObject(identifier, name, identifierKnown);
+        const Bool objectExists = ValidateLabeledObject(identifier, name, identifierKnown);
         if (!identifierKnown) {
             RecordDebugError(ErrorCode::InvalidEnum, __func__,
                              std::format("identifier {} is not a labellable object type.",
@@ -239,7 +237,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         Bool identifierKnown = false;
-        const Bool objectExists = ValidateLabelledObject(identifier, name, identifierKnown);
+        const Bool objectExists = ValidateLabeledObject(identifier, name, identifierKnown);
         if (!identifierKnown) {
             RecordDebugError(ErrorCode::InvalidEnum, __func__,
                              std::format("identifier {} is not a labellable object type.",
@@ -256,7 +254,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& labels = State().objectLabels;
         const auto it = labels.find(MakeObjectLabelKey(identifier, name));
         const String& text = it != labels.end() ? it->second : String{};
-        // GL 4.6 core 20.5: the returned length excludes the NUL, and an unlabelled object hands
+        // GL 4.6 core 20.5: the returned length excludes the NUL, and an unlabeled object hands
         // back an empty string with length 0 rather than an error.
         SizeT copied = 0;
         if (label != nullptr && bufSize > 0) {

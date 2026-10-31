@@ -48,6 +48,8 @@ namespace MobileGL {
                 return "Src1Alpha";
             case BlendFactor::OneMinusSrc1Alpha:
                 return "OneMinusSrc1Alpha";
+            case BlendFactor::SrcAlphaSaturate:
+                return "SrcAlphaSaturate";
             default:
                 return "Unknown";
             }

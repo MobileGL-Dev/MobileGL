@@ -1,0 +1,41 @@
+# MobileGL link-closure ratchet baseline (CONTRACT-P6.md 12.1, ID-P7-7).
+# Regenerate: python3 scripts/link_ratchet.py --build-dir <dir> \
+#               --baseline scripts/data/link_ratchet_baseline.txt \
+#               --write-baseline scripts/data/link_ratchet_baseline.txt
+# base commit : <unknown>
+# configure   : -DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON -DCMAKE_BUILD_TYPE=Release
+# build dir   : /home/swung/mgl-p13-split
+# count       : 27
+#
+# One demangled symbol per line. A trailing ` # note` is an annotation the parser
+# ignores. `# P13` (debts only P13's module work could clear) is refused since
+# P13 closed them. The LIST is the baseline, not the count: a ratchet that
+# stored only a number would go green on the day one symbol is cleared and another
+# added (ID-P7-7).
+MobileGL::MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo
+MobileGL::MG_Pipe::PipeInputs::IsLive() const
+MobileGL::MG_Pipe::PipeInputs::RecordError(MobileGL::ErrorCode, std::unique_ptr<MobileGL::ErrorInfo, std::default_delete<MobileGL::ErrorInfo> >)
+MobileGL::MG_Remote::Client::AdoptTierIsEmulate()
+MobileGL::MG_Remote::Client::BackendObject_Remote::BackendObject_Remote()
+MobileGL::MG_Remote::Client::ClientSession::Active()
+MobileGL::MG_Remote::Client::ClientSession::NoteApplyThreadEnteredApplier()
+MobileGL::MG_Remote::Client::ClientSession::NoteApplyThreadLeftApplier()
+MobileGL::MG_Remote::Client::ClientSession::Start(MobileGL::MG_Config::TransportMode, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+MobileGL::MG_Remote::Client::ClientSession::StartSpawned()
+MobileGL::MG_Remote::Client::ClientSession::Stop()
+MobileGL::MG_Remote::Client::ClientSessionInstance()
+MobileGL::MG_Remote::Client::EmitObjectDeathRecord(MobileGL::MG_Pipe::MGPipeKind, unsigned long)
+MobileGL::MG_State::GLState::BufferObject::GetExternalIndex() const
+MobileGL::MG_State::GLState::BufferObject::GetSize() const
+MobileGL::MG_State::GLState::BufferObject::WritebackFromBackend(MobileGL::DataPtr, unsigned long, unsigned long)
+MobileGL::MG_State::GLState::ClassifyVertexAttribType(unsigned int)
+MobileGL::MG_State::GLState::DecodeProgramArchive(unsigned char const*, unsigned long, MobileGL::MG_State::GLState::ProgramArchive&)
+MobileGL::MG_State::GLState::ProgramArtifactsSchemaFingerprint()
+MobileGL::MG_State::GLState::ProgramObject::JoinPendingLink() const
+MobileGL::MG_State::GLState::SamplerObject::GetAllSamplerParameters() const
+MobileGL::MG_State::GLState::SamplerObject::GetExternalIndex() const
+MobileGL::MG_State::GLState::SamplerObject::GetLifetimeId() const
+MobileGL::MG_State::GLState::TextureObjectBuffer::GetBufferBindingSlot(MobileGL::TextureUploadTarget)
+MobileGL::MG_State::GLState::TextureUnit::GetAllBindingSlots()
+MobileGL::MG_State::GLState::TextureUnit::GetSamplerObject() const
+MobileGL::MG_State::GLState::VertexArrayObject::GetAllAttributes() const

@@ -1,0 +1,435 @@
+// MobileGL - MobileGL/MG_Remote/Transport/Doorbell.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+#include "Doorbell.h"
+
+#include <MG_Util/Debug/Log.h>
+
+#include <condition_variable>
+#include <mutex>
+
+#if !defined(_WIN32)
+#include <cerrno>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
+// Same fallback as FdPassing.cpp: on macOS / BSD the protection is SO_NOSIGPIPE on the
+// socket, set in SocketDoorbell's constructor, not a per-send flag.
+// THE WITNESS'S `events`, and the whole reason it can watch a socket it must not read.
+//
+// POLLRDHUP is what Linux and bionic report when the PEER shuts down its writing end - the exact
+// fact the death witness wants - and asking for it alone means poll never reports POLLIN for that
+// descriptor, so unread control replies queued on it can neither wake this bell nor be consumed
+// from under SocketTransport's reassembler. POLLHUP / POLLERR / POLLNVAL arrive in revents whether
+// requested or not, so an 0 here would still catch a full close; POLLRDHUP only makes the
+// half-close case - the one a dying peer actually produces first - visible too.
+#if !defined(_WIN32)
+#if defined(POLLRDHUP)
+#define MOBILEGL_POLL_PEER_HANGUP POLLRDHUP
+#else
+#define MOBILEGL_POLL_PEER_HANGUP 0
+#endif
+#endif
+
+#if !defined(_WIN32) && !defined(MSG_NOSIGNAL)
+#define MSG_NOSIGNAL 0
+#endif
+
+namespace MobileGL::MG_Remote::Transport {
+
+    // -----------------------------------------------------------------------
+    // The spin calibration (Doorbell.h's SpinItersPerUs block has the argument)
+    // -----------------------------------------------------------------------
+
+    namespace Detail {
+
+        std::atomic<std::uint32_t> g_spinItersPerUs{0};
+
+        namespace {
+
+            // The probe's length. Big enough that one steady_clock read at each end is
+            // a rounding error against it (a few microseconds of loop), small enough
+            // that a thread calibrating on its first wait does not visibly stall: at
+            // any plausible rate this is 2-30 us.
+            constexpr std::uint32_t kProbeIterations = 8192;
+
+            // The clamps. Neither is a guess about a device - they are the bounds
+            // outside which the READING itself cannot be true. A real iteration is an
+            // acquire load plus a yield/pause: below ~0.5 ns each (2000/us) no core
+            // retires it, and above ~250 ns each (4/us) the probe was preempted or the
+            // clock is lying. Clamping is what keeps a bad reading from turning a 50 us
+            // hint into a millisecond spin or into no spin at all.
+            constexpr std::uint32_t kMinSpinItersPerUs = 4;
+            constexpr std::uint32_t kMaxSpinItersPerUs = 2000;
+
+            // What a platform with a clock too coarse to measure the probe gets. 200
+            // iterations per microsecond is the middle of the plausible range (5 ns an
+            // iteration); the fallback exists so that an unmeasurable clock produces a
+            // spin of roughly the right order rather than none. It is NOT what a
+            // measurably slow probe gets - see the clamp at the bottom of this
+            // function, which keeps the two readings apart.
+            constexpr std::uint32_t kFallbackSpinItersPerUs = 200;
+
+        } // namespace
+
+        std::uint32_t CalibrateSpinItersPerUs() {
+            // The probe body is the spin loop's body with the caller's `ready()` replaced
+            // by an atomic load the compiler may not hoist and may not fold: an atomic
+            // the optimizer cannot prove constant is the only portable way to keep the
+            // loop from vanishing, and it is also the closest thing to what a real
+            // `ready()` costs.
+            std::atomic<std::uint32_t> probe{0};
+
+            // TWO PASSES, AND THE FASTER ONE WINS. The first pass pays the i-cache miss,
+            // the branch predictor's warm-up and - on a big.LITTLE phone - the tail of a
+            // frequency ramp; the second is the reading. Taking the MAXIMUM rather than
+            // the last value is the deliberate choice: a pass that was preempted reads
+            // absurdly slow, and under-spinning costs a park (a syscall and a context
+            // switch) while over-spinning costs cycles the thread had nothing else to do
+            // with. Both directions stay inside the clamps.
+            //
+            // "Did any pass produce a number at all?" - which is a DIFFERENT question
+            // from "was the number small?", and conflating them is how a starved machine
+            // ends up with the largest spin in the table. See the clamp below.
+            bool sawUsableClock = false;
+            std::uint32_t best = 0;
+            for (int pass = 0; pass < 2; ++pass) {
+                const auto start = std::chrono::steady_clock::now();
+                for (std::uint32_t i = 0; i < kProbeIterations; ++i) {
+                    if (probe.load(std::memory_order_acquire) != 0) {
+                        break;
+                    }
+                    CpuRelax();
+                }
+                const auto elapsedNs =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start)
+                        .count();
+                if (elapsedNs <= 0) {
+                    continue; // clock too coarse to see this probe at all
+                }
+                sawUsableClock = true;
+                const std::uint64_t perUs =
+                    (static_cast<std::uint64_t>(kProbeIterations) * 1000ull) / static_cast<std::uint64_t>(elapsedNs);
+                const std::uint32_t clamped =
+                    perUs > kMaxSpinItersPerUs ? kMaxSpinItersPerUs : static_cast<std::uint32_t>(perUs);
+                if (clamped > best) {
+                    best = clamped;
+                }
+            }
+            // THE TWO READINGS THAT BOTH ARRIVE AS best == 0 ARE OPPOSITE, and the first
+            // cut of this clamp answered them the same way. `perUs` is
+            // kProbeIterations*1000/elapsedNs, so it truncates to zero as soon as a pass
+            // takes longer than 8.192 ms - that is EXACTLY the heavily preempted probe on
+            // an oversubscribed runner or a thermally throttled device, and handing it
+            // kFallbackSpinItersPerUs would install 200 iters/us (50x the floor, ~10 ms of
+            // busy spin per 50 us wait) on the one machine that can least afford it. A
+            // probe that never saw a usable clock is the opposite case: nothing was
+            // measured, the machine may be perfectly fast, and a mid-range guess is the
+            // only sane answer. So: measured-but-slow clamps UP to the floor, unmeasurable
+            // takes the fallback.
+            if (best < kMinSpinItersPerUs) {
+                best = sawUsableClock ? kMinSpinItersPerUs : kFallbackSpinItersPerUs;
+            }
+            // Relaxed, and a race here is not a bug: two threads that calibrate at the
+            // same moment both store a legitimate budget, and the loser's is as usable as
+            // the winner's. A once_flag would put a guard-variable load on every Wait,
+            // which is the cost this whole change exists to remove.
+            g_spinItersPerUs.store(best, std::memory_order_relaxed);
+            MGLOG_D("MG_Remote doorbell: spin calibrated at %u iterations per microsecond "
+                    "(clock-free spin budget = that times MOBILEGL_IPC_SPIN_US)",
+                    static_cast<unsigned>(best));
+            return best;
+        }
+
+    } // namespace Detail
+
+    // -----------------------------------------------------------------------
+    // CondVarDoorbell
+    // -----------------------------------------------------------------------
+
+    struct CondVarDoorbell::Impl {
+        std::mutex mutex;
+        std::condition_variable cv;
+        // Counted, not a flag: a wakeup that arrives while nobody is parked
+        // must still be observed by the next Park.
+        std::uint32_t signals = 0;
+    };
+
+    CondVarDoorbell::CondVarDoorbell() : m_impl(new Impl()) {}
+
+    CondVarDoorbell::~CondVarDoorbell() {
+        delete m_impl;
+    }
+
+    void CondVarDoorbell::Notify() {
+        {
+            std::lock_guard<std::mutex> lock(m_impl->mutex);
+            ++m_impl->signals;
+        }
+        m_impl->cv.notify_one();
+    }
+
+    bool CondVarDoorbell::Park(std::uint32_t timeoutMs) {
+        std::unique_lock<std::mutex> lock(m_impl->mutex);
+        // The death latch is tested under the same mutex Kill sets it under, so
+        // a Kill cannot slip between this test and the wait below: it either
+        // returns here or wakes the predicate.
+        if (m_dead.load(std::memory_order_relaxed)) {
+            return false;
+        }
+        if (m_impl->signals != 0) {
+            --m_impl->signals;
+            return true;
+        }
+        if (timeoutMs == 0) {
+            return false;
+        }
+        const auto woken = [this] { return m_impl->signals != 0 || m_dead.load(std::memory_order_relaxed); };
+        if (timeoutMs == kWaitForever) {
+            m_impl->cv.wait(lock, woken);
+        } else if (!m_impl->cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), woken)) {
+            return false;
+        }
+        if (m_dead.load(std::memory_order_relaxed)) {
+            // Woken by Kill, not by an event. The caller re-tests its condition
+            // regardless (Doorbell::Wait always does) and then sees Dead().
+            return false;
+        }
+        --m_impl->signals;
+        return true;
+    }
+
+    void CondVarDoorbell::Kill() {
+        {
+            std::lock_guard<std::mutex> lock(m_impl->mutex);
+            m_dead.store(true, std::memory_order_release);
+        }
+        // notify_all, not notify_one: both a raw Park and a Doorbell::Wait may
+        // be parked here, and after this nobody will ring again.
+        m_impl->cv.notify_all();
+    }
+
+    void CondVarDoorbell::Reset() {
+        std::lock_guard<std::mutex> lock(m_impl->mutex);
+        m_impl->signals = 0;
+    }
+
+#if !defined(_WIN32)
+
+    // -----------------------------------------------------------------------
+    // SocketDoorbell
+    // -----------------------------------------------------------------------
+
+    SocketDoorbell::SocketDoorbell(int fd, std::uint8_t code, bool ownsFd)
+        : m_fd(fd), m_notifyFd(fd), m_code(code), m_ownsFd(ownsFd) {
+#if defined(SO_NOSIGPIPE)
+        // The per-socket form of MSG_NOSIGNAL, on the platforms that lack the per-call one:
+        // a Notify to a hung-up peer must come back as EPIPE, not as a fatal signal.
+        if (m_fd >= 0) {
+            const int one = 1;
+            (void)::setsockopt(m_fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+        }
+#endif
+    }
+
+    // The two-fd form: park on one descriptor, ring another. See the header for
+    // why the server needs it and the cross-process form cannot provide it.
+    SocketDoorbell::SocketDoorbell(int parkFd, int notifyFd, std::uint8_t code, bool ownsFds)
+        : m_fd(parkFd), m_notifyFd(notifyFd), m_code(code), m_ownsFd(ownsFds) {
+#if defined(SO_NOSIGPIPE)
+        for (int fd : {m_fd, m_notifyFd}) {
+            if (fd >= 0) {
+                const int one = 1;
+                (void)::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+            }
+        }
+#endif
+    }
+
+    SocketDoorbell::~SocketDoorbell() {
+        if (!m_ownsFd) {
+            return;
+        }
+        if (m_fd >= 0) {
+            ::close(m_fd);
+        }
+        // Only when they are different: the single-fd form has m_notifyFd == m_fd
+        // and closing it twice is a double close, which on a busy process closes
+        // somebody else's descriptor rather than failing.
+        if (m_notifyFd >= 0 && m_notifyFd != m_fd) {
+            ::close(m_notifyFd);
+        }
+    }
+
+    void SocketDoorbell::Notify() {
+        // The NOTIFY descriptor, not the park one: a ring-only bell has no park
+        // fd at all and must still be able to ring.
+        if (m_notifyFd < 0) {
+            return;
+        }
+        const std::uint8_t byte = m_code;
+        for (;;) {
+            const ssize_t written = ::send(m_notifyFd, &byte, 1, MSG_DONTWAIT | MSG_NOSIGNAL);
+            if (written == 1) {
+                return;
+            }
+            if (written < 0 && errno == EINTR) {
+                continue;
+            }
+            if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                // The socket buffer already holds unread wakeups: the peer has
+                // one pending, which is all a doorbell promises.
+                return;
+            }
+            if (written < 0 && (errno == EPIPE || errno == ECONNRESET)) {
+                // The peer is gone: it can never ring back either, so latch it
+                // here too rather than waiting for a Park to discover it.
+                m_dead.store(true, std::memory_order_release);
+                return;
+            }
+            MGLOG_D("MG_Remote doorbell: send failed (errno=%d)", errno);
+            return;
+        }
+    }
+
+    bool SocketDoorbell::Park(std::uint32_t timeoutMs) {
+        // A ring-only bell was never a waiter. Saying so immediately is the
+        // honest answer; blocking forever on -1 would be a hang with no cause.
+        if (m_fd < 0) {
+            return false;
+        }
+        if (m_fd < 0 || m_dead.load(std::memory_order_acquire)) {
+            return false;
+        }
+        const auto start = std::chrono::steady_clock::now();
+        for (;;) {
+            int pollTimeout = -1;
+            if (timeoutMs != kWaitForever) {
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                        .count();
+                const long long remaining = static_cast<long long>(timeoutMs) - elapsed;
+                pollTimeout = remaining <= 0 ? 0 : static_cast<int>(remaining);
+            }
+            // THE WITNESS ASKS FOR HANGUP AND NOTHING ELSE. POLLHUP/POLLERR/POLLNVAL are
+            // reported in revents whether or not they were requested, so an `events` of
+            // POLLRDHUP alone gets the peer's shutdown and never POLLIN - which is the whole
+            // point: the control socket legitimately carries unread REPLY bytes, and asking for
+            // readability there would make every queued reply a wakeup, spin this loop, and race
+            // SocketTransport's reassembler for the same bytes. Nothing is ever recv'd from it.
+            struct pollfd pfds[2]{};
+            pfds[0].fd = m_fd;
+            pfds[0].events = POLLIN;
+            const bool watching = m_witnessFd >= 0;
+            if (watching) {
+                pfds[1].fd = m_witnessFd;
+                pfds[1].events = MOBILEGL_POLL_PEER_HANGUP;
+            }
+            const int ready = ::poll(pfds, watching ? 2 : 1, pollTimeout);
+            struct pollfd& pfd = pfds[0];
+            if (ready < 0) {
+                if (errno == EINTR) {
+                    continue; // a signal is not a wakeup; keep the deadline
+                }
+                MGLOG_D("MG_Remote doorbell: poll failed (errno=%d)", errno);
+                return false;
+            }
+            if (ready == 0) {
+                return false; // timed out
+            }
+            // THE WITNESS FIRST, because a peer that is gone makes every other answer stale. It
+            // reports only hangup shapes by construction, so any revent on it IS the death.
+            if (watching && pfds[1].revents != 0) {
+                MGLOG_I("MG_Remote doorbell: the peer hung up (witness fd %d, revents=0x%X) - "
+                        "this is the DEATH FACT, taken from a descriptor and not from a "
+                        "deadline: a server one frame behind is the intended steady state and "
+                        "must never be mistaken for one that is gone (CONTRACT-P6 5.4)",
+                        m_witnessFd, static_cast<unsigned>(pfds[1].revents));
+                // THE CAUSE BEFORE THE FACT, so a reader that sees Dead() can never find
+                // PeerHungUp() still false and conclude "orderly teardown".
+                m_peerHungUp.store(true, std::memory_order_release);
+                m_dead.store(true, std::memory_order_release);
+                return false;
+            }
+            // revents has to be inspected, not just `ready > 0`. Once the peer
+            // closes its end the descriptor is permanently poll-ready with
+            // nothing to read (measured on Linux: revents=POLLIN|POLLHUP,
+            // recv()==0), so treating any readiness as a wakeup turns every
+            // park on a dead peer into a 100% CPU spin - unbounded, because
+            // Doorbell::Wait re-parks until its deadline and kWaitForever has
+            // none.
+            if ((pfd.revents & (POLLERR | POLLNVAL)) != 0) {
+                MGLOG_D("MG_Remote doorbell: fd %d unusable (revents=0x%X)", m_fd, static_cast<unsigned>(pfd.revents));
+                m_dead.store(true, std::memory_order_release);
+                return false;
+            }
+            if ((pfd.revents & POLLIN) != 0) {
+                if (Drain() != 0) {
+                    return true; // a real wakeup byte
+                }
+                if (m_dead.load(std::memory_order_acquire)) {
+                    return false; // EOF, not an event
+                }
+                // Ready but empty and still alive: someone else drained it.
+                // Report the wakeup and let the caller re-test its condition.
+                return true;
+            }
+            if ((pfd.revents & POLLHUP) != 0) {
+                m_dead.store(true, std::memory_order_release);
+                return false;
+            }
+            // Readiness with no bit we requested or recognize: there is
+            // nothing to consume and no way to make progress, so refuse to
+            // poll this descriptor again.
+            MGLOG_D("MG_Remote doorbell: fd %d ready with revents=0x%X", m_fd, static_cast<unsigned>(pfd.revents));
+            m_dead.store(true, std::memory_order_release);
+            return false;
+        }
+    }
+
+    std::uint64_t SocketDoorbell::Drain() {
+        // Level-triggered to edge-triggered: swallow every queued byte so one
+        // stale wakeup cannot make later Parks return without an event.
+        std::uint64_t consumed = 0;
+        std::uint8_t scratch[64];
+        for (;;) {
+            const ssize_t got = ::recv(m_fd, scratch, sizeof(scratch), MSG_DONTWAIT);
+            if (got > 0) {
+                consumed += static_cast<std::uint64_t>(got);
+                continue;
+            }
+            if (got == 0) {
+                // Orderly shutdown on a stream socket: the peer is gone and
+                // will never ring again.
+                m_dead.store(true, std::memory_order_release);
+                return consumed;
+            }
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return consumed; // drained
+            }
+            MGLOG_D("MG_Remote doorbell: recv failed (errno=%d)", errno);
+            m_dead.store(true, std::memory_order_release);
+            return consumed;
+        }
+    }
+
+    void SocketDoorbell::Reset() {
+        if (m_fd < 0 || m_dead.load(std::memory_order_acquire)) {
+            return;
+        }
+        (void)Drain();
+    }
+
+#endif // !_WIN32
+
+} // namespace MobileGL::MG_Remote::Transport

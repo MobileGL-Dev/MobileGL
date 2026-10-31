@@ -153,9 +153,8 @@ void main() {
                 glGenBuffers(1, &buffer);
                 glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, buffer);
                 const std::vector<float> poison(vertexCapacity * kFloatsPerVertex, kPoison);
-                glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER,
-                             static_cast<GLsizeiptr>(vertexCapacity * kBytesPerVertex), poison.data(),
-                             GL_DYNAMIC_DRAW);
+                glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<GLsizeiptr>(vertexCapacity * kBytesPerVertex),
+                             poison.data(), GL_DYNAMIC_DRAW);
                 return buffer;
             }
 
@@ -190,7 +189,7 @@ void main() {
                     const float expected = static_cast<float>(point) + static_cast<float>(component);
                     const float got = record[component];
                     // isfinite first: every ordered comparison against a NaN is false, so a
-                    // pair of one-sided range tests REPORTS SUCCESS for uninitialised storage
+                    // pair of one-sided range tests REPORTS SUCCESS for uninitialized storage
                     // that happens to read as NaN.
                     if (!std::isfinite(got) || std::fabs(got - expected) > 0.01f) {
                         return ::testing::AssertionFailure()
@@ -223,11 +222,11 @@ void main() {
             EXPECT_EQ(generated, 4u);
 
             std::vector<float> readback(kDrawnPoints * kFloatsPerVertex, kPoison);
-            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                               static_cast<GLsizeiptr>(kDrawnPoints * kBytesPerVertex), readback.data());
+            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(kDrawnPoints * kBytesPerVertex),
+                               readback.data());
             for (int point = 0; point < kDrawnPoints; ++point) {
-                EXPECT_TRUE(CapturedVertexIs(readback.data() + static_cast<std::size_t>(point) * kFloatsPerVertex,
-                                             point));
+                EXPECT_TRUE(
+                    CapturedVertexIs(readback.data() + static_cast<std::size_t>(point) * kFloatsPerVertex, point));
             }
 
             glDeleteBuffers(1, &captureBuffer);
@@ -256,8 +255,8 @@ void main() {
             glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
                                static_cast<GLsizeiptr>(kCapacityVertices * kBytesPerVertex), readback.data());
             for (int point = 0; point < static_cast<int>(kCapacityVertices); ++point) {
-                EXPECT_TRUE(CapturedVertexIs(readback.data() + static_cast<std::size_t>(point) * kFloatsPerVertex,
-                                             point));
+                EXPECT_TRUE(
+                    CapturedVertexIs(readback.data() + static_cast<std::size_t>(point) * kFloatsPerVertex, point));
             }
 
             glDeleteBuffers(1, &captureBuffer);

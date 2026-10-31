@@ -20,12 +20,31 @@ namespace MobileGL::MG_State::GLState {
         const SharedPtr<FramebufferObject>& GetFramebufferObject(Uint index);
         void GenerateNames(Uint number, Vector<Uint>& framebuffers);
         const SharedPtr<FramebufferObject>& CreateFramebufferObject(Uint index);
+        // Puts an already-built object at `index` without the "name 0 is created once" rule,
+        // so a context can adopt the process-wide default framebuffer.
+        void RegisterFramebufferObject(Uint index, SharedPtr<FramebufferObject> object);
         BindingSlot<FramebufferObject>& GetBindingSlot(FramebufferTarget target);
         void MarkFramebufferObjectForDeletion(Uint index);
         Bool ValidateName(Uint index) const;
         Bool ValidateFramebufferObject(Uint index) const;
 
+        // P5c (G6, CONTRACT-P5C §3.3/§5.4): the reverse of HandleFor() for a server that holds
+        // only the handle - the named-blit consumer on a backend with no FBO twin registry
+        // (Magma) resolves the verb's ReadFbo/DrawFbo to the frontend object by the lifetime
+        // id the handle was minted over. Named debt, reached inside
+        // MGPipeFrontendKeyedRegistryScope; P3b/P4b retire it by carrying the object identity
+        // in the record. nullptr when no live framebuffer owns the id.
+        SharedPtr<FramebufferObject> FindFramebufferObjectByLifetimeId(Uint64 lifetimeId) const;
+
+        // P2 brief D4: "did the attachment set or the default geometry of ANY framebuffer
+        // move". It does NOT cover a BIND - a bind writes a BindingSlot, not the object - so
+        // MGPipeTracker pairs this counter with the bound draw framebuffer identity, which
+        // is one extra load and keeps the bump points on the object where they belong.
+        void NoteAttachmentChanged() { ++m_anyAttachmentGeneration; }
+        Uint64 GetAnyAttachmentGeneration() const { return m_anyAttachmentGeneration; }
+
     private:
+        Uint64 m_anyAttachmentGeneration = 0;
         UnorderedMap<Uint, SharedPtr<FramebufferObject>> m_framebufferObjects;
         IndexGenerator<Uint> m_indexGenerator;
         Array<BindingSlot<FramebufferObject>, static_cast<SizeT>(FramebufferTarget::FramebufferTargetCount)>

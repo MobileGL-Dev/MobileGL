@@ -27,7 +27,38 @@ namespace MobileGL::MG_State::GLState {
     // MG_Util/ShaderTranspiler/Types.h.
     inline constexpr SizeT MIN_MAP_BUFFER_ALIGNMENT = 64;
 
-    // Allocator that gives every allocation MIN_MAP_BUFFER_ALIGNMENT. Deliberately minimal: the
+    // The shadow's ALLOCATION alignment is a full page, not the advertised 64: a
+    // page-aligned shadow (page-granular in SIZE as well, in a split build - see
+    // ShadowAllocationBytesFor) owns every byte of every page it occupies, which is what
+    // lets the persistent-map mprotect tracker write-protect the mapped range's containing
+    // pages without ever covering a neighbor allocation's byte (a foreign thread with
+    // signals blocked faulting on a shared page is a process kill).
+    // GL_MIN_MAP_BUFFER_ALIGNMENT keeps answering 64 - over-aligning an allocation is
+    // invisible to the application, and a glMapBufferRange base that is page-aligned is
+    // 64-aligned. The cost is allocator rounding on small buffers, paid so the tracker
+    // never has to make the unsafe choice.
+    inline constexpr SizeT SHADOW_ALLOCATION_ALIGNMENT = 4096;
+
+    // The bytes one shadow allocation actually asks the heap for, from the count std::vector
+    // asked the allocator for. In a split build the SIZE is rounded up to a whole number of
+    // SHADOW_ALLOCATION_ALIGNMENT pages, not just the base: alignment alone puts the first
+    // byte on a page boundary but lets the LAST page end mid-way, and whatever the heap
+    // packs after it shares that page. The persistent-map tracker then had to align its
+    // protected range inward and hash the partial-page edges on every draw (8.5% of the
+    // client thread at VD12 in XXH3, on nearly every buffer - almost no mapped end is
+    // page-aligned). With a page-granular size every byte of [base, base + this) is this
+    // allocation's own, so the tracker can protect the mapped range's containing pages
+    // outward and there are no edges to hash. ONE function for the allocator and for
+    // PipeResource::ShadowAllocationBytes(), because the extent the tracker widens into may
+    // never exceed what was allocated. The pull build keeps the exact count and does not
+    // see this function at all: it has no tracker to spend the rounding on, and G1 holds
+    // its symbol set and .text byte-identical only if allocate()'s own text does not move.
+    inline constexpr SizeT ShadowAllocationBytesFor(SizeT count) {
+        return (count + SHADOW_ALLOCATION_ALIGNMENT - 1) & ~(SHADOW_ALLOCATION_ALIGNMENT - 1);
+    }
+
+    // Allocator that gives every allocation SHADOW_ALLOCATION_ALIGNMENT (and, in a split
+    // build, a page-granular size - see ShadowAllocationBytesFor). Deliberately minimal: the
     // vectors it backs hold raw bytes and are only ever sized, so allocate/deallocate plus the
     // rebinding and equality boilerplate std::vector requires is the whole interface.
     template <typename T>
@@ -40,11 +71,11 @@ namespace MobileGL::MG_State::GLState {
 
         T* allocate(SizeT count) {
             if (count == 0) return nullptr;
-            return static_cast<T*>(
-                ::operator new(count * sizeof(T), std::align_val_t{MIN_MAP_BUFFER_ALIGNMENT}));
+            return static_cast<T*>(::operator new(ShadowAllocationBytesFor(count * sizeof(T)),
+                                                  std::align_val_t{SHADOW_ALLOCATION_ALIGNMENT}));
         }
         void deallocate(T* pointer, SizeT) noexcept {
-            ::operator delete(pointer, std::align_val_t{MIN_MAP_BUFFER_ALIGNMENT});
+            ::operator delete(pointer, std::align_val_t{SHADOW_ALLOCATION_ALIGNMENT});
         }
 
         template <typename U>
@@ -62,13 +93,14 @@ namespace MobileGL::MG_State::GLState {
 
     // Opaque, refcounted handle to the backend's GPU storage for one buffer
     // (the driver-side resource). The active backend derives from it and attaches
-    // its own payload (VkBufferResource / GLESBufferResource). Held by PipeResource.
+    // its own payload (GLESBufferResource); since P13 it is held by the backend's own
+    // handle-keyed table, never by the frontend object.
     class BackendBufferResource {
     public:
         virtual ~BackendBufferResource() = default;
     };
 
-    // Mesa pipe_resource analogue for a GL buffer's storage. It owns the buffer's
+    // The storage resource behind a GL buffer object. It owns the buffer's
     // bytes and its backend GPU resource, and abstracts WHERE the authoritative
     // bytes live so no caller has to branch on the mode:
     //
@@ -100,13 +132,37 @@ namespace MobileGL::MG_State::GLState {
         // glBufferStorage before any persistent map). Mirrors the previous
         // power-of-two reserve + exact resize of the old m_dataPtr.
         void ResizeShadow(SizeT size) {
-            m_shadow->reserve(std::bit_ceil(size == 0 ? SizeT{1} : size));
+            const SizeT reserved = std::bit_ceil(size == 0 ? SizeT{1} : size);
+            m_shadow->reserve(reserved);
             m_shadow->resize(size);
+            // RECORDED HERE, NOT INFERRED FROM capacity(). `reserved` is the count this
+            // call asked the allocator for, so ShadowAllocationBytesFor(reserved) is the
+            // block the allocator handed back whenever this reserve reallocated - and when
+            // it did not (the vector already held at least that much), the block behind
+            // Bytes() is an earlier, LARGER reserve's, so the value recorded here is at
+            // most the true extent either way. Reading capacity() back instead would tie
+            // the ownership claim to a library's promise that capacity() never exceeds
+            // the count it allocated - true of libc++, libstdc++ and MSVC today, pinned by
+            // nothing - and an over-report there would protect a page this allocation
+            // does not own, the very process-killer the extent exists to keep out. An
+            // under-report costs nothing: the tracker still needs rangeEnd <= extent, and
+            // size <= reserved always.
+            m_shadowExtent = ShadowAllocationBytesFor(reserved);
         }
         // Direct shadow access, used only by the backend's upload-from-shadow path,
         // which never runs for a GPU-resident (persistent) buffer.
         MapAlignedData& Shadow() { return *m_shadow; }
         const MapAlignedData& Shadow() const { return *m_shadow; }
+
+        // The extent of the shadow's heap allocation in bytes, as ResizeShadow asked for
+        // it: every byte of [Bytes(), Bytes() + this) belongs to this shadow and to
+        // nothing else, and the extent is a whole number of SHADOW_ALLOCATION_ALIGNMENT
+        // pages. This is what lets the persistent-map tracker protect the mapped range's
+        // containing pages OUTWARD without ever covering a byte it does not own (a
+        // foreign thread with signals blocked faulting on a shared page is a process
+        // kill). Zero for an adopted (GPU-resident) store, whose shadow was released, and
+        // for a shadow that was never sized; the tracker excludes both.
+        SizeT ShadowAllocationBytes() const { return m_gpuMapped != nullptr ? 0 : m_shadowExtent; }
 
         // Transition to persistent GPU residency: adopt the backend's coherent
         // mapped base as the source of truth and drop the CPU shadow. The caller
@@ -116,6 +172,8 @@ namespace MobileGL::MG_State::GLState {
             m_gpuMapped = mappedBase;
             m_shadow->clear();
             m_shadow->shrink_to_fit();
+            // The block is gone with the shrink; the next ResizeShadow records the next one.
+            m_shadowExtent = 0;
         }
 
         // Give the adoption back: the bytes resolve against the shadow again (which
@@ -127,17 +185,13 @@ namespace MobileGL::MG_State::GLState {
         // errors the frontend refuses before reaching here.
         void ReleasePersistentMap() { m_gpuMapped = nullptr; }
 
-        // Backend GPU resource, owned here in both modes.
-        const SharedPtr<BackendBufferResource>& Backend() const { return m_backend; }
-        void SetBackend(SharedPtr<BackendBufferResource> backend) { m_backend = std::move(backend); }
-        SharedPtr<BackendBufferResource> ReleaseBackend() { return std::move(m_backend); }
-
     private:
         // MapAlignedData, not Data: a read-only glMapBuffer hands the application this very
         // pointer, and a range map hands it base + offset, so the base has to be on the
         // GL_MIN_MAP_BUFFER_ALIGNMENT grid for either to satisfy ARB_map_buffer_alignment.
         SharedPtr<MapAlignedData> m_shadow = MakeShared<MapAlignedData>();
         void* m_gpuMapped = nullptr;
-        SharedPtr<BackendBufferResource> m_backend;
+        // See ShadowAllocationBytes. Split-only so the pull build's layout does not move (G1).
+        SizeT m_shadowExtent = 0;
     };
 } // namespace MobileGL::MG_State::GLState

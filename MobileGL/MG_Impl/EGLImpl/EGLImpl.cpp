@@ -7,21 +7,112 @@
 // End of Source File Header
 
 #include "EGLImpl.h"
+#include "EGLPlatformExtensions.h"
+#include "SharedImageFlushPolicy.h"
+#include "WaylandWindow.h"
 #include "../GetProcAddress.h"
 #include <Init.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_State/EGLState/Core.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+// MG_Config::ServerOwnedWindowSurfaces (P12, MOBILEGL_IPC_SURFACE). Split-only: the pull build's
+// translation unit is unchanged (G1).
+#include <Config.h>
+// P14 S1 (docs/Disaggregated/design/11-state-ownership.md). The EGL context lifecycle's
+// client half: eglCreateContext/eglDestroyContext cross as two control frames, and a
+// context switch emits the in-band bind_context record. Reached through MG_Remote::Client
+// because that is the seam MG_Impl already uses for its other wire producers
+// (PipeFill.cpp's emitters) and because the frame channel belongs to the server role - this
+// file must not name ServerLoop's forwarders directly.
+#include <MG_Remote/Client/WireTables.h>
+// The recovery after a device loss (RecoverLostSession below): the session, the remote backend's
+// surface book, and the GL framebuffer 0 that is rebuilt on the fresh session.
+#include <MG_Remote/Client/BackendObject_Remote.h>
+#include <MG_Remote/Client/ClientSession.h>
+#include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
+#include <MG_State/GLState/Core.h>
+#include <optional>
+#endif
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <sstream>
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <dlfcn.h>
+#endif
+#include <algorithm>
+#include <chrono>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#endif
+#if defined(__unix__) || defined(__linux__) || defined(__ANDROID__)
+#include <time.h>
+#endif
 
 namespace MobileGL::MG_Impl::EGLImpl {
     namespace {
+        // MOBILEGL_FPS_LOG=1 (on Android also the property debug.mobilegl.fps_log=1): one INFO line
+        // about every two seconds with the frames this process presented, their mean frame time and
+        // the presenting thread's CPU per frame. A frame rate for an app-hosted game that shows none
+        // of its own (a launcher's Minecraft with the debug overlay closed, which is itself a cost).
+        // Off, a swap pays one load and branch.
+        Bool FrameRateLogEnabled() {
+            static const Bool enabled = [] {
+                const char* value = std::getenv("MOBILEGL_FPS_LOG");
+#if defined(__ANDROID__)
+                char property[PROP_VALUE_MAX] = {};
+                if (value == nullptr && __system_property_get("debug.mobilegl.fps_log", property) > 0) value = property;
+#endif
+                return value != nullptr && value[0] == '1';
+            }();
+            return enabled;
+        }
+
+        void NoteSwapForFrameRateLog() {
+            if (!FrameRateLogEnabled()) return;
+            using Clock = std::chrono::steady_clock;
+            static Clock::time_point windowStart = Clock::now();
+            static Uint32 frames = 0;
+            static Double cpuStartMs = -1.0;
+            const auto threadCpuMs = []() -> Double {
+#if defined(__unix__) || defined(__linux__) || defined(__ANDROID__)
+                struct timespec now{};
+                if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) == 0)
+                    return static_cast<Double>(now.tv_sec) * 1000.0 + static_cast<Double>(now.tv_nsec) / 1e6;
+#endif
+                return -1.0;
+            };
+            if (cpuStartMs < 0.0) cpuStartMs = threadCpuMs();
+            ++frames;
+            const auto now = Clock::now();
+            const Double elapsedMs = std::chrono::duration<Double, std::milli>(now - windowStart).count();
+            if (elapsedMs < 2000.0) return;
+            const Double cpuNow = threadCpuMs();
+            MGLOG_I("MobileGL fps: %.1f over %u frames (%.2f ms/frame, presenting thread CPU %.2f ms/frame)",
+                    1000.0 * frames / elapsedMs, frames, elapsedMs / frames,
+                    cpuNow >= 0.0 && cpuStartMs >= 0.0 ? (cpuNow - cpuStartMs) / frames : -1.0);
+            windowStart = now;
+            frames = 0;
+            cpuStartMs = cpuNow;
+        }
+
+        // SetDispatcherCurrentApiHook.
+        std::atomic<EGLenum (*)()> g_dispatcherCurrentApi{nullptr};
         using EGLStateContext = MG_State::EGLState::EGLContext;
 
         EGLStateContext* GetState() {
             if (!MG_State::pEGLContext) {
-                MGLOG_E_ONCE("pEGLContext is null. MG_State may not be initialized.");
+                // Not an error by itself: a dispatcher calls every vendor's per-thread and error
+                // entry points, including a vendor that never served this process.
+                MGLOG_D("pEGLContext is null. MG_State may not be initialized.");
             }
             return MG_State::pEGLContext.get();
         }
@@ -32,7 +123,14 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // re-initialize after the last eglTerminate tore everything down.
         // Teardown-ish entry points keep using GetState() and fail benignly
         // when MobileGL is not initialized.
+        //
+        // Bringing MobileGL up dials its server, and with none reachable that waits out the
+        // bring-up's whole budget. So it is not attempted then: the entry point fails at once, as
+        // it would on any implementation without a display to offer.
         EGLStateContext* GetStateEnsureInitialized() {
+            if (!MG_State::pEGLContext && !MobileGL::ImplementationAvailable()) {
+                return nullptr;
+            }
             MobileGL::EnsureInitialized();
             return GetState();
         }
@@ -45,11 +143,159 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return backendObject;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        using MG_Remote::Client::ClientSession;
+
+        // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). THE CONTEXT BINDING, AND
+        // THE ONE PLACE IT IS EMITTED.
+        //
+        // `bind_context` is the ring's half of eglMakeCurrent: the MakeCurrent control frame
+        // tells the server which native tuple to hold, and this record tells it which CONTEXT
+        // every record after it belongs to - the attribution the session table was built for.
+        //
+        // IT IS EMITTED AFTER THE SWITCH HAS SUCCEEDED AND BEFORE eglMakeCurrent RETURNS, and
+        // that is the whole ordering argument: the app thread cannot publish a record of the
+        // new context until this call has returned, and the ring is FIFO, so the binding is
+        // behind no verb of the context it names and ahead of every one that follows. Waiting
+        // for the first verb instead would need the emitter to know which context the tracker
+        // is about to prime; this needs only the token EGLState already holds.
+        //
+        // An unchanged token emits NOTHING: an identical eglMakeCurrent is a legal no-op in
+        // EGL and the session is already bound to that context.
+        //
+        // THE COMPARISON IS AGAINST THE BINDING LAST SENT, NOT THIS THREAD'S PREVIOUS CONTEXT
+        // (GLStreamScope in EGLImpl.h): the session has one current context and another thread
+        // may have moved it since this one last bound. The caller holds EGLOperationMutex.
+        thread_local Uint64 t_threadContextToken = 0;
+        Uint64 g_boundContextToken = 0; // guarded by EGLOperationMutex
+        // P14: the share groups of the two tokens above, kept beside them so the client can say
+        // which group's object records a record written now lands in (StreamBoundShareGroupToken).
+        thread_local Uint64 t_threadShareGroupToken = 0;
+        Uint64 g_boundShareGroupToken = 0; // guarded by EGLOperationMutex
+
+        void EmitContextBinding(EGLStateContext* state, EGLContext switched, Uint64 previousToken) {
+            (void)previousToken;
+            if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+            // The apply thread IS the server in this process; a record emitted there would
+            // wait on the thread that has to apply it (EmitAndWait), which is a deadlock and
+            // not a slow path.
+            if (MG_Remote::Client::RunsAsTheServerRole()) return;
+            t_threadContextToken = switched == EGL_NO_CONTEXT ? 0 : state->GetContextClientToken(switched);
+            t_threadShareGroupToken = switched == EGL_NO_CONTEXT ? 0 : state->GetContextShareGroupToken(switched);
+            StreamBindCallingThreadLocked();
+        }
+#endif
+
         std::recursive_mutex& EGLOperationMutex() {
             static std::recursive_mutex mutex;
             return mutex;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    } // namespace
+
+    Bool StreamGateActive() {
+        return MG_Config::Transport != MG_Config::TransportMode::Monolith && !MG_Remote::Client::RunsAsTheServerRole();
+    }
+
+    std::recursive_mutex& StreamMutex() {
+        return EGLOperationMutex();
+    }
+
+    void StreamBindCallingThreadLocked() {
+        const Uint64 token = t_threadContextToken;
+        if (token == g_boundContextToken) return;
+        if (MG_Remote::Client::EmitBindContextRecord(token)) {
+            g_boundContextToken = token;
+            g_boundShareGroupToken = t_threadShareGroupToken;
+        }
+    }
+
+    Bool StreamBoundShareGroupToken(Uint64* outToken) {
+        if (!StreamGateActive()) return false;
+        *outToken = g_boundShareGroupToken;
+        return true;
+    }
+
+    namespace {
+        // RECORDS WRITTEN FOR A CONTEXT THAT IS NOT THE CALLING THREAD'S. eglCreateContext builds
+        // the new context's GL state (its default objects are created there) and eglDestroyContext
+        // ends a context's objects, on whatever thread calls them - one with another context
+        // current, or none. Those records belong to the context being created or destroyed, so the
+        // stream is bound to it first; the next GL entry point binds the stream back to its own
+        // thread's context (GLStreamScope). The caller holds StreamMutex().
+        void StreamBindContextLocked(Uint64 token, Uint64 shareGroupToken) {
+            if (token == g_boundContextToken) return;
+            if (MG_Remote::Client::EmitBindContextRecord(token)) {
+                g_boundContextToken = token;
+                g_boundShareGroupToken = shareGroupToken;
+            }
+        }
+
+        // THE ONE WAY A CONTEXT ENDS on a split client, whether eglDestroyContext ended it at once
+        // or its deferred destroy completed when the last thread released it. `glState` is the
+        // context's GL state, whose last owner this is: dropping it ends the context's own objects
+        // (and its share group's, when it is the group's last context). They end under the
+        // context's own binding, the residual fill's object pins included (a pinned vertex array
+        // or program of this context would otherwise end inside some later thread's draw), and
+        // only then does the server drop the context - the order the records need, because the
+        // server files nothing under a context it no longer has. A context lost with an ended
+        // session goes in silence, as before.
+        void FinishContextDestroy(Uint64 token, Uint64 shareGroupToken, SharedPtr<MG_State::GLState::GLContext> glState,
+                                  Bool lost) {
+            if (token == 0 || lost || !StreamGateActive()) {
+                std::optional<ClientSession::ScopedWireMute> silence;
+                if (lost) silence.emplace();
+                glState.reset();
+                return;
+            }
+            StreamBindContextLocked(token, shareGroupToken);
+            // The pins live in the client's own residual block - its own memory only when the
+            // server is another process; in the one-process shape the apply thread reads that block
+            // too, and only a barriered apply's return may touch it (ClientSession::ReleaseFillPins).
+            if (ClientSession* session = ClientSession::Active();
+                session != nullptr && session->Started() &&
+                MG_Config::Transport != MG_Config::TransportMode::InProcess) {
+                session->WaitForApplyToCatchUp("eglDestroyContext");
+                session->ReleaseFillPins();
+            }
+            glState.reset();
+            // The server drops its binding to 0 when the bound context is destroyed
+            // (ServerSession::DestroyContext's compare-and-swap); the gate mirrors it so the next
+            // write re-binds.
+            if (g_boundContextToken == token) {
+                g_boundContextToken = 0;
+                g_boundShareGroupToken = 0;
+            }
+            const auto emitted = MG_Remote::Client::SendDestroyContextFrame(token);
+            if (emitted == MG_Remote::Client::ContextFrameEmit::Refused) {
+                MGLOG_E_ONCE("eglDestroyContext: the server holds no context token %llu; the "
+                             "session's table and this client's EGL book have drifted apart",
+                             static_cast<unsigned long long>(token));
+            }
+        }
+    } // namespace
+
+    void FinishReapedContexts(MG_State::EGLState::EGLContext* state) {
+        if (state == nullptr) return;
+        if (!StreamGateActive()) {
+            (void)state->TakeReapedContexts(); // dropping them ends their GL state
+            return;
+        }
+        for (auto& reaped : state->TakeReapedContexts()) {
+            const Bool lost = reaped.GLStateObject != nullptr &&
+                              (reaped.GLStateObject->IsFromEndedWireSession() || ClientSession::SessionLatchedLost());
+            FinishContextDestroy(reaped.ClientContextToken, reaped.ShareGroupToken, Move(reaped.GLStateObject), lost);
+        }
+    }
+
+    namespace {
+#else
+        // A monolith has no stream to bind: a context whose deferred destroy completed simply ends.
+        void FinishReapedContexts(MG_State::EGLState::EGLContext* state) {
+            if (state != nullptr) (void)state->TakeReapedContexts();
+        }
+#endif
         String CurrentThreadIdString() {
             std::ostringstream stream;
             stream << std::this_thread::get_id();
@@ -111,6 +357,275 @@ namespace MobileGL::MG_Impl::EGLImpl {
                 return reinterpret_cast<void*>(static_cast<SizeT>(nativeHandle));
             }
         }
+
+        // EGL_KHR_partial_update: the surfaces whose application has declared a damage region. Their
+        // buffer-age query tells the server the region follows (a driver whose age is only
+        // partial_update's is then asked). Guarded by EGLOperationMutex; a destroyed surface leaves.
+        std::unordered_set<EGLSurface>& DamageRegionSurfaces() {
+            static auto* surfaces = new std::unordered_set<EGLSurface>();
+            return *surfaces;
+        }
+
+        // EGL_KHR_surfaceless_context. The EGL state records a surfaceless binding as exactly that
+        // (eglGetCurrentSurface answers EGL_NO_SURFACE), but every backend renders into the surface
+        // it was bound to, and a session's capabilities are published on its first bind to one. So
+        // the backend is bound to a 1x1 pbuffer of the display's own instead: one per display, made
+        // on the first surfaceless bind, never handed to the application, and gone with the display
+        // (eglTerminate). Guarded by EGLOperationMutex.
+        std::unordered_map<EGLDisplay, EGLSurface>& SurfacelessStandIns() {
+            static auto* standIns = new std::unordered_map<EGLDisplay, EGLSurface>();
+            return *standIns;
+        }
+
+        // eglCreatePbufferSurface for the stand-in, except that a split client creates it on the
+        // server as a stand-in, which takes no surface mode there (a server-owned window may follow).
+        EGLSurface CreateSurfacelessStandInPbuffer(EGLStateContext* state, EGLDisplay dpy, EGLConfig config,
+                                                   const EGLint* attribs);
+
+        // The display's stand-in, made now if it has none (or the one it had did not survive).
+        // EGL_NO_SURFACE when the backend could not make a pbuffer; the EGL error is then set.
+        EGLSurface SurfacelessStandIn(EGLStateContext* state, EGLDisplay dpy) {
+            auto& standIns = SurfacelessStandIns();
+            if (const auto it = standIns.find(dpy); it != standIns.end()) {
+                if (state->ValidateSurfaceOnDisplay(dpy, it->second)) return it->second;
+                standIns.erase(it);
+            }
+            // Any of the display's configs will do: a stand-in is never read back or presented.
+            EGLConfig config = nullptr;
+            EGLint count = 0;
+            if (!state->GetConfigs(dpy, &config, 1, &count) || count < 1 || config == nullptr) {
+                state->SetError(EGL_BAD_ALLOC);
+                return EGL_NO_SURFACE;
+            }
+            const EGLint attribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+            const EGLSurface standIn = CreateSurfacelessStandInPbuffer(state, dpy, config, attribs);
+            if (standIn != EGL_NO_SURFACE) standIns[dpy] = standIn;
+            return standIn;
+        }
+
+#if MOBILEGL_WAYLAND_WINDOWS
+        // Every Wayland window surface's presentation, by surface.  Guarded by EGLOperationMutex,
+        // which every entry point that reaches it holds.
+        UnorderedMap<EGLSurface, UniquePtr<Wayland::WindowSurface>>& WaylandSurfaces() {
+            static auto* surfaces = new UnorderedMap<EGLSurface, UniquePtr<Wayland::WindowSurface>>();
+            return *surfaces;
+        }
+
+        // A WINDOW ON A WAYLAND DISPLAY.  Whatever MOBILEGL_IPC_SURFACE says, the window is this
+        // application's own wl_surface, so neither the server's window nor the display host's frame
+        // is what it shows: the backend draws into a pbuffer of the window's size, and each swap
+        // reads the frame back and attaches it to the wl_surface (WaylandWindow.h).  Answers false
+        // when the display is not a Wayland one; otherwise *out is the surface, or EGL_NO_SURFACE
+        // with the error set.
+        // A gbm_surface is scanout memory of a device this library does not draw with; a window
+        // on a GBM display is refused rather than taken for some other kind of window.
+        template <typename State>
+        Bool RefuseGbmWindow(State* state, EGLDisplay dpy) {
+            constexpr EGLenum kPlatformGbm = 0x31D7; // EGL_PLATFORM_GBM_KHR == EGL_PLATFORM_GBM_MESA
+            Uint64 nativeDisplay = 0;
+            EGLenum platform = EGL_NONE;
+            if (!state->GetDisplayNative(dpy, &nativeDisplay, &platform) || platform != kPlatformGbm) return false;
+            MGLOG_W_ONCE("EGL: window surfaces on a GBM display are not supported (offscreen display only)");
+            state->SetError(EGL_BAD_NATIVE_WINDOW);
+            return true;
+        }
+
+        template <typename State>
+        Bool CreateWaylandWindowSurface(State* state, EGLDisplay dpy, EGLConfig config, void* window,
+                                        Bool platformWindow, EGLSurface* out) {
+            Uint64 nativeDisplay = 0;
+            EGLenum platform = EGL_NONE;
+            if (!state->GetDisplayNative(dpy, &nativeDisplay, &platform) ||
+                !Wayland::IsWaylandDisplay(nativeDisplay, platform)) {
+                return false;
+            }
+            *out = EGL_NO_SURFACE;
+            if (!state->IsDisplayInitialized(dpy)) {
+                state->SetError(EGL_NOT_INITIALIZED);
+                return true;
+            }
+            if (!state->ValidateConfigOnDisplay(dpy, config)) {
+                state->SetError(EGL_BAD_CONFIG);
+                return true;
+            }
+            EGLint width = 0;
+            EGLint height = 0;
+            if (!Wayland::WindowSize(window, &width, &height)) {
+                state->SetError(EGL_BAD_NATIVE_WINDOW);
+                return true;
+            }
+            EGLint alpha = 0;
+            (void)state->GetConfigAttrib(dpy, config, EGL_ALPHA_SIZE, &alpha);
+            auto presentation = Wayland::WindowSurface::Create(
+                reinterpret_cast<void*>(static_cast<uintptr_t>(nativeDisplay)), window, width, height, alpha > 0);
+            if (!presentation) {
+                state->SetError(EGL_BAD_NATIVE_WINDOW);
+                return true;
+            }
+            const EGLSurface surface =
+                platformWindow ? state->CreatePlatformWindowSurface(dpy, config, window, nullptr)
+                               : state->CreateWindowSurface(
+                                     dpy, config, (NativeWindowType)(reinterpret_cast<uintptr_t>(window)), nullptr);
+            if (surface == EGL_NO_SURFACE) return true;
+            (void)state->ResizeSurface(dpy, surface, width, height);
+            auto* backendObject = GetBackendObject(state);
+            if (!backendObject || !backendObject->CreateEGLPbufferSurface(surface, width, height)) {
+                MGLOG_E("eglCreateWindowSurface: the backend refused the %dx%d drawable behind a Wayland window", width,
+                        height);
+                state->DestroySurface(dpy, surface);
+                state->SetError(EGL_BAD_ALLOC);
+                return true;
+            }
+            WaylandSurfaces()[surface] = std::move(presentation);
+            *out = surface;
+            return true;
+        }
+
+        // A WAYLAND WINDOW THE APPLICATION RESIZED (wl_egl_window_resize). As with a driver's own
+        // window surface, the new size takes effect at the next make-current or swap: the EGL
+        // surface reports it, the wl_shm presentation adopts it, and the drawable behind it is
+        // resized so the frame rendered at the new size is the frame read back. Qt resizes the
+        // window and then makes the context current, so the make-current arm is the one it hits.
+        void ApplyWaylandResize(EGLStateContext* state, EGLDisplay dpy, EGLSurface surface) {
+            const auto it = WaylandSurfaces().find(surface);
+            if (it == WaylandSurfaces().end()) return;
+            EGLint width = 0;
+            EGLint height = 0;
+            if (!it->second->TakeResize(&width, &height)) return;
+            (void)state->ResizeSurface(dpy, surface, width, height);
+            auto* backendObject = MG_Backend::pActiveBackendObject.get();
+            if (backendObject == nullptr || !backendObject->ResizeEGLWindowSurface(surface, static_cast<Uint32>(width),
+                                                                                   static_cast<Uint32>(height))) {
+                MGLOG_E("Wayland: the drawable behind a %dx%d window could not be resized", width, height);
+            }
+        }
+#endif
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        using MG_Remote::Client::ClientSession;
+
+        // IS `context` LOST. It was built against a server session that has since ended (a device
+        // loss, recovered), or it lives on the session that is lost right now: either way its
+        // objects are on no server this process can reach, and EGL's answer for it is
+        // EGL_CONTEXT_LOST until the application destroys it.
+        Bool ContextIsLost(EGLStateContext* state, EGLContext context) {
+            if (!StreamGateActive() || context == EGL_NO_CONTEXT) return false;
+            const SharedPtr<MG_State::GLState::GLContext> glState = state->GetContextGLState(context);
+            if (!glState) return false;
+            return glState->IsFromEndedWireSession() || ClientSession::SessionLatchedLost();
+        }
+
+        // THE RECOVERY'S EGL HALF. The caller holds EGLOperationMutex - which every GL entry point
+        // takes too (GLStreamScope), so no other thread is in the middle of a GL call - and is an
+        // entry point an application reaches when it rebuilds after a loss: eglCreateContext,
+        // eglCreate*Surface, eglInitialize. A no-op unless the session is latched lost.
+        //
+        // 1. ClientSession ends the lost session and dials a fresh one; its FinishStartup forgets
+        //    every client cache of the old one and moves the wire epoch, which is what makes every
+        //    context built before lost (their objects die later without a word on the new wire).
+        // 2. The process default context and GL framebuffer 0 are rebuilt on the fresh session:
+        //    every context created from now on starts with framebuffer 0 bound, and the old one's
+        //    attachments are textures the fresh server never heard of.
+        // 3. The remote backend initializes the display again on the new server and forgets which
+        //    surfaces and shared images the old one had; each surface is re-created there when it
+        //    is next made current (EGL keeps surfaces across a power-management loss).
+        // 4. Wayland presentations drop the lost session's shared images and allocate new ones.
+        Bool RecoverLostSession() {
+            if (!StreamGateActive() || !ClientSession::SessionLatchedLost()) return true;
+            ClientSession* session = ClientSession::Active();
+            {
+                const ClientSession::ScopedWireMute mute;
+                if (session->RecoverAfterDeviceLoss() != MOBILEGL_OK) return false;
+            }
+            // Nothing is bound on the fresh session: the next thread that writes binds its own.
+            g_boundContextToken = 0;
+            g_boundShareGroupToken = 0;
+            const ClientSession::ScopedCurrentSessionWork work;
+            SharedPtr<MG_State::GLState::GLContext> lostDefault = MG_State::ReplaceProcessDefaultGLContext();
+            UniquePtr<MG_Impl::GLImpl::FramebufferImpl::DefaultFramebufferInfo> lostFramebuffer =
+                Move(MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo);
+            {
+                // Built into the new default context, whatever this thread has current (a lost
+                // context stays this thread's GL state until the application releases it).
+                SharedPtr<MG_State::GLState::GLContext> caller = MG_State::pGLContext;
+                MG_State::pGLContext = MG_State::ProcessDefaultGLContext();
+                MG_Impl::BuildDefaultFramebuffer();
+                MG_State::pGLContext = Move(caller);
+            }
+            {
+                const ClientSession::ScopedWireMute mute;
+                lostFramebuffer.reset();
+                lostDefault.reset();
+            }
+            if (auto* remote =
+                    dynamic_cast<MG_Remote::Client::BackendObject_Remote*>(MG_Backend::pActiveBackendObject.get()))
+                remote->OnSessionReplaced();
+#if MOBILEGL_WAYLAND_WINDOWS
+            for (auto& [surface, presentation] : WaylandSurfaces())
+                presentation->OnSessionReplaced();
+#endif
+            return true;
+        }
+
+        // THE SHARE GROUPS THAT REPLACE LOST ONES, by the lost group's token. An application that
+        // keeps one long-lived context to share with (Qt's global share context) recreates its
+        // other contexts after a loss still naming that context, which is lost and stays so. Those
+        // contexts are put in ONE new share group instead of each in a group of its own: the first
+        // starts it, the later ones share with a live member of it. Without this, every window of
+        // such an application lands in a separate share group after the loss, a shape the
+        // application never asked for. Guarded by EGLOperationMutex.
+        std::unordered_map<Uint64, Vector<EGLContext>>& ReplacementShareContexts() {
+            static auto* replacements = new std::unordered_map<Uint64, Vector<EGLContext>>();
+            return *replacements;
+        }
+
+        // The context a new context should share with in place of the lost `shareCtx`: a live
+        // member of the group that replaces the lost one, or EGL_NO_CONTEXT to start that group.
+        EGLContext ReplacementShareContext(EGLStateContext* state, EGLDisplay dpy, Uint64 lostGroup) {
+            Vector<EGLContext>& members = ReplacementShareContexts()[lostGroup];
+            members.erase(std::remove_if(members.begin(), members.end(),
+                                         [&](EGLContext member) {
+                                             return !state->ValidateContextOnDisplay(dpy, member) ||
+                                                    ContextIsLost(state, member);
+                                         }),
+                          members.end());
+            return members.empty() ? EGL_NO_CONTEXT : members.front();
+        }
+
+        void ForgetReplacementShareContext(EGLContext context) {
+            for (auto& [group, members] : ReplacementShareContexts())
+                members.erase(std::remove(members.begin(), members.end(), context), members.end());
+        }
+
+        // The surface entry points' guard: a surface created after a loss is created on a fresh
+        // session. EGL_BAD_ALLOC when no session could be brought up.
+        Bool RecoverBeforeCreatingSurface(EGLStateContext* state) {
+            const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+            if (RecoverLostSession()) return true;
+            state->SetError(EGL_BAD_ALLOC);
+            return false;
+        }
+#endif
+
+        EGLSurface CreateSurfacelessStandInPbuffer(EGLStateContext* state, EGLDisplay dpy, EGLConfig config,
+                                                   const EGLint* attribs) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            auto* remote = dynamic_cast<MG_Remote::Client::BackendObject_Remote*>(GetBackendObject(state));
+            if (remote == nullptr) return CreatePbufferSurface(dpy, config, attribs);
+            if (!RecoverBeforeCreatingSurface(state)) return EGL_NO_SURFACE;
+            const EGLSurface surface = state->CreatePbufferSurface(dpy, config, attribs);
+            if (surface == EGL_NO_SURFACE) return EGL_NO_SURFACE;
+            if (!remote->CreateEGLSurfacelessStandIn(surface, GetAttribValue(attribs, EGL_WIDTH, 1),
+                                                     GetAttribValue(attribs, EGL_HEIGHT, 1))) {
+                state->DestroySurface(dpy, surface);
+                state->SetError(EGL_BAD_ALLOC);
+                return EGL_NO_SURFACE;
+            }
+            return surface;
+#else
+            return CreatePbufferSurface(dpy, config, attribs);
+#endif
+        }
     } // namespace
 
     EGLSurface CreateWindowSurface(EGLDisplay dpy, EGLConfig config, NativeWindowType window,
@@ -119,6 +634,20 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_SURFACE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (!RecoverBeforeCreatingSurface(state)) return EGL_NO_SURFACE;
+#endif
+#if MOBILEGL_WAYLAND_WINDOWS
+        if (RefuseGbmWindow(state, dpy)) return EGL_NO_SURFACE;
+        {
+            const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+            EGLSurface waylandSurface = EGL_NO_SURFACE;
+            if (CreateWaylandWindowSurface(state, dpy, config, ToVoidHandle(window), /*platformWindow=*/false,
+                                           &waylandSurface)) {
+                return waylandSurface;
+            }
+        }
+#endif
         if (!state->IsDisplayInitialized(dpy)) {
             state->SetError(EGL_NOT_INITIALIZED);
             return EGL_NO_SURFACE;
@@ -127,19 +656,60 @@ namespace MobileGL::MG_Impl::EGLImpl {
             state->SetError(EGL_BAD_CONFIG);
             return EGL_NO_SURFACE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P12 (on-screen server window), D1. With MOBILEGL_IPC_SURFACE=server and a remote server,
+        // the window is the SERVER's: a headless client passes none, so NULL is not
+        // EGL_BAD_NATIVE_WINDOW here. Whatever the client passed never reaches the wire - the
+        // remote backend sends WindowKind::ServerOwned with token 0 (BackendObject_Remote).
+        const Bool serverOwnedWindow = MG_Config::ServerOwnedWindowSurfaces();
+        if (IsNullNativeHandle(window) && !serverOwnedWindow) {
+#else
         if (IsNullNativeHandle(window)) {
+#endif
             state->SetError(EGL_BAD_NATIVE_WINDOW);
             return EGL_NO_SURFACE;
         }
 
+        Uint32 requestedWidth = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_WIDTH, 0), 0));
+        Uint32 requestedHeight = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_HEIGHT, 0), 0));
+#if MOBILEGL_BUILD_DISAGGREGATED && defined(__ANDROID__)
+        // P12: A GAME'S OWN WINDOW SIZE IS THE SIZE OF THE FRAMES IT RENDERS, and a server-owned
+        // window has to take that size or clip. SDL (Minecraft's Android backend) creates the EGL
+        // window surface with no EGL_WIDTH / EGL_HEIGHT, so the request went out as 0x0 - "use the
+        // server window's own size" - and a landscape 2620x1280 game drawn into a portrait 1280x2620
+        // server window came out clipped to its bottom-left 1280x1280 corner (Espryt and Magma
+        // alike; the same game in a landscape window was right). The native window it handed us
+        // knows the size the game believes it has: ask for THAT, and the server fixes its window
+        // buffer to it and aspect-fits the view (MobileGLDisplayActivity), letterboxed.
+        if (serverOwnedWindow && requestedWidth == 0 && requestedHeight == 0 && !IsNullNativeHandle(window)) {
+            auto* native = reinterpret_cast<ANativeWindow*>(ToVoidHandle(window));
+            const int32_t nativeWidth = ANativeWindow_getWidth(native);
+            const int32_t nativeHeight = ANativeWindow_getHeight(native);
+            if (nativeWidth > 0 && nativeHeight > 0) {
+                requestedWidth = static_cast<Uint32>(nativeWidth);
+                requestedHeight = static_cast<Uint32>(nativeHeight);
+                MGLOG_I("eglCreateWindowSurface: no EGL_WIDTH/EGL_HEIGHT; the server-owned window is asked for the "
+                        "native window's %dx%d",
+                        nativeWidth, nativeHeight);
+            }
+        }
+#endif
         const MG_Backend::WindowHandle windowHandle = {
             .Backend = DetectWindowBackend(),
             .Handle = ToVoidHandle(window),
-            .Width = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_WIDTH, 0), 0)),
-            .Height = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_HEIGHT, 0), 0)),
+            .Width = requestedWidth,
+            .Height = requestedHeight,
         };
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        EGLSurface surface = serverOwnedWindow
+                                 ? state->CreateServerOwnedWindowSurface(
+                                       dpy, config, windowHandle.Handle, static_cast<EGLint>(windowHandle.Width),
+                                       static_cast<EGLint>(windowHandle.Height), /*platformWindow=*/false)
+                                 : state->CreateWindowSurface(dpy, config, window, attrib_list);
+#else
         EGLSurface surface = state->CreateWindowSurface(dpy, config, window, attrib_list);
+#endif
         if (surface == EGL_NO_SURFACE) {
             return EGL_NO_SURFACE;
         }
@@ -160,7 +730,20 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     EGLBoolean SwapBuffers(EGLDisplay dpy, EGLSurface draw) {
+        return SwapBuffersWithDamage(dpy, draw, nullptr, 0);
+    }
+
+    // EGL_KHR/EXT_swap_buffers_with_damage. The rectangles (GL window coordinates, origin
+    // bottom-left; none = the whole surface) are clipped to the surface and fitted into a record.
+    // A Wayland window copies only what its shared image missed and damages only the frame's
+    // rectangles; a server-owned window hands them to the native present. Either way they are a
+    // hint about what changed, never a limit on what is shown.
+    EGLBoolean SwapBuffersWithDamage(EGLDisplay dpy, EGLSurface draw, const EGLint* rects, EGLint n_rects) {
         const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The present is this thread's context's (GLStreamScope in EGLImpl.h).
+        if (StreamGateActive()) StreamBindCallingThreadLocked();
+#endif
         auto* state = GetState();
         if (!state) {
             return EGL_FALSE;
@@ -169,17 +752,82 @@ namespace MobileGL::MG_Impl::EGLImpl {
             state->SetError(EGL_BAD_SURFACE);
             return EGL_FALSE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A swap of a lost context's frame: EGL_CONTEXT_LOST (EGL 1.5 3.2), and nothing presented.
+        // A Wayland window is still committed, with no new buffer (WindowSurface::CommitPendingState):
+        // Qt asks for a frame callback before every swap and draws the window again only once it
+        // has fired, so a swap that never committed froze the window for good - a Plasma panel
+        // that hit the loss in its own swap never redrew, not even to rebuild its context.
+        if (ContextIsLost(state, state->GetCurrentContext())) {
+#if MOBILEGL_WAYLAND_WINDOWS
+            if (auto it = WaylandSurfaces().find(draw); it != WaylandSurfaces().end()) it->second->CommitPendingState();
+#endif
+            state->SetError(EGL_CONTEXT_LOST);
+            return EGL_FALSE;
+        }
+#endif
 
         auto* backendObject = GetBackendObject(state);
         if (!backendObject) {
             MGLOG_E_ONCE("activeBackendObject not initialized!");
             return EGL_FALSE;
         }
-        if (!backendObject->SwapEGLBuffers(dpy, draw)) {
-            MGLOG_E_ONCE("eglSwapBuffers failed on thread=%s dpy=%p draw=%p", CurrentThreadIdString().c_str(), dpy, draw);
+        if (n_rects < 0 || (n_rects > 0 && rects == nullptr)) {
+            state->SetError(EGL_BAD_PARAMETER);
+            return EGL_FALSE;
+        }
+        MG_Util::Damage::Region damage = MG_Util::Damage::Region::FromEglRects(rects, n_rects);
+        if (!damage.IsFull()) {
+            EGLint width = 0;
+            EGLint height = 0;
+            if (state->QuerySurface(dpy, draw, EGL_WIDTH, &width) &&
+                state->QuerySurface(dpy, draw, EGL_HEIGHT, &height)) {
+                damage.Normalize(width, height);
+            } else {
+                damage.SetFull();
+            }
+        }
+#if MOBILEGL_WAYLAND_WINDOWS
+        // A Wayland window shows what is attached to it: the frame is read back and attached
+        // BEFORE the swap, while it is still the drawable's content.
+        if (auto it = WaylandSurfaces().find(draw); it != WaylandSurfaces().end()) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // A loss that this very present runs into is reported here, as the one above: a
+            // frame of the lost device shown as if it were the window's would leave the toolkit
+            // with a transparent window it learns only afterwards it has to redraw.
+            const auto sessionLost = +[]() -> Bool {
+                auto* current = GetState();
+                return current != nullptr && ContextIsLost(current, current->GetCurrentContext());
+            };
+#else
+            Bool (*const sessionLost)() = nullptr;
+#endif
+            switch (it->second->Present(damage, state->GetSwapInterval(dpy), sessionLost)) {
+            case Wayland::WindowSurface::PresentResult::kPresented:
+                break;
+            case Wayland::WindowSurface::PresentResult::kLost:
+                it->second->CommitPendingState();
+                state->SetError(EGL_CONTEXT_LOST);
+                return EGL_FALSE;
+            case Wayland::WindowSurface::PresentResult::kNotShown:
+                state->SetError(EGL_BAD_SURFACE);
+                return EGL_FALSE;
+            }
+        }
+#endif
+        const Bool swapped = damage.IsFull() ? backendObject->SwapEGLBuffers(dpy, draw)
+                                             : backendObject->SwapEGLBuffersWithDamage(dpy, draw, damage);
+        if (!swapped) {
+            MGLOG_E_ONCE("eglSwapBuffers failed on thread=%s dpy=%p draw=%p", CurrentThreadIdString().c_str(), dpy,
+                         draw);
             state->SetError(EGL_BAD_SURFACE);
             return EGL_FALSE;
         }
+#if MOBILEGL_WAYLAND_WINDOWS
+        // A resize made between frames takes effect for the next one.
+        ApplyWaylandResize(state, dpy, draw);
+#endif
+        NoteSwapForFrameRateLog();
         return EGL_TRUE;
     }
 
@@ -197,7 +845,117 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_CONTEXT;
         }
-        return state->CreateContext(dpy, config, shareCtx, attrib_list);
+        // The API the context is for, as the dispatcher reports it (SetDispatcherCurrentApiHook):
+        // an ES context made without an eglBindAPI - or with one of the default - is an ES context.
+        if (const auto currentApi = g_dispatcherCurrentApi.load()) {
+            const EGLenum api = currentApi();
+            if (api == EGL_OPENGL_API || api == EGL_OPENGL_ES_API) state->SetBoundAPI(api);
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // AFTER A DEVICE LOSS THIS IS WHERE AN APPLICATION REBUILDS, so this is where a fresh
+        // session comes up (RecoverLostSession) - before the context's GL state is built, because
+        // building it already emits the creates of its default objects. Sharing with a lost
+        // context would share objects no reachable server holds.
+        const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+        // The lost share group this context replaces (ReplacementShareContexts), 0 for none.
+        Uint64 replacedGroup = 0;
+        if (StreamGateActive()) {
+            if (!RecoverLostSession()) {
+                state->SetError(EGL_BAD_ALLOC);
+                return EGL_NO_CONTEXT;
+            }
+            if (shareCtx != EGL_NO_CONTEXT && ContextIsLost(state, shareCtx)) {
+                // Its objects are on no server, so the context does not share them: it joins the
+                // group that replaces the lost one (the other contexts recreated in its place).
+                if (!state->ValidateContextOnDisplay(dpy, shareCtx)) {
+                    state->SetError(EGL_BAD_CONTEXT);
+                    return EGL_NO_CONTEXT;
+                }
+                replacedGroup = state->GetContextShareGroupToken(shareCtx);
+                const EGLContext lostShare = shareCtx;
+                shareCtx = ReplacementShareContext(state, dpy, replacedGroup);
+                MGLOG_I_ONCE("eglCreateContext: the share context %p was lost with its session (device loss); "
+                             "contexts that name it share with each other in a new share group instead",
+                             lostShare);
+            }
+        }
+        // The calling thread may still have a lost context current: what is built here is the
+        // fresh session's all the same.
+        const ClientSession::ScopedCurrentSessionWork currentSession;
+        // A split client builds the context's GL state only once the server has its token (below).
+        const Bool splitClient =
+            MG_Config::Transport != MG_Config::TransportMode::Monolith && !MG_Remote::Client::RunsAsTheServerRole();
+#else
+        constexpr Bool splitClient = false;
+#endif
+        EGLContext context = state->CreateContext(dpy, config, shareCtx, attrib_list, splitClient);
+        if (context == EGL_NO_CONTEXT) {
+            return EGL_NO_CONTEXT;
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (replacedGroup != 0) ReplacementShareContexts()[replacedGroup].push_back(context);
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). THE TOKEN CROSSES BEFORE
+        // eglCreateContext RETURNS. EGLState minted it, together with the share group it was
+        // derived into (the sharing context's group, or a fresh one), and the server tables it
+        // here through the same blocking handshake the surface forwarders use - so the first
+        // bind_context after this call names a context the session already has, and the
+        // sink's "this session never created that token" refusal is unreachable on the
+        // well-behaved path.
+        //
+        // A REFUSAL DROPS THE CLIENT'S CONTEXT AGAIN. Keeping it would hand the application a
+        // handle whose first verb the server refuses - a late failure where an early one is
+        // available, and EGL_NO_CONTEXT with EGL_BAD_ACCESS is the early one. NoWire (the
+        // pre-Start bring-up, the server role) keeps it: there is no server to refuse.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && !MG_Remote::Client::RunsAsTheServerRole()) {
+            auto emitted = MG_Remote::Client::SendCreateContextFrame(state->GetContextClientToken(context),
+                                                                     state->GetContextShareGroupToken(context), 0);
+            // THE LOSS CAN BE FOUND OUT HERE: a session whose server is gone, which nothing had
+            // noticed yet, refuses the create by hanging up on it. That is the loss, not a refusal:
+            // the half-built context goes (its objects silently - they were never on any server),
+            // a fresh session comes up, and the context is built again on it, once.
+            if (emitted == MG_Remote::Client::ContextFrameEmit::Refused && ClientSession::SessionLatchedLost()) {
+                {
+                    const ClientSession::ScopedWireMute mute;
+                    state->DestroyContext(dpy, context);
+                }
+                context = EGL_NO_CONTEXT;
+                if (RecoverLostSession()) {
+                    // The context it was to share with went with the session, too.
+                    if (shareCtx != EGL_NO_CONTEXT && ContextIsLost(state, shareCtx)) {
+                        replacedGroup = state->GetContextShareGroupToken(shareCtx);
+                        shareCtx = ReplacementShareContext(state, dpy, replacedGroup);
+                    }
+                    context = state->CreateContext(dpy, config, shareCtx, attrib_list, splitClient);
+                }
+                if (context == EGL_NO_CONTEXT) {
+                    state->SetError(EGL_BAD_ALLOC);
+                    return EGL_NO_CONTEXT;
+                }
+                if (replacedGroup != 0) ReplacementShareContexts()[replacedGroup].push_back(context);
+                emitted = MG_Remote::Client::SendCreateContextFrame(state->GetContextClientToken(context),
+                                                                    state->GetContextShareGroupToken(context), 0);
+            }
+            if (emitted == MG_Remote::Client::ContextFrameEmit::Refused) {
+                state->DestroyContext(dpy, context);
+                state->SetError(EGL_BAD_ACCESS);
+                return EGL_NO_CONTEXT;
+            }
+            // NOW THE CONTEXT'S GL STATE, under its own binding. Building it creates the context's
+            // default objects (a texture per target, ...), and the records that create them belong
+            // to THIS context's share group on the server - not to whichever context the stream
+            // was last bound to by some other thread, which is where they landed when the state was
+            // built before the token crossed: a context in a share group of its own then drew with
+            // default objects its group never had.
+            if (emitted == MG_Remote::Client::ContextFrameEmit::Sent) {
+                StreamBindContextLocked(state->GetContextClientToken(context),
+                                        state->GetContextShareGroupToken(context));
+            }
+            (void)state->BuildContextGLState(context);
+        }
+#endif
+        return context;
     }
 
     EGLBoolean Initialize(EGLDisplay dpy, EGLint* major, EGLint* minor) {
@@ -205,6 +963,12 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // An application that re-initializes a display after a loss (without the eglTerminate that
+        // would have torn the library down) gets a fresh session here, as eglCreateContext would.
+        const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+        (void)RecoverLostSession();
+#endif
         if (!state->InitializeDisplay(dpy, major, minor)) {
             return EGL_FALSE;
         }
@@ -222,6 +986,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     EGLDisplay GetDisplay(NativeDisplayType display) {
+        // Before the bring-up, which would wait for a configured server that is not there: no
+        // display is better than one that cannot draw, and the caller may have another EGL.
+        if (!MobileGL::ImplementationAvailable()) {
+            return EGL_NO_DISPLAY;
+        }
         auto* state = GetStateEnsureInitialized();
         if (!state) {
             return EGL_NO_DISPLAY;
@@ -243,16 +1012,50 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
+        // A release (explicit, or the implicit one of binding another context) may complete the
+        // deferred destroy of the context it releases; that destroy is finished on the way out,
+        // under the lock, whichever way this call returns.
+        struct FinishReapedOnExit {
+            EGLStateContext* State;
+            ~FinishReapedOnExit() { FinishReapedContexts(State); }
+        } finishReaped{state};
 
         const auto oldDisplay = state->GetCurrentDisplay();
         const auto oldDraw = state->GetCurrentSurface(EGL_DRAW);
         const auto oldRead = state->GetCurrentSurface(EGL_READ);
         const auto oldContext = state->GetCurrentContext();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P14 S1. The context the calling thread had current BEFORE this call, as the wire
+        // knows it. Read here because `state->MakeCurrent` below has already committed the
+        // new one by the time the emission points are reached.
+        const Uint64 oldContextToken = state->GetContextClientToken(oldContext);
+        // Read before the release too: a thread letting go of a context lost with an ended session
+        // says nothing to the fresh one (its binding never named that context).
+        const Bool oldContextLost = ContextIsLost(state, oldContext);
+#endif
         const String threadId = CurrentThreadIdString();
 
-        MGLOG_D("eglMakeCurrent begin thread=%s dpy=%p draw=%p read=%p ctx=%p oldDpy=%p oldDraw=%p oldRead=%p oldCtx=%p",
-                threadId.c_str(), dpy, draw, read, ctx, oldDisplay, oldDraw, oldRead, oldContext);
+        MGLOG_D(
+            "eglMakeCurrent begin thread=%s dpy=%p draw=%p read=%p ctx=%p oldDpy=%p oldDraw=%p oldRead=%p oldCtx=%p",
+            threadId.c_str(), dpy, draw, read, ctx, oldDisplay, oldDraw, oldRead, oldContext);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // EGL 1.5 3.7.3 / 3.2: after a power-management event - a lost device, here - making a
+        // context created before it current fails with EGL_CONTEXT_LOST. The application destroys
+        // it and creates another; a release, and every context created since, go on as usual.
+        if (ctx != EGL_NO_CONTEXT && ContextIsLost(state, ctx)) {
+            // Once per process: an application that keeps binding the context it lost (instead of
+            // destroying it and creating another) never reaches the recovery.
+            MGLOG_I_ONCE("eglMakeCurrent: context %p was lost with its session (device loss): EGL_CONTEXT_LOST "
+                         "until the application destroys it; a context created after the loss gets a fresh session",
+                         ctx);
+            state->SetError(EGL_CONTEXT_LOST);
+            return EGL_FALSE;
+        }
+#endif
 
+#if MOBILEGL_WAYLAND_WINDOWS
+        if (draw != EGL_NO_SURFACE) ApplyWaylandResize(state, dpy, draw);
+#endif
         if (!state->MakeCurrent(dpy, draw, read, ctx)) {
             const EGLint error = state->ConsumeError();
             MGLOG_D("eglMakeCurrent rejected by EGLState thread=%s error=0x%04x", threadId.c_str(), error);
@@ -260,8 +1063,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return EGL_FALSE;
         }
 
-        const Bool releaseCurrentRequest =
-            draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
+        const Bool releaseCurrentRequest = draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
         if (releaseCurrentRequest) {
             if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
                 if (!backendObject->MakeEGLCurrent(dpy, draw, read, ctx)) {
@@ -272,6 +1074,13 @@ namespace MobileGL::MG_Impl::EGLImpl {
                 }
             }
             MGLOG_D("eglMakeCurrent release succeeded thread=%s", threadId.c_str());
+#if MOBILEGL_BUILD_DISAGGREGATED
+            {
+                std::optional<ClientSession::ScopedWireMute> silence;
+                if (oldContextLost) silence.emplace();
+                EmitContextBinding(state, EGL_NO_CONTEXT, oldContextToken);
+            }
+#endif
             return EGL_TRUE;
         }
 
@@ -281,15 +1090,33 @@ namespace MobileGL::MG_Impl::EGLImpl {
             state->MakeCurrent(oldDisplay, oldDraw, oldRead, oldContext);
             return EGL_FALSE;
         }
-        if (!backendObject->MakeEGLCurrent(dpy, draw, read, ctx)) {
-            MGLOG_E_ONCE("eglMakeCurrent backend attach failed thread=%s dpy=%p draw=%p read=%p ctx=%p", threadId.c_str(),
-                    dpy, draw, read, ctx);
+        // A surfaceless binding (EGL_KHR_surfaceless_context; EGLState took it above and records
+        // EGL_NO_SURFACE): the backend gets the display's stand-in pbuffer to render into.
+        EGLSurface backendDraw = draw;
+        EGLSurface backendRead = read;
+        if (draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE) {
+            backendDraw = backendRead = SurfacelessStandIn(state, dpy);
+            if (backendDraw == EGL_NO_SURFACE) {
+                const EGLint error = state->ConsumeError();
+                MGLOG_E_ONCE("eglMakeCurrent: no stand-in pbuffer for a surfaceless binding thread=%s (error=0x%04x)",
+                             threadId.c_str(), error);
+                state->MakeCurrent(oldDisplay, oldDraw, oldRead, oldContext);
+                state->SetError(error != EGL_SUCCESS ? error : EGL_BAD_ALLOC);
+                return EGL_FALSE;
+            }
+        }
+        if (!backendObject->MakeEGLCurrent(dpy, backendDraw, backendRead, ctx)) {
+            MGLOG_E_ONCE("eglMakeCurrent backend attach failed thread=%s dpy=%p draw=%p read=%p ctx=%p",
+                         threadId.c_str(), dpy, draw, read, ctx);
             state->SetError(EGL_BAD_ACCESS);
             state->MakeCurrent(oldDisplay, oldDraw, oldRead, oldContext);
             return EGL_FALSE;
         }
         MGLOG_D("eglMakeCurrent attach succeeded thread=%s dpy=%p draw=%p read=%p ctx=%p", threadId.c_str(), dpy, draw,
                 read, ctx);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        EmitContextBinding(state, ctx, oldContextToken);
+#endif
         return EGL_TRUE;
     }
 
@@ -298,7 +1125,38 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
-        return state->DestroyContext(dpy, ctx) ? EGL_TRUE : EGL_FALSE;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Under the operation lock, like every GL call: what ends here writes records.
+        const std::lock_guard<std::recursive_mutex> destroyLock(EGLOperationMutex());
+        // P14 S1. Read BEFORE the client's own book drops the context: after DestroyContext
+        // the handle no longer resolves and the token is unrecoverable. The frame is sent
+        // AFTER the client's state machine has accepted the destroy, so one EGL refused never
+        // reaches the server - the two ends stay in step without the server having to guess why
+        // a token vanished.
+        const Uint64 contextToken = state->GetContextClientToken(ctx);
+        const Uint64 shareGroupToken = state->GetContextShareGroupToken(ctx);
+        // A LOST CONTEXT IS DESTROYED IN SILENCE. Its objects die here, and a death that reached
+        // the wire would land on whichever session is current now - a fresh one after a recovery,
+        // which never created them.
+        const Bool lost = ContextIsLost(state, ctx);
+        // The context's GL state, held across the book's drop so that its objects end in
+        // FinishContextDestroy, under the context's own binding, rather than inside EGLState.
+        SharedPtr<MG_State::GLState::GLContext> glState = state->GetContextGLState(ctx);
+        Bool deferred = false;
+        if (!state->DestroyContext(dpy, ctx, &deferred)) {
+            return EGL_FALSE;
+        }
+        ForgetReplacementShareContext(ctx);
+        // CURRENT TO A THREAD (this one or another): EGL destroys it once it is released, and that
+        // release finishes it (FinishReapedContexts). Until then its thread keeps drawing in it.
+        if (deferred) return EGL_TRUE;
+        FinishContextDestroy(contextToken, shareGroupToken, Move(glState), lost);
+#else
+        if (!state->DestroyContext(dpy, ctx)) {
+            return EGL_FALSE;
+        }
+#endif
+        return EGL_TRUE;
     }
 
     EGLBoolean DestroySurface(EGLDisplay dpy, EGLSurface surface) {
@@ -310,6 +1168,10 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state->DestroySurface(dpy, surface)) {
             return EGL_FALSE;
         }
+        DamageRegionSurfaces().erase(surface);
+#if MOBILEGL_WAYLAND_WINDOWS
+        WaylandSurfaces().erase(surface);
+#endif
         if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
             backendObject->ReleaseEGLSurface(surface);
         }
@@ -324,7 +1186,18 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state->TerminateDisplay(dpy)) {
             return EGL_FALSE;
         }
+        {
+            // The display's surfaces went with it, its surfaceless stand-in among them; the backend
+            // side goes with ReleaseEGLResources below.
+            const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+            SurfacelessStandIns().erase(dpy);
+        }
         if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
+            // The display's dma-buf EGLImages went with it; so do their shared-image references.
+            MG_Backend::ClientHooks* client = backendObject->AsClient();
+            for (const Uint64 sharedImageId : state->TakeOrphanedSharedImages()) {
+                if (client != nullptr) (void)client->ReleaseSharedImage(sharedImageId);
+            }
             backendObject->ReleaseEGLResources();
         }
         // The last initialized display is gone and nothing is current on any
@@ -333,20 +1206,31 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // re-initializes lazily via GetStateEnsureInitialized(); process exit
         // then has nothing left to destroy.
         if (!state->HasAnyInitializedDisplay() && !state->HasAnyCurrentContext()) {
+            // P14 S3: the process default context (and with it the GL objects the frontend
+            // built while no EGL context was current) goes before Destroy() does, so nothing
+            // it owns outlives glslang::FinalizeProcess() through a thread's fallback binding.
+            MG_State::ReleaseProcessDefaultGLContext();
             MobileGL::Destroy();
         }
         return EGL_TRUE;
     }
 
     EGLBoolean ReleaseThread() {
+        // Always succeeds (EGL 1.4 §3.11): after the last eglTerminate tore MobileGL down there is
+        // simply nothing of this thread's left to release.
+        if (!MG_State::pEGLContext) return EGL_TRUE;
+        const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
         auto* state = GetState();
-        if (!state) {
-            return EGL_FALSE;
-        }
         if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
             (void)backendObject->MakeEGLCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         }
         state->ReleaseThread();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The release edge, as eglMakeCurrent's release sends it: this thread has no context now,
+        // and the binding must not keep naming the one it had.
+        EmitContextBinding(state, EGL_NO_CONTEXT, 0);
+#endif
+        FinishReapedContexts(state);
         return EGL_TRUE;
     }
 
@@ -396,10 +1280,109 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
+        // EGL_EXT_buffer_age. The buffers are the server's, so the server answers - in the stream,
+        // behind the records already written, for the buffer the next frame draws into. Only for the
+        // calling thread's draw surface: that is the buffer the question is about (and the stream is
+        // bound to its context).
+        if (attribute == EGL_BUFFER_AGE_EXT) {
+            const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+            if (!SharedImagesAvailable()) {
+                state->SetError(EGL_BAD_ATTRIBUTE);
+                return EGL_FALSE;
+            }
+            if (!state->ValidateSurfaceOnDisplay(display, surface)) {
+                state->SetError(EGL_BAD_SURFACE);
+                return EGL_FALSE;
+            }
+            if (value == nullptr) {
+                state->SetError(EGL_BAD_PARAMETER);
+                return EGL_FALSE;
+            }
+            if (state->GetCurrentSurface(EGL_DRAW) != surface) {
+                state->SetError(EGL_BAD_SURFACE);
+                return EGL_FALSE;
+            }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (StreamGateActive()) StreamBindCallingThreadLocked();
+#endif
+            EGLint age = 0;
+            MG_Backend::ClientHooks* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get());
+            const Bool regionFollows = DamageRegionSurfaces().count(surface) != 0;
+            if (client == nullptr || !client->QueryBufferAge(regionFollows, &age)) age = 0;
+            *value = age;
+            return EGL_TRUE;
+        }
+        // A size that changes under the application (a server-owned window resized) arrives from the
+        // backend: let it bring the surface's record up to date first, so a caller that polls the size
+        // while it draws nothing still sees the change.
+        if (attribute == EGL_WIDTH || attribute == EGL_HEIGHT) {
+            if (auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get()))
+                client->RefreshSurfaceExtent(surface);
+        }
         return state->QuerySurface(display, surface, attribute, value) ? EGL_TRUE : EGL_FALSE;
     }
 
+    // EGL_KHR_partial_update: the region this frame draws, before it draws (GL window coordinates;
+    // none = the whole surface). Forwarded in the stream to the server's native surface. More than
+    // kMaxRects rectangles are merged, so an application declaring that many draws their bounds.
+    EGLBoolean SetDamageRegion(EGLDisplay dpy, EGLSurface surface, const EGLint* rects, EGLint n_rects) {
+        const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+        auto* state = GetState();
+        if (!state) return EGL_FALSE;
+        if (!SharedImagesAvailable()) {
+            state->SetError(EGL_BAD_DISPLAY);
+            return EGL_FALSE;
+        }
+        if (!state->ValidateSurfaceOnDisplay(dpy, surface)) {
+            state->SetError(EGL_BAD_SURFACE);
+            return EGL_FALSE;
+        }
+        if (state->GetCurrentSurface(EGL_DRAW) != surface) {
+            state->SetError(EGL_BAD_MATCH);
+            return EGL_FALSE;
+        }
+        if (n_rects < 0 || (n_rects > 0 && rects == nullptr)) {
+            state->SetError(EGL_BAD_PARAMETER);
+            return EGL_FALSE;
+        }
+        MG_Util::Damage::Region region = MG_Util::Damage::Region::FromEglRects(rects, n_rects);
+        if (!region.IsFull()) {
+            EGLint width = 0;
+            EGLint height = 0;
+            if (state->QuerySurface(dpy, surface, EGL_WIDTH, &width) &&
+                state->QuerySurface(dpy, surface, EGL_HEIGHT, &height))
+                region.Normalize(width, height);
+            else
+                region.SetFull();
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (StreamGateActive()) StreamBindCallingThreadLocked();
+#endif
+        DamageRegionSurfaces().insert(surface);
+        if (auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get()))
+            (void)client->SetDamageRegion(region);
+        return EGL_TRUE;
+    }
+
     char const* QueryString(EGLDisplay display, EGLint name) {
+        // THE CLIENT QUERIES BRING NOTHING UP. A dispatcher with several vendors asks every one of
+        // them for its client extensions before it picks one, so answering this must not cost a
+        // session - nor wait for a server that is not there.
+        if (display == EGL_NO_DISPLAY) {
+            switch (name) {
+            case EGL_VENDOR:
+                return "MobileGL";
+            case EGL_VERSION:
+                return "1.5 MobileGL";
+            case EGL_CLIENT_APIS:
+                return "OpenGL OpenGL_ES";
+            case EGL_EXTENSIONS:
+                return kClientExtensionString;
+            default:
+                if (auto* state = MG_State::pEGLContext.get()) state->SetError(EGL_BAD_PARAMETER);
+                return nullptr;
+            }
+        }
         auto* state = GetStateEnsureInitialized();
         if (!state) {
             return nullptr;
@@ -418,14 +1401,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
         case EGL_CLIENT_APIS:
             return "OpenGL OpenGL_ES";
         case EGL_EXTENSIONS:
-            if (display == EGL_NO_DISPLAY) {
-                return "EGL_EXT_client_extensions "
-                       "EGL_EXT_platform_base "
-                       "EGL_KHR_platform_base "
-                       "EGL_MESA_platform_surfaceless";
-            }
-            return "EGL_KHR_create_context "
-                   "EGL_MESA_platform_surfaceless";
+            // One list, in EGLPlatformExtensions.h, because the vendor string glvnd reads and
+            // this query an application reads have to agree: an application that does not see the
+            // platform extension here never asks for a platform display at all.
+            if (display == EGL_NO_DISPLAY) return kClientExtensionString;
+            return SharedImagesAvailable() ? kDisplayExtensionStringWithSharedImages : kDisplayExtensionString;
         default:
             state->SetError(EGL_BAD_PARAMETER);
             return nullptr;
@@ -455,6 +1435,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_SURFACE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (!RecoverBeforeCreatingSurface(state)) return EGL_NO_SURFACE;
+#endif
         const EGLint width = GetAttribValue(attrib_list, EGL_WIDTH, 1);
         const EGLint height = GetAttribValue(attrib_list, EGL_HEIGHT, 1);
         EGLSurface surface = state->CreatePbufferSurface(dpy, config, attrib_list);
@@ -616,7 +1599,47 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_SYNC;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // EGL_ANDROID_native_fence_sync's fence command: a native fence with no descriptor of the
+        // application's. The server publishes the current context's shared-image accesses - its
+        // writes into dma-bufs become visible to the compositor's session, as at a glFlush - and
+        // hands back a sync_file of the work, which the application passes on with the buffer
+        // (Chrome's GPU process creates one per frame instead of flushing, when the compositor's
+        // kernel takes dma-buf fences). Answered through the round trip, so it is flushed too.
+        if (type == EGL_SYNC_NATIVE_FENCE_ANDROID && SharedImagesAvailable()) {
+            Bool hasFd = false;
+            for (const EGLAttrib* at = attrib_list; at != nullptr && at[0] != EGL_NONE; at += 2) {
+                if (at[0] == EGL_SYNC_NATIVE_FENCE_FD_ANDROID && at[1] != EGL_NO_NATIVE_FENCE_FD_ANDROID) hasFd = true;
+            }
+            if (!hasFd) {
+                if (GetCurrentContext() == EGL_NO_CONTEXT) {
+                    state->SetError(EGL_BAD_MATCH);
+                    return EGL_NO_SYNC;
+                }
+                int fence = -1;
+                {
+                    const GLStreamScope stream;
+                    MG_Pipe::MGPipeClientDrainTextureUploads();
+                    auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get());
+                    if (client == nullptr || !client->CreateNativeFence(&fence)) {
+                        MGLOG_E_ONCE("eglCreateSync: the server did not answer a native fence; none is created");
+                        state->SetError(EGL_BAD_ALLOC);
+                        return EGL_NO_SYNC;
+                    }
+                }
+                return state->CreateNativeFenceSync(dpy, fence, EGL_SYNC_PRIOR_COMMANDS_COMPLETE);
+            }
+        }
+#endif
         return state->CreateSync(dpy, type, attrib_list);
+    }
+
+    EGLint DupNativeFenceFD(EGLDisplay dpy, EGLSync sync) {
+        auto* state = GetState();
+        if (!state) {
+            return EGL_NO_NATIVE_FENCE_FD_ANDROID;
+        }
+        return state->DupNativeFenceFD(dpy, sync);
     }
 
     EGLBoolean DestroySync(EGLDisplay dpy, EGLSync sync) {
@@ -643,13 +1666,178 @@ namespace MobileGL::MG_Impl::EGLImpl {
         return state->GetSyncAttrib(dpy, sync, attribute, value) ? EGL_TRUE : EGL_FALSE;
     }
 
+    void SetDispatcherCurrentApiHook(EGLenum (*hook)()) {
+        g_dispatcherCurrentApi.store(hook);
+    }
+
+    Bool SharedImagesAvailable() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A split client's backend is the remote one, which forwards the shared-image verbs to
+        // the server; the server's own apply thread and a monolith have no allocator behind them.
+        // Nor has inproc: shared images carry memory between processes, and an inproc server is
+        // this process (its server refuses them too - ServerVerbSink::OnSharedImage).
+        return StreamGateActive() && MG_Config::Transport != MG_Config::TransportMode::InProcess &&
+               MG_Backend::pActiveBackendObject != nullptr;
+#else
+        return false;
+#endif
+    }
+
+    // Whether the server can hold YUV images (its platform allocates the formats): asked once, by
+    // allocating and dropping a small NV12 image, and only when a YUV question first comes up.
+    Bool SharedImageYuvAvailable() {
+        if (!SharedImagesAvailable()) return false;
+        static std::atomic<Int> answer{-1};
+        const Int known = answer.load(std::memory_order_acquire);
+        if (known >= 0) return known != 0;
+        auto* backendObject = MG_Backend::pActiveBackendObject.get();
+        if (backendObject == nullptr) return false;
+        MG_Backend::ClientHooks* client = backendObject->AsClient();
+        MG_Backend::SharedImageExport probe{};
+        const Bool allocated = client != nullptr && client->AllocateSharedImage(
+                                                        16, 16, MG_State::EGLState::EGLContext::kDrmFourccNv12, &probe);
+#if !defined(_WIN32)
+        if (probe.Fd >= 0) ::close(probe.Fd);
+#endif
+        if (allocated && probe.Id != 0) (void)client->ReleaseSharedImage(probe.Id);
+        answer.store(allocated ? 1 : 0, std::memory_order_release);
+        MGLOG_I("Shared images: the server %s YUV (NV12) images", allocated ? "holds" : "has no");
+        return allocated;
+    }
+
+    // Whether two descriptors name one dma-buf (a YUV import's planes must be in one buffer).
+    Bool SameDmaBuf(int a, int b) {
+        if (a == b) return true;
+#if defined(_WIN32)
+        return false;
+#else
+        struct stat sa{}, sb{};
+        return ::fstat(a, &sa) == 0 && ::fstat(b, &sb) == 0 && sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+#endif
+    }
+
+    Bool LookupSharedImage(EGLImage image, Uint64* id, EGLint* width, EGLint* height) {
+        auto* state = GetState();
+        MG_State::EGLState::EGLContext::SharedImageInfo info;
+        if (!state || !state->GetSharedImage(image, &info)) return false;
+        *id = info.Id;
+        *width = info.Width;
+        *height = info.Height;
+        return true;
+    }
+
+    namespace {
+        std::atomic<Bool>& SharedImageBoundToTexture() {
+            static std::atomic<Bool> bound{false};
+            return bound;
+        }
+    } // namespace
+
+    void NoteSharedImageBoundToTexture() {
+        SharedImageBoundToTexture().store(true, std::memory_order_relaxed);
+    }
+
+    void FlushSharedImageAccesses() {
+        if (!SharedImageBoundToTexture().load(std::memory_order_relaxed) &&
+            std::getenv("MOBILEGL_SHARED_IMAGE_FLUSH_SYNC") == nullptr)
+            return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        static const Bool ownsServerWindow = MG_Config::ServerOwnedWindowSurfaces();
+#else
+        constexpr Bool ownsServerWindow = false;
+#endif
+        if (!FlushPublishesSharedImageAccesses(SharedImagesAvailable(), SharedImageBoundToTexture().load(),
+                                               ownsServerWindow, std::getenv("MOBILEGL_SHARED_IMAGE_FLUSH_SYNC")))
+            return;
+        auto* backendObject = MG_Backend::pActiveBackendObject.get();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Uploads still waiting for a validate point go first: they are part of what is published.
+        MG_Pipe::MGPipeClientDrainTextureUploads();
+#endif
+        MG_Backend::ClientHooks* client = MG_Backend::ClientHooksOf(backendObject);
+        if (backendObject != nullptr && (client == nullptr || !client->FlushSharedImageAccesses())) {
+            MGLOG_E_ONCE("glFlush: this session's shared-image accesses could not be published; another session may "
+                         "read them early");
+        }
+    }
+
     EGLImage CreateImage(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
                          const EGLAttrib* attrib_list) {
         auto* state = GetState();
         if (!state) {
             return EGL_NO_IMAGE;
         }
-        return state->CreateImage(dpy, ctx, target, buffer, attrib_list);
+        if (target != EGL_LINUX_DMA_BUF_EXT) {
+            return state->CreateImage(dpy, ctx, target, buffer, attrib_list);
+        }
+
+        // EGL_EXT_image_dma_buf_import. The only dma-bufs this library can bind are the server's
+        // own shared images (a client's linux-dmabuf wl_buffer): the descriptor goes to the
+        // server, which names the image it was exported from, or refuses it.
+        if (!SharedImagesAvailable()) {
+            state->SetError(EGL_BAD_PARAMETER);
+            return EGL_NO_IMAGE;
+        }
+        MG_State::EGLState::EGLContext::DmaBufImportAttribs request;
+        if (!state->PrepareDmaBufImport(dpy, ctx, buffer, attrib_list, &request)) {
+            return EGL_NO_IMAGE;
+        }
+        // GetBackendObject reports the missing backend; a backend that is no remote server's client
+        // imports nothing.
+        MG_Backend::ClientHooks* client = MG_Backend::ClientHooksOf(GetBackendObject(state));
+        Uint64 sharedImageId = 0;
+        Bool imported = false;
+        if (MG_State::EGLState::EGLContext::IsDmaBufFourccYuv(request.Fourcc)) {
+            // YUV: both planes in one buffer (what video decoders and this server's allocator hand
+            // out), sampled through GL_OES_EGL_image_external. Planes in two buffers are refused.
+            if (!SharedImageYuvAvailable() || !SameDmaBuf(request.Fd, request.Plane1Fd)) {
+                MGLOG_I_ONCE("eglCreateImage: a %dx%d YUV dma-buf cannot be imported (%s); refused (EGL_BAD_MATCH)",
+                             request.Width, request.Height,
+                             SharedImageYuvAvailable() ? "its planes are in two buffers"
+                                                       : "the server has no YUV images");
+                state->SetError(EGL_BAD_MATCH);
+                return EGL_NO_IMAGE;
+            }
+            MG_Backend::SharedImageImportLayout layout;
+            layout.PlaneCount = 2;
+            layout.Offset[0] = static_cast<Uint32>(request.Offset);
+            layout.Offset[1] = static_cast<Uint32>(request.Plane1Offset);
+            layout.Pitch[0] = static_cast<Uint32>(request.Pitch);
+            layout.Pitch[1] = static_cast<Uint32>(request.Plane1Pitch);
+            layout.ColorSpace = request.ColorSpace;
+            layout.Range = request.Range;
+            layout.SitingX = request.SitingX;
+            layout.SitingY = request.SitingY;
+            layout.HasModifier = request.HasModifier;
+            layout.Modifier = request.Modifier;
+            imported =
+                client != nullptr && client->ImportSharedImagePlanes(request.Fd, static_cast<Uint32>(request.Width),
+                                                                     static_cast<Uint32>(request.Height),
+                                                                     request.Fourcc, layout, &sharedImageId);
+        } else {
+            imported = client != nullptr &&
+                       client->ImportSharedImage(request.Fd, static_cast<Uint32>(request.Width),
+                                                 static_cast<Uint32>(request.Height), request.Fourcc, &sharedImageId);
+        }
+        if (!imported || sharedImageId == 0) {
+            MGLOG_I_ONCE("eglCreateImage: a %dx%d dma-buf is not one of the server's shared images; refused "
+                         "(EGL_BAD_MATCH)",
+                         request.Width, request.Height);
+            state->SetError(EGL_BAD_MATCH);
+            return EGL_NO_IMAGE;
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const Uint64 wireEpoch = MG_State::CurrentWireEpoch();
+#else
+        const Uint64 wireEpoch = 0;
+#endif
+        const EGLImage image = state->CreateSharedImage(dpy, {.Id = sharedImageId,
+                                                              .Width = request.Width,
+                                                              .Height = request.Height,
+                                                              .Fourcc = request.Fourcc,
+                                                              .WireEpoch = wireEpoch});
+        if (image == EGL_NO_IMAGE) (void)client->ReleaseSharedImage(sharedImageId);
+        return image;
     }
 
     EGLBoolean DestroyImage(EGLDisplay dpy, EGLImage image) {
@@ -657,12 +1845,88 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
-        return state->DestroyImage(dpy, image) ? EGL_TRUE : EGL_FALSE;
+        // The session the image's reference was taken on: a reference of a session that has ended
+        // died with it, and the same image imported again on the fresh session has the same id - a
+        // release of the old one sent there would drop the new one's reference.
+        MG_State::EGLState::EGLContext::SharedImageInfo shared;
+        const Bool sharedImage = state->GetSharedImage(image, &shared);
+        Uint64 sharedImageId = 0;
+        if (!state->DestroyImage(dpy, image, &sharedImageId)) {
+            return EGL_FALSE;
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (sharedImage && shared.WireEpoch != MG_State::CurrentWireEpoch()) sharedImageId = 0;
+#else
+        (void)sharedImage;
+#endif
+        // A texture the image was bound to keeps its own reference on the server (EGLImage
+        // siblings outlive the image), so only this handle's goes.
+        if (sharedImageId != 0) {
+            if (auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get())) {
+                (void)client->ReleaseSharedImage(sharedImageId);
+            }
+        }
+        return EGL_TRUE;
+    }
+
+    EGLBoolean QueryDmaBufFormats(EGLDisplay dpy, EGLint max_formats, EGLint* formats, EGLint* num_formats) {
+        auto* state = GetState();
+        if (!state) {
+            return EGL_FALSE;
+        }
+        return state->QueryDmaBufFormats(dpy, SharedImagesAvailable(), SharedImageYuvAvailable(), max_formats, formats,
+                                         num_formats)
+                   ? EGL_TRUE
+                   : EGL_FALSE;
+    }
+
+    EGLBoolean QueryDmaBufModifiers(EGLDisplay dpy, EGLint format, EGLint max_modifiers, EGLuint64KHR* modifiers,
+                                    EGLBoolean* external_only, EGLint* num_modifiers) {
+        static_assert(sizeof(EGLuint64KHR) == sizeof(Uint64));
+        auto* state = GetState();
+        if (!state) {
+            return EGL_FALSE;
+        }
+        return state->QueryDmaBufModifiers(dpy, SharedImagesAvailable(), SharedImageYuvAvailable(), format,
+                                           max_modifiers, reinterpret_cast<Uint64*>(modifiers), external_only,
+                                           num_modifiers)
+                   ? EGL_TRUE
+                   : EGL_FALSE;
     }
 
     EGLDisplay GetPlatformDisplay(EGLenum platform, void* native_display, const EGLAttrib* attrib_list) {
         (void)attrib_list;
 
+        // As GetDisplay.
+        constexpr EGLenum kPlatformGbm = 0x31D7;
+#if MOBILEGL_WAYLAND_WINDOWS
+        // A "GBM" display whose native display is a wl_display is a Wayland one: Chromium's
+        // Wayland GL layer names the GBM platform for every display it asks for, including the
+        // one on its own Wayland connection whose windows are wl_egl_windows.
+        if (platform == kPlatformGbm && native_display != nullptr &&
+            Wayland::IsWaylandDisplay(reinterpret_cast<Uint64>(native_display), EGL_NONE)) {
+            platform = Wayland::kPlatformWayland;
+        }
+#endif
+#if defined(__linux__) && !defined(__ANDROID__)
+        // A GBM device some other backend created (the system's own driver's) is not one this
+        // implementation can draw for: its buffers come from that driver, never from the server.
+        // Declined before anything is brought up, so a loader with more than one EGL vendor hands
+        // the device to the one it belongs to. Only a device whose backend names itself is asked
+        // about; one from a loader too old to say is served as before.
+        if (platform == kPlatformGbm && native_display != nullptr) {
+            using BackendNameFn = const char* (*)(void*);
+            static const auto backendName =
+                reinterpret_cast<BackendNameFn>(dlsym(RTLD_DEFAULT, "gbm_device_get_backend_name"));
+            const char* name = backendName != nullptr ? backendName(native_display) : nullptr;
+            if (name != nullptr && std::strcmp(name, "mobilegl") != 0) {
+                return EGL_NO_DISPLAY;
+            }
+        }
+#endif
+        if (!MobileGL::ImplementationAvailable()) {
+            return EGL_NO_DISPLAY;
+        }
         auto* state = GetStateEnsureInitialized();
         if (!state) {
             return EGL_NO_DISPLAY;
@@ -676,7 +1940,28 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_SURFACE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (!RecoverBeforeCreatingSurface(state)) return EGL_NO_SURFACE;
+#endif
+#if MOBILEGL_WAYLAND_WINDOWS
+        if (RefuseGbmWindow(state, dpy)) return EGL_NO_SURFACE;
+        {
+            const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+            EGLSurface waylandSurface = EGL_NO_SURFACE;
+            if (CreateWaylandWindowSurface(state, dpy, config, native_window, /*platformWindow=*/true,
+                                           &waylandSurface)) {
+                return waylandSurface;
+            }
+        }
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P12 (on-screen server window), D1: as CreateWindowSurface - with MOBILEGL_IPC_SURFACE=server
+        // the window is the server's, and a headless client's NULL is accepted.
+        const Bool serverOwnedWindow = MG_Config::ServerOwnedWindowSurfaces();
+        if (native_window == nullptr && !serverOwnedWindow) {
+#else
         if (native_window == nullptr) {
+#endif
             state->SetError(EGL_BAD_NATIVE_WINDOW);
             return EGL_NO_SURFACE;
         }
@@ -696,7 +1981,15 @@ namespace MobileGL::MG_Impl::EGLImpl {
             .Height = static_cast<Uint32>(std::max<EGLint>(GetAttribValueAttrib(attrib_list, EGL_HEIGHT, 0), 0)),
         };
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        EGLSurface surface = serverOwnedWindow
+                                 ? state->CreateServerOwnedWindowSurface(
+                                       dpy, config, native_window, static_cast<EGLint>(windowHandle.Width),
+                                       static_cast<EGLint>(windowHandle.Height), /*platformWindow=*/true)
+                                 : state->CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
+#else
         EGLSurface surface = state->CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
+#endif
         if (surface == EGL_NO_SURFACE) {
             return EGL_NO_SURFACE;
         }
@@ -759,7 +2052,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!name) {
             return nullptr;
         }
-        MobileGL::EnsureInitialized();
+        // The answer is a static table; the bring-up is only the lazy-initialization contract, and
+        // it is skipped when there is no server to bring up against (see GetStateEnsureInitialized).
+        if (MobileGL::ImplementationAvailable()) {
+            MobileGL::EnsureInitialized();
+        }
 
         MGLOG_D("eglGetProcAddress(%s)", name);
         void* proc = MG_Impl::GetProcAddress(name);

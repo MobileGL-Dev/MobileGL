@@ -119,9 +119,9 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
             static_assert(std::is_trivially_copyable_v<ValueT>);
             Vector<Pair<StringView, ValueT>> sorted;
             sorted.reserve(map.size());
-            for (const auto& [name, value] : map) sorted.emplace_back(StringView(name), value);
-            std::sort(sorted.begin(), sorted.end(),
-                      [](const auto& a, const auto& b) { return a.first < b.first; });
+            for (const auto& [name, value] : map)
+                sorted.emplace_back(StringView(name), value);
+            std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
             Value(static_cast<Uint64>(sorted.size()));
             for (const auto& [name, value] : sorted) {
                 Text(name);
@@ -281,27 +281,11 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
             const Uint64 lookups = stats.hits + stats.misses;
             MGLOG_D("%s: %llu/%llu hits (%.1f%%), %llu inserts, %llu evictions, %llu oversize, "
                     "%llu duplicate, %zu entries / %zu KiB",
-                    m_name, static_cast<unsigned long long>(stats.hits),
-                    static_cast<unsigned long long>(lookups),
+                    m_name, static_cast<unsigned long long>(stats.hits), static_cast<unsigned long long>(lookups),
                     lookups ? 100.0 * static_cast<double>(stats.hits) / static_cast<double>(lookups) : 0.0,
-                    static_cast<unsigned long long>(stats.inserts),
-                    static_cast<unsigned long long>(stats.evictions),
+                    static_cast<unsigned long long>(stats.inserts), static_cast<unsigned long long>(stats.evictions),
                     static_cast<unsigned long long>(stats.rejectedOversize),
-                    static_cast<unsigned long long>(stats.duplicateInserts), EntryCount(),
-                    StoredBytes() / 1024u);
-        }
-
-        // Tests only: makes the caps small enough to exercise eviction without
-        // building megabytes of shaders. Clears the cache, because shrinking the
-        // caps under live entries would otherwise leave it over budget.
-        void SetCapsForTesting(SizeT maxEntries, SizeT maxBytes) {
-            const std::lock_guard<std::mutex> lock(m_mutex);
-            m_maxEntries = maxEntries;
-            m_maxBytes = maxBytes;
-            m_index.clear();
-            m_entries.clear();
-            m_storedBytes = 0;
-            m_stats = {};
+                    static_cast<unsigned long long>(stats.duplicateInserts), EntryCount(), StoredBytes() / 1024u);
         }
 
     private:
@@ -313,8 +297,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         using EntryList = std::list<Entry>;
 
         void EvictUntilWithinBudgetLocked() {
-            while (!m_entries.empty() &&
-                   (m_entries.size() > m_maxEntries || m_storedBytes > m_maxBytes)) {
+            while (!m_entries.empty() && (m_entries.size() > m_maxEntries || m_storedBytes > m_maxBytes)) {
                 const auto victim = m_entries.begin();
                 m_storedBytes -= victim->bytes;
                 m_index.erase(victim->key);
@@ -643,6 +626,19 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // decides, and a key carrying only it would serve a module lowered under one setting to a
         // link made under the other.
         Bool viewportIndexLoweringArmed = false;
+        // Whether DeferGeometryEmitsForEssl runs on this (geometry) module: the driver POST
+        // measured dropped storage writes after EmitVertex, or MOBILEGL_ESPRYT_DEFER_GEOMETRY_EMITS
+        // forced it.
+        Bool deferGeometryEmitsArmed = false;
+        // Whether EmulateSubgroupsPass lowers this (compute) module, and the workgroup-scratch
+        // budget it may spend (GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, which decides whether it
+        // declines); plus whether FixIterationRPBarrierPass runs ahead of it.
+        Bool subgroupEmulationArmed = false;
+        Int subgroupEmulationScratchBytes = 0;
+        Bool iterationRPBarrierFixArmed = false;
+        // Whether that lowering reads its scratch through atomic loads (the driver POST measured
+        // stale shared-memory loads, or MOBILEGL_ESPRYT_ATOMIC_SUBGROUP_SCRATCH forced it).
+        Bool subgroupScratchAtomicReads = false;
         Bool supportsNoperspectiveInterpolation = false;
         // GL_NV_image_formats. Arms WidenImageFormatsForEssl, which re-declares every storage
         // image whose format GLSL ES core cannot spell in the core format that carries it and
@@ -663,7 +659,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // names the emitted ESSL spells. Empty for every program without a tessellation or
         // geometry stage that declares one block name in both directions, i.e. for all but a
         // handful. The maps rather than what they were derived from: they ARE the pass's
-        // arguments, so they are exactly as fine as its behaviour and no finer.
+        // arguments, so they are exactly as fine as its behavior and no finer.
         const std::map<String, String>* inputBlockRenames = nullptr;
         const std::map<String, String>* outputBlockRenames = nullptr;
         // THIS STAGE's share of the interface-block LOCATION strip - the two arguments
@@ -674,6 +670,10 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // other end is in a different program must keep its location.
         Bool stripInputBlockLocations = false;
         Bool stripOutputBlockLocations = false;
+        // Whether this (vertex) stage carries the narrow-integer seeds - a per-program arming, set
+        // only once some draw fed the program 8/16-bit data of the other signedness, which changes
+        // the emitted ESSL of the same module.
+        Bool narrowIntegerSeedsArmed = false;
 
         // The top of the reserved storage-block window atomic-counter blocks are moved into
         // (`top - N` for GL binding N). Derived from the driver's

@@ -10,65 +10,11 @@
 #include <Includes.h>
 #include "../BufferState/BufferObject.h"
 #include "MG_Util/Types.h"
+#include <MG_Pipe/MGPipeValueTypes.h>
 
 namespace MobileGL {
     namespace MG_State {
         namespace GLState {
-            struct VertexAttribute {
-                Bool Enabled = false;
-                int Size = 4;
-                DataType Type = DataType::Float32;
-                Bool Normalized = false;
-                // The RESOLVED byte distance between consecutive elements, never the raw
-                // glVertexAttrib*Pointer argument: a pointer call's stride 0 means "tightly
-                // packed" and is resolved to the element size here, so a zero that survives
-                // into this field can only have come from the binding model, where a zero
-                // VERTEX_BINDING_STRIDE means the opposite - every vertex reads the SAME
-                // element and the fetch address never advances (GL 4.6 core 10.3.1). Backends
-                // consume this verbatim; collapsing 0 back into the element size is what made
-                // KHR-GL43.vertex_attrib_binding.basic-input-case7/8 read past the buffer.
-                int Stride = 0;
-                SizeT Offset = 0;
-                Bool IsInteger = false;
-                // GL_BGRA vertex size: four components in reversed (B,G,R,A) memory order. Size stays 4.
-                // Set only by the long (L) format entry points. It is NOT implied by
-                // Type == Float64: VertexAttribFormat(GL_DOUBLE) also reads doubles from memory but
-                // asks for them *converted to float*, while VertexAttribLFormat keeps all 64 bits
-                // (GL 4.6 core 10.3.2). Backends have to tell the two apart, and it is what
-                // GL_VERTEX_ATTRIB_ARRAY_LONG reports.
-                Bool IsLong = false;
-                Bool IsBgra = false;
-                Uint Divisor = 0;
-                SharedPtr<BufferObject> Buffer;
-
-                // GL 4.6 core table 23.3: VERTEX_ATTRIB_ARRAY_STRIDE and _POINTER are the
-                // arguments of the last glVertexAttrib*Pointer call on this attribute,
-                // reported verbatim, and NOTHING else writes them - not glVertexAttribFormat,
-                // not glBindVertexBuffer. Stride/Offset above are the *resolved* draw inputs
-                // and the binding model does overwrite those, so the two views have to be
-                // stored apart or the binding-model sequence reports a legacy state it never
-                // set (KHR-GL4x.vertex_attrib_binding.basic-state3).
-                int LegacyStride = 0;
-                SizeT LegacyPointer = 0;
-            };
-
-            // ARB_vertex_attrib_binding separate binding point. Attributes configured through the
-            // binding-point API are resolved eagerly into the flat VertexAttribute view above, so
-            // backends keep consuming resolved attributes and never see binding points.
-            struct VertexBufferBindingPoint {
-                SharedPtr<BufferObject> Buffer;
-                SizeT Offset = 0;
-                // GL 4.6 core table 23.4: the initial VERTEX_BINDING_STRIDE is 16, not 0.
-                int Stride = 16;
-                Uint Divisor = 0;
-            };
-
-            struct VertexAttributeVersion {
-                Uint16 FormatVersion = 0;
-                Uint16 BufferVersion = 0;
-                Uint16 SwitchVersion = 0;
-            };
-
             class VertexArrayObject {
             public:
                 // Storage capacity, not the GL-visible limit. GL_MAX_VERTEX_ATTRIBS is reported as
@@ -79,6 +25,10 @@ namespace MobileGL {
                 static constexpr int MAX_VERTEX_ATTRIB_BINDINGS = 32;
 
                 VertexArrayObject(Uint externIndex);
+                // P2 step e2. Out of line, and declared only where there is a notice to raise:
+                // in a pull build this class keeps its implicit destructor, which is what keeps
+                // the pull build's symbol set byte-for-byte the pre-P2 one (G1).
+                ~VertexArrayObject();
 
                 void EnableAttribute(Uint index);
                 void DisableAttribute(Uint index);
@@ -140,7 +90,7 @@ namespace MobileGL {
                 }
                 Uint GetAttributeBindingIndex(Uint attribIndex) const {
                     return attribIndex < m_attributeBindingIndex.size() ? m_attributeBindingIndex[attribIndex]
-                                                                       : attribIndex;
+                                                                        : attribIndex;
                 }
                 const VertexBufferBindingPoint& GetBindingPoint(Uint bindingIndex) const {
                     static const VertexBufferBindingPoint kEmpty{};
@@ -153,59 +103,15 @@ namespace MobileGL {
                 // Aggregate of every per-attribute version bump; lets backends detect
                 // "any vertex-input state changed" with one compare.
                 Uint32 GetConfigVersion() const { return m_configVersion; }
-
-                // Backend-owned content-hash memo, valid while the config version matches
-                // (same idea as ProgramObject's hash memo — avoids re-hashing all
-                // attributes on every draw).
-                Bool GetBackendHashMemo(Uint64& outHash) const {
-                    if (m_backendHashMemoVersion != m_configVersion) return false;
-                    outHash = m_backendHashMemo;
-                    return true;
-                }
-                void SetBackendHashMemo(Uint64 hash) const {
-                    m_backendHashMemo = hash;
-                    m_backendHashMemoVersion = m_configVersion;
-                }
-
-                // Backend-owned resolved-state memo: an opaque pointer into the
-                // backend's vertex-input-state cache plus the cache's eviction
-                // epoch, valid while the config version matches. Lets the
-                // per-draw path skip the content hash AND the cache lookup; the
-                // epoch guards against the cache evicting the pointee.
-                Bool GetBackendStateMemo(const void*& outState, Uint64& outEpoch) const {
-                    if (m_backendStateMemoVersion != m_configVersion) return false;
-                    outState = m_backendStateMemo;
-                    outEpoch = m_backendStateMemoEpoch;
-                    return true;
-                }
-                void SetBackendStateMemo(const void* state, Uint64 epoch) const {
-                    m_backendStateMemo = state;
-                    m_backendStateMemoEpoch = epoch;
-                    m_backendStateMemoVersion = m_configVersion;
-                }
-
-                // Backend-owned aux memo: two opaque VALUE words (no pointee, so unlike the
-                // state memo above they need no eviction-epoch guard), valid while the config
-                // version matches. They live next to m_configVersion, which every per-draw
-                // path already loads, so a backend can re-read small derived facts about this
-                // VAO's configuration (e.g. a layout hash and attribute masks) without
-                // chasing into its own cache's heap entry - that chase is a guaranteed cache
-                // miss when an app cycles hundreds of VAOs per frame.
-                Bool GetBackendAuxMemo(Uint64& outAux0, Uint64& outAux1) const {
-                    if (m_backendAuxMemoVersion != m_configVersion) return false;
-                    outAux0 = m_backendAuxMemo0;
-                    outAux1 = m_backendAuxMemo1;
-                    return true;
-                }
-                void SetBackendAuxMemo(Uint64 aux0, Uint64 aux1) const {
-                    m_backendAuxMemo0 = aux0;
-                    m_backendAuxMemo1 = aux1;
-                    m_backendAuxMemoVersion = m_configVersion;
-                }
+                // P15: moves with every bump EXCEPT a buffer change that keeps the attribute's
+                // buffer present (or absent) - a glBindVertexBuffer that only swaps the buffer.
+                // That is everything a vertex-elements record (formats, offsets, strides,
+                // enables, divisors) can see, so the record's emitter keys on it.
+                Uint32 GetElementsVersion() const { return m_elementsVersion; }
 
             private:
                 void BumpAttributeFormatVersion(Uint index);
-                void BumpAttributeBufferVersion(Uint index);
+                void BumpAttributeBufferVersion(Uint index, Bool presenceChanged);
                 void BumpAttributeSwitchVersion(Uint index);
                 void ResolveAttributeFromBinding(Uint attribIndex);
                 // Re-resolve every attribute currently pointed at `bindingIndex`. `adopt` turns
@@ -241,14 +147,7 @@ namespace MobileGL {
                 Array<Bool, MAX_VERTEX_ATTRIBS> m_attributeUsesBindingModel = {};
 
                 Uint32 m_configVersion = 0;
-                mutable Uint64 m_backendHashMemo = 0;
-                mutable Uint32 m_backendHashMemoVersion = ~0u;
-                mutable const void* m_backendStateMemo = nullptr;
-                mutable Uint64 m_backendStateMemoEpoch = 0;
-                mutable Uint32 m_backendStateMemoVersion = ~0u;
-                mutable Uint64 m_backendAuxMemo0 = 0;
-                mutable Uint64 m_backendAuxMemo1 = 0;
-                mutable Uint32 m_backendAuxMemoVersion = ~0u;
+                Uint32 m_elementsVersion = 0;
             };
         } // namespace GLState
     } // namespace MG_State

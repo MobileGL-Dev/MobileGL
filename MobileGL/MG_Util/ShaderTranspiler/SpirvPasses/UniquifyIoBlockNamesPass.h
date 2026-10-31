@@ -54,7 +54,7 @@ namespace MobileGL {
                 // `inputBlockRenames` applies to blocks this stage CONSUMES and
                 // `outputBlockRenames` to blocks it PRODUCES, both keyed by the block's
                 // current name. `renamedBlockNames` receives the ORIGINAL names this stage
-                // actually rewrote, so the caller can adopt the re-serialised module only
+                // actually rewrote, so the caller can adopt the re-serialized module only
                 // when there was something to rewrite.
                 UniquifyIoBlockNamesPass(const std::map<String, String>& inputBlockRenames,
                                          const std::map<String, String>& outputBlockRenames,
@@ -77,8 +77,7 @@ namespace MobileGL {
 
                 static spvtools::Optimizer::PassToken CreateUniquifyIoBlockNamesPass(
                     const std::map<String, String>& inputBlockRenames,
-                    const std::map<String, String>& outputBlockRenames,
-                    std::set<String>* renamedBlockNames);
+                    const std::map<String, String>& outputBlockRenames, std::set<String>* renamedBlockNames);
 
             private:
                 std::map<String, String> m_inputBlockRenames;

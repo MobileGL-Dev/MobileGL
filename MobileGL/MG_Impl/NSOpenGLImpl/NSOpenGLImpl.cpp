@@ -70,8 +70,9 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
         }
 
         id SendIdCGLPixelFormat(id receiver, const char* selector, CGLPixelFormatObj value) {
-            return receiver ? ObjcMsgSend<id (*)(id, SEL, CGLPixelFormatObj)>()(receiver, sel_registerName(selector), value)
-                            : nil;
+            return receiver
+                       ? ObjcMsgSend<id (*)(id, SEL, CGLPixelFormatObj)>()(receiver, sel_registerName(selector), value)
+                       : nil;
         }
 
         void SendVoidCGRect(id receiver, const char* selector, CGRect value) {
@@ -306,9 +307,9 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             }
             SetAssoc(self, &kContextViewKey, view, kAssociationAssign);
             SetAssoc(self, &kContextLayerKey, layer, kAssociationRetain);
-            const auto error = CGLImpl::AttachDrawable(context, view, layer,
-                                                       static_cast<GLint>(geometry.DrawableSize.width),
-                                                       static_cast<GLint>(geometry.DrawableSize.height));
+            const auto error =
+                CGLImpl::AttachDrawable(context, view, layer, static_cast<GLint>(geometry.DrawableSize.width),
+                                        static_cast<GLint>(geometry.DrawableSize.height));
             if (error != kCGLNoError) {
                 MGLOG_E_ONCE("NSOpenGLImpl: failed to attach drawable: %s", CGLImpl::ErrorString(error));
             }
@@ -373,9 +374,9 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             }
             const auto geometry = GetDrawableGeometry(view);
             ConfigureMetalLayerForView(layer, view, geometry);
-            const auto error = CGLImpl::AttachDrawable(context, view, layer,
-                                                       static_cast<GLint>(geometry.DrawableSize.width),
-                                                       static_cast<GLint>(geometry.DrawableSize.height));
+            const auto error =
+                CGLImpl::AttachDrawable(context, view, layer, static_cast<GLint>(geometry.DrawableSize.width),
+                                        static_cast<GLint>(geometry.DrawableSize.height));
             if (error != kCGLNoError) {
                 MGLOG_E_ONCE("NSOpenGLImpl: update failed to attach drawable: %s", CGLImpl::ErrorString(error));
                 return;
@@ -448,8 +449,8 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
                 return false;
             }
 
-            ReplaceInstanceMethod(pixelFormatClass, "initWithAttributes:",
-                                  reinterpret_cast<IMP>(PixelFormatInitWithAttributes));
+            ReplaceInstanceMethod(pixelFormatClass,
+                                  "initWithAttributes:", reinterpret_cast<IMP>(PixelFormatInitWithAttributes));
             ReplaceInstanceMethod(pixelFormatClass, "initWithCGLPixelFormatObj:",
                                   reinterpret_cast<IMP>(PixelFormatInitWithCGLPixelFormatObj));
             ReplaceInstanceMethod(pixelFormatClass, "getValues:forAttribute:forVirtualScreen:",
@@ -461,10 +462,10 @@ namespace MobileGL::MG_Impl::NSOpenGLImpl {
             ReplaceInstanceMethod(pixelFormatClass, "dealloc", reinterpret_cast<IMP>(PixelFormatDealloc),
                                   &g_pixelFormatDealloc);
 
-            ReplaceInstanceMethod(contextClass, "initWithFormat:shareContext:",
-                                  reinterpret_cast<IMP>(ContextInitWithFormatShare));
-            ReplaceInstanceMethod(contextClass, "initWithCGLContextObj:",
-                                  reinterpret_cast<IMP>(ContextInitWithCGLContextObj));
+            ReplaceInstanceMethod(contextClass,
+                                  "initWithFormat:shareContext:", reinterpret_cast<IMP>(ContextInitWithFormatShare));
+            ReplaceInstanceMethod(contextClass,
+                                  "initWithCGLContextObj:", reinterpret_cast<IMP>(ContextInitWithCGLContextObj));
             ReplaceInstanceMethod(contextClass, "setView:", reinterpret_cast<IMP>(ContextSetView));
             ReplaceInstanceMethod(contextClass, "view", reinterpret_cast<IMP>(ContextView));
             ReplaceInstanceMethod(contextClass, "makeCurrentContext", reinterpret_cast<IMP>(ContextMakeCurrent));

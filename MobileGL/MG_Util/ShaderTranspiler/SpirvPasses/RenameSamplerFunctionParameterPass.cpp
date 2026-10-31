@@ -26,7 +26,7 @@ namespace MobileGL {
                 }
 
                 const char* GetConflictingFunctionParameterCompatName(spvtools::opt::IRContext* context,
-                                                                       spvtools::opt::Instruction& nameInst) {
+                                                                      spvtools::opt::Instruction& nameInst) {
                     if (nameInst.opcode() != spv::Op::OpName || nameInst.NumInOperands() < 2) {
                         return nullptr;
                     }
@@ -61,7 +61,8 @@ namespace MobileGL {
                 return modified ? Status::SuccessWithChange : Status::SuccessWithoutChange;
             }
 
-            spvtools::Optimizer::PassToken RenameSamplerFunctionParameterPass::CreateRenameSamplerFunctionParameterPass() {
+            spvtools::Optimizer::PassToken RenameSamplerFunctionParameterPass::
+                CreateRenameSamplerFunctionParameterPass() {
                 return spvtools::Optimizer::PassToken(MakeUnique<RenameSamplerFunctionParameterPass>());
             }
         } // namespace ShaderTranspiler

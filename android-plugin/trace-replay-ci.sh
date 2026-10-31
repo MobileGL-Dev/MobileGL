@@ -32,6 +32,9 @@ Usage:
     [--avoid-angle-llvmpipe-explicit-lod-bias] \
     [--coherent-as-flush] \
     [--dump-texture-2d CALL,TEXTURE,LEVEL,DIR] \
+    [--env "K=V;K=V"] \
+    [--require-inproc] \
+    [--require-spawn] \
     [--benchmark] \
     [--benchmark-tail-frames N] \
     [--benchmark-finish 0|1] \
@@ -42,10 +45,9 @@ Set MOBILEGL_ESPRYT_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
 instead of the device system GLES driver.
 Set MOBILEGL_TRACE_ANGLE_VARIANT to the packaged ANGLE short hash used by
 DirectGLES replay.
-Set MOBILEGL_RETRACE_USE_PBUFFER=1 or pass --use-pbuffer to run DirectGLES
+Set MOBILEGL_RETRACE_USE_PBUFFER=1 or pass --use-pbuffer to run
 against an offscreen EGL pbuffer instead of the Activity surface.
-Set MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1,
-MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS=1, and MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER=1 to
+Set MOBILEGL_ITRP_FIX=ForceOn to
 forward the corresponding iterationRP SPIR-V repairs into the APK process.
 Pass --avoid-angle-llvmpipe-sampler-mipmap-min-filter for DirectGLES traces that
 need ANGLE llvmpipe sampler mipmap filters downgraded to avoid driver stalls.
@@ -60,6 +62,16 @@ copies benchmark.json (per-frame times plus mean/median/p95) out of the app, and
 "passed" only means the replay reached the end of the trace without an error.
 Pass --reuse-fixture to skip re-extracting and re-pushing the trace, for repeat
 runs of a case whose fixture is already in /data/local/tmp.
+Pass --env "K=V;K=V" (or set MOBILEGL_TRACE_ENV) to hand arbitrary environment
+variables to the replay process. They are applied last, immediately before
+libMobileGL.so is loaded, so they override every flag above; an entry with no "="
+unsets the variable instead. This is the generic passthrough: a MOBILEGL_* knob
+that has no flag of its own needs no plumbing to be forwarded.
+Pass --require-spawn to require the same proof for transport=spawn, plus the one
+sentence a monolith fallback can never write: the pid of the server process.
+Pass --require-inproc to require the library's real transport-resolution log,
+strict errors and separate role state, plus zero Fatal records. This checks the
+APK process after replay; a host environment echo or an SSIM-only pass is not proof.
 EOF
 }
 
@@ -119,6 +131,9 @@ avoid_angle_llvmpipe_sampler_mipmap_min_filter=0
 avoid_angle_llvmpipe_explicit_lod_bias=0
 coherent_as_flush=0
 texture_2d_dumps=""
+env_overrides="${MOBILEGL_TRACE_ENV:-}"
+require_inproc=0
+require_spawn=0
 benchmark=0
 benchmark_tail_frames=200
 benchmark_finish=1
@@ -164,6 +179,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     --coherent-as-flush) coherent_as_flush=1; shift 1 ;;
     --dump-texture-2d) texture_2d_dumps="$(next_arg "$@")"; shift 2 ;;
+    --env) env_overrides="$(next_arg "$@")"; shift 2 ;;
+    --require-inproc) require_inproc=1; shift 1 ;;
+    --require-spawn) require_spawn=1; shift 1 ;;
     --benchmark) benchmark=1; shift 1 ;;
     --benchmark-tail-frames) benchmark_tail_frames="$(next_arg "$@")"; shift 2 ;;
     --benchmark-finish) benchmark_finish="$(next_arg "$@")"; shift 2 ;;
@@ -220,7 +238,7 @@ collect_run_diagnostics() {
   adb_device_path shell dumpsys activity activities > "${diagnostics_dir}/activity.txt" 2>&1 || true
   adb_device_path shell run-as "${package_name}" ls -laR "${app_dir}" > "${diagnostics_dir}/app-files.txt" 2>&1 || true
   adb_device_path exec-out run-as "${package_name}" cat "${app_dir}/output/retrace.log" > "${diagnostics_dir}/retrace.log" || true
-  adb_device_path exec-out run-as "${package_name}" cat "${app_dir}/output/mobilegl.log" > "${diagnostics_dir}/mobilegl.log" || true
+  collect_role_logs "${app_dir}/output/mobilegl.log" "${diagnostics_dir}/mobilegl.log" || true
 }
 
 # Records why a retrace was charged to the infrastructure rather than the code
@@ -259,7 +277,12 @@ is_angle_surface_lost() {
 is_infrastructure_failure() {
   diagnostics_dir="$1"
   adb_state="$(cat "${diagnostics_dir}/adb-state.txt" 2>/dev/null || true)"
-  if [ "${adb_state}" != "device" ]; then
+  # Diagnostics can take several adb calls: a device that was online at their
+  # start may disappear while we collect them. Keep the polling observation and
+  # check the live state as well, rather than trusting that earlier snapshot.
+  live_adb_state="$(adb_device_path get-state 2>/dev/null | tr -d '\r' || true)"
+  if [ -f "${diagnostics_dir}/adb-disconnected.txt" ] ||
+     [ "${adb_state}" != "device" ] || [ "${live_adb_state}" != "device" ]; then
     echo "trace-replay-ci.sh: Android device is unavailable (state: ${adb_state:-unknown})" >&2
     record_infrastructure_reason "device-unavailable"
     return 0
@@ -277,6 +300,20 @@ is_infrastructure_failure() {
   return 1
 }
 
+# A replay that PASSED and then lost its logs is not evidence either way. Sampled on the APK
+# workflow (5 of 7 failed legs): result.json said "passed": true, then "error: device offline"
+# before the role logs were copied, and the --require-inproc/--require-spawn proof read an empty
+# mobilegl.log and failed the leg with exit 1 - charging the emulator's disappearance to the trace
+# instead of asking for the one infrastructure retry. True only when a proof needs the log
+# ($2 = 1), the log is empty, and the classifier above says the infrastructure failed; an online
+# device with an empty log stays the proof's failure.
+passed_replay_lost_its_logs() {
+  lost_logs_dir="$1"
+  [ "$2" -eq 1 ] || return 1
+  [ ! -s "${lost_logs_dir}/mobilegl.log" ] || return 1
+  is_infrastructure_failure "${lost_logs_dir}"
+}
+
 copy_app_artifact() {
   source_path="$1"
   destination_path="$2"
@@ -284,6 +321,39 @@ copy_app_artifact() {
     echo "trace-replay-ci.sh: warning: failed to copy ${source_path}" >&2
     rm -f "${destination_path}"
   fi
+}
+
+# P6: the library writes ONE LOG PER ROLE - <base>.client.log and <base>.server.log - because
+# under inproc both roles are threads of one process. Pull both and concatenate into the single
+# <dest> every downstream reader still expects: the client-only markers (ConfigLoader's transport
+# line, `spawn ARMED`, the client Config: IPC line) are present, and the Fatal census and the
+# capabilities probe see BOTH roles - the applier's refusals and its GL_RENDERER line live on the
+# server side. The two source files are also kept beside <dest> for a human reading the artifact.
+collect_role_logs() {
+  base_source="$1"   # e.g. <app_dir>/output/mobilegl.log
+  dest="$2"          # e.g. <result_dir>/mobilegl.log
+  base_no_ext="${base_source%.log}"
+  dest_no_ext="${dest%.log}"
+: > "${dest}"
+  wrote_any=0
+  for role in client server; do
+    role_src="${base_no_ext}.${role}.log"
+    role_dst="${dest_no_ext}.${role}.log"
+    # PULL, THEN JUDGE BY CONTENT. `run-as test -f` is unreliable through `exec-out` on some
+    # devices (measured: it returned 0 for a file that does not exist), and `exec-out` folds the
+    # device-side `cat: ... No such file` error into the stdout stream - so a missing role file
+    # arrives as a one-line log that begins with `cat:`. The monolith arm legitimately has no
+    # server file, and that must be a silent skip rather than a one-line server log. So: pull,
+    # then drop anything empty or carrying cat's own not-found line.
+    adb_device_path exec-out run-as "${package_name}" cat "${role_src}" > "${role_dst}" 2>/dev/null || true
+    if [ -s "${role_dst}" ] && ! head -1 "${role_dst}" | grep -q '^cat: .*: No such file'; then
+      cat "${role_dst}" >> "${dest}"
+      wrote_any=1
+    else
+      rm -f "${role_dst}"
+    fi
+  done
+  [ "${wrote_any}" -eq 1 ] || rm -f "${dest}"
 }
 
 copy_texture_2d_dumps() {
@@ -352,14 +422,16 @@ run_retrace() {
     use_angle=1
     test -n "${MOBILEGL_TRACE_ANGLE_VARIANT:-}" || die "MOBILEGL_TRACE_ANGLE_VARIANT is required for DirectGLES ANGLE replay"
   fi
-  if [ "${MOBILEGL_RETRACE_USE_PBUFFER:-}" = "1" ] && [ "${backend}" = "DirectGLES" ]; then
+  if [ "${MOBILEGL_RETRACE_USE_PBUFFER:-}" = "1" ]; then
     use_pbuffer=1
   fi
 
   mkdir -p "${result_dir}"
   # A repeat run of a case the previous invocation already installed and pushed only needs
   # the on-device copy back into a fresh app output directory.
-  if [ "${reuse_fixture}" -eq 0 ]; then
+  # MOBILEGL_TRACE_SKIP_INSTALL=1: the caller installed the APK itself (ColorOS shows an install-confirmation
+  # dialog whose tap drops adb for a few seconds, so the install has to be done and settled outside a run).
+  if [ "${reuse_fixture}" -eq 0 ] && [ "${MOBILEGL_TRACE_SKIP_INSTALL:-0}" != "1" ]; then
     "${ADB}" install -r "$(host_path_for_adb "${apk_file}")"
   fi
   copy_fixture_to_app
@@ -376,7 +448,14 @@ run_retrace() {
     set -- "$@" --ez use_angle true
     set -- "$@" --es angle_variant "${MOBILEGL_TRACE_ANGLE_VARIANT}"
   fi
-  if [ "${use_pbuffer}" -eq 1 ] && [ "${backend}" = "DirectGLES" ]; then
+  # PBUFFER IS A SURFACE SHAPE, NOT A BACKEND PROPERTY, and the DirectGLES condition that used to
+  # guard this line made it one. It was harmless while the only caller was the ANGLE lane; P6 needs
+  # it on BOTH backends, because the spawn arm can only use pbuffer/surfaceless (a windowed client
+  # uses MOBILEGL_IPC_SURFACE=server) - an
+  # ANativeWindow* is a pointer into the CLIENT's process and SetWindowHandle is refused by name
+  # with Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"} on the way across. Magma creates an
+  # EGL pbuffer exactly as Espryt does.
+  if [ "${use_pbuffer}" -eq 1 ]; then
     set -- "$@" --ez use_pbuffer true
   fi
   if [ "${avoid_angle_llvmpipe_sampler_mipmap_min_filter}" -eq 1 ] && [ "${backend}" = "DirectGLES" ]; then
@@ -388,17 +467,17 @@ run_retrace() {
   if [ "${coherent_as_flush}" -eq 1 ]; then
     set -- "$@" --ez coherent_as_flush true
   fi
-  if [ "${MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH:-}" = "1" ]; then
-    set -- "$@" --ez fix_iterationrp_subgroup_scratch true
-  fi
-  if [ "${MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS:-}" = "1" ]; then
-    set -- "$@" --ez derive_num_subgroups true
-  fi
-  if [ "${MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER:-}" = "1" ]; then
-    set -- "$@" --ez iterationrp_fix_barrier true
-  fi
+  case "${MOBILEGL_ITRP_FIX:-}" in
+    1|true|on|forceon|ForceOn) set -- "$@" --ez itrp_fix true ;;
+  esac
   if [ -n "${texture_2d_dumps}" ]; then
     set -- "$@" --es texture_2d_dumps "${texture_2d_dumps}"
+  fi
+  if [ -n "${env_overrides}" ]; then
+    # adb joins the argv with spaces and hands the result to the device shell, so a value
+    # holding the ';' that separates entries would otherwise be read there as a command
+    # separator. The single quotes make it one token again.
+    set -- "$@" --es mobilegl_env "'${env_overrides}'"
   fi
   if [ "${benchmark}" -eq 1 ]; then
     set -- "$@" --ez benchmark true
@@ -426,25 +505,43 @@ run_retrace() {
 
   app_exited=0
   saw_app_process=0
+  # One failed pidof is not an exit: under memory pressure the adb shell call
+  # itself can fail while the app is alive (seen with the process still in
+  # pidof and the activity still initializing right after the "exit").
+  missed_app_polls=0
+  poll_started="$(date +%s)"
   for _ in $(seq 1 "${timeout_seconds}"); do
     if adb_device_path shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
       break
     fi
     if adb_device_path shell pidof "${package_name}" >/dev/null 2>&1; then
       saw_app_process=1
-    elif [ "${saw_app_process}" -eq 1 ]; then
-      app_exited=1
-      break
+      missed_app_polls=0
+    else
+      poll_adb_state="$(adb_device_path get-state 2>/dev/null | tr -d '\r' || true)"
+      if [ "${poll_adb_state}" != "device" ]; then
+        printf '%s\n' "${poll_adb_state:-unknown}" > "${result_dir}/adb-disconnected.txt"
+        break
+      fi
+      if [ "${saw_app_process}" -eq 1 ]; then
+        missed_app_polls=$((missed_app_polls + 1))
+        if [ "${missed_app_polls}" -ge 3 ]; then
+          app_exited=1
+          break
+        fi
+      fi
     fi
     sleep 1
   done
 
   collect_run_diagnostics "${result_dir}"
   if ! adb_device_path shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
-    if [ "${app_exited}" -eq 1 ]; then
+    if [ -f "${result_dir}/adb-disconnected.txt" ]; then
+      echo "trace-replay-ci.sh: device disconnected while waiting for result.json" >&2
+    elif [ "${app_exited}" -eq 1 ]; then
       echo "trace-replay-ci.sh: app process exited before result.json was created" >&2
     else
-      echo "trace-replay-ci.sh: result.json was not created after ${timeout_seconds}s" >&2
+      echo "trace-replay-ci.sh: result.json was not created after $(($(date +%s) - poll_started))s (budget ${timeout_seconds}s)" >&2
     fi
     if [ -s "${result_dir}/retrace.log" ]; then
       echo "trace-replay-ci.sh: retrace.log:" >&2
@@ -472,7 +569,7 @@ run_retrace() {
     copy_app_artifact "${app_dir}/output/${safe_case}-diff.png" "${result_dir}/${safe_case}-${backend}-diff.png"
   fi
   copy_app_artifact "${app_dir}/output/retrace.log" "${result_dir}/retrace.log"
-  copy_app_artifact "${app_dir}/output/mobilegl.log" "${result_dir}/mobilegl.log"
+  collect_role_logs "${app_dir}/output/mobilegl.log" "${result_dir}/mobilegl.log"
   if [ "${benchmark}" -eq 1 ]; then
     copy_app_artifact "${app_dir}/output/benchmark.json" "${result_dir}/benchmark.json"
   fi
@@ -502,7 +599,101 @@ run_retrace() {
     fi
   fi
 
-  "${PYTHON}" -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "${result_dir}/result.json"
+  # The two paths below reach a NATIVE python. On Git Bash that is only right when MSYS
+  # converts /c/... for it, which a caller's MSYS_NO_PATHCONV=1 (set for adb's /data/...
+  # arguments) switches off - then json.load fails on a file that exists and every case
+  # reads "trace replay failed" over a passed result.json. host_path_for_adb converts
+  # explicitly, so the verdict no longer depends on the caller's environment.
+  "${PYTHON}" -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "$(host_path_for_adb "${result_dir}/result.json")" || return "$?"
+  if passed_replay_lost_its_logs "${result_dir}" "$((require_inproc | require_spawn))"; then
+    echo "trace-replay-ci.sh: the replay passed but its logs were never copied, so the transport proof has nothing to read; requesting one infrastructure retry" >&2
+    exit "${INFRASTRUCTURE_FAILURE_EXIT_CODE}"
+  fi
+  if [ "${require_inproc}" -eq 1 ]; then
+    "${PYTHON}" - "$(host_path_for_adb "${result_dir}/mobilegl.log")" "$(host_path_for_adb "${result_dir}/transport-proof.json")" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+log_path, proof_path = map(Path, sys.argv[1:])
+text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+# ConfigLoader's InProcess arm emits this sentence only after selecting the
+# compiled transport. "Accepted env variable: MOBILEGL_TRANSPORT=inproc" is not it.
+marker = "Config: MOBILEGL_TRANSPORT=inproc - the MGPipe record stream"
+configs = re.findall(r"Config: IPC[^\r\n]*", text)
+fatals = re.findall(r"^.*Fatal\{.*$", text, re.MULTILINE)
+required = {"strict": "1", "role-split-state": "1", "run-ahead": "1"}
+config_ok = bool(configs) and all(
+    all(re.search(r"\b" + re.escape(key) + "=" + value + r"\b", line) for key, value in required.items())
+    for line in configs
+)
+passed = marker in text and config_ok and not fatals
+proof = {"required_transport": "inproc", "library_log": str(log_path),
+         "transport_resolution_marker": marker in text, "ipc_config_lines": configs,
+         "required_ipc_settings": required, "ipc_settings_match": config_ok,
+         "fatal_count": len(fatals), "fatal_lines": fatals, "passed": passed}
+proof_path.write_text(json.dumps(proof, indent=2), encoding="utf-8")
+if not passed:
+    sys.exit("trace replay failed actual inproc/strict/role/zero-Fatal proof: " + json.dumps(proof))
+print("Android retrace: real inproc transport, strict role state and zero Fatal records confirmed")
+PY
+  fi
+  if [ "${require_spawn}" -eq 1 ]; then
+    "${PYTHON}" - "${result_dir}/mobilegl.log" "${result_dir}/transport-proof.json" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+log_path, proof_path = map(Path, sys.argv[1:])
+text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+
+# TWO SENTENCES, AND THE SECOND IS THE ONE THAT MATTERS.
+#
+# ConfigLoader's marker proves the VALUE RESOLVED - it exists only in ConfigLoader's Spawn arm,
+# which exists only under MOBILEGL_BUILD_DISAGGREGATED, so a pull library cannot write it. That
+# is a statement about a parser.
+#
+# `spawn ARMED - the server role runs in pid N` is written by ClientSession::StartSpawned only
+# after the launch, the connect and the handshake have ALL succeeded, and the pid in it is the
+# SERVER's. It is the only line in this log a same-process run cannot produce: inproc resolves
+# its own marker while running the server role on a thread HERE. Requiring only the first would
+# accept a session that resolved spawn and then never reached another process.
+marker = "Config: MOBILEGL_TRANSPORT=spawn - the MGPipe record stream"
+armed = re.search(r"spawn ARMED - the server role runs in pid (\d+)", text)
+
+# `any`, NOT the `all` the inproc gate uses, and the difference is load-bearing.
+#
+# This log is the CONCATENATION of the two role files (collect_role_logs), so it carries the
+# SERVER's own `Config: IPC` line as well as the client's - and the server's reads strict=0
+# role-split-state=0 by construction, because the launcher scrubs every MOBILEGL_IPC_* out of
+# the child's environment (anti-recursion catch (b)). Demanding that EVERY line match would red
+# every spawn run for the one thing the design requires; `any` asks that the CLIENT's line is
+# present, which is the one that carries the knobs.
+configs = re.findall(r"Config: IPC[^\r\n]*", text)
+fatals = re.findall(r"^.*Fatal\{.*$", text, re.MULTILINE)
+required = {"strict": "1", "role-split-state": "1", "run-ahead": "1"}
+def matches(line):
+    return all(re.search(r"\b" + re.escape(key) + "=" + value + r"\b", line)
+               for key, value in required.items())
+client_configs = [line for line in configs if matches(line)]
+config_ok = bool(client_configs)
+
+passed = marker in text and armed is not None and config_ok and not fatals
+proof = {"required_transport": "spawn", "library_log": str(log_path),
+         "transport_resolution_marker": marker in text,
+         "server_pid": int(armed.group(1)) if armed else None,
+         "ipc_config_lines": configs, "required_ipc_settings": required,
+         "client_ipc_line_present": config_ok,
+         "fatal_count": len(fatals), "fatal_lines": fatals, "passed": passed}
+proof_path.write_text(json.dumps(proof, indent=2), encoding="utf-8")
+if not passed:
+    sys.exit("trace replay failed actual spawn/second-process/zero-Fatal proof: " + json.dumps(proof))
+print("Android retrace: real spawn transport, server role in pid "
+      f"{proof['server_pid']}, and zero Fatal records confirmed")
+PY
+  fi
 }
 
 mkdir -p "${fixture_root}" "${result_root}"

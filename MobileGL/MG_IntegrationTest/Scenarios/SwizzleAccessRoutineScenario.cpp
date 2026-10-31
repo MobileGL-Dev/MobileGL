@@ -47,7 +47,7 @@
 namespace MGITest {
     namespace {
 
-        // The conformance test's own source texel, one recognisable value per channel.
+        // The conformance test's own source texel, one recognizable value per channel.
         constexpr std::uint32_t kSourceTexel[4] = {0x3FFFFFFFu, 0x7FFFFFFFu, 0xBFFFFFFFu, 0xFFFFFFFFu};
 
         constexpr int kOutputWidth = 8;
@@ -196,10 +196,9 @@ void main()
                     }
                     ++offenders;
                 }
-                EXPECT_EQ(offenders, 0u)
-                    << routine.name << "(...)." << kChannels[channel] << " returned 0x" << std::hex << firstBad
-                    << " instead of 0x" << expected << std::dec << " at texel " << firstIndex << " (" << offenders
-                    << " of " << texels.size() << " wrong)";
+                EXPECT_EQ(offenders, 0u) << routine.name << "(...)." << kChannels[channel] << " returned 0x" << std::hex
+                                         << firstBad << " instead of 0x" << expected << std::dec << " at texel "
+                                         << firstIndex << " (" << offenders << " of " << texels.size() << " wrong)";
             }
 
             GLuint m_sourceTexture = 0;
@@ -271,7 +270,7 @@ void main()
 
         // One routine from each side of the device's failure order, so a ceiling that takes the
         // vulnerable one down first is still caught.
-        const AccessRoutine& plain = kRoutines[0];      // texture
+        const AccessRoutine& plain = kRoutines[0];       // texture
         const AccessRoutine& explicitLod = kRoutines[1]; // textureLod
         constexpr int kIterations = 200;
 

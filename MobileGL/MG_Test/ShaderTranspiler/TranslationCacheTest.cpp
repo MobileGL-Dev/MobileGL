@@ -9,7 +9,7 @@
 // The two-level shader translation memo (MG_Util/ShaderTranspiler/TranslationCache.h).
 //
 // A wrong hit here is a silently miscompiled shader, so the cases below are weighted
-// heavily towards the KEY rather than towards the plumbing: for each level there is one
+// heavily toward the KEY rather than toward the plumbing: for each level there is one
 // case per input that can change the output, asserting that moving that input alone moves
 // the key. That is the test that catches an under-specified key, which is the only way
 // this feature can produce a wrong answer.
@@ -48,8 +48,7 @@ namespace {
     // AsyncSpirvPhaseTest's AsyncModeScope uses for its own toggle.
     class CacheModeScope {
     public:
-        explicit CacheModeScope(const Bool enabled)
-            : m_saved(MG_Config::Features.ShaderTranslationCache) {
+        explicit CacheModeScope(const Bool enabled) : m_saved(MG_Config::Features.ShaderTranslationCache) {
             MG_Config::Features.ShaderTranslationCache =
                 enabled ? MG_Config::QuirkOverride::ForceOn : MG_Config::QuirkOverride::ForceOff;
         }
@@ -86,7 +85,9 @@ namespace {
         return MakeTranslationCacheKey(builder);
     }
 
-    SizeT PayloadBytes(const TestPayload& payload) { return payload.text.size(); }
+    SizeT PayloadBytes(const TestPayload& payload) {
+        return payload.text.size();
+    }
 
     // ---- L1 fixtures ----
     const char* kVertexSource = R"(#version 460
@@ -112,11 +113,15 @@ void main() {
     String SwizzleLikeFragment(const String& basicType) {
         return "#version 460\n"
                "in vec3 vPos;\n"
-               "layout(location = 0) out " + basicType + "vec4 fragColor;\n"
+               "layout(location = 0) out " +
+               basicType +
+               "vec4 fragColor;\n"
                "uniform sampler2D uTex;\n"
                "void main() {\n"
                "    vec4 s = texture(uTex, vPos.xy);\n"
-               "    fragColor = " + basicType + "vec4(s);\n"
+               "    fragColor = " +
+               basicType +
+               "vec4(s);\n"
                "}\n";
     }
 
@@ -148,7 +153,8 @@ void main() {
 
     Uint64 DigestOf(const Vector<Uint32>& words) {
         Uint64 hash = 1469598103934665603ull;
-        for (const Uint32 word : words) hash = (hash ^ static_cast<Uint64>(word)) * 1099511628211ull;
+        for (const Uint32 word : words)
+            hash = (hash ^ static_cast<Uint64>(word)) * 1099511628211ull;
         return hash;
     }
 
@@ -156,7 +162,8 @@ void main() {
         Vector<Uint64> digest;
         const auto& object = MG_State::pGLContext->GetProgramObject(program);
         if (!object) return digest;
-        for (const auto& module : object->GetGeneratedSpirv()) digest.push_back(DigestOf(module));
+        for (const auto& module : object->GetGeneratedSpirv())
+            digest.push_back(DigestOf(module));
         return digest;
     }
 
@@ -403,8 +410,7 @@ TEST_F(TranslationCacheTest, TextAppendsCannotRunIntoEachOther) {
 TEST_F(TranslationCacheTest, L1AndL2KeysNeverAlias) {
     const Vector<Uint32> spirv{1u, 2u, 3u};
     const TranslationCacheKey l2 = BuildEsslTranslationKey(BaselineEsslInputs(spirv));
-    const TranslationCacheKey l1 =
-        BuildSpirvTranslationKey(BaselineSpirvInputs({{GL_FRAGMENT_SHADER, "source"}}));
+    const TranslationCacheKey l1 = BuildSpirvTranslationKey(BaselineSpirvInputs({{GL_FRAGMENT_SHADER, "source"}}));
     EXPECT_FALSE(l1 == l2);
 }
 
@@ -415,8 +421,7 @@ TEST_F(TranslationCacheTest, L1AndL2KeysNeverAlias) {
 TEST_F(TranslationCacheTest, L1KeyMovesWithEveryInputThatMovesTheSpirv) {
     const String vs = kVertexSource;
     const String fs = kFragmentSource;
-    const Vector<SpirvTranslationKeyInputs::Stage> baseStages{
-        {GL_VERTEX_SHADER, vs}, {GL_FRAGMENT_SHADER, fs}};
+    const Vector<SpirvTranslationKeyInputs::Stage> baseStages{{GL_VERTEX_SHADER, vs}, {GL_FRAGMENT_SHADER, fs}};
 
     const UnorderedMap<String, Uint> attribs{{"aPos", 3u}};
     const UnorderedMap<String, Uint> fragOut{{"fragColor", 1u}};
@@ -433,44 +438,41 @@ TEST_F(TranslationCacheTest, L1KeyMovesWithEveryInputThatMovesTheSpirv) {
 
     Vector<Pair<const char*, TranslationCacheKey>> variants;
 
-    {   // the environment fingerprint (glslang resource limits, backend identity,
+    { // the environment fingerprint (glslang resource limits, backend identity,
         // advertised extension set, compute limits)
         SpirvTranslationKeyInputs v = base;
         v.frontendFingerprint ^= 1ull;
         variants.emplace_back("frontendFingerprint", BuildSpirvTranslationKey(v));
     }
-    {   // a stage's source text
+    { // a stage's source text
         const String otherFs = SwizzleLikeFragment("i");
-        SpirvTranslationKeyInputs v = BaselineSpirvInputs({{GL_VERTEX_SHADER, vs},
-                                                           {GL_FRAGMENT_SHADER, otherFs}});
+        SpirvTranslationKeyInputs v = BaselineSpirvInputs({{GL_VERTEX_SHADER, vs}, {GL_FRAGMENT_SHADER, otherFs}});
         variants.emplace_back("stage source", BuildSpirvTranslationKey(v));
     }
-    {   // a stage's TYPE, with the text unchanged
-        SpirvTranslationKeyInputs v = BaselineSpirvInputs({{GL_VERTEX_SHADER, vs},
-                                                           {GL_COMPUTE_SHADER, fs}});
+    { // a stage's TYPE, with the text unchanged
+        SpirvTranslationKeyInputs v = BaselineSpirvInputs({{GL_VERTEX_SHADER, vs}, {GL_COMPUTE_SHADER, fs}});
         variants.emplace_back("stage type", BuildSpirvTranslationKey(v));
     }
-    {   // the SET of stages - mapIO resolves a fragment stage's Locations against the
+    { // the SET of stages - mapIO resolves a fragment stage's Locations against the
         // vertex stage's outputs, which is why this key is per PROGRAM and not per stage
         SpirvTranslationKeyInputs v = BaselineSpirvInputs({{GL_FRAGMENT_SHADER, fs}});
         variants.emplace_back("stage set", BuildSpirvTranslationKey(v));
     }
-    {   // stage ORDER
-        SpirvTranslationKeyInputs v = BaselineSpirvInputs({{GL_FRAGMENT_SHADER, fs},
-                                                           {GL_VERTEX_SHADER, vs}});
+    { // stage ORDER
+        SpirvTranslationKeyInputs v = BaselineSpirvInputs({{GL_FRAGMENT_SHADER, fs}, {GL_VERTEX_SHADER, vs}});
         variants.emplace_back("stage order", BuildSpirvTranslationKey(v));
     }
-    {   // glBindAttribLocation
+    { // glBindAttribLocation
         SpirvTranslationKeyInputs v = base;
         v.explicitVertexInLocations = &attribs;
         variants.emplace_back("explicitVertexInLocations", BuildSpirvTranslationKey(v));
     }
-    {   // glBindFragDataLocation
+    { // glBindFragDataLocation
         SpirvTranslationKeyInputs v = base;
         v.explicitFragmentOutLocations = &fragOut;
         variants.emplace_back("explicitFragmentOutLocations", BuildSpirvTranslationKey(v));
     }
-    {   // glBindFragDataLocationIndexed
+    { // glBindFragDataLocationIndexed
         SpirvTranslationKeyInputs v = base;
         v.explicitFragmentOutIndices = &fragIndex;
         variants.emplace_back("explicitFragmentOutIndices", BuildSpirvTranslationKey(v));
@@ -479,19 +481,19 @@ TEST_F(TranslationCacheTest, L1KeyMovesWithEveryInputThatMovesTheSpirv) {
     // map is an OUTPUT of mapIO (TMglGlslIoResolver writes it and never reads it), so it is a
     // pure function of the stage sources this key already carries in full. It was dropped from
     // SpirvTranslationKeyInputs with the glslang-capture migration; kKeyLayoutVersion moved to
-    // 4 so no blob written under the old shape can be honoured.
-    {   // ShaderCompileBits (0 on both production parse paths; keyed so a future value
+    // 4 so no blob written under the old shape can be honored.
+    { // ShaderCompileBits (0 on both production parse paths; keyed so a future value
         // cannot alias a module parsed without it)
         SpirvTranslationKeyInputs v = base;
         v.shaderCompileFlags = 1u;
         variants.emplace_back("shaderCompileFlags", BuildSpirvTranslationKey(v));
     }
-    {   // MOBILEGL_ENABLE_SPIRV_VALIDATION
+    { // MOBILEGL_ENABLE_SPIRV_VALIDATION
         SpirvTranslationKeyInputs v = base;
         v.enableSpirvValidation = true;
         variants.emplace_back("enableSpirvValidation", BuildSpirvTranslationKey(v));
     }
-    {   // CompileEnv::ConsumesFloat64Natively(): the fp64 tail of SanitizeAndOptimizeBinary is
+    { // CompileEnv::ConsumesFloat64Natively(): the fp64 tail of SanitizeAndOptimizeBinary is
         // skipped under it, so the SAME GLSL yields modules with real doubles under one answer
         // and demoted, storage-block-flattened ones under the other. The one backend capability
         // bit in this key, and the only one allowed in without changing what glslang produces.
@@ -499,14 +501,14 @@ TEST_F(TranslationCacheTest, L1KeyMovesWithEveryInputThatMovesTheSpirv) {
         v.nativeFloat64 = true;
         variants.emplace_back("nativeFloat64", BuildSpirvTranslationKey(v));
     }
-    {   // CompileEnv::DemotesTessellationPointSize(): phase B rewrites the cached modules
+    { // CompileEnv::DemotesTessellationPointSize(): phase B rewrites the cached modules
         // under it (the point-size demotion), so one key shape would describe two module
         // sets - built-in kept vs carried as a varying with the capability stripped.
         SpirvTranslationKeyInputs v = base;
         v.demoteTessellationPointSize = true;
         variants.emplace_back("demoteTessellationPointSize", BuildSpirvTranslationKey(v));
     }
-    {   // ... and its geometry twin, keyed separately because the ES loader really does
+    { // ... and its geometry twin, keyed separately because the ES loader really does
         // probe the two extension families independently.
         SpirvTranslationKeyInputs v = base;
         v.demoteGeometryPointSize = true;
@@ -516,22 +518,22 @@ TEST_F(TranslationCacheTest, L1KeyMovesWithEveryInputThatMovesTheSpirv) {
     // They cannot move a word of the generated SPIR-V, but they do shape the reflection the
     // payload now carries, so they have to split the key. This is the group that would go
     // stale first if the payload ever grew again without the key following it.
-    {   // glTransformFeedbackVaryings: shapes xfbVaryings / xfbStrides / gsStripTriangles
+    { // glTransformFeedbackVaryings: shapes xfbVaryings / xfbStrides / gsStripTriangles
         SpirvTranslationKeyInputs v = base;
         v.requestedXfbVaryings = &xfbVaryings;
         variants.emplace_back("requestedXfbVaryings", BuildSpirvTranslationKey(v));
     }
-    {   // ... and its ORDER, which gl_NextBuffer / gl_SkipComponentsN make load-bearing
+    { // ... and its ORDER, which gl_NextBuffer / gl_SkipComponentsN make load-bearing
         SpirvTranslationKeyInputs v = base;
         v.requestedXfbVaryings = &xfbVaryingsReordered;
         variants.emplace_back("requestedXfbVaryings order", BuildSpirvTranslationKey(v));
     }
-    {   // GL_INTERLEAVED_ATTRIBS vs GL_SEPARATE_ATTRIBS
+    { // GL_INTERLEAVED_ATTRIBS vs GL_SEPARATE_ATTRIBS
         SpirvTranslationKeyInputs v = base;
         v.xfbBufferMode = GL_SEPARATE_ATTRIBS;
         variants.emplace_back("xfbBufferMode", BuildSpirvTranslationKey(v));
     }
-    {   // GL_MAX_DRAW_BUFFERS: decides whether the link is REJECTED at all
+    { // GL_MAX_DRAW_BUFFERS: decides whether the link is REJECTED at all
         SpirvTranslationKeyInputs v = base;
         v.maxFragmentOutputColorNumber = 4;
         variants.emplace_back("maxFragmentOutputColorNumber", BuildSpirvTranslationKey(v));
@@ -614,8 +616,7 @@ TEST_F(TranslationCacheTest, TwoBackendsCompilingTheSameGlslShareOneL1Entry) {
     const auto [a, b] = BackendOnlyDifferentEnvs();
     const String vs = kVertexSource;
     const String fs = kFragmentSource;
-    const Vector<SpirvTranslationKeyInputs::Stage> stages{{GL_VERTEX_SHADER, vs},
-                                                          {GL_FRAGMENT_SHADER, fs}};
+    const Vector<SpirvTranslationKeyInputs::Stage> stages{{GL_VERTEX_SHADER, vs}, {GL_FRAGMENT_SHADER, fs}};
 
     SpirvTranslationKeyInputs onA = BaselineSpirvInputs(stages);
     onA.frontendFingerprint = ComputeFrontendCompileEnvFingerprint(a);
@@ -632,9 +633,9 @@ TEST_F(TranslationCacheTest, TwoBackendsCompilingTheSameGlslShareOneL1Entry) {
 // payload is the module AFTER SanitizeAndOptimizeBinary and the fp64 tail of that chain is
 // exactly what this bit gates.
 TEST_F(TranslationCacheTest, NativeFloat64IsOutOfTheFrontendFingerprintAndInsideTheL1Key) {
-    CompileEnv none;                              // no backend at all
-    CompileEnv emulated;                          // a backend without the feature
-    CompileEnv nativeEnv;                         // a backend with it
+    CompileEnv none;      // no backend at all
+    CompileEnv emulated;  // a backend without the feature
+    CompileEnv nativeEnv; // a backend with it
     emulated.backend = BackendType::DirectVulkan;
     nativeEnv.backend = BackendType::DirectVulkan;
     nativeEnv.params.SupportsShaderFloat64 = true;
@@ -670,9 +671,9 @@ TEST_F(TranslationCacheTest, NativeFloat64IsOutOfTheFrontendFingerprintAndInside
 // accessor direction is pinned too, because it is INVERTED relative to the params field
 // and a swap of the arms would disable the device repair with every rendering test green.
 TEST_F(TranslationCacheTest, PointSizeDemotionBitsAreOutOfTheFrontendFingerprintAndInsideTheL1Key) {
-    CompileEnv none;      // no backend at all: never demote, standalone compiles stay standard
-    CompileEnv hosting;   // a backend that hosts the built-in
-    CompileEnv demoting;  // a backend that cannot
+    CompileEnv none;     // no backend at all: never demote, standalone compiles stay standard
+    CompileEnv hosting;  // a backend that hosts the built-in
+    CompileEnv demoting; // a backend that cannot
     hosting.backend = BackendType::DirectVulkan;
     demoting.backend = BackendType::DirectVulkan;
     demoting.params.SupportsTessellationPointSize = false;
@@ -720,6 +721,8 @@ TEST_F(TranslationCacheTest, TheFrontendFingerprintMovesWithEveryFrontendLimit) 
         {"params.MaxImageUnits", [](CompileEnv& e) { e.params.MaxImageUnits += 1; }},
         {"params.MaxDrawBuffers", [](CompileEnv& e) { e.params.MaxDrawBuffers += 1; }},
         {"params.MaxVertexImageUniforms", [](CompileEnv& e) { e.params.MaxVertexImageUniforms += 1; }},
+        {"params.MaxTessControlImageUniforms", [](CompileEnv& e) { e.params.MaxTessControlImageUniforms += 1; }},
+        {"params.MaxTessEvaluationImageUniforms", [](CompileEnv& e) { e.params.MaxTessEvaluationImageUniforms += 1; }},
         {"params.MaxGeometryImageUniforms", [](CompileEnv& e) { e.params.MaxGeometryImageUniforms += 1; }},
         {"params.MaxFragmentImageUniforms", [](CompileEnv& e) { e.params.MaxFragmentImageUniforms += 1; }},
         {"params.MaxComputeImageUniforms", [](CompileEnv& e) { e.params.MaxComputeImageUniforms += 1; }},
@@ -732,8 +735,7 @@ TEST_F(TranslationCacheTest, TheFrontendFingerprintMovesWithEveryFrontendLimit) 
         // compiles to different SPIR-V under two different values, so each must split the
         // key - one case per COMPONENT, because a per-axis difference is exactly the shape
         // real drivers produce (z = 64 on ES against 1024 elsewhere).
-        {"params.MaxComputeTextureImageUnits",
-         [](CompileEnv& e) { e.params.MaxComputeTextureImageUnits += 1; }},
+        {"params.MaxComputeTextureImageUnits", [](CompileEnv& e) { e.params.MaxComputeTextureImageUnits += 1; }},
         // wave4's 4fc3531d: glslang rejects gl_ClipDistance[i] past this at parse AND expands
         // gl_MaxClipDistances from it, so it is both a compile gate and a baked constant.
         {"params.MaxClipDistances", [](CompileEnv& e) { e.params.MaxClipDistances += 1; }},
@@ -748,8 +750,7 @@ TEST_F(TranslationCacheTest, TheFrontendFingerprintMovesWithEveryFrontendLimit) 
          [](CompileEnv& e) { e.params.MaxCombinedClipAndCullDistances += 1; }},
         {"params.MaxTextureImageUnits", [](CompileEnv& e) { e.params.MaxTextureImageUnits += 1; }},
         {"params.MaxVertexTextureImageUnits", [](CompileEnv& e) { e.params.MaxVertexTextureImageUnits += 1; }},
-        {"params.MaxCombinedTextureImageUnits",
-         [](CompileEnv& e) { e.params.MaxCombinedTextureImageUnits += 1; }},
+        {"params.MaxCombinedTextureImageUnits", [](CompileEnv& e) { e.params.MaxCombinedTextureImageUnits += 1; }},
         {"params.MaxSamples", [](CompileEnv& e) { e.params.MaxSamples += 1; }},
         {"maxComputeWorkGroupSize[0]", [](CompileEnv& e) { e.maxComputeWorkGroupSize[0] += 1; }},
         {"maxComputeWorkGroupSize[1]", [](CompileEnv& e) { e.maxComputeWorkGroupSize[1] += 1; }},
@@ -878,8 +879,7 @@ TEST_F(TranslationCacheTest, AProgramServedFromTheMemoStillAnswersGetFragDataLoc
     const Int memoLocation = MG_Impl::GLImpl::GetFragDataLocation(fromMemo, "fragColor");
     EXPECT_EQ(parsedLocation, 0) << "the parsed program's own answer moved; this case is testing "
                                     "the wrong thing";
-    EXPECT_EQ(memoLocation, parsedLocation)
-        << "a program served from the L1 memo lost its fragment output location";
+    EXPECT_EQ(memoLocation, parsedLocation) << "a program served from the L1 memo lost its fragment output location";
 
     // A name that is not an output must still be -1 from both, so the case cannot pass by
     // making the accessor answer everything.
@@ -926,7 +926,7 @@ TEST_F(TranslationCacheTest, TheEscapeHatchDisablesL1Entirely) {
     const SyncCompileScope sync;
     const String fs = SwizzleLikeFragment("");
 
-    {   // prime the cache with the switch ON, so a later hit would be available
+    { // prime the cache with the switch ON, so a later hit would be available
         const CacheModeScope cacheOn(true);
         (void)LinkProgramFromSources(kVertexSource, fs);
     }
@@ -963,35 +963,60 @@ TEST_F(TranslationCacheTest, L2KeyMovesWithEveryGateThatSteersTheEsslChain) {
 
     Vector<Pair<const char*, TranslationCacheKey>> variants;
 
-    {   // the module itself
+    { // the module itself
         EsslTranslationKeyInputs v = base;
         v.spirv = &otherSpirv;
         variants.emplace_back("spirv", BuildEsslTranslationKey(v));
     }
-    {   // stage: gates LowerDrawParametersForEssl and SplitArrayVertexInputsForEssl (vertex)
+    { // stage: gates LowerDrawParametersForEssl and SplitArrayVertexInputsForEssl (vertex)
         // and LegalizeFragmentOutputIndexingForEssl (fragment)
         EsslTranslationKeyInputs v = base;
         v.shaderType = GL_VERTEX_SHADER;
         variants.emplace_back("shaderType", BuildEsslTranslationKey(v));
     }
-    {   // arms LowerViewportIndexForEssl
+    { // arms LowerViewportIndexForEssl
         EsslTranslationKeyInputs v = base;
         v.viewportIndexLoweringArmed = true;
         variants.emplace_back("viewportIndexLoweringArmed", BuildEsslTranslationKey(v));
     }
-    {   // arms EmulateNoPerspectiveForEssl
+    { // arms EmulateSubgroupsPass on the ESSL path
+        EsslTranslationKeyInputs v = base;
+        v.subgroupEmulationArmed = true;
+        variants.emplace_back("subgroupEmulationArmed", BuildEsslTranslationKey(v));
+    }
+    { // the emulation's scratch budget decides whether it declines
+        EsslTranslationKeyInputs v = base;
+        v.subgroupEmulationScratchBytes = 32768;
+        variants.emplace_back("subgroupEmulationScratchBytes", BuildEsslTranslationKey(v));
+    }
+    { // arms FixIterationRPBarrierPass on the ESSL path
+        EsslTranslationKeyInputs v = base;
+        v.iterationRPBarrierFixArmed = true;
+        variants.emplace_back("iterationRPBarrierFixArmed", BuildEsslTranslationKey(v));
+    }
+    { // the subgroup emulation reads its scratch through atomic loads
+        EsslTranslationKeyInputs v = base;
+        v.subgroupScratchAtomicReads = true;
+        variants.emplace_back("subgroupScratchAtomicReads", BuildEsslTranslationKey(v));
+    }
+    { // arms DeferGeometryEmitsForEssl
+        EsslTranslationKeyInputs v = base;
+        v.deferGeometryEmitsArmed = true;
+        variants.emplace_back("deferGeometryEmitsArmed", BuildEsslTranslationKey(v));
+    }
+    { // arms EmulateNoPerspectiveForEssl
         EsslTranslationKeyInputs v = base;
         v.supportsNoperspectiveInterpolation = true;
         variants.emplace_back("supportsNoperspectiveInterpolation", BuildEsslTranslationKey(v));
     }
-    {   // arms WidenImageFormatsForEssl - a driver WITH GL_NV_image_formats keeps the declared
+    { // arms WidenImageFormatsForEssl - a driver WITH GL_NV_image_formats keeps the declared
         // rg32f/r8ui/... image formats, one without has them re-declared in a core carrier and
         // every access to them masked, so the two get materially different ESSL from one module.
         EsslTranslationKeyInputs v = base;
         v.supportsExtendedImageFormats = true;
         variants.emplace_back("supportsExtendedImageFormats", BuildEsslTranslationKey(v));
     }
-    {   // arms AND parameterizes ClampMultisampleFetchesForEssl
+    { // arms AND parameterizes ClampMultisampleFetchesForEssl
         EsslTranslationKeyInputs v = base;
         v.maxColorTextureSamples = 1;
         variants.emplace_back("maxColorTextureSamples", BuildEsslTranslationKey(v));
@@ -1006,38 +1031,38 @@ TEST_F(TranslationCacheTest, L2KeyMovesWithEveryGateThatSteersTheEsslChain) {
         v.maxDepthTextureSamples = 1;
         variants.emplace_back("maxDepthTextureSamples", BuildEsslTranslationKey(v));
     }
-    {   // the ceiling the three above are compared against
+    { // the ceiling the three above are compared against
         EsslTranslationKeyInputs v = base;
         v.advertisedMaxSamples = 8;
         variants.emplace_back("advertisedMaxSamples", BuildEsslTranslationKey(v));
     }
-    {   // the argument to FlattenXfbInterfaceBlocksForEssl
+    { // the argument to FlattenXfbInterfaceBlocksForEssl
         EsslTranslationKeyInputs v = base;
         v.xfbCaptureBlockNames = &xfbBlocks;
         variants.emplace_back("xfbCaptureBlockNames", BuildEsslTranslationKey(v));
     }
-    {   // the argument to BakeImageFormatsForEssl - live glBindImageTexture state
+    { // the argument to BakeImageFormatsForEssl - live glBindImageTexture state
         EsslTranslationKeyInputs v = base;
         v.glFormatByUniformName = &imageFormats;
         variants.emplace_back("glFormatByUniformName", BuildEsslTranslationKey(v));
     }
-    {   // SpvcSession::SetShaderStorageBlockBinding
+    { // SpvcSession::SetShaderStorageBlockBinding
         EsslTranslationKeyInputs v = base;
         v.storageBlockBindingOverrides = &storageBindings;
         variants.emplace_back("storageBlockBindingOverrides", BuildEsslTranslationKey(v));
     }
-    {   // SPVC_COMPILER_OPTION_GLSL_VERSION (ResolveBackendEsslVersion)
+    { // SPVC_COMPILER_OPTION_GLSL_VERSION (ResolveBackendEsslVersion)
         EsslTranslationKeyInputs v = base;
         v.esslVersion = 300;
         variants.emplace_back("esslVersion", BuildEsslTranslationKey(v));
     }
-    {   // SpvcSession::SetAtomicCounterBlockBindings - printed into the layout(binding=)
+    { // SpvcSession::SetAtomicCounterBlockBindings - printed into the layout(binding=)
         // qualifier of every synthesized counter block, so it changes the emitted text.
         EsslTranslationKeyInputs v = base;
         v.atomicCounterEsslBindingTop = 6;
         variants.emplace_back("atomicCounterEsslBindingTop", BuildEsslTranslationKey(v));
     }
-    {   // the two arguments to UniquifyIoBlockNamesForEssl. Separate cases, because a stage
+    { // the two arguments to UniquifyIoBlockNamesForEssl. Separate cases, because a stage
         // that CONSUMES a block renames it after the previous stage while one that PRODUCES
         // it renames after itself - so the same block name legitimately maps to different
         // spellings in the two maps, and a key that folded them together would let a
@@ -1051,12 +1076,12 @@ TEST_F(TranslationCacheTest, L2KeyMovesWithEveryGateThatSteersTheEsslChain) {
         v.outputBlockRenames = &ioBlockRenames;
         variants.emplace_back("outputBlockRenames", BuildEsslTranslationKey(v));
     }
-    {   // ...and a DIFFERENT target spelling for the same block name must not share either.
+    { // ...and a DIFFERENT target spelling for the same block name must not share either.
         EsslTranslationKeyInputs v = base;
         v.outputBlockRenames = &otherIoBlockRenames;
         variants.emplace_back("outputBlockRenames(other target)", BuildEsslTranslationKey(v));
     }
-    {   // the two arguments to StripIoBlockLocationsForEssl, and separate cases for the same
+    { // the two arguments to StripIoBlockLocationsForEssl, and separate cases for the same
         // reason the rename maps are: a stage strips the blocks it CONSUMES only when the
         // producer is in this program and the ones it PRODUCES only when the consumer is, so
         // the two directions are independently armed and a key that folded them together
@@ -1069,6 +1094,11 @@ TEST_F(TranslationCacheTest, L2KeyMovesWithEveryGateThatSteersTheEsslChain) {
         EsslTranslationKeyInputs v = base;
         v.stripOutputBlockLocations = true;
         variants.emplace_back("stripOutputBlockLocations", BuildEsslTranslationKey(v));
+    }
+    { // arms the narrow-integer seeds of a vertex stage (ExtendNarrowIntegerVertexInputsForEssl)
+        EsslTranslationKeyInputs v = base;
+        v.narrowIntegerSeedsArmed = true;
+        variants.emplace_back("narrowIntegerSeedsArmed", BuildEsslTranslationKey(v));
     }
     {
         EsslTranslationKeyInputs v = base;
@@ -1190,7 +1220,8 @@ TEST_F(TranslationCacheTest, ConcurrentLookupsOverOverlappingKeysAgreeWithTheSer
             }
         });
     }
-    for (std::thread& thread : threads) thread.join();
+    for (std::thread& thread : threads)
+        thread.join();
 
     EXPECT_EQ(mismatches.load(), 0) << "a worker was handed a payload belonging to another key";
     EXPECT_EQ(nulls.load(), 0);
@@ -1231,7 +1262,8 @@ TEST_F(TranslationCacheTest, ConcurrentLookupsStaySafeWhileEvictionChurns) {
             }
         });
     }
-    for (std::thread& thread : threads) thread.join();
+    for (std::thread& thread : threads)
+        thread.join();
 
     EXPECT_EQ(mismatches.load(), 0);
     EXPECT_LE(cache.EntryCount(), 4u);
@@ -1246,7 +1278,8 @@ TEST_F(TranslationCacheTest, ConcurrentLinksOfSharedSourcesProduceIdenticalSpirv
     constexpr Int kProgramsPerVariant = 8;
 
     Vector<String> sources;
-    for (Int v = 0; v < kVariants; ++v) sources.push_back(SwizzleLikeFragment(v == 0 ? "" : (v == 1 ? "i" : "u")));
+    for (Int v = 0; v < kVariants; ++v)
+        sources.push_back(SwizzleLikeFragment(v == 0 ? "" : (v == 1 ? "i" : "u")));
 
     Vector<GLuint> programs;
     Vector<Int> variantOf;
@@ -1295,14 +1328,18 @@ namespace {
     }
 
     // A source no other case in this file uses, so the process-global L1c cache cannot be
-    // pre-warmed by a neighbour and turn a "must miss" assertion green by accident.
+    // pre-warmed by a neighbor and turn a "must miss" assertion green by accident.
     String UniqueFragment(const String& tag) {
         return "#version 460\n"
                "in vec3 vPos;\n"
                "layout(location = 0) out vec4 fragColor;\n"
-               "uniform vec3 uTint_" + tag + ";\n"
+               "uniform vec3 uTint_" +
+               tag +
+               ";\n"
                "void main() {\n"
-               "    fragColor = vec4(uTint_" + tag + " * vPos, 1.0);\n"
+               "    fragColor = vec4(uTint_" +
+               tag +
+               " * vPos, 1.0);\n"
                "}\n";
     }
 
@@ -1332,14 +1369,11 @@ TEST_F(TranslationCacheTest, TheParseVerdictKeyMovesWithEveryInput) {
     const TranslationCacheKey baseline = BuildShaderParseVerdictKey(BaselineParseVerdictInputs(source));
 
     const Vector<Pair<const char*, std::function<void(ShaderParseVerdictKeyInputs&, const String&)>>> mutations{
-        {"frontendFingerprint",
-         [](ShaderParseVerdictKeyInputs& i, const String&) { i.frontendFingerprint ^= 1ull; }},
-        {"shaderType",
-         [](ShaderParseVerdictKeyInputs& i, const String&) { i.shaderType = GL_VERTEX_SHADER; }},
+        {"frontendFingerprint", [](ShaderParseVerdictKeyInputs& i, const String&) { i.frontendFingerprint ^= 1ull; }},
+        {"shaderType", [](ShaderParseVerdictKeyInputs& i, const String&) { i.shaderType = GL_VERTEX_SHADER; }},
         {"preprocessedSource",
          [](ShaderParseVerdictKeyInputs& i, const String& other) { i.preprocessedSource = other; }},
-        {"shaderCompileFlags",
-         [](ShaderParseVerdictKeyInputs& i, const String&) { i.shaderCompileFlags = 1u; }},
+        {"shaderCompileFlags", [](ShaderParseVerdictKeyInputs& i, const String&) { i.shaderCompileFlags = 1u; }},
     };
 
     Vector<TranslationCacheKey> seen{baseline};
@@ -1369,11 +1403,11 @@ TEST_F(TranslationCacheTest, TheParseVerdictKeyIgnoresBackendOnlyDifferences) {
     EXPECT_TRUE(BuildShaderParseVerdictKey(onA) == BuildShaderParseVerdictKey(onB));
 }
 
-// The headline behaviour: a second shader object handed the same source does not parse.
+// The headline behavior: a second shader object handed the same source does not parse.
 //
 // Synchronous, deliberately. Under async, ShaderCompileAdoptionMap would hand the second
 // object the FIRST one whole compile node and no second compile would run at all - a
-// different (and older) optimisation, which would make this case pass without L1c existing.
+// different (and older) optimization, which would make this case pass without L1c existing.
 TEST_F(TranslationCacheTest, ASecondCompileOfTheSameSourceSkipsTheParse) {
     const SyncCompileScope sync;
     const CacheModeScope cacheOn(true);
@@ -1490,7 +1524,7 @@ TEST_F(TranslationCacheTest, TheEscapeHatchDisablesL1c) {
     EXPECT_EQ(after.hits - before.hits, 0u);
     EXPECT_EQ(after.misses - before.misses, 0u) << "the cache was consulted with the escape hatch set";
     EXPECT_EQ(after.inserts - before.inserts, 0u);
-    // With the level off, BOTH compiles parse - which is the pre-L1c behaviour exactly.
+    // With the level off, BOTH compiles parse - which is the pre-L1c behavior exactly.
     EXPECT_TRUE(ShaderHasParse(first));
     EXPECT_TRUE(ShaderHasParse(second));
 }

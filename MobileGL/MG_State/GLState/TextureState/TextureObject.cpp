@@ -8,8 +8,17 @@
 
 #include "TextureObject.h"
 #include "MG_State/GLState/Core.h"
+#include "MG_State/GLState/StateObjectDeathNotice.h"
 #include "MG_Util/Types.h"
 #include <MG_Util/Metrics/TextureMetrics.h>
+#include <MG_Pipe/PipeMutation.h>
+// NO MG_State TRANSLATION UNIT SEES THE CLIENT'S EMITTER ANY MORE (c0b, ID-13). v1 included
+// MG_Impl/Pipe/TextureEmit.h here and in RenderbufferObject.cpp because at the contract tag
+// MG_Pipe/PipeMutation.h carried no texture row; it now declares the four mints, the nine
+// emissions and the publication latch, so this file sees a DECLARATION exactly as
+// BufferObject.cpp does and the closure gate's mutation-header probe has nothing to find.
+// The three PipePublish* helpers stay on TextureObjectBase so the cube's, the view's and the
+// buffer texture's translation units keep calling an inherited member.
 
 namespace MobileGL {
     namespace MG_State {
@@ -23,6 +32,82 @@ namespace MobileGL {
             // TextureObjectBase implementations
             Uint64 TextureObjectBase::AllocateLifetimeId() {
                 return s_nextTextureLifetimeId.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            TextureObjectBase::~TextureObjectBase() {
+                // P4a D-I1: BACKEND-NEUTRAL FROM DAY ONE, and the three-step order is fixed.
+                //
+                //   1. the wire delete FIRST - it drops the applier's record while the record
+                //      still exists, so a recycled slot cannot inherit a field. Published-gated
+                //      rather than slot-gated: a backend twin table mints a slot through
+                //      MGPipeSlots().Acquire whether or not the subsystem ever asked this client
+                //      to emit a create, and a resource_destroy on such a handle is a refused
+                //      call the applier counts and asserts on;
+                //   2. the death notice SECOND - it resolves the handle through the allocator,
+                //      and a backend told after the free could no longer find its twin. This is
+                //      the P2 step-e2 announcement that used to stand here alone: the last
+                //      SharedPtr to this object dropping, not the glDelete* that only marks the
+                //      name and leaves a still-bound object very much alive;
+                //   3. the slot LAST, and a double free on a stale generation is a proven no-op.
+                //
+                // ALL THREE STEPS ARE THE CONTRACT'S HELPER (c0b): it reads the publication
+                // latch, emits the resource_destroy itself, raises the notice while the handle
+                // still resolves and frees the slot last. v1 emitted step 1 from a second
+                // statement here because at the tag the helper hard-coded `published = false`;
+                // that statement is deleted rather than kept, since a second delete for a
+                // record the helper has already dropped is a refused call the applier asserts
+                // on. The SamplerViewCso minted off this same lifetime id goes with it. The
+                // BUILT-IN SAMPLER does not: it is a real SamplerObject with its own lifetime
+                // id and its own destructor, which takes the same helper shape.
+                MG_Pipe::MGPipeEmitTextureDestroyAndFree(m_lifetimeId);
+            }
+
+            // ---- P4a's three client emission points (see TextureObject.h) ----
+
+            void TextureObjectBase::PipePublishDescriptor() {
+                MG_Pipe::MGPipeEmitTextureResourceRespecify(*this, MG_Pipe::MGPipeTextureRespecifyScope::WholeResource,
+                                                            0, 0);
+                // AND THE FRAMEBUFFER AGGREGATE MOVES (P4a fable seam F-3). The resource record
+                // above is only half of what a storage definition changes: set_framebuffer_state
+                // INLINES an attachment's InternalFormat, TextureTarget, extent, Samples and
+                // Complete at emission (D-C1), so redefining the storage of a texture that is
+                // ATTACHED changed those fields with nothing bit 11 reads moving - the format
+                // and shape setters bump the two TEXTURE aggregates and never the attachment
+                // one, and no path from a texture reaches its framebuffers. The handle arm then
+                // answered its four cross-object masks from the stale copy while the legacy arm
+                // re-read the frontend at the same re-sync. This is the one funnel every
+                // storage-defining entry point takes (see AllocateStorage), so the bump lives
+                // here and not per setter, it is push-only like the rest of this block, and it
+                // over-fires the framebuffer bit once per storage definition of an unattached
+                // texture - at load time, where a 304-byte hash is nothing.
+                MGP_NOTE_AGGREGATE(FramebufferAttachment);
+            }
+
+            void TextureObjectBase::PipePublishLevelDescriptor(TextureUploadTarget uploadTarget, Uint mipmapLevel) {
+                // ONE level was (re)allocated: only that level's pending upload is against
+                // storage that is gone (P4a final review C-1). Every other level's stays.
+                MG_Pipe::MGPipeEmitTextureResourceRespecify(*this, MG_Pipe::MGPipeTextureRespecifyScope::OneLevel,
+                                                            static_cast<Uint32>(uploadTarget),
+                                                            static_cast<Uint32>(mipmapLevel));
+                MGP_NOTE_AGGREGATE(FramebufferAttachment); // an attached level's extent is inlined (F-3)
+            }
+
+            void TextureObjectBase::PipePublishTruncatedDescriptor(TextureUploadTarget uploadTarget, Uint levelCount) {
+                // The chain was cut at `levelCount`: the levels above the cut are gone with their
+                // pending uploads, the levels below it are untouched and keep theirs.
+                MG_Pipe::MGPipeEmitTextureResourceRespecify(*this, MG_Pipe::MGPipeTextureRespecifyScope::LevelsFrom,
+                                                            static_cast<Uint32>(uploadTarget),
+                                                            static_cast<Uint32>(levelCount));
+                MGP_NOTE_AGGREGATE(FramebufferAttachment);
+            }
+
+            void TextureObjectBase::PipePublishParams() {
+                MG_Pipe::MGPipeEmitTextureParams(*this);
+            }
+
+            void TextureObjectBase::PipeNoteLevelDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel) {
+                MG_Pipe::MGPipeNoteTextureLevelDirty(*this, static_cast<Uint32>(uploadTarget),
+                                                     static_cast<Uint32>(mipmapLevel));
             }
 
             void TextureObjectBase::BumpShapeVersion() {
@@ -40,7 +125,9 @@ namespace MobileGL {
             TextureObjectBase::TextureObjectBase(TextureTarget target, Uint externalIndex)
                 : m_externalIndex(externalIndex), m_lifetimeId(AllocateLifetimeId()), m_target(target) {
                 m_sampler = MakeShared<SamplerObject>(0);
-                if (target == TextureTarget::TextureRectangle) {
+                if (target == TextureTarget::TextureRectangle || target == TextureTarget::External) {
+                    // (An external texture, GL_OES_EGL_image_external, starts the same way: LINEAR
+                    // and CLAMP_TO_EDGE, and it has no mip chain either.)
                     // A rectangle texture has no mip chain, so its initial sampler state is not
                     // the shared one: TEXTURE_MIN_FILTER is LINEAR and TEXTURE_WRAP_S/T are
                     // CLAMP_TO_EDGE (GL 4.6 core table 23.15). Leaving the 2D default of
@@ -53,6 +140,32 @@ namespace MobileGL {
                     m_sampler->SetWrapT(SamplerWrapMode::ClampToEdge);
                     m_sampler->SetWrapR(SamplerWrapMode::ClampToEdge);
                 }
+                // P4a D-D1: A RESOURCE EXISTS BEFORE ANYTHING CAN NAME IT, so resource_create is
+                // emitted from the constructor and carries no storage - the store is defined
+                // lazily by the first respecify and every backend already tolerates a resource
+                // with none. The handle itself is minted whatever the subsystem bitmask says,
+                // because set_framebuffer_state and set_sampler_views name this texture by handle
+                // out of two different subsystems.
+                //
+                // NOTHING THE DERIVED CLASS IMPLEMENTS IS TOUCHED HERE and that is a
+                // correctness requirement rather than a style: the derived object does not exist
+                // yet, so ITextureObject::GetStorageType and ::GetUploadTargets - PURE, with no
+                // body on this base - would be undefined behavior. The emitter reads GetTarget()
+                // and GetExternalIndex(), which TextureObjectBase itself overrides and which
+                // therefore dispatch to this class's own bodies over members the mem-init list
+                // has already written; the storage kind is derived from the target, which is
+                // exact (TextureObjectBuffer is the only class that reports Buffer and
+                // TextureBuffer is the only target it is constructed with).
+                //
+                // TWO CALLS AND NOT ONE (c0b): the MINT is unconditional in a push build -
+                // set_framebuffer_state and set_sampler_views name this texture by handle out of
+                // two other subsystems, so gating it would make them emit null handles in exactly
+                // the A/B arm that exists to isolate the families - and the CREATE is what the
+                // subsystem gate in PipeFill.cpp decides.
+                (void)target;
+                (void)externalIndex;
+                MG_Pipe::MGPipeMintTextureHandle(*this);
+                MG_Pipe::MGPipeEmitTextureResourceCreate(*this);
             }
 
             TextureInternalFormat TextureObjectBase::GetFormat() const {
@@ -99,6 +212,13 @@ namespace MobileGL {
                 m_internalFormat = format;
                 BumpShapeVersion();
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
+                // The format is BOTH halves: a descriptor field the backend allocates from and a
+                // parameter the swizzle / depth-stencil push reads, so both records move. It is
+                // also the last statement of both glTexBuffer entry points, which is what
+                // publishes a buffer texture's window without a call site in MG_Impl/GLImpl.
+                PipePublishDescriptor();
+                PipePublishParams();
             }
 
             Uint TextureObjectBase::GetExternalIndex() const {
@@ -117,13 +237,14 @@ namespace MobileGL {
             // make a float (0,0,0,1) and an integer (0,0,0,1) numerically identical, but they are
             // different GL state and the DirectGLES sync memoises on m_textureParamsVersion.
             void TextureObjectBase::SetBorderColor(const FloatVec4& color) {
-                if (color == m_sampler->GetBorderColor() &&
-                    m_sampler->GetBorderColorForm() == BorderColorForm::Float) {
+                if (color == m_sampler->GetBorderColor() && m_sampler->GetBorderColorForm() == BorderColorForm::Float) {
                     return;
                 }
 
                 m_sampler->SetBorderColor(color);
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
+                PipePublishParams();
             }
 
             const IntVec4& TextureObjectBase::GetBorderColorI() const {
@@ -131,13 +252,14 @@ namespace MobileGL {
             }
 
             void TextureObjectBase::SetBorderColorI(const IntVec4& color) {
-                if (color == m_sampler->GetBorderColorI() &&
-                    m_sampler->GetBorderColorForm() == BorderColorForm::Int) {
+                if (color == m_sampler->GetBorderColorI() && m_sampler->GetBorderColorForm() == BorderColorForm::Int) {
                     return;
                 }
 
                 m_sampler->SetBorderColorI(color);
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
+                PipePublishParams();
             }
 
             const UintVec4& TextureObjectBase::GetBorderColorUI() const {
@@ -152,6 +274,8 @@ namespace MobileGL {
 
                 m_sampler->SetBorderColorUI(color);
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
+                PipePublishParams();
             }
 
             BorderColorForm TextureObjectBase::GetBorderColorForm() const {
@@ -201,6 +325,8 @@ namespace MobileGL {
                     break;
                 }
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
+                PipePublishParams();
             }
 
             void TextureObjectBase::SetSwizzleParamRGBA(const Vec4<TextureSwizzleParam>& values) {
@@ -208,35 +334,54 @@ namespace MobileGL {
 
                 m_swizzleParams = values;
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
+                PipePublishParams();
             }
 
             const UintVec2& TextureObjectBase::GetLevelRange() const {
                 return m_levelRange;
             }
 
-            void TextureObjectBase::SetBaseLevel(Uint baseLevel) {
-                if (IsImmutable() && m_immutableLevels > 0) {
-                    baseLevel = std::min(baseLevel, m_immutableLevels - 1);
-                }
-                if (baseLevel == m_levelRange.x()) return;
+            const UintVec2& TextureObjectBase::GetSpecifiedLevelRange() const {
+                return m_specifiedLevelRange;
+            }
 
-                m_levelRange.x() = baseLevel;
-                if (IsImmutable() && m_levelRange.y() < m_levelRange.x()) {
-                    m_levelRange.y() = m_levelRange.x();
+            // GL 4.6 core 8.17: an immutable texture's level_base is clamped to [0, levels - 1]
+            // and its level_max to [level_base, levels - 1] - when they are USED. The parameters
+            // themselves keep what was set (glGetTexParameter(GL_TEXTURE_MAX_LEVEL) still reads
+            // 1000 after a two-level glTexStorage), so the clamp lives in this derived copy.
+            Bool TextureObjectBase::UpdateEffectiveLevelRange() {
+                UintVec2 effective = m_specifiedLevelRange;
+                if (IsImmutable()) {
+                    effective.x() = std::min(effective.x(), m_immutableLevels - 1);
+                    effective.y() = std::min(std::max(effective.y(), effective.x()), m_immutableLevels - 1);
                 }
+                if (effective == m_levelRange) return false;
+                m_levelRange = effective;
+                return true;
+            }
+
+            void TextureObjectBase::SetBaseLevel(Uint baseLevel) {
+                m_specifiedLevelRange.x() = baseLevel;
+                if (!UpdateEffectiveLevelRange()) return;
+
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
                 BumpShapeVersion();
+                // The level range is PARAMS, not a descriptor field: the record carries
+                // BaseLevel / MaxLevel and the storage is untouched. The descriptor is deduped on
+                // its own bytes, so the shape bump above costs nothing here.
+                PipePublishParams();
             }
 
             void TextureObjectBase::SetMaxLevel(Uint maxLevel) {
-                if (IsImmutable() && m_immutableLevels > 0) {
-                    maxLevel = std::min(std::max(maxLevel, m_levelRange.x()), m_immutableLevels - 1);
-                }
-                if (maxLevel == m_levelRange.y()) return;
+                m_specifiedLevelRange.y() = maxLevel;
+                if (!UpdateEffectiveLevelRange()) return;
 
-                m_levelRange.y() = maxLevel;
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
                 BumpShapeVersion();
+                PipePublishParams();
             }
 
             Bool TextureObjectBase::IsImmutable() const {
@@ -251,11 +396,15 @@ namespace MobileGL {
                 if (m_immutableLevels == levels) return;
 
                 m_immutableLevels = levels;
-                if (m_immutableLevels > 0) {
-                    m_levelRange.x() = std::min(m_levelRange.x(), m_immutableLevels - 1);
-                    m_levelRange.y() = std::min(std::max(m_levelRange.y(), m_levelRange.x()), m_immutableLevels - 1);
-                }
+                UpdateEffectiveLevelRange();
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
+                // Immutable is a descriptor fact the backend reads - and NOT a request for an
+                // acknowledgment: MGPipeResourceRespecifyNeedsAck names the buffer target
+                // explicitly, because texture allocation is lazy in monolith and stays lazy in
+                // split. The level clamp above is params.
+                PipePublishDescriptor();
+                PipePublishParams();
             }
 
             Uint16 TextureObjectBase::GetTextureParamsVersion() const {
@@ -283,6 +432,7 @@ namespace MobileGL {
 
             void TextureObjectBase::BumpContentVersion() {
                 ++m_contentVersion;
+                MGP_NOTE_AGGREGATE(TextureContent);
             }
 
             Int TextureObjectBase::GetSamples() const {
@@ -292,6 +442,8 @@ namespace MobileGL {
             void TextureObjectBase::SetSamples(Int samples) {
                 m_samples = samples;
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
+                PipePublishDescriptor();
             }
 
             Bool TextureObjectBase::HasFixedSampleLocations() const {
@@ -301,6 +453,8 @@ namespace MobileGL {
             void TextureObjectBase::SetFixedSampleLocations(Bool fixedSampleLocations) {
                 m_fixedSampleLocations = fixedSampleLocations;
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
+                PipePublishDescriptor();
             }
 
             Uint64 TextureObjectBase::GetLifetimeId() const {
@@ -332,11 +486,23 @@ namespace MobileGL {
                                                              MipmapInput input) {
                 BumpShapeVersion();
                 m_textureStorage.AllocateLevel(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, input);
+                // AFTER the allocation, never before: BumpShapeVersion runs first and a descriptor
+                // built there would describe the level set this call is about to change. Every
+                // storage-defining GL entry point - glTexImage*, glCompressedTexImage*,
+                // glTexStorage*, glTextureView and the generated-mip storage grow - reaches
+                // storage through here, which is what makes the emission complete without one call
+                // site per entry point in MG_Impl/GLImpl. AND IT NAMES THE LEVEL (final review
+                // C-1): this call replaced ONE level's storage, and only that level's pending
+                // upload may go with it.
+                PipePublishLevelDescriptor(uploadTarget, mipmapLevel);
             }
 
             void TextureObjectWithOneMipmap::TruncateMipmapLevels(TextureUploadTarget uploadTarget, Uint levelCount) {
                 BumpShapeVersion();
                 m_textureStorage.TruncateToLevelCount(GetIndexOfTextureUploadTarget(uploadTarget), levelCount);
+                // The levels at and above the cut are gone; the ones below keep their pending
+                // uploads (final review C-1).
+                PipePublishTruncatedDescriptor(uploadTarget, levelCount);
             }
 
             void TextureObjectWithOneMipmap::UpdateMipmapSubData(TextureUploadTarget uploadTarget, Uint mipmapLevel,
@@ -352,8 +518,12 @@ namespace MobileGL {
                                                               Bool dirty) {
                 if (dirty) {
                     ++m_contentVersion;
+                    MGP_NOTE_AGGREGATE(TextureContent);
                 }
                 m_textureStorage.MarkDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, dirty);
+                // THE DRAIN LIST HAS NO CLEAN ARM (see TextureEmit.h): a level that goes clean
+                // is collected at the next drain, whose first test is IsStorageDirty.
+                if (dirty) PipeNoteLevelDirty(uploadTarget, mipmapLevel);
             }
 
             Bool TextureObjectWithOneMipmap::IsStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel) const {
@@ -363,8 +533,14 @@ namespace MobileGL {
             void TextureObjectWithOneMipmap::MarkStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                                     IntVec3 offset, IntVec3 size) {
                 ++m_contentVersion;
+                MGP_NOTE_AGGREGATE(TextureContent);
                 m_textureStorage.MarkDirtyRegion(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, offset,
                                                  size);
+                // THE DRAIN LIST IS KEYED ON THE STORAGE OWNER FOR FREE: TextureObjectView
+                // forwards this call to the OWNER's method after remapping the level and the
+                // region, so an upload through a view and an upload through the owner arrive here
+                // on the same object with the same owner-side coordinates.
+                PipeNoteLevelDirty(uploadTarget, mipmapLevel);
             }
 
             MipmapDirtyRegion TextureObjectWithOneMipmap::GetStorageDirtyRegion(TextureUploadTarget uploadTarget,
@@ -373,8 +549,7 @@ namespace MobileGL {
             }
 
             SizeT TextureObjectWithOneMipmap::GetStorageDirtyRects(TextureUploadTarget uploadTarget, Uint mipmapLevel,
-                                                                   MipmapDirtyRegion* outRects,
-                                                                   SizeT maxRects) const {
+                                                                   MipmapDirtyRegion* outRects, SizeT maxRects) const {
                 return m_textureStorage.GetDirtyRects(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
                                                       outRects, maxRects);
             }
@@ -385,35 +560,37 @@ namespace MobileGL {
                 m_textureStorage.GetDirtyFootprint(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, outRects);
             }
 
-            void TextureObjectWithOneMipmap::SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
-                                                              GLenum internalFormat, const void* data, SizeT size) {
+            void TextureObjectWithOneMipmap::SetMipmapCompressedImage(TextureUploadTarget uploadTarget,
+                                                                      Uint mipmapLevel, GLenum internalFormat,
+                                                                      const void* data, SizeT size) {
                 m_textureStorage.SetCompressedImage(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
                                                     internalFormat, data, size);
             }
 
             GLenum TextureObjectWithOneMipmap::GetMipmapCompressedFormat(TextureUploadTarget uploadTarget,
-                                                                  Uint mipmapLevel) const {
+                                                                         Uint mipmapLevel) const {
                 return m_textureStorage.GetCompressedFormat(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
             SizeT TextureObjectWithOneMipmap::GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget,
-                                                                    Uint mipmapLevel) const {
+                                                                          Uint mipmapLevel) const {
                 return m_textureStorage.GetCompressedByteSize(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
             const void* TextureObjectWithOneMipmap::MapMipmapCompressedImage(TextureUploadTarget uploadTarget,
-                                                                       Uint mipmapLevel) const {
+                                                                             Uint mipmapLevel) const {
                 return m_textureStorage.MapCompressedData(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
             void TextureObjectWithOneMipmap::SetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget,
-                                                                       Uint mipmapLevel, GLenum internalFormat) {
+                                                                                Uint mipmapLevel,
+                                                                                GLenum internalFormat) {
                 m_textureStorage.SetRequestedCompressedFormat(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
                                                               internalFormat);
             }
 
             GLenum TextureObjectWithOneMipmap::GetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget,
-                                                                       Uint mipmapLevel) const {
+                                                                                  Uint mipmapLevel) const {
                 return m_textureStorage.GetRequestedCompressedFormat(GetIndexOfTextureUploadTarget(uploadTarget),
                                                                      mipmapLevel);
             }
@@ -457,88 +634,89 @@ namespace MobileGL {
 
             // TODO: add other texture types as needed
 
-        Bool IsMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
-            if (texture == nullptr) return true;
-            return texture->IsMipmapCompleteForFilterCached(mipmapped);
-        }
-
-        Bool SamplesAsIncompleteTexture(const ITextureObject* texture, const SamplerObject* effectiveSampler) {
-            // A multisample texture is fetched, never filtered. GL 4.6 core 8.17 gives it exactly
-            // one level and says its sampler state is not used at all - texelFetch is the only way
-            // a shader can read it - so 8.14's filter-completeness rules, which is what the
-            // `mipmapped` branch below asks about, never apply to it.
-            //
-            // Deriving `mipmapped` from that unused sampler is what made EVERY multisample texture
-            // look incomplete: MIN_FILTER's initial value is NEAREST_MIPMAP_LINEAR, and a texture
-            // that can only ever have one level never satisfies the mip-chain check. Both backends
-            // treat "samples as incomplete" as "do not bind it" (DirectGLES's per-unit walk in
-            // ResolveAndBindUnitTextures, DirectVulkan's UniformManager), so the sampler2DMS the
-            // shader declared was left pointing at nothing and every texelFetch read zero. That is
-            // the sampler2DMS/sampler2DMSArray half of KHR-GL43.compute_shader.resource-texture,
-            // which fails at the first data7 element with the multisample texture correctly
-            // cleared and simply never bound.
-            //
-            // IsCopyImageEndpointComplete already spells the same guard as
-            // CopyImageTargetHasMipmapChain; this was the one place that asked without it.
-            const TextureTarget target = texture != nullptr ? texture->GetTarget() : TextureTarget::Unknown;
-            const Bool filtered = target != TextureTarget::Texture2DMultisample &&
-                                  target != TextureTarget::Texture2DMultisampleArray;
-            const Bool mipmapped = filtered && effectiveSampler != nullptr &&
-                                   effectiveSampler->GetMipmapMode() != SamplerMipmapMode::None;
-            return !IsMipmapCompleteForFilter(texture, mipmapped);
-        }
-
-        static Bool ComputeMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
-            if (texture == nullptr) return true;
-            if (!texture->IsComplete()) return false;
-            if (!mipmapped) return true;
-
-            const auto* mipmapTexture = AsMipmapTexture(texture);
-            if (mipmapTexture == nullptr) return true; // no mip chain to be incomplete about
-
-            const UintVec2& levelRange = texture->GetLevelRange();
-            const Uint baseLevel = levelRange.x();
-            const Uint storedLevels = mipmapTexture->GetMipmapLevelCount();
-            if (baseLevel >= storedLevels) return false;
-
-            // An array texture's layer count is not a dimension of the image: it stays put all
-            // the way down the chain (GL 4.6 core 8.14.3). GetMipmapTexelSize reports it in the
-            // slot after the image's own dimensions.
-            const TextureTarget target = texture->GetTarget();
-            Int shrinkingComponents = 3;
-            if (target == TextureTarget::Texture1DArray) {
-                shrinkingComponents = 1;
-            } else if (target == TextureTarget::Texture2DArray || target == TextureTarget::TextureCubeMapArray) {
-                shrinkingComponents = 2;
+            Bool IsMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
+                if (texture == nullptr) return true;
+                return texture->IsMipmapCompleteForFilterCached(mipmapped);
             }
 
-            for (const auto uploadTarget : texture->GetUploadTargets()) {
-                const IntVec3 baseSize = mipmapTexture->GetMipmapTexelSize(uploadTarget, baseLevel);
-                Int largest = 0;
-                for (Int component = 0; component < shrinkingComponents; ++component) {
-                    largest = std::max(largest, baseSize[component]);
+            Bool SamplesAsIncompleteTexture(const ITextureObject* texture, const SamplerObject* effectiveSampler) {
+                // A multisample texture is fetched, never filtered. GL 4.6 core 8.17 gives it exactly
+                // one level and says its sampler state is not used at all - texelFetch is the only way
+                // a shader can read it - so 8.14's filter-completeness rules, which is what the
+                // `mipmapped` branch below asks about, never apply to it.
+                //
+                // Deriving `mipmapped` from that unused sampler is what made EVERY multisample texture
+                // look incomplete: MIN_FILTER's initial value is NEAREST_MIPMAP_LINEAR, and a texture
+                // that can only ever have one level never satisfies the mip-chain check. Both backends
+                // treat "samples as incomplete" as "do not bind it" (DirectGLES's per-unit walk in
+                // ResolveAndBindUnitTextures, DirectVulkan's UniformManager), so the sampler2DMS the
+                // shader declared was left pointing at nothing and every texelFetch read zero. That is
+                // the sampler2DMS/sampler2DMSArray half of KHR-GL43.compute_shader.resource-texture,
+                // which fails at the first data7 element with the multisample texture correctly
+                // cleared and simply never bound.
+                //
+                // IsCopyImageEndpointComplete already spells the same guard as
+                // CopyImageTargetHasMipmapChain; this was the one place that asked without it.
+                const TextureTarget target = texture != nullptr ? texture->GetTarget() : TextureTarget::Unknown;
+                const Bool filtered =
+                    target != TextureTarget::Texture2DMultisample && target != TextureTarget::Texture2DMultisampleArray;
+                const Bool mipmapped = filtered && effectiveSampler != nullptr &&
+                                       effectiveSampler->GetMipmapMode() != SamplerMipmapMode::None;
+                return !IsMipmapCompleteForFilter(texture, mipmapped);
+            }
+
+            static Bool ComputeMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
+                if (texture == nullptr) return true;
+                if (!texture->IsComplete()) return false;
+                if (!mipmapped) return true;
+
+                const auto* mipmapTexture = AsMipmapTexture(texture);
+                if (mipmapTexture == nullptr) return true; // no mip chain to be incomplete about
+
+                const UintVec2& levelRange = texture->GetLevelRange();
+                const Uint baseLevel = levelRange.x();
+                const Uint storedLevels = mipmapTexture->GetMipmapLevelCount();
+                if (baseLevel >= storedLevels) return false;
+
+                // An array texture's layer count is not a dimension of the image: it stays put all
+                // the way down the chain (GL 4.6 core 8.14.3). GetMipmapTexelSize reports it in the
+                // slot after the image's own dimensions.
+                const TextureTarget target = texture->GetTarget();
+                Int shrinkingComponents = 3;
+                if (target == TextureTarget::Texture1DArray) {
+                    shrinkingComponents = 1;
+                } else if (target == TextureTarget::Texture2DArray || target == TextureTarget::TextureCubeMapArray) {
+                    shrinkingComponents = 2;
                 }
-                if (largest <= 0) return false;
 
-                // p = log2 of the largest base dimension: the last level the chain needs
-                // before every dimension has reached 1. TEXTURE_MAX_LEVEL can cut it short.
-                Uint p = 0;
-                for (Int extent = largest; extent > 1; extent >>= 1) ++p;
-                const Uint lastLevel = std::min(baseLevel + p, levelRange.y());
+                for (const auto uploadTarget : texture->GetUploadTargets()) {
+                    const IntVec3 baseSize = mipmapTexture->GetMipmapTexelSize(uploadTarget, baseLevel);
+                    Int largest = 0;
+                    for (Int component = 0; component < shrinkingComponents; ++component) {
+                        largest = std::max(largest, baseSize[component]);
+                    }
+                    if (largest <= 0) return false;
 
-                for (Uint level = baseLevel; level <= lastLevel; ++level) {
-                    if (level >= storedLevels) return false;
-                    const IntVec3 actual = mipmapTexture->GetMipmapTexelSize(uploadTarget, level);
-                    for (Int component = 0; component < 3; ++component) {
-                        const Int expected = component < shrinkingComponents
-                            ? std::max(1, baseSize[component] >> (level - baseLevel))
-                            : baseSize[component];
-                        if (actual[component] != expected) return false;
+                    // p = log2 of the largest base dimension: the last level the chain needs
+                    // before every dimension has reached 1. TEXTURE_MAX_LEVEL can cut it short.
+                    Uint p = 0;
+                    for (Int extent = largest; extent > 1; extent >>= 1)
+                        ++p;
+                    const Uint lastLevel = std::min(baseLevel + p, levelRange.y());
+
+                    for (Uint level = baseLevel; level <= lastLevel; ++level) {
+                        if (level >= storedLevels) return false;
+                        const IntVec3 actual = mipmapTexture->GetMipmapTexelSize(uploadTarget, level);
+                        for (Int component = 0; component < 3; ++component) {
+                            const Int expected = component < shrinkingComponents
+                                                     ? std::max(1, baseSize[component] >> (level - baseLevel))
+                                                     : baseSize[component];
+                            if (actual[component] != expected) return false;
+                        }
                     }
                 }
+                return true;
             }
-            return true;
-        }
 
         } // namespace GLState
     } // namespace MG_State

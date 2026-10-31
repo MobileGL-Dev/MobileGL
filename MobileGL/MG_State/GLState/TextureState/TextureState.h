@@ -8,12 +8,18 @@
 
 #pragma once
 #include <Includes.h>
+#include <MG_Pipe/PipeMutation.h>
 #include <MG_Util/Miscellany/IndexGenerator.h>
 #include "MG_State/GLState/TextureState/TextureObject.h"
 #include "MG_Util/Types.h"
 #include "TextureUnit.h"
 
 namespace MobileGL::MG_State::GLState {
+    // The one place a texture object's concrete type is chosen for a target. Shared because the
+    // share group's texture table and the context's per-target default texture objects both
+    // build through it.
+    SharedPtr<ITextureObject> MakeTextureObjectForTarget(Uint index, TextureTarget target);
+
     struct ImageTextureBinding {
         SharedPtr<ITextureObject> Texture;
         GLint Level = 0;
@@ -32,9 +38,20 @@ namespace MobileGL::MG_State::GLState {
             Access = access;
             Format = format;
             ++Version;
+            // P4a D-A4 / final review M-A: the EARLIEST producer of kMGPipeBindShaderImage. The
+            // ImageBindableHint the bit feeds prevents the texture re-mint (a texture the server
+            // knows may be image-bound is allocated image-bindable up front, P9 W2), so it has
+            // to reach the applier before the texture's first sync - at
+            // the bind, not at the next validate point's image walk. Push-only through the
+            // contract's door, like every other hook in this directory (G1).
+            if (Texture) MG_Pipe::MGPipeNoteTextureImageBound(*Texture);
         }
     };
 
+    // The per-context half of the texture state: the texture units (and their per-target
+    // bindings), the image unit bindings, the active unit, and the default texture objects
+    // (name 0), which GL scopes to the context rather than the share group. The named texture
+    // objects and their name space belong to the share group (ShareGroupState).
     class TextureState {
     public:
         // Capacity of the combined texture-unit state arrays (indexed by glActiveTexture unit).
@@ -46,36 +63,34 @@ namespace MobileGL::MG_State::GLState {
         static constexpr int MAX_PER_STAGE_TEXTURE_IMAGE_UNITS = 32;
 
         TextureState();
-        void GenerateNames(Uint number, Vector<Uint>& textures);
-        const SharedPtr<ITextureObject>& CreateTextureObject(Uint index, TextureTarget target);
-        // glTextureView (GL 4.6 core 8.18). `storageOwner` must already be a texture with
-        // immutable storage and must NOT itself be a view - the caller composes a view-of-a-view
-        // onto the root first, and passes the composed (root-relative) level/layer range here.
-        const SharedPtr<ITextureObject>& CreateTextureViewObject(Uint index, TextureTarget target,
-                                                                 const SharedPtr<ITextureObject>& storageOwner,
-                                                                 Uint minLevel, Uint numLevels, Uint minLayer,
-                                                                 Uint numLayers);
-        const SharedPtr<ITextureObject>& GetTextureObject(Uint index);
         // The context's default texture object (name 0) for `target`. GL 3.3 core 3.8: texture
         // zero names a real, per-target texture object shared by every texture unit; binding 0
         // binds it, and image/parameter calls on it must work like on any texture. It is not a
-        // GenTextures name: it lives outside m_textureObjects (so glIsTexture(0) stays GL_FALSE
-        // and by-name lookups keep failing for 0) and can never be deleted.
+        // GenTextures name: it lives outside the share group's table (so glIsTexture(0) stays
+        // GL_FALSE and by-name lookups keep failing for 0) and can never be deleted.
         const SharedPtr<ITextureObject>& GetDefaultTextureObject(TextureTarget target) const;
         TextureUnit& GetUnitObject(Int unit);
         ImageTextureBinding& GetImageTextureBinding(Int unit);
         const ImageTextureBinding& GetImageTextureBinding(Int unit) const;
         Int GetActiveTextureUnit() const;
         void SetActiveTextureUnit(Int unit);
-        void MarkTextureObjectForDeletion(Uint index, Bool keepUnboundReservation);
-        Bool ValidateName(Uint index) const;
-        Bool ValidateTextureObject(Uint index) const;
+        // Rebinds every unit and image unit that names `textureObject` back to the target's
+        // default texture object; this context's half of a texture delete (GL 4.6 core 8.1).
+        void UnbindTextureFromUnits(const SharedPtr<ITextureObject>& textureObject);
 
         // High-water mark of texture units ever touched by a texture or sampler bind.
         // Units above it have provably-empty binding slots, so per-draw backend scans
         // can stop there instead of walking all MAX_TEXTURE_IMAGE_UNITS units.
         void NoteUnitTouched(Int unit, Bool bindingChanged = true) {
-            if (unit > m_maxTouchedUnit && unit < MAX_TEXTURE_IMAGE_UNITS) m_maxTouchedUnit = unit;
+            if (unit > m_maxTouchedUnit && unit < MAX_TEXTURE_IMAGE_UNITS) {
+                m_maxTouchedUnit = unit;
+                ++m_contextValuesGeneration;
+                // Push-on-mutation (MG_Pipe/PipeMutation.h): the high-water mark is a pushed
+                // PipeInputs field, and a bind reached from inside a verb - a backend binding
+                // its own synthesised fallback texture - would otherwise leave the block
+                // describing a smaller scan range than the live context has.
+                MGP_NOTE_MUTATION(GetMaxTouchedTextureUnit);
+            }
             // Every texture/sampler bind entry point (glBindTexture / glBindTextureUnit /
             // glBindTextures / glBindSampler) routes through here, so bumping the generation here
             // - plus in MarkTextureObjectForDeletion for delete-unbind - covers every change to
@@ -85,11 +100,57 @@ namespace MobileGL::MG_State::GLState {
             // Re-binding the object a slot already holds changes nothing that the generation
             // guards; such callers pass bindingChanged=false so only the high-water mark advances
             // and the backend fast path survives the redundant re-binds apps issue every frame.
-            if (bindingChanged) ++m_textureBindGeneration;
+            if (bindingChanged) {
+                ++m_textureBindGeneration;
+                MGP_NOTE_MUTATION(GetTextureBindGeneration);
+            }
         }
         Int GetMaxTouchedUnit() const { return m_maxTouchedUnit; }
+        // Moves whenever the active unit or the touched high-water mark does: the texture half of
+        // GLContext::GetContextValuesGeneration.
+        Uint64 GetContextValuesGeneration() const { return m_contextValuesGeneration; }
+        // High-water mark of IMAGE units ever bound by glBindImageTexture, and it is a SECOND
+        // mark rather than a widening of the one above because the two index different
+        // namespaces: GL 4.6 core 8.22's image units are their own array, and folding them
+        // together would make a bind of image unit 7 push every per-draw TEXTURE-unit scan out
+        // to eight slots for nothing - and a bind of the last advertised image unit push it out
+        // to MAX_TEXTURE_IMAGE_UNITS (191), which is the whole array.
+        //
+        // WHAT IT IS FOR. The split client's per-draw GPU-write set swept ALL
+        // MAX_TEXTURE_IMAGE_UNITS image units looking for a writable image-BUFFER texture
+        // (MG_Remote/Client/GpuWritePending.cpp), because the frontend had no such mark - the
+        // 2026-09-17 inproc profile measured that sweep at 2.15% self / 3.59% inclusive of the
+        // GL thread in an application (Minecraft) that never binds an image at all. With the
+        // mark that application's sweep is one compare against -1.
+        //
+        // IT ONLY EVER GROWS, which is NoteUnitTouched's rule one notch stronger and is the
+        // whole safety argument: an unbind - glBindImageTexture(unit, 0, ...), or the
+        // delete-unbind in MarkTextureObjectForDeletion - leaves the mark where it was, so a
+        // scan bounded by it is an OVER-approximation. Over-approximating a GPU-write set costs
+        // a readback the narrowing channel removes; under-approximating it reads a stale buffer
+        // and says nothing, which is the one direction that set may not fail in.
+        //
+        // PUSH BUILDS ONLY, so the pull build's TextureState keeps its layout and its .text byte
+        // for byte (G1): the only reader is a push-build path and the only writer -
+        // MG_Impl/GLImpl/Texture/GL_Texture.cpp's BindImageTexture - is guarded the same way.
+        void NoteImageUnitTouched(Int unit) {
+            if (unit > m_maxTouchedImageUnit && unit < MAX_TEXTURE_IMAGE_UNITS) {
+                m_maxTouchedImageUnit = unit;
+            }
+        }
+        // -1 until an image unit is bound for the first time, i.e. "there is nothing to sweep".
+        Int GetMaxTouchedImageUnit() const { return m_maxTouchedImageUnit; }
         Uint64 GetTextureBindGeneration() const { return m_textureBindGeneration; }
-        void BumpTextureBindGeneration() { ++m_textureBindGeneration; }
+        // Both counters below are pushed PipeInputs fields AND are moved by writes the
+        // backends make into frontend objects during their own verb - a synthesised fallback
+        // texture's AllocateStorage/SetInternalFormat, a sampler override's SetMinFilter, a
+        // default texture becoming defined. Every such path funnels through these two
+        // methods (and the bind branch above), so noticing here covers the whole family
+        // rather than each writer (P1 lane finding F2; MG_Pipe/PipeMutation.h).
+        void BumpTextureBindGeneration() {
+            ++m_textureBindGeneration;
+            MGP_NOTE_MUTATION(GetTextureBindGeneration);
+        }
 
         // Sibling of the bind generation for everything that changes WHICH native texture a
         // backend ends up putting on a unit WITHOUT any binding moving. Two families feed it:
@@ -108,7 +169,10 @@ namespace MobileGL::MG_State::GLState {
         // its sampled-set memo carries THIS generation alongside the bind one. Any memo of a
         // resolved per-unit binding - or of which textures a draw samples at all - needs both.
         Uint64 GetSamplingResolutionGeneration() const { return m_samplingResolutionGeneration; }
-        void BumpSamplingResolutionGeneration() { ++m_samplingResolutionGeneration; }
+        void BumpSamplingResolutionGeneration() {
+            ++m_samplingResolutionGeneration;
+            MGP_NOTE_MUTATION(GetSamplingResolutionGeneration);
+        }
 
         // Globally-unique, never-reused id of THIS texture state, i.e. of the context that owns
         // it. Both generations above restart at 0 with a new context, so a backend memo keyed on
@@ -117,7 +181,20 @@ namespace MobileGL::MG_State::GLState {
         // again (the unit tests do exactly that between cases).
         Uint64 GetContextId() const { return m_contextId; }
 
+        // P2 brief D4, the two texture aggregates. CONTENT is an upload or a dirty region;
+        // PARAMS is a glTexParameter or a glSamplerParameter. They are separate because
+        // NEW_SAMPLER_VIEWS and NEW_SAMPLERS are separate dirty bits and a Minecraft frame
+        // moves them at wildly different rates.
+        void NoteTextureContentChanged() { ++m_anyTextureContentGeneration; }
+        Uint64 GetAnyTextureContentGeneration() const { return m_anyTextureContentGeneration; }
+        void NoteTextureParamsChanged() { ++m_anyTextureParamsGeneration; }
+        Uint64 GetAnyTextureParamsGeneration() const { return m_anyTextureParamsGeneration; }
+
     private:
+        Uint64 m_anyTextureContentGeneration = 0;
+        Uint64 m_anyTextureParamsGeneration = 0;
+        // See NoteImageUnitTouched: the image-unit twin of m_maxTouchedUnit, push builds only.
+        Int m_maxTouchedImageUnit = -1;
         static Uint64 AllocateContextId();
 
         const Uint64 m_contextId;
@@ -125,10 +202,9 @@ namespace MobileGL::MG_State::GLState {
         Uint64 m_samplingResolutionGeneration = 0;
         Int m_maxTouchedUnit = -1;
         Int m_activeTextureUnit = 0;
+        Uint64 m_contextValuesGeneration = 0;
         Array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> m_textureUnits;
         Array<ImageTextureBinding, MAX_TEXTURE_IMAGE_UNITS> m_imageTextureBindings;
-        IndexGenerator<Uint> m_indexGenerator;
-        UnorderedMap<GLuint, SharedPtr<ITextureObject>> m_textureObjects;
         // One default texture object (external name 0) per target, created with the context and
         // immortal for its lifetime; the initial binding of every unit/target slot.
         Array<SharedPtr<ITextureObject>, (int)TextureTarget::TextureTargetCount> m_defaultTextureObjects;

@@ -1,3 +1,11 @@
+# MobileGL - MobileGL/MG_Test/Program/CMakeLists.txt
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 cmake_minimum_required(VERSION 3.24)
 
 add_executable(
@@ -19,7 +27,7 @@ target_include_directories(ProgramUtilTest PRIVATE
 
 target_link_libraries(
         ProgramUtilTest
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -51,7 +59,7 @@ target_include_directories(AsyncCompileTest PRIVATE
 
 target_link_libraries(
         AsyncCompileTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -72,7 +80,7 @@ target_include_directories(OptimisticStatusTest PRIVATE
 
 target_link_libraries(
         OptimisticStatusTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -83,7 +91,7 @@ target_include_directories(AsyncLinkTest PRIVATE
 
 target_link_libraries(
         AsyncLinkTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -101,7 +109,7 @@ target_include_directories(AsyncSpirvPhaseTest PRIVATE
 
 target_link_libraries(
         AsyncSpirvPhaseTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -117,7 +125,7 @@ target_include_directories(ShaderCompileAdoptionTest PRIVATE
 
 target_link_libraries(
         ShaderCompileAdoptionTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -133,7 +141,7 @@ target_include_directories(ParallelShaderCompileTest PRIVATE
 
 target_link_libraries(
         ParallelShaderCompileTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -152,7 +160,7 @@ target_include_directories(XfbFrontendOrderInvarianceTest PRIVATE
 
 target_link_libraries(
         XfbFrontendOrderInvarianceTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -171,7 +179,24 @@ target_include_directories(AsyncTeardownTest PRIVATE
 
 target_link_libraries(
         AsyncTeardownTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
+        ${LINK_LIBRARIES}
+)
+
+# Its own binary for the same reason: every case Initialize()s and Destroy()s the library.
+add_executable(
+        ShaderPrewarmTest
+        ShaderPrewarmTest.cpp
+)
+
+target_include_directories(ShaderPrewarmTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        ShaderPrewarmTest PRIVATE
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -187,7 +212,7 @@ target_include_directories(XfbBlockVaryingTest PRIVATE
 
 target_link_libraries(
         XfbBlockVaryingTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -203,7 +228,7 @@ target_include_directories(TessellationLinkTest PRIVATE
 
 target_link_libraries(
         TessellationLinkTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -219,7 +244,7 @@ target_include_directories(ProgramPipelineCompositeTest PRIVATE
 
 target_link_libraries(
         ProgramPipelineCompositeTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -235,7 +260,7 @@ target_include_directories(ProgramInterfaceTest PRIVATE
 
 target_link_libraries(
         ProgramInterfaceTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -246,7 +271,7 @@ target_include_directories(ProgramTest PRIVATE
 
 target_link_libraries(
         ProgramTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -273,5 +298,50 @@ gtest_discover_tests(ParallelShaderCompileTest DISCOVERY_TIMEOUT 60 PROPERTIES L
 # in-flight compile, and the two-phase replay links 48 programs across both flag states.
 gtest_discover_tests(OptimisticStatusTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 gtest_discover_tests(AsyncTeardownTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
+gtest_discover_tests(ShaderPrewarmTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 # Same reason again: several cases leave A links outstanding while B compiles and links.
 gtest_discover_tests(XfbFrontendOrderInvarianceTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
+
+# P0.5: the ProgramArtifacts.h header on its own - the alias identity proofs, the POD trip
+# wire and the archive field tables. Its first include is the artifacts header, so this
+# binary is also the compile-time proof that the header is self-contained.
+add_executable(
+        ProgramArtifactsTest
+        ProgramArtifactsTest.cpp
+)
+
+target_include_directories(ProgramArtifactsTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        ProgramArtifactsTest PRIVATE
+        MobileGLTestMain
+        ${LINK_LIBRARIES}
+)
+
+gtest_discover_tests(ProgramArtifactsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+# P4a: the archive SERIALIZER over the same VisitFields tables, beside the header's own suite.
+# Its target and this registration are the CONTRACT commit's, like every other suite whose
+# contents a later package extends. Every case is a visible SKIP in a pull build, because the
+# codec is push-only - the root CMakeLists.txt appends it inside `if (MOBILEGL_PIPE_PUSH)` -
+# and a vanishing test would make `ctest -N` differ between the pull and push trees.
+add_executable(
+        ProgramArtifactsCodecTest
+        ProgramArtifactsCodecTest.cpp
+)
+
+target_include_directories(ProgramArtifactsCodecTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        ProgramArtifactsCodecTest PRIVATE
+        MobileGLTestMain
+        ${LINK_LIBRARIES}
+)
+
+gtest_discover_tests(ProgramArtifactsCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

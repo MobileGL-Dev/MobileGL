@@ -32,13 +32,15 @@ namespace MobileGL::MG_State::GLState {
 
         SizeT StringsBytes(const Vector<String>& values) {
             SizeT bytes = 0;
-            for (const String& value : values) bytes += value.size() + sizeof(String);
+            for (const String& value : values)
+                bytes += value.size() + sizeof(String);
             return bytes;
         }
 
         SizeT ResourcesBytes(const Vector<ProgramObject::ResourceReflection>& records) {
             SizeT bytes = records.size() * sizeof(ProgramObject::ResourceReflection);
-            for (const auto& record : records) bytes += record.name.size();
+            for (const auto& record : records)
+                bytes += record.name.size();
             return bytes;
         }
     } // namespace
@@ -48,7 +50,8 @@ namespace MobileGL::MG_State::GLState {
     // and ignores per-entry fixed overhead.
     SizeT ProgramTranslationResultBytes(const ProgramTranslationResult& result) {
         SizeT bytes = 0;
-        for (const auto& module : result.spirv.generatedSpirv) bytes += module.size() * sizeof(unsigned);
+        for (const auto& module : result.spirv.generatedSpirv)
+            bytes += module.size() * sizeof(unsigned);
         bytes += result.spirv.uniformOffsets.size() * sizeof(Uint);
         bytes += result.spirv.globalUboScratch.size();
         bytes += ResourcesBytes(result.link.uniformReflection);
@@ -61,8 +64,7 @@ namespace MobileGL::MG_State::GLState {
         return bytes;
     }
 
-    MG_Util::ShaderTranspiler::BoundedTranslationCache<ProgramTranslationResult>&
-    GetProgramTranslationCache() {
+    MG_Util::ShaderTranspiler::BoundedTranslationCache<ProgramTranslationResult>& GetProgramTranslationCache() {
         // DELIBERATELY LEAKED - see the same note on the L2 cache in
         // MG_Util/ShaderTranspiler/TranslationCache.cpp. A function-local static OBJECT
         // registers its destructor at first use, and first use here is a ShaderCompilePool
@@ -70,13 +72,16 @@ namespace MobileGL::MG_State::GLState {
         // earlier, and exit handlers run in reverse order - so the cache would be destroyed
         // while workers were still inserting into it. A function-local static POINTER is
         // trivially destructible and registers no exit handler at all.
-        static auto* const kCache =
-            new MG_Util::ShaderTranspiler::BoundedTranslationCache<ProgramTranslationResult>(
-                "ShaderTranslationCache L1 (GLSL->front end)", kMaxEntries, kMaxBytes);
+        static auto* const kCache = new MG_Util::ShaderTranspiler::BoundedTranslationCache<ProgramTranslationResult>(
+            "ShaderTranslationCache L1 (GLSL->front end)", kMaxEntries, kMaxBytes);
         return *kCache;
     }
 
-    void ClearProgramTranslationCache() { GetProgramTranslationCache().Clear(); }
+    void ClearProgramTranslationCache() {
+        GetProgramTranslationCache().Clear();
+    }
 
-    void LogProgramTranslationCacheStats() { GetProgramTranslationCache().LogStats(); }
+    void LogProgramTranslationCacheStats() {
+        GetProgramTranslationCache().LogStats();
+    }
 } // namespace MobileGL::MG_State::GLState

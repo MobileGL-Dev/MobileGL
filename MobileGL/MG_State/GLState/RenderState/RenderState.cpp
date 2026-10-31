@@ -6,7 +6,11 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#include <cstring>
+#include <new>
+#include <type_traits>
 #include "RenderState.h"
+#include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include "MG_Util/Debug/Log.h"
 #include "MG_Util/Types.h"
 
@@ -27,13 +31,22 @@ namespace MobileGL {
                 }
 
                 // Every viewport's scissor-test bit set, i.e. what glEnable(GL_SCISSOR_TEST) writes.
-                constexpr Uint32 kAllViewportsMask =
-                    RenderStateParameters::MAX_VIEWPORTS >= 32
-                        ? ~0u
-                        : (1u << RenderStateParameters::MAX_VIEWPORTS) - 1u;
+                constexpr Uint32 kAllViewportsMask = RenderStateParameters::MAX_VIEWPORTS >= 32
+                                                         ? ~0u
+                                                         : (1u << RenderStateParameters::MAX_VIEWPORTS) - 1u;
             } // namespace
 
             RenderState::RenderState() {
+                // ZERO PADDING FIRST. The parameters' pipeline and dynamic chunks are pushed as
+                // bytes and content-addressed byte for byte (CsoCache's hash and memcmp), so the
+                // padding between members must not carry whatever the allocator left there: two
+                // contexts with equal state would otherwise mint two render-state CSOs, and the
+                // recorder goldens (MG_Test/Pipe/RecorderGoldenTest.cpp) would not be repeatable.
+                // Re-constructing in place keeps every default member initializer; the type is
+                // trivially destructible, so the first construction needs no destructor call.
+                static_assert(std::is_trivially_destructible_v<RenderStateParameters>);
+                std::memset(static_cast<void*>(&m_parameters), 0, sizeof(m_parameters));
+                new (&m_parameters) RenderStateParameters();
                 // The color writemask defaults to all-true for every draw buffer.
                 for (auto& mask : m_parameters.ColorMasks) {
                     mask = BoolVec4(true, true, true, true);
@@ -83,7 +96,8 @@ namespace MobileGL {
                 // nearest (GL 4.6 core 22.2), and truncating a 63.5-wide viewport to 63 would
                 // also hand the backends a rectangle one pixel short of what was asked for.
                 return IntVec4(static_cast<Int>(std::lround(viewport.x())), static_cast<Int>(std::lround(viewport.y())),
-                               static_cast<Int>(std::lround(viewport.z())), static_cast<Int>(std::lround(viewport.w())));
+                               static_cast<Int>(std::lround(viewport.z())),
+                               static_cast<Int>(std::lround(viewport.w())));
             }
 
             void RenderState::SetViewportIndexed(Uint index, FloatVec4 viewport) {
@@ -119,11 +133,20 @@ namespace MobileGL {
             void RenderState::SetHint(GLenum target, GLenum mode) {
                 GLenum* slot = nullptr;
                 switch (target) {
-                case GL_LINE_SMOOTH_HINT: slot = &m_parameters.LineSmoothHint; break;
-                case GL_POLYGON_SMOOTH_HINT: slot = &m_parameters.PolygonSmoothHint; break;
-                case GL_TEXTURE_COMPRESSION_HINT: slot = &m_parameters.TextureCompressionHint; break;
-                case GL_FRAGMENT_SHADER_DERIVATIVE_HINT: slot = &m_parameters.FragmentShaderDerivativeHint; break;
-                default: return;
+                case GL_LINE_SMOOTH_HINT:
+                    slot = &m_parameters.LineSmoothHint;
+                    break;
+                case GL_POLYGON_SMOOTH_HINT:
+                    slot = &m_parameters.PolygonSmoothHint;
+                    break;
+                case GL_TEXTURE_COMPRESSION_HINT:
+                    slot = &m_parameters.TextureCompressionHint;
+                    break;
+                case GL_FRAGMENT_SHADER_DERIVATIVE_HINT:
+                    slot = &m_parameters.FragmentShaderDerivativeHint;
+                    break;
+                default:
+                    return;
                 }
                 if (*slot == mode) return;
                 *slot = mode;
@@ -132,11 +155,16 @@ namespace MobileGL {
 
             GLenum RenderState::GetHint(GLenum target) const {
                 switch (target) {
-                case GL_LINE_SMOOTH_HINT: return m_parameters.LineSmoothHint;
-                case GL_POLYGON_SMOOTH_HINT: return m_parameters.PolygonSmoothHint;
-                case GL_TEXTURE_COMPRESSION_HINT: return m_parameters.TextureCompressionHint;
-                case GL_FRAGMENT_SHADER_DERIVATIVE_HINT: return m_parameters.FragmentShaderDerivativeHint;
-                default: return GL_DONT_CARE;
+                case GL_LINE_SMOOTH_HINT:
+                    return m_parameters.LineSmoothHint;
+                case GL_POLYGON_SMOOTH_HINT:
+                    return m_parameters.PolygonSmoothHint;
+                case GL_TEXTURE_COMPRESSION_HINT:
+                    return m_parameters.TextureCompressionHint;
+                case GL_FRAGMENT_SHADER_DERIVATIVE_HINT:
+                    return m_parameters.FragmentShaderDerivativeHint;
+                default:
+                    return GL_DONT_CARE;
                 }
             }
 
@@ -309,16 +337,18 @@ namespace MobileGL {
     case CapabilityInput::capability:                                                                                  \
         if (m_parameters.capability##Enabled == (flag)) break;                                                         \
         m_parameters.capability##Enabled = (flag);                                                                     \
-        BumpVersions();                                                                                                   \
+        BumpVersions();                                                                                                \
         break;
 
                 switch (cap) {
                     SET_CAPABILITY(ColorLogicOp, enabled);
                     SET_CAPABILITY(DebugOutput, enabled);
                     SET_CAPABILITY(DebugOutputSynchronous, enabled);
+                    SET_CAPABILITY(DepthClamp, enabled);
                     SET_CAPABILITY(DepthTest, enabled);
                     SET_CAPABILITY(CullFace, enabled);
                     SET_CAPABILITY(Dither, enabled);
+                    SET_CAPABILITY(FramebufferSrgb, enabled);
                     SET_CAPABILITY(LineSmooth, enabled);
                     SET_CAPABILITY(Multisample, enabled);
                     SET_CAPABILITY(PolygonOffsetFill, enabled);
@@ -334,6 +364,7 @@ namespace MobileGL {
                     SET_CAPABILITY(SampleMask, enabled);
                     SET_CAPABILITY(SampleShading, enabled);
                     SET_CAPABILITY(StencilTest, enabled);
+                    SET_CAPABILITY(TextureCubeMapSeamless, enabled);
                     SET_CAPABILITY(ProgramPointSize, enabled);
                 case CapabilityInput::Blend: {
                     Bool stateChanged = false;
@@ -365,9 +396,8 @@ namespace MobileGL {
                 case CapabilityInput::ClipDistance6:
                 case CapabilityInput::ClipDistance7: {
                     const Uint32 bit = ClipDistanceBit(cap);
-                    const Uint32 updated =
-                        enabled ? (m_parameters.ClipDistanceEnabledMask | bit)
-                                : (m_parameters.ClipDistanceEnabledMask & ~bit);
+                    const Uint32 updated = enabled ? (m_parameters.ClipDistanceEnabledMask | bit)
+                                                   : (m_parameters.ClipDistanceEnabledMask & ~bit);
                     if (updated == m_parameters.ClipDistanceEnabledMask) break;
                     m_parameters.ClipDistanceEnabledMask = updated;
                     // Deliberately NOT BumpVersions(): no backend bakes a clip-distance enable
@@ -377,7 +407,9 @@ namespace MobileGL {
                     ++m_version;
                     break;
                 }
-                default: // not supported currently
+                // Every CapabilityInput now has storage; the arm is a backstop for a value
+                // outside the enum, not a silent swallow of a real glEnable.
+                default:
                     break;
                 }
 #undef SET_CAPABILITY
@@ -391,9 +423,11 @@ namespace MobileGL {
                     RETURN_CAPABILITY(ColorLogicOp);
                     RETURN_CAPABILITY(DebugOutput);
                     RETURN_CAPABILITY(DebugOutputSynchronous);
+                    RETURN_CAPABILITY(DepthClamp);
                     RETURN_CAPABILITY(DepthTest);
                     RETURN_CAPABILITY(CullFace);
                     RETURN_CAPABILITY(Dither);
+                    RETURN_CAPABILITY(FramebufferSrgb);
                     RETURN_CAPABILITY(LineSmooth);
                     RETURN_CAPABILITY(Multisample);
                     RETURN_CAPABILITY(PolygonOffsetFill);
@@ -409,6 +443,7 @@ namespace MobileGL {
                     RETURN_CAPABILITY(SampleMask);
                     RETURN_CAPABILITY(SampleShading);
                     RETURN_CAPABILITY(StencilTest);
+                    RETURN_CAPABILITY(TextureCubeMapSeamless);
                     RETURN_CAPABILITY(ProgramPointSize);
                 case CapabilityInput::Blend:
                     return m_parameters.BlendStates[0].Enabled;
@@ -651,8 +686,7 @@ namespace MobileGL {
             void RenderState::SetStencilOp(StencilFace face, StencilOperation fail, StencilOperation depthFail,
                                            StencilOperation depthPass) {
                 StencilFaceState& state = m_parameters.StencilStates[GetStencilFaceIndex(face)];
-                if (state.FailOp == fail && state.PassDepthFailOp == depthFail &&
-                    state.PassDepthPassOp == depthPass) {
+                if (state.FailOp == fail && state.PassDepthFailOp == depthFail && state.PassDepthPassOp == depthPass) {
                     return;
                 }
 
@@ -813,6 +847,35 @@ namespace MobileGL {
 
             Float RenderState::GetMinSampleShadingValue() const {
                 return m_parameters.MinSampleShadingValue;
+            }
+
+            void RenderState::SetShadingRate(Uint8 rate) {
+                if (m_parameters.ShadingRate == rate) return;
+
+                m_parameters.ShadingRate = rate;
+                // BumpVersions, not just ++m_version: the bytes sit in a pipeline chunk (they took
+                // its alignment padding), and the G7 rule makes every byte there pipeline state.
+                BumpVersions();
+            }
+
+            Uint8 RenderState::GetShadingRate() const {
+                return m_parameters.ShadingRate;
+            }
+
+            void RenderState::SetShadingRateCombinerOps(Uint8 op0, Uint8 op1) {
+                if (m_parameters.ShadingRateCombinerOp0 == op0 && m_parameters.ShadingRateCombinerOp1 == op1) return;
+
+                m_parameters.ShadingRateCombinerOp0 = op0;
+                m_parameters.ShadingRateCombinerOp1 = op1;
+                BumpVersions();
+            }
+
+            Uint8 RenderState::GetShadingRateCombinerOp0() const {
+                return m_parameters.ShadingRateCombinerOp0;
+            }
+
+            Uint8 RenderState::GetShadingRateCombinerOp1() const {
+                return m_parameters.ShadingRateCombinerOp1;
             }
 
             // -------------------- Pixel Store --------------------

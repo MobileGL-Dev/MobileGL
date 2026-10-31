@@ -6,10 +6,20 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#endif
 #include "Config.h"
+// For kMGPipeSubsystemsMigratedAtP5e, the push build's PipePush default (the P2, P3a and P4a
+// constants beside it are the phase-by-phase controls, not the default). Push-only, so the
+// pull build's translation unit is unchanged.
+#include <MG_Pipe/MGPipe.h>
 
 #include <cerrno>
+#include <cstdio>
 #include <cstdlib>
+// std::strcmp: InitIpc's server-role check (P12) and the system configuration's.
+#include <cstring>
 
 #ifndef _WIN32
 extern char** environ;
@@ -19,6 +29,17 @@ namespace MobileGL::MG_Config {
     // Zero/default-initialized at static-init time (all fields have constexpr-friendly
     // defaults), so it is safe to read even if MG_ConfigLoader::Init has not run yet.
     FeaturesTable Features;
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // Same contract, and for the same reason: MG_Backend::Init() reads Transport, and a
+    // build order that put it before MG_ConfigLoader::Init() must see Monolith rather than
+    // a torn enum. Defined only here - in a pull build Config.h makes Transport a constexpr
+    // and there is nothing to define.
+    TransportMode Transport = TransportMode::Monolith;
+    String TransportEndpoint;
+    Bool SplitTransportRequestedByConfig = false;
+    IpcTable Ipc;
+#endif
+    RecordArmTable RecordArm;
 } // namespace MobileGL::MG_Config
 
 namespace MobileGL::MG_ConfigLoader {
@@ -26,6 +47,139 @@ namespace MobileGL::MG_ConfigLoader {
 
     static Bool IsAcceptedPrefix(const String& key) {
         return (key.compare(0, 6, "LIBGL_") == 0 || key.compare(0, 9, "MOBILEGL_") == 0);
+    }
+
+    // ---- the system configuration -----------------------------------------------------------
+    //
+    // A library that is every process's GL implementation (installed as the system's EGL/GLX
+    // vendor) cannot rely on each process having been started with MOBILEGL_* in its environment:
+    // most are started by something that has never heard of it. So the settings a whole machine
+    // shares live in files, and the environment only overrides them:
+    //
+    //     environment  >  /etc/mobilegl/backend (MOBILEGL_BACKEND_TYPE only)  >  client.conf  >  built-in
+    //
+    // client.conf is `KEY=value` lines; blank lines and lines starting with '#' are skipped, the
+    // key and the value are trimmed, and one pair of matching quotes around the value is removed.
+    // Only MOBILEGL_* / LIBGL_* keys are taken, exactly as from the environment. The backend file
+    // holds just the backend's name (the file the backend switch rewrites), and names it over a
+    // MOBILEGL_BACKEND_TYPE line in client.conf so that switch cannot be silently shadowed.
+    //
+    // MOBILEGL_CONFIG_FILE / MOBILEGL_BACKEND_FILE name other files; set to empty they turn the
+    // file off. The defaults exist only on desktop Linux: an Android app configures its process
+    // itself, and a server process (MOBILEGL_IPC_ROLE=server) never reads the clients' file.
+    namespace {
+#if defined(__linux__) && !defined(__ANDROID__)
+        constexpr const char* kDefaultConfigFile = "/etc/mobilegl/client.conf";
+        constexpr const char* kDefaultBackendFile = "/etc/mobilegl/backend";
+#else
+        constexpr const char* kDefaultConfigFile = "";
+        constexpr const char* kDefaultBackendFile = "";
+#endif
+
+        String FilePathSetting(const char* variable, const char* fallback) {
+            const char* value = std::getenv(variable);
+            return value != nullptr ? String(value) : String(fallback);
+        }
+
+        String Trimmed(const String& text) {
+            const auto first = text.find_first_not_of(" \t\r\n");
+            if (first == String::npos) return String();
+            const auto last = text.find_last_not_of(" \t\r\n");
+            return text.substr(first, last - first + 1);
+        }
+
+        Bool IsServerProcess() {
+            const char* role = std::getenv("MOBILEGL_IPC_ROLE");
+            return role != nullptr && std::strcmp(role, "server") == 0;
+        }
+
+        // Reads `path` into `out` without replacing what `out` already holds. A missing file is
+        // not an error: the defaults are the absence of one.
+        void ReadConfigFile(const String& path, UnorderedMap<String, String>& out, Bool log) {
+            if (path.empty()) return;
+            std::FILE* file = std::fopen(path.c_str(), "r");
+            if (file == nullptr) return;
+            char buffer[4096];
+            Uint32 lineNumber = 0;
+            while (std::fgets(buffer, sizeof(buffer), file) != nullptr) {
+                ++lineNumber;
+                const String line = Trimmed(buffer);
+                if (line.empty() || line[0] == '#') continue;
+                const auto equals = line.find('=');
+                const String key = equals == String::npos ? String() : Trimmed(line.substr(0, equals));
+                if (key.empty() || !IsAcceptedPrefix(key)) {
+                    if (log) {
+                        MGLOG_W("Config: %s:%u is not a MOBILEGL_*/LIBGL_* KEY=value line; ignored", path.c_str(),
+                                lineNumber);
+                    }
+                    continue;
+                }
+                String value = Trimmed(line.substr(equals + 1));
+                if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
+                    value.back() == value.front()) {
+                    value = value.substr(1, value.size() - 2);
+                }
+                out.emplace(key, value);
+            }
+            std::fclose(file);
+        }
+
+        void ReadBackendFile(const String& path, UnorderedMap<String, String>& out) {
+            if (path.empty()) return;
+            std::FILE* file = std::fopen(path.c_str(), "r");
+            if (file == nullptr) return;
+            char buffer[256];
+            const Bool read = std::fgets(buffer, sizeof(buffer), file) != nullptr;
+            std::fclose(file);
+            if (!read) return;
+            const String name = Trimmed(buffer);
+            if (!name.empty()) out.emplace("MOBILEGL_BACKEND_TYPE", name);
+        }
+
+        // Everything the system files say, the backend file ahead of client.conf (first emplace
+        // wins). Re-read on every call: callers are few (Init, a handful of lookups before it, and a
+        // verify build's comparator when it arms), and a file that changed between two processes'
+        // starts must not be served stale.
+        void ReadSystemConfig(UnorderedMap<String, String>& out, Bool log) {
+            if (IsServerProcess()) return;
+            ReadBackendFile(FilePathSetting("MOBILEGL_BACKEND_FILE", kDefaultBackendFile), out);
+            ReadConfigFile(FilePathSetting("MOBILEGL_CONFIG_FILE", kDefaultConfigFile), out, log);
+#if defined(__ANDROID__)
+            // An app that hosts the library (FCL) owns its process environment, so a developer
+            // has no way to set a MOBILEGL_* knob in it. `adb shell setprop debug.mobilegl.env
+            // "MOBILEGL_A=1;MOBILEGL_B=0"` does it, below the environment like the Linux config
+            // file (PROP_VALUE_MAX bounds it to a few keys).
+            char property[PROP_VALUE_MAX] = {};
+            if (__system_property_get("debug.mobilegl.env", property) > 0) {
+                String all(property);
+                SizeT start = 0;
+                while (start < all.size()) {
+                    SizeT end = all.find(';', start);
+                    if (end == String::npos) end = all.size();
+                    const String item = all.substr(start, end - start);
+                    const SizeT eq = item.find('=');
+                    if (eq != String::npos && eq > 0) {
+                        out.emplace(item.substr(0, eq), item.substr(eq + 1));
+                        if (log) MGLOG_I("Config: debug.mobilegl.env sets %s", item.c_str());
+                    }
+                    start = end + 1;
+                }
+            }
+#endif
+        }
+    } // namespace
+
+    Bool LookupSetting(const char* key, String& outValue) {
+        if (const char* value = std::getenv(key)) {
+            outValue = value;
+            return true;
+        }
+        UnorderedMap<String, String> system;
+        ReadSystemConfig(system, false);
+        const auto it = system.find(key);
+        if (it == system.end()) return false;
+        outValue = it->second;
+        return true;
     }
 
     inline void InitializeAcceptedEnvVariables() {
@@ -58,6 +212,15 @@ namespace MobileGL::MG_ConfigLoader {
                 }
             }
         }
+
+        // Below the environment: a key the environment set is never replaced.
+        UnorderedMap<String, String> system;
+        ReadSystemConfig(system, true);
+        for (const auto& [key, value] : system) {
+            if (acceptedEnvVariablesMap->emplace(key, value).second) {
+                MGLOG_D("Config: Accepted system setting: %s=%s", key.c_str(), value.c_str());
+            }
+        }
     }
 
     inline void QueryEnvVariable(const String& key, String& outValue, const String& defaultValue) {
@@ -88,13 +251,20 @@ namespace MobileGL::MG_ConfigLoader {
 
     // Quirk overrides are tri-state: an unset variable keeps device auto-detection, a truthy
     // value forces the quirk on, anything else set ("0", "false", "") forces it off.
+    // Unset, empty or "auto" keeps Auto; "forceon"/"on" and "forceoff"/"off"/"no" name the two
+    // overrides; anything else is read as a flag (1/true -> ForceOn, 0/false -> ForceOff).
     inline MG_Config::QuirkOverride QueryEnvQuirkOverride(const String& key) {
         auto it = acceptedEnvVariablesMap->find(key);
         if (it == acceptedEnvVariablesMap->end()) {
             return MG_Config::QuirkOverride::Auto;
         }
-        return IsTruthyValue(it->second) ? MG_Config::QuirkOverride::ForceOn
-                                         : MG_Config::QuirkOverride::ForceOff;
+        String lowered = it->second;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lowered.empty() || lowered == "auto") return MG_Config::QuirkOverride::Auto;
+        if (lowered == "forceon" || lowered == "on") return MG_Config::QuirkOverride::ForceOn;
+        if (lowered == "forceoff" || lowered == "off" || lowered == "no") return MG_Config::QuirkOverride::ForceOff;
+        return IsTruthyValue(it->second) ? MG_Config::QuirkOverride::ForceOn : MG_Config::QuirkOverride::ForceOff;
     }
 
     // Multi-draw mode is a named-value preference: unset keeps Auto (best supported tier),
@@ -159,6 +329,38 @@ namespace MobileGL::MG_ConfigLoader {
         return static_cast<Uint32>(parsedValue);
     }
 
+    // Same contract as QueryEnvUint32, over 64 bits and accepting an explicit 0x prefix: the
+    // one consumer is a subsystem BITMASK, and a bitmask written in decimal is unreadable.
+    // Decimal otherwise - never strtoull's base 0, whose "leading zero means octal" rule
+    // silently read MOBILEGL_PIPE_PUSH=010 as 8 - and a '-' anywhere is rejected rather than
+    // wrapped, which strtoull would otherwise do without complaint (-1 -> every bit set).
+    inline Uint64 QueryEnvUint64(const String& key, Uint64 defaultValue) {
+        auto it = acceptedEnvVariablesMap->find(key);
+        if (it == acceptedEnvVariablesMap->end()) {
+            return defaultValue;
+        }
+
+        const String& value = it->second;
+        const char* text = value.c_str();
+        int base = 10;
+        if (value.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+            text += 2;
+            base = 16;
+        }
+        char* parseEnd = nullptr;
+        errno = 0;
+        const bool negative = value.find('-') != String::npos;
+        const unsigned long long parsedValue = negative ? 0 : std::strtoull(text, &parseEnd, base);
+        if (negative || parseEnd == text || *parseEnd != '\0' || errno == ERANGE) {
+            MGLOG_W("Config: Ignoring invalid env variable %s='%s'; expected a non-negative integer "
+                    "(decimal, or 0x-prefixed hexadecimal), using default %llu",
+                    key.c_str(), value.c_str(), static_cast<unsigned long long>(defaultValue));
+            return defaultValue;
+        }
+
+        return static_cast<Uint64>(parsedValue);
+    }
+
     inline void InitFeatures() {
         auto& features = MG_Config::Features;
         features.DisableTimerQuery = QueryEnvFlag("MOBILEGL_DISABLE_TIMERQUERY");
@@ -168,32 +370,45 @@ namespace MobileGL::MG_ConfigLoader {
 #if defined(MOBILEGL_TRACE_ANGLE_VARIANTS)
         QueryEnvVariable("MOBILEGL_TRACE_ANGLE_VARIANT", features.TraceAngleVariant, "");
 #endif
-        features.MagmaDisableSubgroup = QueryEnvFlag("MOBILEGL_MAGMA_DISABLE_SUBGROUP");
-        features.MagmaEmulateSubgroup = QueryEnvFlag("MOBILEGL_MAGMA_EMULATE_SUBGROUP");
-        features.MagmaFixIterationRPSubgroupScratch =
-            QueryEnvQuirkOverride("MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
-        features.MagmaIterationRPFixBarrier = QueryEnvFlag("MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER");
-        features.MagmaDeriveNumSubgroups = QueryEnvQuirkOverride("MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS");
+        features.SubgroupEmulation = QueryEnvQuirkOverride("MOBILEGL_SUBGROUP_EMULATION");
+        features.IterationRPFix = QueryEnvQuirkOverride("MOBILEGL_ITRP_FIX");
+        features.MagmaInPassClear = QueryEnvQuirkOverride("MOBILEGL_MAGMA_INPASS_CLEAR");
+        features.MagmaInPassClearDefault = QueryEnvQuirkOverride("MOBILEGL_MAGMA_INPASS_CLEAR_DEFAULT");
+        features.MagmaPassCache = QueryEnvQuirkOverride("MOBILEGL_MAGMA_PASS_CACHE");
+        features.MagmaVertexConversionCache = QueryEnvQuirkOverride("MOBILEGL_MAGMA_VERTEX_CONVERSION_CACHE");
+        features.MagmaWriteRename = QueryEnvQuirkOverride("MOBILEGL_MAGMA_WRITE_RENAME");
+        features.EsprytVaoShadow = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_VAO_SHADOW");
+        features.PipeVertexElementsDedup = QueryEnvQuirkOverride("MOBILEGL_PIPE_VERTEX_ELEMENTS_DEDUP");
+        features.PipeFramebufferStateMemo = QueryEnvQuirkOverride("MOBILEGL_PIPE_FRAMEBUFFER_STATE_MEMO");
         features.AdvertiseFp64 = QueryEnvFlag("MOBILEGL_ADVERTISE_FP64");
         features.MagmaR11G11B10FFallback = QueryEnvFlag("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
-        features.MagmaFramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);
+        features.MagmaAllowInvalidSpirv = QueryEnvFlag("MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV");
+        // P15: one backend-neutral knob; the Magma-only spelling stays as a deprecated alias.
+        if (acceptedEnvVariablesMap->count("MOBILEGL_FRAMES_IN_FLIGHT") != 0) {
+            features.FramesInFlight = QueryEnvUint32("MOBILEGL_FRAMES_IN_FLIGHT", 3, 1, 64);
+        } else {
+            features.FramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);
+            if (acceptedEnvVariablesMap->count("MOBILEGL_MAGMA_FRAMESINFLIGHT") != 0)
+                MGLOG_W("Config: MOBILEGL_MAGMA_FRAMESINFLIGHT is deprecated; use MOBILEGL_FRAMES_IN_FLIGHT");
+        }
+        features.MagmaExtraSwapchainImages = QueryEnvUint32("MOBILEGL_MAGMA_EXTRA_SWAPCHAIN_IMAGES", 0, 0, 16);
         features.MagmaMaxDrawsPerCommandBuffer =
             QueryEnvUint32("MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER", 16384, 0, 1u << 24);
         features.MagmaDescriptorTrimFrames = QueryEnvUint32("MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES", 120, 0, 1u << 20);
-        features.EsprytAvoidSamplerMipmapMinFilter =
-            QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
+        features.EsprytAvoidSamplerMipmapMinFilter = QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
         features.EsprytAvoidExplicitLodBias = QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS");
         features.EsprytUnlocatedIoBlocks = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS");
+        features.EsprytDeferGeometryEmits = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_DEFER_GEOMETRY_EMITS");
+        features.EsprytAtomicSubgroupScratch = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_ATOMIC_SUBGROUP_SCRATCH");
+        features.EsprytInvalidImagePlaceholder = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_INVALID_IMAGE_PLACEHOLDER");
         features.PointSizeDemotion = QueryEnvQuirkOverride("MOBILEGL_POINT_SIZE_DEMOTION");
         features.CoherentAsFlush = QueryEnvFlag("MOBILEGL_COHERENT_AS_FLUSH");
-        features.TraceSkipAutodestroy = QueryEnvFlag("MOBILEGL_TRACE_SKIP_AUTODESTROY");
         features.EsprytDisableUboRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UBO_RING");
         features.EsprytDisableUnpackRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UNPACK_RING");
         features.EsprytDisableUploadRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UPLOAD_RING");
         features.EsprytDisableInvalidateFlush = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH");
         features.DisableLargeBufferAdoption = QueryEnvFlag("MOBILEGL_DISABLE_LARGE_BUFFER_ADOPTION");
-        features.EsprytForceDepthStencilReadbackEmulation =
-            QueryEnvFlag("MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION");
+        features.EsprytForceDepthStencilReadbackEmulation = QueryEnvFlag("MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION");
         features.RelaxedSemantics = QueryEnvFlag("MOBILEGL_RELAXED_SEMANTICS");
         features.MagmaDisableBlendedDepthWriteQuirk =
             QueryEnvQuirkOverride("MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE");
@@ -202,19 +417,61 @@ namespace MobileGL::MG_ConfigLoader {
         features.EsprytMultiDrawMode = QueryEnvGLESMultiDrawMode("MOBILEGL_ESPRYT_MULTIDRAW_MODE");
         features.AsyncShaderCompile = QueryEnvQuirkOverride("MOBILEGL_ASYNC_SHADER_COMPILE");
         features.AsyncShaderCompileThreads = QueryEnvUint32("MOBILEGL_ASYNC_SHADER_COMPILE_THREADS", 0, 0, 64);
-        features.AsyncOptimisticShaderStatus =
-            QueryEnvQuirkOverride("MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS");
+        features.DisableShaderPrewarm = QueryEnvFlag("MOBILEGL_DISABLE_SHADER_PREWARM");
+        features.AsyncOptimisticShaderStatus = QueryEnvQuirkOverride("MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS");
         features.ShaderTranslationCache = QueryEnvQuirkOverride("MOBILEGL_SHADER_CACHE");
-        features.EsprytViewportArrayEmulation =
-            QueryEnvQuirkOverride("MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION");
-        features.EsprytWidenPacked16Storage =
-            QueryEnvQuirkOverride("MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE");
+        features.EsprytViewportArrayEmulation = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION");
+        features.EsprytWidenPacked16Storage = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE");
         features.MagmaPrimGenQueryReroute = QueryEnvQuirkOverride("MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE");
+        features.MagmaE5RawReads = QueryEnvQuirkOverride("MOBILEGL_MAGMA_E5_RAW_READS");
+        features.MagmaSplitSliceCopies = QueryEnvQuirkOverride("MOBILEGL_MAGMA_SPLIT_SLICE_COPIES");
+        features.MagmaReemitStateAfterDiscard = QueryEnvQuirkOverride("MOBILEGL_MAGMA_REEMIT_STATE_AFTER_DISCARD");
+        // MGPipe. Nothing here needs adding to an allow-list: InitializeAcceptedEnvVariables
+        // accepts every MOBILEGL_ / LIBGL_ prefixed variable in the environment, so a name
+        // that starts with MOBILEGL_ is visible to these queries by construction.
+        // A push build with the knob unset runs every subsystem migrated so far, so the
+        // shipped path is the one the gates measure; MOBILEGL_PIPE_PUSH=0 in the
+        // environment is the all-subsystems-pull control that reproduces P1 exactly, and
+        // kMGPipeSubsystemsMigratedAtP3a (0x1ff) is the phase-by-phase control - P4a's four
+        // subsystems off, everything P3a landed still on.
+        features.PipePush = QueryEnvUint64("MOBILEGL_PIPE_PUSH", MG_Pipe::kMGPipeSubsystemsMigratedAtP5e);
+        // P13 W3b (ID-P13-3): bits 0-13 are fixed on. The arms a cleared bit used to select
+        // (the pre-handle memos, the pull build's frontend reads) are gone, so a cleared bit has
+        // nothing to run; it is refused here, by name, before any backend is brought up, rather
+        // than discovered as an armless subsystem at its first draw. Bit 63 (CSO content
+        // addressing off) stays a switch.
+        if ((features.PipePush & MG_Pipe::kMGPipeSubsystemsMigratedAtP5e) != MG_Pipe::kMGPipeSubsystemsMigratedAtP5e) {
+            MGLOG_F("MGPipe: Fatal{PipeSubsystemsFixedOn, \"MOBILEGL_PIPE_PUSH=0x%llx clears subsystem "
+                    "bit(s) 0x%llx; bits 0-13 are fixed on since P13 - only bit 63 may be set or "
+                    "cleared\"}",
+                    static_cast<unsigned long long>(features.PipePush),
+                    static_cast<unsigned long long>(MG_Pipe::kMGPipeSubsystemsMigratedAtP5e & ~features.PipePush));
+            std::abort();
+        }
+        features.PipeVerify = QueryEnvFlag("MOBILEGL_PIPE_VERIFY");
+        // Defaults ON: read as a tri-state so only an explicitly falsy value turns it off.
+        features.PipeVerifyFatal =
+            QueryEnvQuirkOverride("MOBILEGL_PIPE_VERIFY_FATAL") != MG_Config::QuirkOverride::ForceOff;
+        features.PipeStats = QueryEnvFlag("MOBILEGL_PIPE_STATS");
+        features.PipeIndexMirrorMb = QueryEnvUint32("MOBILEGL_PIPE_INDEX_MIRROR_MB", 64, 0, 4096);
+        features.PipeStatsPeriod = QueryEnvUint32("MOBILEGL_PIPE_STATS_PERIOD", 120, 1, 1000000);
+        QueryEnvVariable("MOBILEGL_PIPE_STATS_FILE", features.PipeStatsFile, "");
     }
 
     inline void InitBackendType() {
         String backendTypeStr;
         QueryEnvVariable("MOBILEGL_BACKEND_TYPE", backendTypeStr, "DirectGLES");
+#if defined(__ANDROID__)
+        // An Android app that hosts the library sets the environment itself, before the library
+        // loads; the debug property is how a developer picks the backend for such a process
+        // without rebuilding it (`adb shell setprop debug.mobilegl.backend DirectVulkan`).
+        char property[PROP_VALUE_MAX] = {};
+        if (__system_property_get("debug.mobilegl.backend", property) > 0) {
+            MGLOG_I("Config: debug.mobilegl.backend=%s overrides MOBILEGL_BACKEND_TYPE=%s", property,
+                    backendTypeStr.c_str());
+            backendTypeStr = property;
+        }
+#endif
 #define ENTRY(backendType)                                                                                             \
     if (backendTypeStr == #backendType) {                                                                              \
         MG_Config::ActiveBackendType = BackendType::backendType;                                                       \
@@ -228,12 +485,288 @@ namespace MobileGL::MG_ConfigLoader {
 #undef ENTRY
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // MOBILEGL_TRANSPORT = monolith | inproc | spawn | unix:<path> | pipe:<name>
+    // (ARCHITECTURE.md §16). Shaped after InitBackendType above: an exact-name table, then
+    // one fallback that names what it did instead. The two prefixed forms are the only
+    // reason this is not literally that function's ENTRY macro.
+    //
+    // spawn / unix: / pipe: PARSE AND THEN REFUSE. They are P6's, and the refusal is NAMED
+    // rather than silent, because the failure this avoids is a P6 lane that set
+    // MOBILEGL_TRANSPORT=spawn, fell back to monolith, and went green on the wrong arm.
+    // The mode is left at Monolith so nothing half-initializes.
+    inline void InitTransport() {
+        String value;
+        QueryEnvVariable("MOBILEGL_TRANSPORT", value, "monolith");
+#if defined(__ANDROID__)
+        // As debug.mobilegl.backend above: a developer picks the transport of an app-hosted
+        // library (a launcher's game process) without rebuilding it or its launcher.
+        char property[PROP_VALUE_MAX] = {};
+        if (__system_property_get("debug.mobilegl.transport", property) > 0) {
+            MGLOG_I("Config: debug.mobilegl.transport=%s overrides MOBILEGL_TRANSPORT=%s", property, value.c_str());
+            value = property;
+        }
+#endif
+        String lowered = value;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        MG_Config::TransportEndpoint.clear();
+        if (lowered.empty() || lowered == "monolith") {
+            MG_Config::Transport = MG_Config::TransportMode::Monolith;
+            return;
+        }
+        if (lowered == "inproc") {
+            MG_Config::Transport = MG_Config::TransportMode::InProcess;
+            // P7 F1: see Config.h. Set beside the mode, on the two arms that actually resolve
+            // one, and NOT on the two that name a transport and then stay monolith - a process
+            // that was refused its transport brings no client half up either.
+            MG_Config::SplitTransportRequestedByConfig = true;
+            MGLOG_I("Config: MOBILEGL_TRANSPORT=inproc - the MGPipe record stream crosses a real "
+                    "ring to an apply thread");
+            return;
+        }
+        // The three P6 forms. Recognized precisely, so the diagnostic can say "rejected"
+        // rather than "unknown", which are different bugs on the operator's side.
+        // P6 `sm`/`cp`: spawn is IMPLEMENTED. It launches a server process on a
+        // rendezvous of its own and connects to it - the two processes are
+        // independent, so this is `Dial = Connect` with a launcher attached
+        // rather than the fork-coupled shape ARCHITECTURE.md §15.1 described.
+        if (lowered == "spawn") {
+            MG_Config::Transport = MG_Config::TransportMode::Spawn;
+            MG_Config::SplitTransportRequestedByConfig = true; // P7 F1, as above.
+            // THE SAME SHAPE AS THE inproc LINE ABOVE, AND FOR THE SAME REASON.
+            // run_trace_case.cmake asserts on a distinctive sentence from this
+            // function rather than on `MOBILEGL_TRANSPORT=spawn` alone, because
+            // ConfigLoader logs an `Accepted env variable: KEY=VALUE` line for
+            // every MOBILEGL_* in EVERY build including the pull one - so the
+            // bare KEY=VALUE is satisfied by a monolith library that parsed
+            // nothing (review M-5). A spawn arm with no line of its own could
+            // only have been asserted with the inproc marker, which spawn never
+            // emits: the arm would have been red for a missing sentence rather
+            // than green for a working transport.
+            MGLOG_I("Config: MOBILEGL_TRANSPORT=spawn - the MGPipe record stream crosses a real "
+                    "ring to an apply thread in ANOTHER PROCESS");
+            return;
+        }
+        if (lowered.compare(0, 5, "unix:") == 0 || lowered.compare(0, 5, "pipe:") == 0) {
+            // unix: and pipe: are NOT MOBILEGL_TRANSPORT values and are rejected here. Connecting
+            // to a server somebody else is listening on is `spawn` plus
+            // MOBILEGL_IPC_CONTROL=unix:<path>|unix:@<name>|tcp://host:port (InitIpc); there is
+            // no pipe: form. Named, never a silent degrade.
+            MGLOG_E("Config: MOBILEGL_TRANSPORT='%s' names a transport P6 does not implement yet; "
+                    "staying on monolith. This run is NOT a split run.",
+                    value.c_str());
+            MG_Config::Transport = MG_Config::TransportMode::Monolith;
+            return;
+        }
+        MGLOG_W("Config: Ignoring invalid env variable MOBILEGL_TRANSPORT='%s'; expected "
+                "monolith|inproc|spawn|unix:<path>|pipe:<name>, using monolith",
+                value.c_str());
+        MG_Config::Transport = MG_Config::TransportMode::Monolith;
+    }
+
+    // The MOBILEGL_IPC_* family (Config.h IpcTable). Parsed unconditionally rather than only
+    // when Transport != Monolith: a knob that silently means nothing on one arm of an A/B is
+    // how an A/B stops being one, and the ranges below are the diagnostics.
+    inline void InitIpc() {
+        auto& ipc = MG_Config::Ipc;
+        QueryEnvVariable("MOBILEGL_IPC_SERVER_PATH", ipc.ServerPath, "");
+        QueryEnvVariable("MOBILEGL_IPC_CONTROL", ipc.Control, "fork");
+        QueryEnvVariable("MOBILEGL_IPC_DATA", ipc.Data, "auto");
+        // Both ring floors are 1 MiB, not 0: a ring caps ONE record at half its size, and
+        // the catalog's largest fixed payload (MGPFramebufferState, 304 bytes) plus a
+        // create_shader_state archive already needs far more than a toy ring. The ceilings
+        // are sanity, not policy.
+        ipc.RingMb = QueryEnvUint32("MOBILEGL_IPC_RING_MB", 8, 1, 1024);
+        ipc.StageMb = QueryEnvUint32("MOBILEGL_IPC_STAGE_MB", 32, 1, 4096);
+        ipc.SpinUs = QueryEnvUint32("MOBILEGL_IPC_SPIN_US", 50, 0, 1000000);
+        // PH-6 (ID-P7-2; Config.h has the semantics). 0 is NOT admitted: a server with no
+        // patience at all would forfeit a healthy run-ahead client the first time its ring
+        // filled between two of the client's drains, which is an ordinary backlog.
+        ipc.EventWaitMs = QueryEnvUint32("MOBILEGL_IPC_EVENT_WAIT_MS", 2000, 1, 600000);
+        ipc.BatchWaits = QueryEnvUint32("MOBILEGL_IPC_BATCH_WAITS", 1, 0, 1);
+        // The create window: default 10, range 1..12. 12 is WireTables.cpp's kCreateWindowMax, half
+        // of the stream link's declared-answer store, and its static_assert checks that bound.
+        // Config.h has the semantics and the reason for the default.
+        ipc.CreateWindow = QueryEnvUint32("MOBILEGL_IPC_CREATE_WINDOW", 10, 1, 12);
+        // P9 W1: the pack-buffer readback's A/B and red-once control (Config.h says both).
+        ipc.PboReadbackSync = QueryEnvUint32("MOBILEGL_IPC_PBO_READBACK_SYNC", 0, 0, 1);
+        // P10: fence polls answered locally; 0 is the A/B arm (Config.h).
+        ipc.PollEscalate = QueryEnvUint32("MOBILEGL_IPC_POLL_ESCALATE", 64, 0, 1000000);
+        // A lost session is replaced by a fresh one on the application's next create (Config.h).
+        ipc.RecoverAfterLoss = QueryEnvUint32("MOBILEGL_IPC_RECOVER", 1, 0, 1);
+        // The verify harness compares the pushed block against the applier per verb; a
+        // batched queue lets the comparer read a supplied field mid-apply, which is a
+        // torn read rather than a divergence. The batch is therefore off whenever the
+        // shadow comparer is armed, which only a verify build compiles.
+#if MOBILEGL_PIPE_VERIFY
+        if (MG_Config::Features.PipeVerify) ipc.BatchWaits = 0;
+#endif
+        // UNSET is T0 with quiet fallbacks (the default since 2026-09-29); 0 asks for T0 by name, 1 is
+        // refused by name, 2 is T2 - settled at the handshake from the data plane (P11 A1/B2,
+        // MG_Remote/Transport/AdoptTier.h). An unparseable value is warned about and reads as unset.
+        ipc.AdoptTier = QueryEnvUint32("MOBILEGL_IPC_ADOPT_TIER", MG_Config::kAdoptTierUnset, 0, 2);
+        // P11 B2: the server's own T0 allow switch (Config.h).
+        ipc.AllowAdoptT0 = QueryEnvUint32("MOBILEGL_IPC_ALLOW_ADOPT_T0", 1, 0, 1);
+        // P5e (§1). The wait rule's A/B, parsed here like every
+        // other IPC knob and armed only where the server publishes kCapRunAheadApply.
+        ipc.RunAhead = QueryEnvUint32("MOBILEGL_IPC_RUN_AHEAD", 1, 0, 1);
+        // ... and forced OFF by the verify harness for BatchWaits' reason, one step further:
+        // run-ahead's whole point is that the client stops filling gPipeInputs for an
+        // unbarriered record, and the comparator has nothing left to compare when it does.
+#if MOBILEGL_PIPE_VERIFY
+        if (MG_Config::Features.PipeVerify) ipc.RunAhead = 0;
+#endif
+        // The present credit (ruling 4). 1 is one frame of overlap; 8 is the ceiling because a
+        // deeper queue buys nothing on a CPU-bound client and pays for it in latency. 0 is NOT
+        // admitted: a credit of zero would mean "publish no present at all".
+        // P15: derived from MOBILEGL_FRAMES_IN_FLIGHT (Config.h states the mapping); the explicit
+        // knob stays as an override for experiments.
+        {
+            const Uint32 derived = std::max<Uint32>(
+                1u, std::min<Uint32>(8u, MG_Config::Features.FramesInFlight > 2 ? MG_Config::Features.FramesInFlight - 2
+                                                                                : 1u));
+            ipc.PresentCredit = QueryEnvUint32("MOBILEGL_IPC_PRESENT_CREDIT", derived, 1, 8);
+        }
+        // CONTRACT-P6 D5b's reply bound and P7's cold-start budget (Config.h has the semantics).
+        // Both are floored at 100 ms: a zero bound would declare every live server silent.
+        ipc.ControlTimeoutMs = QueryEnvUint32("MOBILEGL_IPC_CONTROL_TIMEOUT_MS", 5000, 100, 600000);
+        ipc.ColdStartMs = QueryEnvUint32("MOBILEGL_IPC_COLD_START_MS", 20000, 100, 600000);
+        ipc.StrictErrors = QueryEnvFlag("MOBILEGL_IPC_STRICT_ERRORS");
+        ipc.WaitStats = QueryEnvFlag("MOBILEGL_IPC_WAIT_STATS");
+        ipc.Audit = QueryEnvFlag("MOBILEGL_IPC_AUDIT");
+        QueryEnvVariable("MOBILEGL_IPC_SERVER_AFFINITY", ipc.ServerAffinity, "auto");
+        // P5f f1: the dual-block rehearsal (P5F-WIRE-COMPLETENESS.md §4). Forced OFF by the
+        // verify harness: the comparator's entry compare and compare-at-read hook are built on
+        // there being ONE filled block (the hook pins itself to &gPipeInputs,
+        // PipeFill.cpp's MGPipeVerifyReadHook), which is exactly what the rehearsal splits.
+        // P15: ON BY DEFAULT. Every split lane and the on-device retrace gate already ran with it,
+        // and the dual-block census is empty (no apply reads a client-filled field), so the
+        // shipped arm now matches what is tested - and with two blocks the client's fill is its
+        // own and needs no applier quiesce. 0 still turns it off (the negative control does).
+        ipc.RoleSplitState =
+            QueryEnvQuirkOverride("MOBILEGL_IPC_ROLE_SPLIT_STATE") != MG_Config::QuirkOverride::ForceOff;
+#if MOBILEGL_PIPE_VERIFY
+        if (MG_Config::Features.PipeVerify && ipc.RoleSplitState) {
+            MGLOG_W("Config: MOBILEGL_IPC_ROLE_SPLIT_STATE=1 is incompatible with "
+                    "MOBILEGL_PIPE_VERIFY (the comparator owns the single fill block); "
+                    "the dual-block rehearsal is OFF for this run");
+            ipc.RoleSplitState = false;
+        }
+#endif
+
+        // P6 `dl` (CONTRACT-P6 5.3): MOBILEGL_IPC_RESPAWN IS A NAMED REFUSAL, NOT A NO-OP.
+        //
+        // The device-lost latch is deliberately one-way - a session whose server died has
+        // nothing to recover into, because every handle the client minted names an object in a
+        // process that no longer exists. Re-pushing the world onto a fresh server is the work
+        // this knob would turn on, and no stage has written it.
+        //
+        // Refused BY NAME rather than parsed and ignored, for the reason Config.h gives about
+        // the whole IPC family: an environment variable nothing consumes is indistinguishable
+        // from one that is consumed and does nothing, and an operator who set this one would
+        // otherwise conclude that recovery had been tried and had not helped.
+        {
+            String respawn;
+            QueryEnvVariable("MOBILEGL_IPC_RESPAWN", respawn, "");
+            if (!respawn.empty() && respawn != "0") {
+                MGLOG_E("Config: MOBILEGL_IPC_RESPAWN='%s' names a recovery NO STAGE HAS "
+                        "IMPLEMENTED. The device-lost latch is one-way on purpose: every handle "
+                        "this client minted names an object inside the server process, so a new "
+                        "server would have to be re-pushed the entire world before a single verb "
+                        "could land. This run will latch device-lost and stay there.",
+                        respawn.c_str());
+            }
+        }
+
+        // P12 (on-screen server window): MOBILEGL_IPC_SURFACE = offscreen | server (Config.h has
+        // the semantics). An unknown value is named and read as the default, like every knob here.
+        {
+            String surface;
+            QueryEnvVariable("MOBILEGL_IPC_SURFACE", surface, "offscreen");
+            std::transform(surface.begin(), surface.end(), surface.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (surface.empty() || surface == "offscreen") {
+                ipc.Surface = MG_Config::IpcSurface::Offscreen;
+            } else if (surface == "server") {
+                ipc.Surface = MG_Config::IpcSurface::Server;
+            } else {
+                MGLOG_W("Config: Ignoring invalid env variable MOBILEGL_IPC_SURFACE='%s'; expected "
+                        "offscreen|server, using offscreen",
+                        surface.c_str());
+                ipc.Surface = MG_Config::IpcSurface::Offscreen;
+            }
+            // (Not said by a server process: a spawned server inherits the client's environment,
+            // parses this before RunSession sets its own transport, and has no client half anyway.)
+            const char* role = std::getenv("MOBILEGL_IPC_ROLE");
+            const Bool serverProcess = role != nullptr && std::strcmp(role, "server") == 0;
+            if (ipc.Surface == MG_Config::IpcSurface::Server && !serverProcess &&
+                MG_Config::Transport != MG_Config::TransportMode::Spawn) {
+                // Said, not silently honored: there is no remote server here to own a window.
+                MGLOG_W("Config: MOBILEGL_IPC_SURFACE=server is IGNORED - it asks a remote server "
+                        "(MOBILEGL_TRANSPORT=spawn, a fork or tcp:// control) to own the window surface, "
+                        "and this run has none. Window surfaces stay the client's own");
+            }
+        }
+
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        // One line, on the arm where these numbers decide behavior, because every one of
+        // them is a number a bug report has to quote.
+        // CREATE-WINDOW IS IN THIS LINE BECAUSE A RUN HAS TO SAY WHICH WINDOW IT USED. It was
+        // missing while the value was a number nobody varied, and the moment it became one that
+        // changes the wall clock by seconds (the P12 sweep: 28.3 s at 1 down to 10.8 s at 6) a
+        // log that does not name it makes every run ambiguous about its own configuration.
+        MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB wire-deferred=%uMiB spin=%uus event-wait=%ums "
+                "create-window=%u pbo-readback-sync=%u poll-escalate=%u "
+                "adopt-tier=%s allow-t0=%u run-ahead=%u present-credit=%u control-timeout=%ums "
+                "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s' surface=%s",
+                ipc.RingMb, ipc.StageMb, MG_Config::RecordArm.WireDeferredMb, ipc.SpinUs, ipc.EventWaitMs,
+                ipc.CreateWindow, ipc.PboReadbackSync, ipc.PollEscalate,
+                ipc.AdoptTier == 0   ? "0"
+                : ipc.AdoptTier == 1 ? "1"
+                : ipc.AdoptTier == 2 ? "2"
+                                     : "unset(T0)",
+                ipc.AllowAdoptT0, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs, ipc.ColdStartMs,
+                static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit), static_cast<int>(ipc.RoleSplitState),
+                ipc.ServerAffinity.c_str(), MG_Config::ServerOwnedWindowSurfaces() ? "server" : "offscreen");
+    }
+#endif
+
+    // P13 W5: the record arm's knobs (Config.h RecordArmTable), in every build that has the arm.
+    inline void InitRecordArm() {
+        MG_Config::RecordArmTable& ipc = MG_Config::RecordArm;
+        // P7 wave 4 M2 (Config.h has the semantics). 0 is admitted ON PURPOSE as the negative
+        // control: no forced sync, and MagmaWireReclaimScenario's watermark case must go red.
+        ipc.WireDeferredMb = QueryEnvUint32("MOBILEGL_IPC_WIRE_DEFERRED_MB", 64, 0, 65536);
+        // Whole-range push is the 0 arm; with it on (default) only blocks whose
+        // xxHash64 changed since the last push are shipped.
+        ipc.PersistentHashSuppress = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS", 1, 0, 1);
+        ipc.PersistentMprotect = QueryEnvUint32("MOBILEGL_PIPE_PERSISTENT_MPROTECT", 1, 0, 1);
+        if (ipc.PersistentMprotect == 0) {
+            MGLOG_W("Config: MOBILEGL_PIPE_PERSISTENT_MPROTECT=0 - no SIGSEGV handler is installed "
+                    "for persistent write maps; every one takes the hash scan");
+        }
+        if (ipc.WireDeferredMb == 0) {
+            MGLOG_W("Config: MOBILEGL_IPC_WIRE_DEFERRED_MB=0 is the M2 NEGATIVE CONTROL: the "
+                    "server never forces a sync for orphaned wire buffer stores, so a long frame "
+                    "that respecifies and draws holds every one of them until the frame ends");
+        }
+    }
+
     void Init() {
         MGLOG_D("Loading configuration from environment variables...");
         InitializeAcceptedEnvVariables();
 
         InitBackendType();
         InitFeatures();
+        InitRecordArm();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // After InitFeatures, so the one line InitIpc logs is the last word on this run's
+        // configuration, and before the accepted-env map is destroyed just below.
+        InitTransport();
+        InitIpc();
+#endif
 
         // Destroy the map since we won't need it anymore
         acceptedEnvVariablesMap.reset();

@@ -9,6 +9,7 @@
 #pragma once
 #include "Config.h"
 #include "FrameContext.h"
+#include "MagmaPipeArms.h"
 #include "PipelineFactory.h"
 #include "ProgramFactory.h"
 #include "SwapchainObject.h"
@@ -21,10 +22,20 @@
 #include "VkSamplerManager.h"
 #include "VkTextureManager.h"
 #include "VkTimerQueryManager.h"
+#include "GpuProgressMarkers.h"
+#include "WireRenderPassCompatibility.h"
+#include "WireE5RawCopy.h"
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Remote/Server/SharedImageRegistry.h>
+#endif
 #include "MG_Util/Math/VectorTypes.h"
 #include <Includes.h>
 #include <MG_Backend/BackendObject.h>
+#include <MG_Pipe/MGPipeHandles.h>
 #include <MG_Util/SelfTest/PrimitivesGeneratedNoXfbProbe.h>
+// The applier's CSO store: MGPipeApplier().BoundRenderStateCso is what the pipeline memo
+// keys on after P2 (D12.1). Push-only, so the pull build's include graph is unchanged.
+#include <MG_Pipe/PipeApply.h>
 #include <vk_mem_alloc.h>
 
 #include "../VkIncludes.h"
@@ -37,15 +48,15 @@ namespace MobileGL::MG_State::GLState {
 } // namespace MobileGL::MG_State::GLState
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-    enum class DrawSetupAspect: Uint8 {
-        FramebufferObject  = 1 << 0,
-        VertexArrayObject  = 1 << 1,
-        UniformBuffer      = 1 << 2,
-        VertexBuffer       = 1 << 3,
-        IndexBuffer        = 1 << 4,
+    enum class DrawSetupAspect : Uint8 {
+        FramebufferObject = 1 << 0,
+        VertexArrayObject = 1 << 1,
+        UniformBuffer = 1 << 2,
+        VertexBuffer = 1 << 3,
+        IndexBuffer = 1 << 4,
         IndirectDrawBuffer = 1 << 5,
-        Viewport           = 1 << 6,
-        Scissor            = 1 << 7,
+        Viewport = 1 << 6,
+        Scissor = 1 << 7,
     };
 
     struct DrawCmdParam {
@@ -120,9 +131,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     };
 
+    // VK_KHR_fragment_shading_rate as this renderer enabled it, which is everything
+    // GL_EXT_fragment_shading_rate needs to know about the device. The three feature flags are the
+    // ENABLED ones; the rest are the device's properties and are meaningful only under them.
+    struct FragmentShadingRateSupport {
+        Bool Pipeline = false;
+        Bool Primitive = false;
+        Bool Attachment = false;
+        Bool NonTrivialCombiners = false;
+        Bool WithShaderDepthStencilWrites = false;
+        Bool WithSampleMask = false;
+        Bool PrimitiveWithMultipleViewports = false;
+        Bool LayeredAttachments = false;
+        // Per sample count 1, 2, 4 .. 64: bit (log2(w) << 2 | log2(h)) per rate the device lists
+        // for that count (vkGetPhysicalDeviceFragmentShadingRatesKHR).
+        Uint16 RateMasks[7] = {};
+        Uint32 MinAttachmentTexelWidth = 0;
+        Uint32 MinAttachmentTexelHeight = 0;
+        Uint32 MaxAttachmentTexelWidth = 0;
+        Uint32 MaxAttachmentTexelHeight = 0;
+        Uint32 MaxAttachmentTexelAspectRatio = 0;
+    };
+
     class VulkanRenderer : public IBufferCopyCommandProvider,
                            public FrameContext::IRecordingObserver,
-                           public VkRenderPassManager::IEvictionObserver,
                            public ProgramFactory::IEvictionObserver {
     public:
         VulkanRenderer(NativeWindowType window, const VulkanRendererConfig& cfg = {});
@@ -134,90 +166,137 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // IBufferCopyCommandProvider: recording command buffer, outside any
         // render pass, for immediate staged buffer copies.
         VkCommandBuffer AcquireBufferCopyCommandBuffer() override;
+        // EGL_BUFFER_AGE_EXT of the active target's default framebuffer for the next frame: the age
+        // of the swapchain image acquired for it (SwapchainObject::BufferAgeOf). Asking makes the
+        // target keep its presented images' content from then on.
+        Int32 CurrentDrawBufferAge();
+        VkBufferManager& GetWireBufferManager() { return m_bufferManager; }
+        Bool FlushWirePendingCommandsForTextureUpdate() {
+            // A new texture upload must not race graphics work that samples
+            // the old texels. No current recording does not imply no in-flight
+            // submission: finish the recorded work, then wait its whole prefix.
+            if (HasPendingRecordedWork() && !FlushPendingCommands()) return false;
+            return WaitForSubmitsUpTo(m_submitCounter, UINT64_MAX);
+        }
+        // The level-upload arm's half of the above, WITHOUT the CPU wait. Its bytes go through a
+        // staging buffer into an upload batch that is submitted on this same queue after this
+        // flush, and the batch's first barrier takes its source scope from the image's tracked
+        // layout (ALL_COMMANDS for GENERAL, the sampled-read stages for a read-only layout), so
+        // queue submission order already puts every earlier draw's access to the old texels
+        // ahead of the copy. The preserve arm keeps the wait: it retires the old image.
+        // (rd12 Magma: the wait was ~1.8 ms/frame of fence stall, one per lightmap update.)
+        // P15 (WireFramebuffer.cpp): runs an image's deferred clears now, outside any pass.
+        void MaterializeWirePendingClears(VkTextureManager::TextureResource& resource);
+        Bool FlushWirePendingCommandsForTextureUpload() { return !HasPendingRecordedWork() || FlushPendingCommands(); }
+        // P7 wave 2 package B3: the submission that will carry whatever is recorded NEXT.
+        // RetireWireObjects (WireDraw.cpp) already tags future objects with exactly this, and
+        // for the same reason: a draw being set up now is not in any submission yet, so the
+        // index that names it is one past the counter. Deliberately NOT
+        // GetSyncPointSubmitIndex(), which answers m_submitCounter when nothing is recorded -
+        // true for a fence taken at that instant, wrong for work about to be recorded.
+        Uint64 GetWireNextSubmitIndex() const { return m_submitCounter + 1; }
+        // P8-D: the wire arm's indirect draw families, issued as vkCmdDraw[Indexed]Indirect[Count]
+        // from the wire stores MGPipeApplier().VerbIndirectBuffer / VerbIndirectParameterBuffer
+        // name. `offset` / `countOffset` are byte offsets into those stores; `stride` 0 means
+        // tightly packed. FALSE = this device cannot issue the COUNT form natively (the monolith
+        // arm's own condition, see the definition in WireDraw.cpp) and the caller must read the
+        // words on the CPU; TRUE = issued, or declined by name.
+        Bool DrawWireIndirectNative(GLenum mode, GLenum type, Uint64 offset, GLsizei drawcount, GLsizei stride,
+                                    Bool indexed, Bool counted, Uint64 countOffset);
+        // P11 B2 (T0): what importing a client's AHardwareBuffer as a wire buffer store needs from
+        // this device. False when the device did not take VK_ANDROID_external_memory_android_
+        // hardware_buffer at creation (not Android, not advertised, or a monolith device).
+        struct WireAhbImport {
+            VkDevice device = VK_NULL_HANDLE;
+            VkQueue queue = VK_NULL_HANDLE;
+            Uint32 queueFamily = 0;
+            VkPhysicalDeviceMemoryProperties memory{};
+            void* getAhbProperties = nullptr; // PFN_vkGetAndroidHardwareBufferPropertiesANDROID
+        };
+        Bool GetWireAhbImport(WireAhbImport& out) const;
+        // SHARED IMAGES (ServerHooks::BlitDefaultFramebufferToSharedImage): the active surface
+        // target's default framebuffer, copied into `image` top row first and scaled to its
+        // extent. Returns once the copy is submitted, with its fence published to the image
+        // (SharedImages::PublishWrite); waits for it on the CPU only on a device without sync_file
+        // export. False (logged) when it cannot be done here: no AHardwareBuffer import, a
+        // quarter-turned surface, an unblittable format.
+        //
+        // `region` (GL window coordinates; Full = all) is the part to copy into an image this
+        // renderer has written before - the rest of it is left as it is; a first write, a scaled
+        // or turned copy copies all of it.
+        Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image, const MG_Util::Damage::Region& region);
+        // IMPLICIT SYNC BY FLUSH (ServerHooks::PublishSharedImageAccesses): every image acquired
+        // since the last boundary goes back to the foreign family, the recording is submitted with
+        // the exportable semaphore, and its sync_file is published to each as a write and a read.
+        // From then on an image's first acquire per frame also waits for its pending reads.
+        Bool PublishSharedImageAccesses();
+        // EGL_ANDROID_native_fence_sync's fence command (ServerHooks::ExportNativeFence): the
+        // submission's sync_file in `*fence` (-1: none, and the work is waited out here), and - for
+        // a session that writes images - the boundary PublishSharedImageAccesses makes.
+        Bool ExportNativeFence(int* fence);
+        // The reading side's per-use hook (WireSharedImage.cpp): every shared-image texture the
+        // wire draw or dispatch being set up samples (VkTextureManager::NoteSharedImageUse) is
+        // acquired from the foreign family before it, when it moved or is not held.
+        void AcquireNotedSharedImages() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (m_textureManager && m_textureManager->HasNotedSharedImageUses()) AcquireNotedSharedImagesSlow();
+#endif
+        }
+        // One shared-image texture, before a use: a new write generation, or an image released at
+        // the last frame boundary, is acquired here - an ownership barrier recorded ahead of the
+        // use, the write's fence a wait of the submission carrying it - and noted as read.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        void AcquireSharedImage(VkTextureManager::TextureResource& resource);
+#else
+        // P13 W5: no transport, no shared image (only a server allocates one), so a texture's
+        // sharedImageId is never set and there is nothing to acquire.
+        void AcquireSharedImage(VkTextureManager::TextureResource&) {}
+#endif
 
         // FrameContext::IRecordingObserver: prepares the frame's timer-query
         // pool (harvest + reset) right after the frame command buffer begins
         // recording, before any render pass.
         void OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) override;
 
-        // VkRenderPassManager::IEvictionObserver: the render-pass aging sweep just
-        // destroyed these VkRenderPasses; evict every graphics pipeline hashed on a
-        // dying handle (they share its >1024-boundary idleness, so immediate
-        // destruction is safe) and drop the last-pipeline memo if any went.
-        void OnRenderPassesDestroyed(const Vector<VkRenderPass>& renderPasses) override;
-
         // ProgramFactory::IEvictionObserver: an aged-out program entry was
         // destroyed; evict its compute pipeline and graphics pipelines (same
         // idleness guarantee - they are only bound through draws/dispatches that
         // stamp the program entry) and purge the descriptor-set cache entries
         // keyed by its now-recyclable VkDescriptorSetLayout handle.
-        void OnProgramEvicted(ProgramFactory::HashType programHash,
-                              VkDescriptorSetLayout descriptorSetLayout) override;
+        void OnProgramEvicted(ProgramFactory::HashType programHash, VkDescriptorSetLayout descriptorSetLayout) override;
 
         Bool SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
-                       const DrawCmdParam& drawParams,
-                       const IndexBufferView* pIndexBufferView = nullptr);
-        // ANGLE-style consecutive-draw fast path: SetupDraw snapshots the fully
-        // resolved draw configuration; the next draw whose cheap version/identity
-        // checks all match skips the resolution half (LOD probe, sampled-set
-        // walk, render-pass and pipeline resolution) and jumps straight to the
-        // per-draw tail. Returns false (leaving no side effects that the full
-        // path cannot redo idempotently) whenever anything might have changed.
-        Bool TrySetupDrawFastPath(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
-                                  const DrawCmdParam& drawParams, const IndexBufferView* pIndexBufferView);
-        void ClearAttachmentsOnActiveRenderPass(VkCommandBuffer commandBuffer,
-                                                const RenderPassEntry& compatibleRenderPassEntry);
-
+                       const DrawCmdParam& drawParams, const IndexBufferView* pIndexBufferView = nullptr);
         enum class ScissoredClearPrep {
-            NotNeeded,  // scissor covers the whole target — take the deferred whole-surface path instead
-            NoOp,       // nothing to clear (degenerate target or empty scissor rect)
-            Ready,      // a render pass is active; record vkCmdClearAttachments with the returned rect
+            NotNeeded, // scissor covers the whole target — take the deferred whole-surface path instead
+            NoOp,      // nothing to clear (degenerate target or empty scissor rect)
+            Ready,     // a render pass is active; record vkCmdClearAttachments with the returned rect
         };
-        ScissoredClearPrep PrepareScissoredClear(const MG_State::GLState::FramebufferObject& framebuffer,
-                                                 VkClearRect& outClearRect);
-
         void Clear(GLbitfield mask);
         void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
         void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
         void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value);
         void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value);
-        void ClearNamedFramebufferfv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
-                                     GLenum buffer, GLint drawbuffer, const GLfloat* value);
-        void ClearNamedFramebufferiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
-                                     GLenum buffer, GLint drawbuffer, const GLint* value);
-        void ClearNamedFramebufferuiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
-                                      GLenum buffer, GLint drawbuffer, const GLuint* value);
-        void ClearNamedFramebufferfi(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
-                                     GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
-        void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                             GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-                             GLbitfield mask, GLenum filter);
-        void BlitNamedFramebuffer(const SharedPtr<MG_State::GLState::FramebufferObject>& readFbo,
-                                  const SharedPtr<MG_State::GLState::FramebufferObject>& drawFbo,
-                                  GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                                  GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-                                  GLbitfield mask, GLenum filter);
-        void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
-                       GLint x, GLint y, GLsizei width, GLsizei height);
-        void CopyImageSubData(const CopyImageEndpoint& srcEndpoint,
-                              GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                              const CopyImageEndpoint& dstEndpoint,
-                              GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
-                              GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth);
+        void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
+                             GLint dstY1, GLbitfield mask, GLenum filter);
+        void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
+                               GLsizei width, GLsizei height);
+        void CopyImageSubData(const CopyImageEndpoint& srcEndpoint, GLenum srcTarget, GLint srcLevel, GLint srcX,
+                              GLint srcY, GLint srcZ, const CopyImageEndpoint& dstEndpoint, GLenum dstTarget,
+                              GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ, GLsizei srcWidth, GLsizei srcHeight,
+                              GLsizei srcDepth);
         void GenerateMipmap(GLenum target);
         void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
-        // GL_DEPTH_COMPONENT / GL_DEPTH_STENCIL / GL_STENCIL_INDEX readback from the
-        // read framebuffer's depth/stencil attachment (per-aspect buffer copies with
-        // CPU repacking into the requested client layout).
-        void ReadDepthStencilPixels(MG_State::GLState::FramebufferObject& readFbo, GLint x, GLint y, GLsizei width,
-                                    GLsizei height, GLenum format, GLenum type, void* pixels);
+        // Server resource handle in, tightly packed owned bytes out. No frontend
+        // texture, pixel-pack state or PBO is consulted by this readback.
+        Bool ReadTextureImageWire(const MG_Pipe::MGPReadbackInfo& info, Vector<Uint8>& ownedBytes);
         // Copy-and-repack core shared by depth-stencil ReadPixels and GetTexImage;
         // expects command recording to be active and any render pass already ended.
         //
         // `defaultFramebufferOrientation` is set only when the source is the swapchain's
         // depth/stencil image, which this renderer stores display-side-up: the copy rect then
         // has to be mapped out of GL's bottom-origin space and the copied rows re-oriented on
-        // the way back, exactly as the colour ReadPixels path does.
+        // the way back, exactly as the color ReadPixels path does.
         // `sourceLayerCount` above 1 says the `height` rows the client is owed are stored as that
         // many ARRAY LAYERS of a one-row image rather than as rows of one layer - the shape a GL
         // 1D array has in Vulkan. The two produce byte-identical tightly-packed readbacks, so
@@ -244,18 +323,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                       VkOffset2D* imageOffset, VkExtent2D* imageCopyExtent);
         // Reorder a tightly packed block copied with MapDefaultFramebufferReadbackRect back into
         // GL row order. The input block has swapped dimensions for 90/270 degree transforms.
-        static Bool RemapDefaultFramebufferReadback(const Uint8* rawPixels, Uint32 logicalWidth,
-                                                    Uint32 logicalHeight,
-                                                    VkSurfaceTransformFlagBitsKHR preTransform,
-                                                    SizeT texelSize, Uint8* outPixels);
-        static Bool ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat,
-                                          GLsizei width, GLsizei height, GLenum destinationFormat,
-                                          GLenum destinationType, SizeT destinationRowStride,
-                                          Uint8* destinationPixels);
-        void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels);
-        void GetTextureImage(const SharedPtr<MG_State::GLState::ITextureObject>& texture,
-                             TextureUploadTarget uploadTarget, GLint level, GLenum format, GLenum type,
-                             GLsizei bufSize, GLvoid* pixels);
+        static Bool RemapDefaultFramebufferReadback(const Uint8* rawPixels, Uint32 logicalWidth, Uint32 logicalHeight,
+                                                    VkSurfaceTransformFlagBitsKHR preTransform, SizeT texelSize,
+                                                    Uint8* outPixels);
+        static Bool ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat, GLsizei width,
+                                          GLsizei height, GLenum destinationFormat, GLenum destinationType,
+                                          SizeT destinationRowStride, Uint8* destinationPixels);
         void DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ);
         void DispatchComputeIndirect(GLintptr indirect);
         void MemoryBarrier(GLbitfield barriers);
@@ -264,17 +337,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void DrawElements(const DrawIndexedCmd& payload);
         void MultiDrawArrays(const MultiDrawCmd& payload);
         void MultiDrawElements(const MultiDrawIndexedCmd& payloads);
-        void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
-                                       GLsizei stride);
-        void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride);
-        void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
-                                            GLsizei maxdrawcount, GLsizei stride);
         void Present();
 
         const PhysicalDevice& GetPhysicalDevice() const;
         VkInstance GetInstance() const;
-        Bool IsDrawIndirectCountExtensionEnabled() const;
-
         // GL fence support, expressed in queue-submission indices backed by
         // real VkFences. A GL fence captures GetSyncPointSubmitIndex() at
         // creation: the index of the submission that will carry the commands
@@ -297,6 +363,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // one is retired until the frame slot's fence is next waited. Returns
         // true when a submission was made.
         Bool FlushPendingCommands();
+        // DEVICE LOSS. A GPU fault or hang the driver reset leaves this renderer's VkDevice lost:
+        // every later submit and wait answers VK_ERROR_DEVICE_LOST. NoteDeviceLoss records it at
+        // the submit/wait sites (cheap, any result); IsDeviceLost answers from the record and,
+        // when nothing was recorded, asks the device once (only failure paths call it, so the
+        // probe's wait costs nothing on a healthy frame). Each session owns its own VkDevice, so a
+        // loss here is this session's alone.
+        void NoteDeviceLoss(VkResult result, const char* where);
+        Bool IsDeviceLost();
+        // For a wire site whose submit or wait just failed: true when the failure is a lost
+        // device, in which case this session has been latched (MGPipeSessionLatch - it ends, the
+        // display server's other sessions do not) and the caller must return from its verb
+        // without recording or submitting anything more. False: an ordinary failure, the site
+        // keeps the death it had. `site` names it in the latch line.
+        Bool LatchWireDeviceLoss(const char* site);
+        // THE GPU HANG WATCH (GpuProgressMarkers.h): true once the watch named one of this device's
+        // submissions as the one that stops the GPU. The device is then treated as lost, this session
+        // is latched, and the caller returns from its verb without submitting anything more. Asked
+        // before every frame submission and by the apply loop before it applies another record.
+        Bool LatchIfGpuHung(const char* site);
         // Flush gated on usefulness: only flushes when `submitIndex` is still
         // unsubmitted, so poll loops on already-submitted fences do not split
         // the frame's render pass (a full tile load/store on TBDR GPUs).
@@ -321,6 +406,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The samplerAnisotropy device feature was granted, so GL_TEXTURE_MAX_ANISOTROPY_EXT is
         // honored rather than accepted-and-ignored.
         Bool IsSamplerAnisotropySupported() const { return m_samplerAnisotropyFeatureEnabled; }
+        const FragmentShadingRateSupport& GetFragmentShadingRateSupport() const { return m_fragmentShadingRate; }
         // ARB_base_instance extends indirect command records with a non-zero firstInstance and
         // requires gl_InstanceID to remain zero-based. Vulkan needs both features to honor that
         // complete contract: one legalizes the command word, the other enables the shader rebase.
@@ -366,7 +452,65 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // no new swapchain is installed and presentation must stay suspended.
         Bool RecreateSwapchain();
 
+        // SURFACE TARGETS. One renderer - one device and every GL object's resources - serves
+        // every EGL surface of its context's client; only the presentation side (VkSurfaceKHR,
+        // swapchain, its render-finished semaphores, the acquired image, the pbuffer's image
+        // reader) belongs to a surface. `key` names the client surface. The renderer starts with
+        // the surface it was constructed for as its active target (SetActiveSurfaceTargetKey).
+        // Activating another key parks the active target - its recorded work submitted, its
+        // pending acquire consumed - and brings the other back, or builds it on first use.
+        void SetActiveSurfaceTargetKey(Uint64 key) { m_activeTargetKey = key; }
+        // False when a NEW target's surface could not be built (logged); the renderer is then left
+        // with no active target - every present drops its frame - and the caller refuses by name.
+        Bool ActivateSurfaceTarget(Uint64 key, NativeWindowType window, const VulkanRendererConfig& surfaceConfig);
+        // Drops a surface's target, active or parked. A no-op for a key that has none.
+        void DestroySurfaceTarget(Uint64 key);
+        // The default framebuffer's extent (surface space, what PublishDefaultFramebufferInfo
+        // publishes) of `key`'s target, active or parked; 0x0 when it has none or no swapchain.
+        VkExtent2D SurfaceTargetExtent(Uint64 key) const;
+        // The active WINDOW target's window changed size. Between frames (nothing recorded since the last
+        // present) its swapchain is rebuilt now - which publishes the new extent - so a client that has
+        // nothing to redraw learns it without presenting; with a frame half-recorded the rebuild waits
+        // for that frame's present (it would otherwise land half in each swapchain). False: no active
+        // window target.
+        Bool FollowActiveWindowResize();
+        // Whether `key` names the active target.
+        Bool IsActiveSurfaceTarget(Uint64 key) const { return key == m_activeTargetKey && m_surface != VK_NULL_HANDLE; }
+
     private:
+        // The presentation half of the renderer, parked while another surface is active. Its
+        // fields mirror the renderer members ExchangeActiveTarget swaps them with.
+        struct SurfaceTarget {
+            Uint64 serial = 0;
+            NativeWindowType window = 0;
+            void* platformDisplay = nullptr;
+            void* platformLibrary = nullptr;
+            void* platformCloseDisplay = nullptr;
+            void* fallbackImageReader = nullptr;
+            Uint32 surfaceWidth = 0;
+            Uint32 surfaceHeight = 0;
+            Optional<Int> swapInterval;
+            Bool presentsToAppWindow = false;
+            Optional<Int> swapchainSwapInterval;
+            Bool swapchainResizeRequested = false;
+            Bool presentSuspended = false;
+            VkSurfaceKHR surface = VK_NULL_HANDLE;
+            SwapchainObject swapchain;
+            Vector<VkSemaphore> renderFinishedSemaphores;
+            Uint imageIndexAcquired = 0;
+            Uint defaultFramebufferImageIndex = 0;
+        };
+        void ExchangeActiveTarget(SurfaceTarget& target);
+        // Submits the active target's work, consumes its pending acquire and moves it into
+        // m_parkedTargets. Leaves the renderer with no target.
+        void ParkActiveTarget();
+        void OnActiveTargetChanged();
+        void DestroyParkedTarget(SurfaceTarget& target);
+        UnorderedMap<Uint64, SurfaceTarget> m_parkedTargets;
+        Uint64 m_activeTargetKey = 0;
+        Uint64 m_activeTargetSerial = 1;
+        Uint64 m_nextTargetSerial = 2;
+
         // Tiered emission for an already-set-up multi-draw batch (state bound, index
         // buffer bound for the indexed form). Tier 1: VK_EXT_multi_draw. Tier 2: one
         // vkCmdDraw(Indexed)Indirect over a transient command array. Tier 3: unrolled
@@ -384,24 +528,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Int padding[3] = {0, 0, 0};
         };
 
-        struct BlitResources {
-            SharedPtr<MG_State::GLState::ProgramObject> program;
-            SharedPtr<MG_State::GLState::SamplerObject> nearestSampler;
-            SharedPtr<MG_State::GLState::SamplerObject> linearSampler;
-            Int srcRectLocation = -1;
-            Int dstRectLocation = -1;
-            Int surfaceTransformLocation = -1;
-            Uint32 samplerBinding = 0;
-        };
+        // P7 wave 2-B2, CONTRACT-P7 §5.2 (B'): THE FRONTEND MEMBERS ARE PULL-BUILD ONLY. In a
+        // disaggregated build the monolith arm blits and generates depth mips with the baked
+        // modules (WireColorBlit.cpp, WireDepthMipmap.cpp), so no DirectVulkan object holds a
+        // ProgramObject, a ShaderObject or a SamplerObject any more - which is what takes
+        // ProgramObject::{AllocateLifetimeId, AttachShader, Link, ~ProgramObject},
+        // ShaderObject::{SetShaderSource, Compile, JoinPendingCompile, ReleaseCompileNode,
+        // DropCompileNode} and SamplerObject::{SetWrapS, SetWrapT, SetWrapR, SetLodRange} out
+        // of the link ratchet's `p7-magma` bucket (§4.2). The destructor of a SharedPtr member
+        // is a reference too, so the MEMBER has to go and not only its construction.
+        //
+        // The structs stay, empty, so ShutdownBlitResources and the two `= {}` assignments read
+        // the same on both builds.
+        struct BlitResources {};
 
-        struct DepthMipmapResources {
-            SharedPtr<MG_State::GLState::ProgramObject> program;
-            Int srcRectLocation = -1;
-            Int dstRectLocation = -1;
-            Int surfaceTransformLocation = -1;
-            Int srcTexelSizeLocation = -1;
-            Uint32 samplerBinding = 0;
-        };
+        struct DepthMipmapResources {};
 
         // A single-sample staging image for multisample-resolve blits that also have to change
         // orientation. vkCmdResolveImage cannot flip (it takes one offset per side, not the
@@ -421,11 +562,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
         };
         MultisampleResolveScratchImage m_msResolveScratch;
-        // Returns a scratch image at least `extent` in size with exactly `format`, transitioned to
-        // TRANSFER_DST and ready to be resolved into. Null image on failure (the caller then falls
-        // back to the direct resolve).
-        Bool AcquireMultisampleResolveScratchImage(VkCommandBuffer commandBuffer, VkFormat format,
-                                                   VkExtent2D extent);
         void DestroyMultisampleResolveScratchImage();
 
         struct DeferredDepthMipmapCleanup {
@@ -436,14 +572,420 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         void QueueClearBufferPayload(GLenum buffer, GLint drawbuffer, const ClearAttachmentPayload& clearPayload);
-        void QueueClearBufferPayloadForFramebuffer(const MG_State::GLState::FramebufferObject& framebuffer,
-                                                  GLenum buffer, GLint drawbuffer,
-                                                  const ClearAttachmentPayload& clearPayload);
-        void RecordScissoredClearBuffer(const MG_State::GLState::FramebufferObject& framebuffer,
-                                        GLenum buffer, GLint drawbuffer,
-                                        const ClearAttachmentPayload& clearPayload,
-                                        const VkClearRect& clearRect);
+        // See NoteDeviceLoss. Set once, never cleared: a lost VkDevice stays lost.
+        Bool m_deviceLost = false;
+        Bool m_deviceLossLatched = false;
+        // Brackets this device's frame submissions for the GPU hang watch (LatchIfGpuHung).
+        GpuProgressMarkers m_progressMarkers;
+        struct WireImage {
+            VkImage image = VK_NULL_HANDLE;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
+            VkExtent2D extent{};
+            VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VkImageLayout* trackedLayout = nullptr;
+            VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+            VkImageAspectFlags aspect = 0;
+            // Zero for the default framebuffer, which no arm that reads this ever reaches.
+            VkImageUsageFlags usageFlags = 0;
+            Uint32 level = 0, layer = 0, layers = 1, levels = 1;
+            Bool isDefault = false;
+            // Set when isDefault: the swapchain image index this role resolved to.
+            Uint32 swapchainImageIndex = 0;
+            Bool is3D = false;
+            MG_Pipe::MGPipeHandle storage = MG_Pipe::kMGPipeNullHandle;
+            // The storage's resource, for a non-default surface (null for the default framebuffer).
+            VkTextureManager::TextureResource* resource = nullptr;
+        };
+        // `isWriteTarget` selects which side of the default framebuffer this resolves: a write
+        // re-points it at the image Present() acquired, a read keeps the current one (see
+        // m_defaultFramebufferImageIndex). Reads must pass false.
+        WireImage ResolveWireImage(const MG_Pipe::MGPFramebufferState& fbo, const MG_Pipe::MGPSurface& surface,
+                                   VkImageAspectFlags aspect, Bool isWriteTarget = false);
+        void TransitionWireImage(WireImage& image, VkImageLayout layout, Bool coalesceWithLastFullBarrier = false);
+        // P15: WIRE DEFERRED CLEARS (WireFramebuffer.cpp). A clear of images the open pass
+        // holds is recorded inside it; a whole-image clear of others waits on the image
+        // (WirePendingClear) for the next pass that draws into it (LOAD_OP_CLEAR) or the first
+        // other use (MaterializeWirePendingClears).
+        GLbitfield ClearWireAttachmentsOfOpenPass(const MG_Pipe::MGPFramebufferState& fbo,
+                                                  const ClearAttachmentPayload& payload, GLint drawbuffer);
+        GLbitfield DeferWireClear(const MG_Pipe::MGPFramebufferState& fbo, const ClearAttachmentPayload& payload,
+                                  GLint drawbuffer);
+        // An attachment of the pass being prepared whose image carries pending clears; taken
+        // when the pass begins (BeginWireDrawPassFolding) or applied inside it if it is open.
+        struct WireFoldClear {
+            Uint32 attachment = 0;
+            VkImageAspectFlags aspects = 0;
+            VkTextureManager::TextureResource* resource = nullptr;
+            Uint32 level = 0, layer = 0, layers = 1;
+        };
+        Vector<WireFoldClear> m_wireFoldClears;
+        static Bool WireImageCanDeferClear(const WireImage& image);
+        static void NoteWirePendingClear(const WireImage& image, VkImageAspectFlags aspects, const VkClearValue& value);
+        VkRenderPass WireClearVariant(RenderPassEntry& begun, Uint64 variantKey);
+        Bool BeginWireDrawPassFolding(FrameContext::FrameData& frame, RenderPassEntry& begun, Uint64 variantKey,
+                                      const VkClearValue* values);
+        void ApplyWireFoldClearsInPass(FrameContext::FrameData& frame, RenderPassEntry& pass);
+        void ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo, const ClearAttachmentPayload& payload,
+                                  GLint drawbuffer = -1);
+        void BlitWireFramebuffers(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1,
+                                  GLint dy1, GLbitfield mask, GLenum filter);
+        void ResolveWireDepthStencil(WireImage source, WireImage destination, GLint sx0, GLint sy0, GLint sx1,
+                                     GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1);
+        // One aspect of a depth/stencil image through a buffer (source in TRANSFER_SRC_OPTIMAL,
+        // destination in TRANSFER_DST_OPTIMAL, one format). The returned buffer is named by the
+        // recorded commands and must be retired with them.
+        UniquePtr<VkBufferObject> CopyWireAspectThroughBuffer(VkImage srcImage, Uint32 srcLevel, Uint32 srcLayer,
+                                                              GLint sx, GLint sy, const WireImage& destination,
+                                                              GLint dx, GLint dy, Uint32 width, Uint32 height,
+                                                              VkImageAspectFlags aspect, VkFormat format, Bool mirrorY,
+                                                              const char* fatalDetail);
+        // A single-sample depth/stencil blit whose rectangles make it a plain copy, performed
+        // without vkCmdBlitImage (P7 gate 5). False when the shape is not a plain copy.
+        Bool CopyWireDepthStencilBlit(WireImage& source, WireImage& destination, GLint sx0, GLint sy0, GLint sx1,
+                                      GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1, VkImageAspectFlags aspect);
+        // True when the rectangles give a multisample depth/stencil resolve a shape it declines
+        // (a scale, an X mirror, a Y mirror across two formats); the decline has then been
+        // logged and its INVALID_OPERATION recorded. BlitWireFramebuffers asks it BEFORE any
+        // aspect runs, so a call the SHAPE declines leaves every attachment alone - the user
+        // and the default draw framebuffer alike. The CAPABILITY decline inside
+        // ResolveWireDepthStencil (a stencil-only resolve without VK_EXT_shader_stencil_export
+        // on a device without VK_KHR_depth_stencil_resolve) is still decided per aspect, after
+        // color ran; rule I (a) accepts that (§2.10).
+        Bool DeclineWireDepthStencilResolveShape(const WireImage& source, const WireImage& destination, GLint sx0,
+                                                 GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1,
+                                                 GLint dy1);
+        PFN_vkCreateRenderPass2 m_wireCreateRenderPass2 = nullptr;
+        VkResolveModeFlags m_wireDepthResolveModes = 0;
+        VkResolveModeFlags m_wireStencilResolveModes = 0;
+        // P7 wave 2-B2, CONTRACT-P7 §3.2 (`multisample-blit-aspect`): the SECOND arm of the
+        // multisample depth/stencil resolve, for the device that does not carry
+        // VK_KHR_depth_stencil_resolve. One baked pass per aspect, sample zero, no frontend
+        // object - see WireMultisampleResolve.cpp. `resolved` must be a single-sample image of
+        // the source's format and extent; the rect is expressed by the scissor.
+        Bool ResolveWireDepthStencilWithShader(WireImage source, WireImage resolved, VkImageAspectFlags aspect,
+                                               GLint sx0, GLint sy0, Uint32 width, Uint32 height);
+        struct WireMultisampleResolveResources;
+        WireMultisampleResolveResources* m_wireMultisampleResolveResources = nullptr;
+        void DestroyWireMultisampleResolveResources();
+        Bool m_wireShaderStencilExport = false;
+        // VK_EXT_robustness2 (or its KHR promotion) with ONLY nullDescriptor enabled, wire arms
+        // only: an invalid image unit binds a null storage descriptor (codex closeout finding 2).
+        Bool m_wireNullDescriptor = false;
+        // The resolve probe's verdict for this device (WireDepthResolveArm.h,
+        // WireDepthResolveProbe.h): true when the no-draw render pass was measured leaving its
+        // target unwritten while the shader control resolved - the shader arm then resolves
+        // first and the render-pass arm is the fallback (P7 gate 5, g5-msprobe).
+        Bool m_wirePreferShaderDepthResolve = false;
+        // P11 B2 (T0): the device took the AHardwareBuffer import extensions at creation, and the
+        // one entry point the import needs (PFN_vkGetAndroidHardwareBufferPropertiesANDROID).
+        Bool m_wireAhbImport = false;
+        void* m_wireGetAhbProperties = nullptr;
+        // YUV shared images (WireYuvImage.cpp): the device enabled samplerYcbcrConversion, and the
+        // conversion pipelines made so far (one per buffer format and color conversion).
+        Bool m_samplerYcbcrConversion = false;
+        struct WireYuvResources;
+        WireYuvResources* m_wireYuvResources = nullptr;
+        void DestroyWireYuvResources();
+        // A YUV texture's first use in a frame converts its image (yuvConvertedFrame against this,
+        // which every frame boundary - present, publishing flush, native fence - moves).
+        Uint64 m_yuvFrameSerial = 1;
+        Bool ConvertYuvSharedImage(VkTextureManager::TextureResource& resource);
+        // Shared images this session presents into, imported once each and keyed by the image's
+        // id (monotonic, never reused). `owner` watches the registry's image: an entry whose image
+        // died is dropped at a later present once `lastSubmit`, its last copy, has completed.
+        struct SharedImagePresentTarget {
+            VkTextureManager::ImportedSharedImage image;
+            WeakPtr<const void> owner;
+            Uint64 lastSubmit = 0;
+            // A copy has written the image through this import: what it holds is a frame.
+            Bool written = false;
+        };
+        UnorderedMap<Uint64, SharedImagePresentTarget> m_sharedImagePresentTargets;
+        void DestroySharedImagePresentTargets(Bool onlyDead);
 
+        // SHARED-IMAGE SYNCHRONIZATION (WireSharedImage.cpp). The sync_file fences other sessions
+        // publish become binary semaphores: a temporary SYNC_FD import is a WAIT, an exportable
+        // semaphore a SIGNAL, of the next frame submission - whichever of SubmitPendingCommandBuffer
+        // and Present's submit comes first, which is the one carrying what was recorded since.
+        // Each semaphore is recycled once the submission that used it has completed.
+        // m_sharedImageSyncFd: the device imports and exports SYNC_FD binary semaphores; without
+        // it the waits happen on the CPU and nothing is exported (see WireSharedImage.cpp).
+        Bool m_sharedImageSyncFd = false;
+        // The session writes images - it ends frames at publishing flushes
+        // (PublishSharedImageAccesses), or it reached one through a framebuffer (ResolveWireImage):
+        // a first acquire waits for the image's pending reads as well, and its boundaries publish
+        // what it used as written.
+        Bool m_sharedImageImplicitSync = false;
+        PFN_vkImportSemaphoreFdKHR m_importSemaphoreFd = nullptr;
+        PFN_vkGetSemaphoreFdKHR m_getSemaphoreFd = nullptr;
+        struct SharedImageWait {
+            VkSemaphore semaphore = VK_NULL_HANDLE;
+            VkPipelineStageFlags stages = 0;
+        };
+        Vector<SharedImageWait> m_sharedImageWaits;                // staged for the next submission
+        VkSemaphore m_sharedImageSignal = VK_NULL_HANDLE;          // staged for the next submission
+        VkSemaphore m_sharedImageSignalSubmitted = VK_NULL_HANDLE; // the last one submitted, to export
+        struct SharedImageSemaphoreInFlight {
+            VkSemaphore semaphore = VK_NULL_HANDLE;
+            Uint64 submitIndex = 0;
+            Bool exportable = false;
+            Bool exported = false; // a signal whose sync_file was taken (which unsignals it)
+        };
+        Vector<SharedImageSemaphoreInFlight> m_sharedImageSemaphoresInFlight; // submit order
+        Vector<VkSemaphore> m_freeSharedImageWaitSemaphores;
+        Vector<VkSemaphore> m_freeSharedImageSignalSemaphores;
+        // The reading side, per session: the shared-image textures this frame holds (acquired, not
+        // yet released; keyed as in VkTextureManager's handle map, with the submission that carries
+        // the acquire), and the frame's ReadTracker, published at Present.
+        struct SharedImageHold {
+            Uint64 key = 0;
+            Uint64 acquireSubmit = 0;
+        };
+        Vector<SharedImageHold> m_sharedImagesHeld;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MG_Remote::Server::SharedImages::ReadTracker m_sharedImageReads;
+#endif
+        Vector<Uint64> m_sharedImageUseScratch;
+        // What one vkQueueSubmit carries beyond its own semaphores (AttachSharedImageSync).
+        struct SharedImageSubmitSync {
+            Bool attached = false;
+            Vector<VkSemaphore> waits;
+            Vector<VkPipelineStageFlags> stages;
+            Vector<VkSemaphore> signals;
+        };
+        void AttachSharedImageSync(VkSubmitInfo& info, SharedImageSubmitSync& storage);
+        // After the submission `storage` was attached to was submitted and registered.
+        void CommitSharedImageSync(const SharedImageSubmitSync& storage);
+        // Takes ownership of `fence` (a sync_file; -1 = nothing to wait for).
+        void StageSharedImageWait(int fence, VkPipelineStageFlags stages);
+        VkSemaphore TakeSharedImageSemaphore(Bool exportable);
+        // The submitted signal's sync_file (-1: it has already signaled). False: not exported.
+        Bool ExportSharedImageSignal(VkSemaphore semaphore, int& fence);
+        void RecycleSharedImageSemaphores(Uint64 completedSubmit);
+        void DestroySharedImageSync();
+        void AcquireNotedSharedImagesSlow();
+        // The reading side's frame boundary: release every held image back to the foreign family
+        // in the open recording, and - after the submission carrying it - publish its fence.
+        void ReleaseHeldSharedImages();
+        void PublishSharedImageReads();
+        // A frame dropped unsubmitted (Present with no usable swapchain).
+        void AbandonSharedImageReads();
+        // Runs the probe (memoized per device identity) and sets the member above. Called at the end of
+        // device creation, after ArmPrimGenReroute: it records on m_graphicsQueue.
+        void ArmWireDepthResolveOrder();
+        // Adreno's E5B9G9R9 transfer-read canonicalization (WireE5RawCopy.h): when armed, every
+        // transfer read of an E5B9G9R9 texture (readback, glCopyImageSubData, a storage
+        // recreate's level copy) first copies the words out through the raw route's compute pass.
+        // Decided by ArmWireE5RawReads at bring-up (probe memoized per device identity, or
+        // MOBILEGL_MAGMA_E5_RAW_READS).
+        Bool m_wireE5RawReads = false;
+        WireE5RawCopyKit m_wireE5RawCopyKit;
+        // Cross-format 2D-array <-> 3D vkCmdCopyImage lands only its first slice (WireCopySliceProbe.h):
+        // CopyImageSubData then records one region per slice. Set by ArmWireCopySliceSplit at bring-up.
+        Bool m_wireSplitCrossFormatSliceCopies = false;
+        void ArmWireCopySliceSplit();
+        // A rasterizer-discard draw drops the dynamic viewport/scissor it was recorded with on some
+        // drivers (WireDiscardStateProbe.h): there the draw path forgets the dynamic-state shadow after
+        // each discard draw (ForgetDynamicStateAfterDiscardDraw). Set by ArmWireDiscardStateReemit.
+        Bool m_wireReemitStateAfterDiscard = false;
+        void ArmWireDiscardStateReemit();
+        void ForgetDynamicStateAfterDiscardDraw();
+        void ArmWireE5RawReads();
+
+    public:
+        // The kit when the route is armed, else nullptr. VkTextureManager asks before a level copy.
+        const WireE5RawCopyKit* GetWireE5RawCopyKit() const { return m_wireE5RawReads ? &m_wireE5RawCopyKit : nullptr; }
+
+    private:
+        Bool BlitWireColorToDefault(WireImage source, WireImage destination, GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+                                    GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter);
+        Bool BlitWireColorImage(WireImage source, WireImage destination, GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+                                GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter, Bool mipmap);
+        // P7 wave 2-B, CONTRACT-P7 §3.2 (`default-color-blit-shape`): the rotated arm. Moves the
+        // source region into an owned single-sample 2D image of a sampled-float format in the
+        // same size-compatibility class, then shader-blits THAT to the rotated default
+        // framebuffer - the shapes BlitWireColorImage itself cannot sample (an integer format, a
+        // 3D or array source) become shapes it can.
+        Bool BlitWireColorToDefaultThroughScratch(WireImage source, WireImage destination, GLint sx0, GLint sy0,
+                                                  GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1,
+                                                  GLenum filter);
+        struct WireColorBlitResources;
+        WireColorBlitResources* m_wireColorBlitResources = nullptr;
+        void DestroyWireColorBlitResources();
+        void ResetWireColorBlitFramePool(Uint32 frameIndex);
+        void RetireWireColorBlitTargets(Bool all);
+        // P7 wave 2-B, CONTRACT-P7 §5.1 (A): the baked depth-mip program (WireDepthMipmap.cpp).
+        // One level of a depth chain, source and destination being two depth subresources of
+        // the same image; the caller loops. It owns no frontend object, which is what the
+        // monolith arm's GenerateDepthMipmapWithShader cannot say.
+        Bool GenerateWireDepthMipLevel(WireImage source, WireImage destination);
+        struct WireDepthMipmapResources;
+        WireDepthMipmapResources* m_wireDepthMipmapResources = nullptr;
+        void DestroyWireDepthMipmapResources();
+        // P7 wave 2-B (exit gate 3): the readback's own write-visibility barrier, recorded before
+        // the copy instead of inferred from the image's tracked layout. See WireFramebuffer.cpp.
+        void RecordWireReadbackWriteBarrier();
+        void ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
+        void GenerateWireMipmap();
+        Bool SetupWireDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
+                           const DrawCmdParam& drawParams, const IndexBufferView* indices);
+        void DestroyWireDrawPass();
+        void RetireWireDrawPass();
+        struct WireDrawAttachmentKey {
+            MG_Pipe::MGPipeHandle storage = MG_Pipe::kMGPipeNullHandle;
+            Uint32 resourceKind = 0;
+            VkImage image = VK_NULL_HANDLE;
+            VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            VkImageAspectFlags aspect = 0, requestedAspect = 0;
+            Uint32 level = 0, layer = 0, layers = 1, imageLevels = 1;
+            Uint32 width = 0, height = 0;
+            VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+            Bool operator==(const WireDrawAttachmentKey&) const = default;
+        };
+        struct WireDrawPassKey {
+            Vector<WireDrawAttachmentKey> attachments;
+            Vector<Uint32> colorReferences;
+            Uint32 depthReference = VK_ATTACHMENT_UNUSED;
+            Uint32 width = 0, height = 0, layers = 1;
+            // The rasterization sample count of a pass with no attachments (0 otherwise), where
+            // nothing else in the key would tell two such passes apart.
+            Uint32 noAttachmentSamples = 0;
+            Uint64 textureImageEpoch = 0, resourceEraseEpoch = 0;
+            VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+            Uint32 swapchainImageIndex = 0;
+            Bool isDefault = false, framebufferSrgb = false;
+            Bool operator==(const WireDrawPassKey&) const = default;
+            // Default values, vectors emptied but their storage kept (the per-draw scratch).
+            void ResetKeepingCapacity() {
+                auto keptAttachments = Move(attachments);
+                auto keptColorReferences = Move(colorReferences);
+                *this = WireDrawPassKey{};
+                keptAttachments.clear();
+                keptColorReferences.clear();
+                attachments = Move(keptAttachments);
+                colorReferences = Move(keptColorReferences);
+            }
+        };
+        struct WireDrawPassCacheEntry {
+            WireDrawPassKey key;
+            UniquePtr<RenderPassEntry> pass;
+            Vector<VkImageView> views;
+            // The last submission that recorded this pass (P15 S0): it may be destroyed only once
+            // that submission completed.
+            Uint64 lastUseSubmit = 0;
+        };
+        // Objects only: every draw still ends/begins its pass and records the
+        // existing memory dependencies. P15 S0: ONE cache across frame slots, so a framebuffer
+        // drawn every frame keeps its render pass, framebuffer and views instead of rebuilding them
+        // each frame. An entry whose key's image epochs moved can never hit again (the key holds
+        // them) and is destroyed once its last use completed (ClearWireDrawPassCache).
+        Bool AcquireCachedWireDrawPass(const WireDrawPassKey& key);
+        void ClearWireDrawPassCache(Uint32 frameIndex);
+        void ClearAllWireDrawPassCaches();
+        void DestroyWireDrawPassCacheEntry(WireDrawPassCacheEntry& entry);
+        Vector<WireDrawPassCacheEntry> m_wireDrawPassCache;
+        WireDrawPassKey m_wireDrawPassKey;
+        // P15: the open pass's attachment that is `image` (WireFramebuffer.cpp's deferred clears).
+        static Uint32 OpenPassAttachmentOf(const WireImage& image, const Vector<WireDrawAttachmentKey>& attachments);
+        WireRenderPassCompatibilityTable m_wireRenderPassCompatibility;
+        // The interned compatibility id of m_wireDrawPass's attachments, or 0 when not known yet.
+        // A draw that continues the pass (its WireDrawPassKey compares equal, which covers every
+        // input of the compatibility key) reuses it instead of building and hashing the key again.
+        Uint64 m_wireDrawPassCompatibilityId = 0;
+        // P14: SetupWireDraw's per-draw containers, cleared and refilled every draw instead of
+        // allocated and freed (the heap was ~10% of a Minecraft frame on the wire arm). A nested
+        // SetupWireDraw - nothing does that today - would use a local set (WireDraw.cpp).
+        struct WireDrawScratch {
+            VertexInputStateFactory::BackendVertexInputState input;
+            Vector<BufferSlice> vertexSlices;
+            Vector<VkAttachmentDescription> attachments;
+            Vector<VkImageViewCreateInfo> viewInfos;
+            Vector<VkAttachmentReference> colors;
+            Vector<WireImage> sameLayoutAttachments;
+            WireDrawPassKey passKey;
+            WireRenderPassCompatibilityKey compatibilityKey;
+            struct GpuWriteMark {
+                MG_Pipe::MGPipeHandle storage;
+                Uint32 level, layer, layers;
+            };
+            Vector<GpuWriteMark> gpuWriteMarks;
+        };
+        // The current wire pass's attachments were marked GPU-written at this StagedTextureStore
+        // clear generation (SetupWireDraw); false whenever the pass changes.
+        Bool m_wirePassMarksValid = false;
+        // P14: THE OPEN PASS'S ATTACHMENTS, as the last full attachment walk resolved them. A draw
+        // into the same framebuffer record (FramebufferSerial moves on every framebuffer write,
+        // ContextSerial on every applier reset) while the pass is still open on this command buffer,
+        // with no texture image re-created or erased, and every attachment still in GENERAL with no
+        // pending upload, would resolve exactly these again and continue the pass: it skips both
+        // resolves and the pass key. Never for the default framebuffer, whose image index moves
+        // with each acquire.
+        struct WirePassMemo {
+            Bool valid = false;
+            Uint64 framebufferSerial = 0, contextSerial = 0;
+            MG_Pipe::MGPipeHandle drawFramebuffer = MG_Pipe::kMGPipeNullHandle;
+            Uint64 textureImageEpoch = 0, resourceEraseEpoch = 0;
+            Bool framebufferSrgb = false;
+            Uint64 passHash = 0;
+            struct Attachment {
+                VkTextureManager::TextureResource* resource = nullptr;
+                MG_Pipe::MGPipeHandle storage = MG_Pipe::kMGPipeNullHandle;
+                Bool renderbuffer = false;
+            };
+            Vector<Attachment> attachments;
+            Vector<WireDrawScratch::GpuWriteMark> marks;
+        };
+        WirePassMemo m_wirePassMemo;
+        Bool WirePassMemoHolds(const MG_Pipe::MGPFramebufferState& fbo, const FrameContext::FrameData& frame) const;
+        Uint64 m_wirePassMarksClearGeneration = 0;
+        WireDrawScratch m_wireDrawScratch;
+        Uint64 m_wireStreamsConverted = 0, m_wireStreamsReused = 0;
+        Bool PrepareWireDrawPass(FrameContext::FrameData& frame, const MG_Pipe::MGPFramebufferState& fbo,
+                                 WireDrawScratch& scratch, Bool passContinues, Bool& continuing);
+        // P15: glClear / glClearBuffer* into the attachments of the wire draw pass, recorded inside it
+        // (vkCmdClearAttachments). Returns the GL clear-mask bits it could not take; those go through
+        // the standalone path.
+        GLbitfield ClearWireFramebufferInPass(const MG_Pipe::MGPFramebufferState& fbo,
+                                              const ClearAttachmentPayload& payload, GLint drawbuffer);
+        struct WireRetiredObjects {
+            Uint64 submitIndex = 0;
+            UniquePtr<RenderPassEntry> drawPass;
+            Vector<VkFramebuffer> framebuffers;
+            Vector<VkRenderPass> renderPasses;
+            Vector<VkImageView> imageViews;
+            Vector<VkDescriptorPool> descriptorPools;
+            // Transfer/resolve scratch storage belongs to the submission that
+            // consumes it, just like the views and framebuffer above.
+            Vector<UniquePtr<VkTextureManager::TextureResource>> textures;
+            Vector<UniquePtr<VkBufferObject>> buffers;
+        };
+        void RetireWireObjects(WireRetiredObjects objects);
+        void CollectWireObjects(Uint64 completedSubmit, Bool all = false);
+        Vector<WireRetiredObjects> m_wireRetiredObjects;
+        Uint32 m_wirePreparationDepth = 0;
+        // P8-D: set only while DrawWireIndirectNative is inside SetupDraw, so SetupWireDraw can
+        // tell the wire arm's own indirect draw from a monolith indirect entry point reached under
+        // a transport (still the `buffer-legacy-arm` role violation).
+        Bool m_wireNativeIndirectDraw = false;
+        void DispatchWireCompute(GLuint x, GLuint y, GLuint z);
+        // P8-SV: glDispatchComputeIndirect on the wire arm - vkCmdDispatchIndirect from the
+        // dispatch-indirect store, as the monolith arm issues it (WireDraw.cpp).
+        void DispatchWireComputeIndirect(GLintptr offset);
+        // False: the device was lost and the session latched; the caller drops its draw/dispatch.
+        Bool RewindWireDescriptorSetsIfDue();
+        UniquePtr<RenderPassEntry> m_wireDrawPass;
+        Vector<VkImageView> m_wireDrawViews;
+        VkPipeline GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,
+                                                const ProgramFactory::VkProgramObject& programObj,
+                                                ProgramFactory::CompileOptionFlags transformFlags,
+                                                const VertexInputStateFactory::BackendVertexInputState& vis,
+                                                const RenderPassEntry& renderPassEntry, Bool primitiveRestartEnable,
+                                                Bool layeredFramebuffer, Uint64 wireRenderPassCompatibilityId = 0);
+
+        void CopyWireFramebufferToTexture(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
+                                          GLsizei width, GLsizei height);
         // ---- Submission fence tracking (GL sync objects) ----
         // One record per vkQueueSubmit still in flight, in ascending submit
         // order. Present/readback submissions reference the frame slot's
@@ -469,12 +1011,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // vkWaitForFences inline before returning.
         void RegisterSubmit(VkFence fence, Bool pooledFence);
         // Builds the submit packet for the frame's pending command buffer
-        // (consuming the acquire semaphore on the slot's first submission),
+        // (consuming the acquire semaphore on the first submission that
+        // references the acquired image, or on any when `waitAcquire`),
         // submits it with `fence`, and registers the submission. On failure
         // the frame state is left untouched. Shared by the mid-frame flush
         // and the readback path so the semaphore-consumption invariant lives
         // in one place.
-        Bool SubmitPendingCommandBuffer(FrameContext::FrameData& frame, VkFence fence, Bool pooledFence);
+        Bool SubmitPendingCommandBuffer(FrameContext::FrameData& frame, VkFence fence, Bool pooledFence,
+                                        Bool waitAcquire = false);
+        // Called before the frame first references the acquired swapchain image: submits what is
+        // recorded so far WITHOUT the acquire wait, then marks the recording as referencing the
+        // image, so only the window pass waits for the presentation engine's release.
+        void SubmitAheadOfAcquiredImage();
         // Polls in-flight submission fences (prefix order) and advances the
         // completed counter past every fence observed signaled.
         void RefreshCompletedSubmits();
@@ -482,6 +1030,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // was waited or the device was idled); drops their records and
         // recycles pooled fences.
         void OnSubmitsCompletedUpTo(Uint64 submitIndex);
+        // A later fence alone cannot retire earlier submissions. Wait for the
+        // whole still-live prefix before advancing the completed submit floor.
+        Bool WaitForSubmitsUpTo(Uint64 submitIndex, Uint64 timeoutNs);
         VkFence AcquirePooledSubmitFence();
         void DestroySubmitFencePool();
         Bool HasPendingRecordedWork() const;
@@ -508,6 +1059,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<VkFence> m_freeSubmitFences;
         Uint64 m_submitCounter = 0;
         Uint64 m_completedSubmitCounter = 0;
+        // IsSubmitIndexComplete's quiet window: the in-flight front last seen unsignaled, and when.
+        Uint64 m_unsignaledPollFront = 0;
+        Uint64 m_unsignaledPollNs = 0;
         // Drains since the last Present, gating the drain's frame-boundary-equivalent
         // work (arena rewind + cache aging): a presenting app's mid-frame
         // readbacks/waits must neither churn the transient caches nor accelerate the
@@ -529,7 +1083,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // a substituted window. (Android is the one exception and has its own path -
         // no Mali/Adreno driver seen so far exposes the extension, so a windowless
         // context is given an AImageReader ANativeWindow that is never displayed.)
-        Bool m_headlessSurfaceSupported = true;
+        // ENABLED ON THIS INSTANCE, not merely offered: a renderer created for a window never asks
+        // for the extension, and its later offscreen targets must not call an entry point the
+        // instance does not have (OffscreenSurfaceRoute.h). Hence false until CreateInstance says so.
+        Bool m_headlessSurfaceSupported = false;
+        // VK_KHR_android_surface was enabled on this instance (the AImageReader route needs it).
+        Bool m_androidSurfaceEnabled = false;
         // Android has the same shortfall: no Mali/Adreno driver seen so far exposes
         // VK_EXT_headless_surface, so a windowless (EGL pbuffer) context gets an
         // AImageReader's ANativeWindow to hand the WSI instead. Nothing is ever
@@ -591,8 +1150,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_shaderDrawParametersFeatureEnabled = false;
         // Native subgroup topology, queried at device creation for the compute-module
         // subgroup repairs (SubgroupSupportPolicy.h) and the REQUIRE_FULL_SUBGROUPS
-        // stage flag; 0 / false when the device has no usable compute subgroups or
-        // MOBILEGL_MAGMA_DISABLE_SUBGROUP forced them off.
+        // stage flag; 0 / false when the device has no usable compute subgroups.
         Uint32 m_nativeSubgroupSize = 0;
         Bool m_nativeSubgroupSupported = false;
         Bool m_computeFullSubgroupsFeatureEnabled = false;
@@ -608,6 +1166,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // drive a runtime fallback when the device lacks them.
         Bool m_fillModeNonSolidFeatureEnabled = false;
         Bool m_independentBlendFeatureEnabled = false;
+        // depthBiasClamp gates the clamp argument of vkCmdSetDepthBias (glPolygonOffsetClamp);
+        // without it the polygon offset is applied unclamped.
+        Bool m_depthBiasClampFeatureEnabled = false;
         // dualSrcBlend gates GL_SRC1_* blend factors (glBindFragDataLocationIndexed dual-source blend);
         // primitiveTopologyListRestart gates primitive restart on *list* topologies (strip/fan restart
         // needs no feature). Both cached at device creation and drive a hard-fail-at-draw when absent.
@@ -624,9 +1185,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // VK_EXT_custom_border_color. Vulkan's four predefined VkBorderColor values cover only
         // transparent/opaque black and opaque white; GL_TEXTURE_BORDER_COLOR is an arbitrary vec4 (or
         // an arbitrary ivec4/uvec4 through the "I" entry points). Without this extension a border
-        // colour outside the palette has to be snapped to the nearest predefined one. Both features
+        // color outside the palette has to be snapped to the nearest predefined one. Both features
         // are required together: customBorderColorWithoutFormat is what lets a sampler carry a custom
-        // colour without naming the image format it will be paired with, which GL's sampler objects
+        // color without naming the image format it will be paired with, which GL's sampler objects
         // cannot know. maxCustomBorderColorSamplers is a real device limit, so the sampler cache has
         // to be able to fall back to the snapped value once it is reached.
         Bool m_customBorderColorFeatureEnabled = false;
@@ -659,11 +1220,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                                  VkDeviceSize offset, VkBuffer countBuffer,
                                                                  VkDeviceSize countBufferOffset, Uint32 maxDrawCount,
                                                                  Uint32 stride);
-        static inline PFNDrawIndexedIndirectCountFunc s_vkCmdDrawIndexedIndirectCount = nullptr;
+        PFNDrawIndexedIndirectCountFunc s_vkCmdDrawIndexedIndirectCount = nullptr;
+        // P8-D: vkCmdDrawIndirectCount (same signature, same extension), for the wire arm's
+        // glMultiDrawArraysIndirectCount. The monolith arm never loads it: it reads that count on
+        // the CPU (DirectVulkan.cpp's MultiDrawArraysIndirectCount).
+        PFNDrawIndexedIndirectCountFunc s_vkCmdWireDrawIndirectCount = nullptr;
         // VK_EXT_multi_draw entry points, loaded at device creation when the extension
         // (and its multiDraw feature) is enabled; null otherwise.
-        static inline PFN_vkCmdDrawMultiEXT s_vkCmdDrawMultiEXT = nullptr;
-        static inline PFN_vkCmdDrawMultiIndexedEXT s_vkCmdDrawMultiIndexedEXT = nullptr;
+        PFN_vkCmdDrawMultiEXT s_vkCmdDrawMultiEXT = nullptr;
+        PFN_vkCmdDrawMultiIndexedEXT s_vkCmdDrawMultiIndexedEXT = nullptr;
+        // VK_KHR_fragment_shading_rate, which backs GL_EXT_fragment_shading_rate: what was enabled
+        // at device creation and what the device answers for it (see GetFragmentShadingRateSupport).
+        // Null / all-false on a device without pipelineFragmentShadingRate.
+        PFN_vkCmdSetFragmentShadingRateKHR s_vkCmdSetFragmentShadingRateKHR = nullptr;
+        FragmentShadingRateSupport m_fragmentShadingRate{};
 
         // VK_EXT_transform_feedback (GL transform feedback capture)
         Bool m_transformFeedbackFeatureEnabled = false;
@@ -679,7 +1249,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // pipeline from asking for LAST on a device that cannot preserve a fan's provoking vertex.
         Bool m_provokingVertexXfbPreserveEnabled = false;
         // provokingVertexModePerPipeline: when VK_FALSE every pipeline in one render pass instance
-        // must agree on the mode, so glProvokingVertex(GL_FIRST_VERTEX_CONVENTION) cannot be honoured
+        // must agree on the mode, so glProvokingVertex(GL_FIRST_VERTEX_CONVENTION) cannot be honored
         // per draw and every pipeline takes GL's default (LAST) instead.
         Bool m_provokingVertexModePerPipeline = false;
         // transformFeedbackPreservesTriangleFanProvokingVertex.
@@ -690,21 +1260,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the pipeline-state value hash, neither of which moves when glBeginTransformFeedback is
         // called, so a dynamic input here would hand back a stale VkPipeline.
         VkProvokingVertexModeEXT SelectProvokingVertexMode(VkPrimitiveTopology topology,
-                                                          Bool capturesXfbFromGeometryStage) const;
+                                                           Bool capturesXfbFromGeometryStage) const;
         // VK_EXT_vertex_attribute_divisor: without it every non-zero glVertexAttribDivisor
         // behaves as 1, because that is all Vulkan's instance input rate can express.
         Bool m_vertexAttributeDivisorEnabled = false;
-        static inline PFN_vkCmdBindTransformFeedbackBuffersEXT s_vkCmdBindTransformFeedbackBuffersEXT = nullptr;
-        static inline PFN_vkCmdBeginTransformFeedbackEXT s_vkCmdBeginTransformFeedbackEXT = nullptr;
-        static inline PFN_vkCmdEndTransformFeedbackEXT s_vkCmdEndTransformFeedbackEXT = nullptr;
+        PFN_vkCmdBindTransformFeedbackBuffersEXT s_vkCmdBindTransformFeedbackBuffersEXT = nullptr;
+        PFN_vkCmdBeginTransformFeedbackEXT s_vkCmdBeginTransformFeedbackEXT = nullptr;
+        PFN_vkCmdEndTransformFeedbackEXT s_vkCmdEndTransformFeedbackEXT = nullptr;
         // Counter buffers (one 4-byte slot per capture binding) let consecutive
         // draws within one glBeginTransformFeedback append GL-style. Transform feedback
         // objects can each hold an open, paused span at the same time, so the counters are
         // per object: one group of four slots each, handed out on first use.
         static constexpr SizeT kXfbCounterObjectSlots = 16;
         VkBufferObject m_xfbCounterBuffer;
-        UnorderedMap<Uint, Uint32> m_xfbCounterSlotByObject;
-        Uint32 m_xfbNextCounterSlot = 0;
+        // Which transform feedback object owns each slot group, by the frontend's never-reused
+        // lifetime id (0 = the slot is free). This used to be an UnorderedMap keyed on the GL
+        // NAME, which is recycled by glGenTransformFeedbacks: a deleted-and-recreated object
+        // inherited the dead one's slot, and since nothing ever removed an entry the map also
+        // grew for the life of the context. A fixed table cannot do either: a group is taken over
+        // only from an owner with no OPEN span (see CurrentXfbCounterSlot), so an object whose
+        // counters can still be resumed never loses them, and a dead object's group comes back.
+        Array<Uint64, kXfbCounterObjectSlots> m_xfbCounterSlotOwner{};
+        // Tie-break among reclaimable groups only; never on its own, because the paused span the
+        // groups exist for is by construction the least recently used one.
+        Array<Uint64, kXfbCounterObjectSlots> m_xfbCounterSlotLastUse{};
+        Uint64 m_xfbCounterSlotUseSerial = 0;
         // Set for a slot once a captured draw has been recorded into its span; selects
         // counter-buffer resume on the next captured draw of the same span.
         Array<Bool, kXfbCounterObjectSlots> m_xfbCountersValid{};
@@ -714,6 +1294,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Wraps a recorded draw with BeginTransformFeedbackEXT/EndTransformFeedbackEXT
         // when GL transform feedback is active; binds capture buffers on demand.
         Bool BeginXfbCaptureForDraw(FrameContext::FrameData& frame);
+        Bool BeginXfbCaptureWithBuffers(FrameContext::FrameData& frame, Uint32 count, const VkBuffer* buffers,
+                                        const VkDeviceSize* offsets, const VkDeviceSize* sizes);
+        Bool BeginWireXfbCaptureForDraw(FrameContext::FrameData& frame);
+        Uint32 m_currentDrawXfbBufferCount = 0;
+        Uint32 m_currentDrawXfbBufferMask = 0;
         void EndXfbCaptureForDraw(FrameContext::FrameData& frame, Bool began);
         // Makes the captured bytes visible to whatever reads them next. Deferred rather than
         // recorded next to the capture, because the capturing draw runs inside a render pass
@@ -748,7 +1333,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 m_xfbQueryOpenSlot = 0;
         // GL_PRIMITIVES_GENERATED reroute for draws made while transform feedback is
         // INACTIVE. The stream pool's primitivesNeeded is defined to count those draws
-        // too, but a Mali driver (and Mesa lavapipe) answers 0 unless a capture span
+        // too, but a Mali driver (and lavapipe) answers 0 unless a capture span
         // is open (the CTS's tessellator-measuring shape). Where the bring-up probe
         // finds that defect with a working control - or
         // MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE forces it - such draws accumulate the
@@ -776,8 +1361,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // tessellationShader was enabled at device creation (it is taken whenever the
         // device advertises it); gates the probe's PATCHES shape.
         Bool m_tessellationShaderFeatureEnabled = false;
-        MG_Util::SelfTest::PrimGenRerouteKind m_primGenRerouteKind =
-            MG_Util::SelfTest::PrimGenRerouteKind::None;
+        MG_Util::SelfTest::PrimGenRerouteKind m_primGenRerouteKind = MG_Util::SelfTest::PrimGenRerouteKind::None;
         // The bring-up probe measured this device's stream query as counting draws made
         // with no capture span open (the StreamCounts verdict) - so it counts the
         // PAUSED-span ones too, through the stream slot they take when nothing is
@@ -809,8 +1393,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // kind: 0 = PRIMITIVES_WRITTEN, 1 = PRIMITIVES_GENERATED.
         Bool StartXfbQueryCapture(Uint32 kind);
         void StopXfbQueryCapture(Uint32 kind, Vector<Uint32>& outSlots, Vector<Uint32>& outRerouteSlots);
-        Bool ResolveXfbQueryResult(const Vector<Uint32>& slots, const Vector<Uint32>& rerouteSlots,
-                                   Bool wantGenerated, Uint64& outPrimitives);
+        Bool ResolveXfbQueryResult(const Vector<Uint32>& slots, const Vector<Uint32>& rerouteSlots, Bool wantGenerated,
+                                   Uint64& outPrimitives);
 
     private:
         void BeginXfbQueryForDraw(VkCommandBuffer commandBuffer, Bool xfbActive);
@@ -821,7 +1405,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkBufferManager m_bufferManager;
 
         Uint m_imageIndexAcquired = 0;
+        // The swapchain image GL addresses as the default framebuffer: the one a readback, a
+        // blit source or a copy out of it resolves, and the one the app last rendered into.
+        // Present() runs ahead - it presents the frame and acquires the next image without
+        // waiting for the apply that would render into it (kWaitPresent) - so this must NOT
+        // follow m_imageIndexAcquired. Before it existed a readback resolved the freshly
+        // acquired image, which nothing had written yet: the pure-black sundial-lite frame.
+        Uint m_defaultFramebufferImageIndex = 0;
         FrameContext m_frameContext;
+
+        // Resolves the swapchain image index a READ of the default framebuffer must use. A
+        // non-default framebuffer ignores the index; it keeps the acquired one, which still
+        // keys its render-pass cache.
+        Uint32 DefaultFramebufferReadIndex(Bool isDefaultFramebuffer) const {
+            return isDefaultFramebuffer ? m_defaultFramebufferImageIndex : m_imageIndexAcquired;
+        }
+
+        // Same for a WRITE: the default framebuffer starts addressing the image Present()
+        // acquired only once something renders into it again.
+        Uint32 DefaultFramebufferWriteIndex(Bool isDefaultFramebuffer) {
+            if (isDefaultFramebuffer) m_defaultFramebufferImageIndex = m_imageIndexAcquired;
+            return DefaultFramebufferReadIndex(isDefaultFramebuffer);
+        }
 
         UniquePtr<PipelineFactory> m_pipelineFactory;
         // Single-slot "last pipeline" memo: skip the per-draw GetOrCreatePipeline work (state
@@ -838,12 +1443,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 programHash = 0;
             Uint64 vertexInputHash = 0;
             Uint64 renderPassHash = 0;
-            // VALUE hash of the pipeline-relevant fixed-function state (see
-            // ComputePipelineStateHash), not the monotonic pipeline-state version:
-            // the version never repeats, so a per-draw GL_BLEND toggle would miss
-            // all entries forever even though the state alternates between two
-            // values the memo already holds.
+            Uint64 wireRenderPassCompatibilityId = 0;
+            // The PRE-HANDLE arm's key component (P2 brief D12.1), and 0 in every entry the
+            // handle arm mints. VALUE hash of the pipeline-relevant fixed-function state (see
+            // ComputePipelineStateHash), not the monotonic pipeline-state version: the version
+            // never repeats, so a per-draw GL_BLEND toggle would miss all entries forever even
+            // though the state alternates between two values the memo already holds.
             Uint64 pipelineStateHash = 0;
+            // The HANDLE arm's key component, and the whole of D12.1: the CLIENT already
+            // hashed the pipeline subset of RenderStateParameters and minted a content-
+            // addressed CSO for it (MG_Pipe/MGPipeRenderStateSpans.h, MG_Impl/Pipe/CsoCache),
+            // so re-hashing the same 396 bytes here was work the boundary had already done.
+            // Two draws share a CSO handle exactly when their pipeline bytes are equal, and
+            // the client's subset is a strict SUPERSET of what ComputePipelineStateHash read,
+            // so the handle discriminates at least as finely as the hash it replaces.
+            //
+            // renderPassHash STAYS beside it and is what keeps this key complete: the CSO
+            // carries GL state only, while colorAttachmentCount and the rasterization sample
+            // count - which ComputePipelineStateHash folded in through its signature and
+            // through ResolveEffectiveSampleMask - are render-pass facts that the render-pass
+            // hash already separates.
+            //
+            // Null in an entry minted by the legacy arm, so entries of the two arms can never
+            // match each other: the compare below tests BOTH components.
+            MG_Pipe::MGPipeHandle renderStateCso = MG_Pipe::kMGPipeNullHandle;
             ProgramFactory::CompileOptionFlags transformFlags = {};
             // Baked into the pipeline (PipelineFactory::ComputeHash mixes it), and NOT derivable
             // from anything else in this key: it depends on whether the draw is indexed and on the
@@ -851,25 +1474,132 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // indexed and a non-indexed draw over the same program and state collide on one entry
             // and the second one gets the first one's restart setting.
             Bool primitiveRestartEnable = false;
+            // The pipeline was built from the program's nonLayeredStages (gl_Layer stores zeroed,
+            // PipelineCreatePayload::nonLayeredStages). Not derivable from the render pass: a
+            // layered and a single-layer attachment of one format share it.
+            Bool nonLayeredStages = false;
+            // The pipeline was built with the program's full-coverage gl_SampleMask fragment
+            // module (PipelineCreatePayload::fullCoverageFragmentModule). Follows from the
+            // render pass's sample count and MULTISAMPLE, kept here so the key states it.
+            Bool fullCoverageSampleMask = false;
             VkPipeline pipeline = VK_NULL_HANDLE;
         };
         static constexpr Uint32 kPipelineMemoSize = 8;
         PipelineMemoEntry m_pipelineMemo[kPipelineMemoSize];
         Uint32 m_pipelineMemoCount = 0;
         Uint32 m_pipelineMemoNext = 0;
-        // Hash of every fixed-function GL state the pipeline payload reads that the
-        // memo key's other fields (mode / program / vertex input / render pass /
-        // transform flags) do not already pin down. Equal hash under an equal rest
-        // of key => byte-identical PipelineCreatePayload. Cached per pipeline-state
-        // version: the version is monotonic and bumps on every pipeline-state
-        // change, so an unchanged (version, colorAttachmentCount) proves the state
-        // bytes are unchanged and the hash can be reused without re-reading them.
-        Uint64 ComputePipelineStateHash(Uint32 colorAttachmentCount,
-                                        VkSampleCountFlagBits rasterizationSamples) const;
+
+        // P2 D12.1's arm selector, and the whole of the pipeline memo's re-key. Returns the
+        // render-state CSO this draw is keyed on, or the null handle when the pre-handle arm
+        // is the one that runs.
+        //
+        // Under the handle arm the memo's state key IS this handle. The client hashed those
+        // 396 pipeline bytes when it minted the CSO (MGPipeComputePipelineSubsetHash), so
+        // recomputing an overlapping hash here was work the boundary had already done; the
+        // client's pipeline subset is a strict SUPERSET of what ComputePipelineStateHash read,
+        // so the handle discriminates at least as finely as the hash it replaces. What the
+        // handle does NOT carry is the render-pass side - colorAttachmentCount and the
+        // rasterization sample count, which ComputePipelineStateHash folded in through its
+        // signature and through ResolveEffectiveSampleMask - and that is exactly why
+        // entry.renderPassHash stays in the key beside it.
+        //
+        // The arm is live only when the render-state subsystem is migrated in this run AND the
+        // client has actually bound a CSO. The second half is not belt and braces: a tree whose
+        // tracker does not emit create/bind_render_state yet has no handle to key on, and
+        // delete_render_state clears the binding (MG_Pipe/PipeApply.cpp), so the null handle is
+        // reachable on any tree. Keying every draw on it would alias every render state onto
+        // one memo entry, so a null handle means "fall back to a state hash" - never an abort,
+        // and never a per-draw consultation of the legacy-memo lever: bit 0 is not a Track-H
+        // subsystem (D14 labels only bits 5 and 6 that), and the lever's Fatal is a STARTUP
+        // one, in MagmaPipeValidateSubsystemConfiguration.
+        //
+        // The fallback is warned ONCE rather than logged at debug, and that is deliberate: a
+        // silent fallback is what makes "the CSO arm never ran" easy to miss. W is compiled in
+        // at every shipped log level.
+        //
+        // The latch is a plain member bool, NOT MGLOG_W_ONCE. MOBILEGL_LOG_ONCE_INTERNAL
+        // (MG_Util/Debug/Log.h) is an UNCONDITIONAL std::atomic_flag::test_and_set - a locked
+        // xchg, executed on every evaluation, not "one static bool test" as an earlier round of
+        // this comment claimed - and this site is on the per-draw pipeline path in the very
+        // configuration that reaches it (no tracker: every draw). guide/discipline.md forbids leaving
+        // instrumentation on a hot path, so the once-ness is one non-atomic, always-predicted
+        // load of a member that is false exactly once. Single-threaded like the rest of the
+        // renderer, and per renderer rather than per process, which is also the right scope: a
+        // second context that never binds a CSO deserves to say so.
+        //
+        // What the absence of this warning from a run's log proves, EXACTLY: that no draw took
+        // the fallback WHILE bit 0 was set. With kMGPipeSubsystemRenderState clear the function
+        // returns before the latch, so absence proves nothing at all - and no draw is keyed on a
+        // handle either. Grep the mask out of the log beside it (review v2 minor 3).
+        //
+        // Push-only by construction: the pull build does not compile this function at all, so
+        // its two callers are statement-for-statement what they were (G1).
+        //
+        // [routed to the integrator, review v2 minor 11] MG_Pipe::MGPipeApplier() is ONE
+        // process-global applier (MG_Pipe/PipeApply.cpp), not the per-context CSO store D2
+        // specifies. In a multi-context process this reads whatever CSO another context last
+        // bound. The defect is package A's and the fix belongs there; Magma is its only P2
+        // consumer, so it is named here rather than left for both reviews to assume the other
+        // caught it.
+        MG_Pipe::MGPipeHandle ResolveBoundRenderStateCso() const {
+            if (!MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemRenderState)) {
+                return MG_Pipe::kMGPipeNullHandle;
+            }
+            const MG_Pipe::MGPipeHandle boundCso = MG_Pipe::MGPipeApplier().BoundRenderStateCso;
+            if (MG_Pipe::MGPipeHandleIsNull(boundCso) && !m_pipelineCsoFallbackWarned) {
+                m_pipelineCsoFallbackWarned = true;
+                MGLOG_W("MGPipe: kMGPipeSubsystemRenderState is on but no render-state CSO is "
+                        "bound; the pipeline memo is running on a state hash, not on the CSO "
+                        "handle (no tracker on this build, or a draw between "
+                        "delete_render_state and the next bind)");
+            }
+            return boundCso;
+        }
+        // Latch for the warning above. Mutable because the resolve is const and the latch is
+        // not part of the renderer's observable state.
+        mutable Bool m_pipelineCsoFallbackWarned = false;
+        // The memo key's STATE-HASH half, for a draw that has no CSO handle to key on: the
+        // pre-handle arm, and the fallback of D12.1's handle arm. Cached on the pipeline-state
+        // version plus the two render-pass facts the hash's inputs depend on, so an unchanged
+        // (version, colorAttachmentCount, sampleCount) proves the bytes are unchanged.
+        //
+        // [deviation from D12.1] The brief deletes this gate and its cached fields outright.
+        // They cannot go while a no-CSO draw is reachable - and it is, on any tree: a draw
+        // between delete_render_state and the next bind has no handle. On a tree whose tracker
+        // binds a CSO these five words are written once and never read again; they retire for
+        // real when the pull path does, at P13.
+        Uint64 ResolveFallbackPipelineStateHash(Uint renderStateVersion, Uint32 colorAttachmentCount,
+                                                VkSampleCountFlagBits rasterizationSamples) {
+            if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
+                m_pipelineStateHashColorCount != colorAttachmentCount ||
+                m_pipelineStateHashSampleCount != rasterizationSamples) {
+                m_pipelineStateHash = ComputePipelineSubsetStateHashFallback();
+                m_pipelineStateHashVersion = renderStateVersion;
+                m_pipelineStateHashColorCount = colorAttachmentCount;
+                m_pipelineStateHashSampleCount = rasterizationSamples;
+                m_pipelineStateHashValid = true;
+            }
+            return m_pipelineStateHash;
+        }
+        // The same answer as ComputePipelineStateHash, computed from the P2 chunk table
+        // instead of from a hand-written field list, for the build that compiles no
+        // pre-handle arm (cmake -DMOBILEGL_PIPE_LEGACY_MEMOS=OFF). It is the CLIENT's own
+        // hash function - MGPipeComputePipelineSubsetHash over the 396 pipeline bytes - so a
+        // draw keyed on it and a draw keyed on a CSO handle are keyed on the same equivalence
+        // class of state, and the render-pass facts stay separated by renderPassHash either
+        // way. This is what makes the no-legacy build RUNNABLE rather than a configuration
+        // that aborts on the first draw that arrives without a CSO.
+        Uint64 ComputePipelineSubsetStateHashFallback() const;
         // The effective GL_SAMPLE_MASK word for a draw at this rasterization sample count; see
         // the definition for the GL-vs-Vulkan rule it reconciles. Shared by the pipeline payload
-        // and the pipeline-state memo word so the two cannot disagree.
+        // and the pipeline-state memo word so the two cannot disagree. NOT part of the legacy
+        // arm: it is a PAYLOAD computation that depends on rasterizationSamples, so it survives
+        // the re-key and keeps reading Multisample / SampleMask / SampleMaskValue out of the
+        // working block.
         Uint32 ResolveEffectiveSampleMask(VkSampleCountFlagBits rasterizationSamples) const;
+        // ResolveFallbackPipelineStateHash's cache. Written once and never read again on a
+        // build whose client binds a render-state CSO; see that function for why it survives
+        // the re-key at all.
         Uint m_pipelineStateHashVersion = 0;
         Uint32 m_pipelineStateHashColorCount = 0;
         // The sample count the cached hash was computed at. A pipeline-state input now depends on
@@ -884,8 +1614,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // pass renders unflipped). Keyed on BOTH inputs; missing the FBO bit shipped
         // an upside-down default-framebuffer pass after any render-to-texture
         // (minecraft-1.17-main-menu retrace, whole frame flipped).
-        VkSurfaceTransformFlagBitsKHR m_baseTransformFlagsPreTransform =
-            VK_SURFACE_TRANSFORM_FLAG_BITS_MAX_ENUM_KHR;
+        VkSurfaceTransformFlagBitsKHR m_baseTransformFlagsPreTransform = VK_SURFACE_TRANSFORM_FLAG_BITS_MAX_ENUM_KHR;
         Bool m_baseTransformFlagsIsDefaultFbo = false;
         Bool m_baseTransformFlagsKeyValid = false;
         Uint32 m_baseTransformFlagsCache = 0;
@@ -895,7 +1624,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Drops every memoized pipeline handle. Required at command-buffer
         // boundaries and whenever any pipeline may have been destroyed. Also drops
         // the cached pipeline-state hash: the same boundaries can retire the GL
-        // context whose monotonic version the cache is keyed on.
+        // context whose monotonic version the cache is keyed on. The handle arm has no
+        // such cache to drop - a CSO handle is not derived from a monotonic version.
         void InvalidatePipelineMemo() {
             m_pipelineMemoCount = 0;
             m_pipelineMemoNext = 0;
@@ -905,7 +1635,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UniquePtr<ProgramFactory> m_programFactory;
         UniquePtr<UniformManager> m_uniformManager;
         UniquePtr<VertexInputStateFactory> m_vertexInputStateFactory;
-        UniquePtr<VkClearManager> m_clearManager;
         UniquePtr<VkRenderPassManager> m_renderPassManager;
         UniquePtr<VkTextureManager> m_textureManager;
         UniquePtr<VkSamplerManager> m_samplerManager;
@@ -914,388 +1643,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DepthMipmapResources m_depthMipmapResources;
         Vector<DeferredDepthMipmapCleanup> m_deferredDepthMipmapCleanup;
 
-        // Skip the per-draw CollectSampledTextures walk (~5% of the render thread) when the sampled
-        // texture SET is provably unchanged from the previous draw: same program (lifetime id +
-        // backend-state version, which covers sampler-uniform reassignment / relink) and transform
-        // flags, no texture bind/unbind/delete since (GetTextureBindGeneration), and nothing that
-        // moves a texture's shape or a sampler's parameters since (GetSamplingResolutionGeneration
-        // - membership depends on mipmap-completeness, which both of those decide). On a hit,
-        // m_sampledTexturesScratch still holds the previous draw's list and steps 2-4 (feedback /
-        // layout probe / transition) re-run on it, so layout correctness is unaffected - only the GL
-        // walk is skipped. The program lifetime id (never reused, unlike the GL name) and the
-        // monotonic bind generation make the key ABA-proof; the per-command-buffer reset is a cheap
-        // belt-and-suspenders.
-        Bool m_lastSampledSetValid = false;
-        Uint64 m_lastSampledSetProgramLifetimeId = 0;
-        Uint32 m_lastSampledSetProgramVersion = 0;
-        ProgramFactory::CompileOptionFlags m_lastSampledSetTransformFlags = {};
-        Uint64 m_lastSampledSetBindGeneration = 0;
-        Uint64 m_lastSampledSetSamplingGeneration = 0;
         // Set from the draw's resolved VkProgramObject on both the full and the fast setup paths;
         // read by BeginXfbCaptureForDraw, which has only GL state otherwise. See
         // VkProgramObject::xfbCaptureDeclined.
         Bool m_currentDrawXfbCaptureDeclined = false;
 
-        // Memo for the per-draw explicit-LOD-0 eligibility probe
-        // (ProgramSamplesOnlySingleLevelTextures): same key family as the
-        // sampled-set memo, plus the sampled textures' params-version sum so a
-        // level-range or filter change re-probes. On a hit the resolved
-        // transform flags are reused, which also collapses the two
-        // GetOrCreateProgram lookups into one.
-        Bool m_lastLodDecisionValid = false;
-        Uint64 m_lastLodProgramLifetimeId = 0;
-        Uint32 m_lastLodProgramVersion = 0;
-        Uint64 m_lastLodBindGeneration = 0;
-        Uint64 m_lastLodParamsSum = 0;
-        // Sampling-resolution generation at probe time. The probe reads the effective
-        // sampler's filters/aniso/LOD range, whose setters bump only this counter -
-        // the params-version sum above never moves for them.
-        Uint64 m_lastLodSamplingGeneration = 0;
-        ProgramFactory::CompileOptionFlags m_lastLodBaseFlags = {};
-        ProgramFactory::CompileOptionFlags m_lastLodResultFlags = {};
-
-        // Does the current program's vertex stage declare the BaseVertex builtin? A property
-        // of the program's SPIR-V, so (lifetime id, backend-state version) is the whole key.
-        //
-        // Memoized rather than re-asked because asking means resolving the UN-zeroed program
-        // variant, and a program that only ever draws non-indexed would then compile a variant
-        // no draw uses AND re-stamp its use every draw, so the idle sweep could never retire
-        // it. With the memo the answer is known before the first lookup and only the variant
-        // the draw actually needs is resolved.
-        Bool m_lastBaseVertexQueryValid = false;
-        Uint64 m_lastBaseVertexProgramLifetimeId = 0;
-        Uint32 m_lastBaseVertexProgramVersion = 0;
-        Bool m_lastBaseVertexReads = false;
-
-        // Snapshot behind TrySetupDrawFastPath. Values only: the program and
-        // render-pass caches are open-addressing maps whose entries move on
-        // insert, so no pointers into them are cached; the pipeline handle is
-        // protected by the command-buffer-boundary reset plus the mid-frame
-        // pipeline-destruction resets, and monotonic epochs guard everything
-        // that can be destroyed or recreated between draws.
-        struct SetupDrawSnapshot {
-            Bool valid = false;
-            Uint8 aspects = 0;
-            GLenum mode = 0;
-            Uint64 programLifetimeId = 0;
-            Uint32 programVersion = 0;
-            const void* vao = nullptr;
-            // Same rule as VaoDrawMemo::vaoLifetimeId: (address, config version) is not an
-            // identity, because a recycled address can arrive carrying a config version
-            // the dead VAO also had (two mutations to configure one attribute is the
-            // common shape), and "the VAO did not move" would then skip the layout
-            // re-resolve for a different VAO.
-            Uint64 vaoLifetimeId = 0;
-            Uint32 vaoConfigVersion = 0;
-            const void* drawFbo = nullptr;
-            // Never-reused lifetime id beside the raw pointer + Uint16 version: a
-            // deleted FBO recycled at the same address with the same fresh version
-            // count would otherwise compare equal (same ABA as the render-pass
-            // manager's fast-path memo).
-            Uint64 drawFboLifetimeId = 0;
-            Uint16 fboVersion = 0;
-            Bool drawFboIsDefault = false;
-            Uint renderStateVersion = 0;
-            Uint64 bindGeneration = 0;
-            Uint32 baseTransformFlags = 0;
-            Uint32 resolvedTransformFlags = 0;
-            // What ResolvePrimitiveRestartEnable answered for the draw this snapshot was taken
-            // from, i.e. what its pipeline's primitiveRestartEnable was built with. `aspects`
-            // already separates indexed from non-indexed draws, but not one index TYPE from
-            // another, and a restart index that fits GL_UNSIGNED_INT but not GL_UNSIGNED_SHORT
-            // makes those two draws want different pipelines.
-            Bool primitiveRestartEnable = false;
-            Uint64 renderPassHash = 0;
-            Uint32 imageIndex = 0;
-            Uint64 textureEraseEpoch = 0;
-            Uint64 textureImageEpoch = 0;
-            Uint64 renderbufferImageEpoch = 0;
-            Uint64 sampledContentSum = 0;
-            Uint64 sampledParamsSum = 0;
-            // Guards the sampler-descriptor reuse hint: bumped by any sampler-object
-            // parameter or texture shape change (see GetSamplingResolutionGeneration),
-            // none of which the sums above cover.
-            Uint64 samplingResolutionGeneration = 0;
-            // Render-pass flavor input (DepthTest || StencilTest at snapshot time).
-            // A pipeline-state change that leaves this equal cannot change which
-            // render pass GetOrCreateRenderPass would pick, so the fast path may
-            // re-resolve just the pipeline against the active pass; a change that
-            // flips it must fall back to the full path's pass selection.
-            Bool drawUsesDepthStencil = false;
-            // The snapshotting draw's pipeline viewportCount. A pure function of the PROGRAM
-            // (writesViewportIndexBuiltin) and of a device feature fixed at renderer init, both
-            // of which the programLifetimeId/programVersion guards above already pin - carried
-            // here so the fast path does not re-fetch the program object to re-derive it.
-            Uint32 viewportCount = 1;
-            IntVec2 renderPassExtent = {0, 0};
-            // colorAttachmentCount of the snapshotting draw's render pass: the
-            // pipeline-state hash input, so the fast path can refresh that hash and
-            // probe the pipeline memo after a state change without re-fetching the
-            // render-pass entry (the pass itself is pinned by renderPassHash above).
-            Uint32 renderPassColorCount = 0;
-            // Pinned with the colour count and for the same reason: the fast path recomputes the
-            // pipeline-state value hash from the snapshot, and that hash reads the sample count.
-            VkSampleCountFlagBits renderPassSampleCount = VK_SAMPLE_COUNT_1_BIT;
-            VkPipeline pipeline = VK_NULL_HANDLE;
-            // layoutHash of the snapshotting draw's vertex-input state. The pipeline and
-            // the vertex-input pre-flight depend on the VAO only through this (plus the
-            // program, pinned separately), so a changed VAO whose aux memo carries the
-            // same layoutHash re-uses the snapshot's pipeline and pre-flight verdict
-            // outright - the VAO-cycling case Minecraft chunk rendering hits every draw.
-            Uint64 vaoLayoutHash = 0;
-            // Memoised ProgramFactory entry of the snapshotting draw, valid while
-            // (programLifetimeId, programVersion, resolvedTransformFlags) match - all
-            // checked above - AND the factory's cache structure epoch is unchanged (the
-            // cache is open-addressing and holds entries by value, so any insert/erase
-            // moves them). The fast path must re-stamp use through StampProgramUse when
-            // it bypasses GetOrCreateProgram, or the idle sweep could evict a live entry.
-            const ProgramFactory::VkProgramObject* programObj = nullptr;
-            Uint64 programFactoryEpoch = 0;
-            // Per-entry copies of the snapshotting draw's sampled set (the scratch
-            // vectors below hold only the LAST full-path draw's set, which with more
-            // than one snapshot entry is not necessarily this entry's program).
-            // sampledTextures/sampledResources carry the same epoch-guarded pointer
-            // lifetime rules as the scratch originals: textureEraseEpoch (checked
-            // every probe) declines the entry before any erased resource pointer
-            // could be dereferenced. sampledLayouts is the layout VALUE each
-            // resource held when this entry's descriptors were built (the
-            // descriptor-reuse hint needs the SAME layout, not just a sampleable
-            // one), and sampledBindingRecords feeds SampledBindingsUnchanged when
-            // the bind generation moved.
-            Vector<MG_State::GLState::ITextureObject*> sampledTextures;
-            Vector<VkTextureManager::TextureResource*> sampledResources;
-            Vector<VkImageLayout> sampledLayouts;
-            Vector<UniformManager::SampledBindingRecord> sampledBindingRecords;
-        };
-        // Program-keyed snapshot entries: program ping-pong (Sodium switches programs
-        // mid-frame every few draws) would otherwise evict the single snapshot on
-        // every switch and send every draw through the full path. Entries are found
-        // by programLifetimeId (MRU-first probe); every other guard stays per-probe,
-        // so a stale entry declines itself exactly like the old single snapshot did.
-        static constexpr Uint32 kSetupDrawSnapshotCount = 4;
-        SetupDrawSnapshot m_setupDrawSnapshots[kSetupDrawSnapshotCount];
-        Uint32 m_setupDrawSnapshotMru = 0;    // last entry that hit or was filled
-        Uint32 m_setupDrawSnapshotVictim = 0; // round-robin fill cursor when all entries are live
-        void InvalidateSetupDrawSnapshots() {
-            for (auto& snapshot : m_setupDrawSnapshots) {
-                snapshot.valid = false;
-            }
-        }
-
-        // Per-draw scratch buffers (clear keeps capacity) — these paths run for every
-        // draw call and must not allocate.
-        Vector<MG_State::GLState::ITextureObject*> m_sampledTexturesScratch;
-        // Per-binding (texture, effective sampler) lifetime-id records from the same
-        // CollectSampledTextures walk that filled m_sampledTexturesScratch. The fast
-        // path shadow-compares against them (SampledBindingsUnchanged) when the
-        // texture bind generation moved, so a redundant glBindSampler/glBindTexture
-        // storm that resolves to the same bindings keeps the fast path.
-        Vector<UniformManager::SampledBindingRecord> m_sampledBindingRecordsScratch;
-        // Parallel to m_sampledTexturesScratch, refilled by every SetupDraw's
-        // first sampled-texture loop: the resolved backend resources, so the
-        // post-transition loop can skip re-resolving textures whose layout is
-        // already sampleable.
-        Vector<VkTextureManager::TextureResource*> m_sampledResourcesScratch;
-        Vector<MG_State::GLState::ITextureObject*> m_storageImageTexturesScratch;
-        Vector<UniformManager::SamplerImageFeedbackBinding> m_samplerImageFeedbackScratch;
-        Vector<UniformManager::SamplerBindingOverride> m_samplerImageBindingOverridesScratch;
-        Vector<VkBuffer> m_vertexBuffersScratch;
-        Vector<VkDeviceSize> m_vertexOffsetsScratch;
+        // Per-draw scratch buffer (clear keeps capacity) - this path runs for every draw call and
+        // must not allocate.
         Vector<VkVertexInputAttributeDescription> m_patchedAttributesScratch;
-        Vector<Float> m_vertexConversionScratch;
-        Vector<Uint8> m_vertexRepackScratch;
-
-        struct ConvertedVertexStreamKey {
-            const MG_State::GLState::BufferObject* buffer = nullptr;
-            Uint64 changeSerial = 0;
-            SizeT baseOffset = 0;
-            Uint32 sourceStride = 0;
-            DataType type = DataType::Float32;
-            Int size = 0;
-            Bool normalized = false;
-            Bool isInteger = false;
-            VertexInputStateFactory::VertexStreamConversion conversion =
-                VertexInputStateFactory::VertexStreamConversion::None;
-
-            Bool operator==(const ConvertedVertexStreamKey& other) const {
-                return buffer == other.buffer && changeSerial == other.changeSerial &&
-                       baseOffset == other.baseOffset && sourceStride == other.sourceStride &&
-                       type == other.type && size == other.size && normalized == other.normalized &&
-                       isInteger == other.isInteger && conversion == other.conversion;
-            }
-        };
-
-        struct ConvertedVertexStreamKeyHash {
-            SizeT operator()(const ConvertedVertexStreamKey& key) const {
-                SizeT hash = std::hash<const void*>{}(key.buffer);
-                auto combine = [&hash](SizeT value) {
-                    hash ^= value + static_cast<SizeT>(0x9e3779b97f4a7c15ull) + (hash << 6) + (hash >> 2);
-                };
-                combine(std::hash<Uint64>{}(key.changeSerial));
-                combine(std::hash<SizeT>{}(key.baseOffset));
-                combine(std::hash<Uint32>{}(key.sourceStride));
-                combine(std::hash<Uint32>{}(static_cast<Uint32>(key.type)));
-                combine(std::hash<Int>{}(key.size));
-                combine(std::hash<Bool>{}(key.normalized));
-                combine(std::hash<Bool>{}(key.isInteger));
-                combine(std::hash<Uint32>{}(static_cast<Uint32>(key.conversion)));
-                return hash;
-            }
-        };
-
-        struct ConvertedVertexStream {
-            BufferSlice slice;
-            // Number of source elements the cached slice covers. A draw needing a prefix of
-            // this range reuses the slice (converted streams are tightly packed); a draw
-            // needing more reconverts and replaces the entry, so per (buffer, layout) a
-            // frame converts at most the largest range any draw asked for.
-            SizeT elementCount = 0;
-            // Pins the source buffer for the frame so its heap address cannot be reused by
-            // a new BufferObject while this pointer-keyed entry is alive.
-            SharedPtr<const MG_State::GLState::BufferObject> sourcePin;
-        };
-        UnorderedMap<ConvertedVertexStreamKey, ConvertedVertexStream, ConvertedVertexStreamKeyHash>
-            m_convertedVertexStreams;
-
-        // One VAO's resolved vkCmdBindVertexBuffers arguments, reusable by a later draw
-        // that would resolve them to the same thing. Consecutive draws in a chunk-renderer
-        // frame keep the program and the vertex layout and only swap the VAO, so a
-        // per-VAO memo turns the second and later draws through each VAO into a validate
-        // plus (usually skipped) rebind.
-        //
-        // Only whole-buffer bindings are memoised. Client-memory and format-converted
-        // streams re-upload from a range that depends on the draw's own vertex/index
-        // range, and synthetic bindings carry glVertexAttrib* values that are not part
-        // of any key here; a layout using any of them is never stored.
-        // Field order is hit-path cache locality, hot to cold: the per-draw validate
-        // reads the scalars and the EBO memo head, then only the first bindingCount
-        // elements of vkBuffers/vkOffsets; the per-binding revalidation arrays at the
-        // tail are touched once per frame at most.
-        struct ResolvedVertexBindings {
-            // Must equal DynamicStateShadow::kMaxShadowedVertexBindings (static_assert in
-            // the .cpp): past that width the bind shadow cannot skip a redundant bind
-            // either, so a wider layout resolves per draw. Minecraft-shaped layouts use four.
-            static constexpr Uint32 kMaxBindings = 8;
-
-            // Frame serial of the last completed resolve OR cross-frame revalidation.
-            // Zero until a resolve completes, and reset to zero before one starts, so a
-            // resolve that bails out midway cannot leave a half-filled entry matchable.
-            // Unlike the original frame-scoped memo, an entry whose buffers are all
-            // resident and unmapped is revalidated across frames (per-binding slice
-            // epoch compares) instead of re-resolved - see TryBindResolvedVertexBindings.
-            Uint64 frameSerial = 0;
-            // Identity of the resolved Vulkan layout: the VAO's content hash
-            // (VertexInputStateFactory::GetOrComputeHash - the same value the factory
-            // keys its entries on) fixes bindings.size(), each binding's base offset,
-            // which bindings are client/converted, and (through the mixed-in buffer
-            // addresses) which buffer each binding reads. Compared against the VAO's
-            // own hash memo on the hit path, so a hit never touches the factory entry.
-            VertexInputStateFactory::HashType vertexInputHash = 0;
-            // The program's vertex input layout: decides the synthetic-binding set and
-            // hence the total binding count.
-            Uint32 activeAttribMask = 0;
-            Uint32 bindingCount = 0;
-            // VkBufferManager::GetSliceEpochCounter() at resolve time. Still equal means
-            // no buffer anywhere changed its slice or was persistently mapped since, which
-            // settles every per-binding question below in one compare.
-            Uint64 sliceEpochCounter = 0;
-            // Any bound buffer already carrying a host map when the slice was resolved.
-            // Such a buffer can mutate its shadow with no API call, so it has to be
-            // re-pushed per draw and the one-compare path above cannot apply.
-            Bool anyBufferMapped = true;
-
-            // Resident element-buffer slice memo (skips the per-draw AcquireResidentSlice
-            // for the VAO's EBO, which cold-chases 500+ distinct resources in a
-            // chunk-cycling frame). Self-validating exactly like the bindings above: a hit
-            // requires the LIVE bound EBO pointer to equal indexBuffer AND either an
-            // unmoved manager-wide slice-epoch counter (nothing anywhere changed slices
-            // or gained a host map, the same one-compare rescue the vertex half uses) or
-            // that buffer's resource still carrying indexSliceEpoch (epochs are minted
-            // from a process-lifetime counter, so a recycled address can never
-            // revalidate). Restart-substituted and streamed EBOs are never stored.
-            // indexFrameSerial tracks the last frame the resource's GPU-use serial was
-            // stamped through this memo; 0 means no index memo. Independent of the
-            // vertex half: both are (pointer, epoch)-validated, so neither can serve
-            // stale state for the other.
-            const MG_State::GLState::BufferObject* indexBuffer = nullptr;
-            Uint64 indexSliceEpoch = 0;
-            // GetSliceEpochCounter() when the resource's epoch was last verified; only
-            // meaningful while indexFrameSerial matches the current frame serial.
-            Uint64 indexSliceEpochCounter = 0;
-            VkBuffer indexVkBuffer = VK_NULL_HANDLE;
-            VkDeviceSize indexSliceOffset = 0;
-            Uint64 indexFrameSerial = 0;
-            // The EBO carried a host map when the slice was recorded - the mirror of
-            // anyBufferMapped on the vertex half. A shadow-backed (non-adopted)
-            // persistent map mutates its shadow with no API call and no epoch bump, so
-            // the one-compare rescue must decline and re-run the acquire, whose
-            // SyncPersistentMappedRange is the push-down. A map taken AFTER the record
-            // is already covered: AcquirePersistentMap bumps the slice epoch for the
-            // request itself, adopted or declined.
-            Bool indexBufferMapped = false;
-
-            // Bound per draw (first bindingCount elements).
-            VkBuffer vkBuffers[kMaxBindings] = {};
-            VkDeviceSize vkOffsets[kMaxBindings] = {};
-            // Per binding: the VAO attribute location its buffer comes from, that buffer,
-            // and the buffer's VkBufferManager slice epoch when the slice was resolved.
-            // Only read by the per-frame revalidation and the something-moved fallback.
-            Uint8 attributeLocations[kMaxBindings] = {};
-            const MG_State::GLState::BufferObject* buffers[kMaxBindings] = {};
-            Uint64 sliceEpochs[kMaxBindings] = {};
-        };
-        // One direct-mapped slot of the per-VAO draw-memo table below. A slot belongs to
-        // the object whose (vaoKey, vaoLifetimeId) pair it carries: the address alone
-        // only picks the slot, and the never-reused lifetime id is what proves the slot
-        // is THIS VAO's, so the successor allocated onto a destroyed VAO's address
-        // always misses. That identity check is load-bearing and the content-hash
-        // validations below do NOT stand in for it - a recycled address under a
-        // byte-identical configuration reproduces the content hash exactly, which is
-        // how a destroyed VAO's resolved bindings were once handed to its successor's
-        // draw. The slot is still never dereferenced through vaoKey, and every fact it
-        // carries is still validated against live state before use:
-        //  - layoutHash/layoutAuxMasks are valid only while contentHash equals the LIVE
-        //    VAO's own hash memo (which the VAO's config version guards), so a config
-        //    change or a buffer rebind misses even for the same object.
-        //  - bindings revalidates per draw exactly as before (frame serial, content
-        //    hash, per-binding live buffer pointers and slice epochs).
-        struct alignas(64) VaoDrawMemo {
-            const MG_State::GLState::VertexArrayObject* vaoKey = nullptr;
-            // The VAO's never-reused lifetime id, checked alongside vaoKey. The pointer
-            // ALONE is not an identity: a deleted VAO's heap address is handed straight
-            // back by the next glGenVertexArrays-shaped allocation, and the successor then
-            // matched this slot and inherited the dead object's memos. Both stated
-            // defences failed with it, because both reduce to the content hash and the
-            // content hash's buffer-identity component was itself a recycled heap address.
-            Uint64 vaoLifetimeId = 0;
-            // The VAO content hash (VertexInputStateFactory::GetOrComputeHash) the two
-            // layout facts below were derived from; 0 while nothing valid is stored.
-            Uint64 contentHash = 0;
-            Bool layoutFactsValid = false;
-            // The resolved layout identity + packed (unsupported, location) masks -
-            // the exact values GetBackendAuxMemo used to serve, moved here so the
-            // per-draw probe stays inside this table's one hot line instead of
-            // touching a second cold line of every cycled VAO object.
-            Uint64 layoutHash = 0;
-            Uint64 layoutAuxMasks = 0;
-            ResolvedVertexBindings bindings;
-        };
-        // Fixed-size, allocated on first use, never rehashed or swept: entries are
-        // recycled in place on slot collisions (two-slot probe, older frame serial
-        // evicted), and stale entries self-invalidate through the compares above. A
-        // fixed table also makes every VaoDrawMemo/ResolvedVertexBindings pointer
-        // stable for the duration of a draw, which the EBO memo handoff
-        // (m_currentDrawResolvedEntry) relies on.
-        static constexpr Uint32 kVaoDrawMemoSlotCount = 2048; // power of two
-        Vector<VaoDrawMemo> m_vaoDrawMemoTable;
-        // Finds the slot holding `vao`, or recycles the older of its two candidate
-        // slots into an empty memo keyed on `vao`. Never returns null.
-        VaoDrawMemo* LookupVaoDrawMemo(const MG_State::GLState::VertexArrayObject* vao);
-        // The current draw's memo entry, set by UploadAndBindVertexBuffers and consumed
-        // by the same draw's UploadAndBindIndexBuffer (the EBO memo lives in the same
-        // entry). Valid ONLY within that window: the next draw's lookup can recycle the
-        // slot. Null when the draw's layout is not memoisable.
-        ResolvedVertexBindings* m_currentDrawResolvedEntry = nullptr;
 
         void CreateInstance();
         VkResult SetupDebugMessenger();
@@ -1303,7 +1658,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkResult SetupDebugReportCallback();
         void DestroyDebugReportCallback();
         VkDebugUtilsMessengerCreateInfoEXT PopulateDebugMessengerCreateInfo();
-        void CreateSurface();
+        // False (logged) when the target's surface cannot be built; the renderer then has no surface.
+        Bool CreateSurface();
         void PickPhysicalDevice();
         void CreateLogicalDeviceAndQueues();
         void CreateAllocator();
@@ -1320,31 +1676,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool ResolvePrimitiveRestartEnable(Flags<DrawSetupAspect> aspects,
                                            const IndexBufferView* pIndexBufferView) const;
 
-        VkPipeline GetOrCreatePipeline(
-            GLenum mode,
-            const MG_State::GLState::ProgramObject& program,
-            const ProgramFactory::VkProgramObject& programObj,
-            ProgramFactory::CompileOptionFlags transformFlags,
-            const MG_State::GLState::VertexArrayObject& vao,
-            const RenderPassEntry& renderPassEntry,
-            Bool primitiveRestartEnable);
         VkPipeline GetOrCreateComputePipeline(const ProgramFactory::VkProgramObject& programObj);
         void DestroyComputePipelines();
-        // Takes the frame rather than a command buffer: a first-time storage-usage upgrade has to
-        // flush the pending recording (see the body), which retires the current command buffer.
-        Bool PrepareStorageImageTextures(
-            FrameContext::FrameData& frame,
-            const MG_State::GLState::ProgramObject& program,
-            const ProgramFactory::VkProgramObject& programObj);
-        // Vulkan forbids a sampled descriptor and writable storage descriptor from naming the
-        // same image subresource in one shader operation. Snapshot only the sampler side; the
-        // storage descriptor continues to name the application texture.
-        Bool PrepareSamplerImageFeedbackSnapshots(
-            FrameContext::FrameData& frame,
-            const MG_State::GLState::ProgramObject& program,
-            const ProgramFactory::VkProgramObject& programObj,
-            VkPipelineStageFlags consumerShaderStageMask);
-
         // The per-draw dynamic-state tail (viewport, scissor, blend constants, depth
         // bias, line width, stencil), gated behind one render-state-parameters-version
         // compare per command buffer - see the gate fields in DynamicStateShadow.
@@ -1355,8 +1688,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                        Uint32 viewportCount = 1);
         void ApplyMultiViewportDynamicState(VkCommandBuffer commandBuffer, Uint32 viewportCount, const IntVec2& extent,
                                             VkSurfaceTransformFlagBitsKHR preTransform, Bool isDefaultFbo);
-        VkRect2D ComputeGLScissorRect(Uint32 index, const IntVec2& extent,
-                                      VkSurfaceTransformFlagBitsKHR preTransform, Bool isDefaultFbo) const;
+        VkRect2D ComputeGLScissorRect(Uint32 index, const IntVec2& extent, VkSurfaceTransformFlagBitsKHR preTransform,
+                                      Bool isDefaultFbo) const;
         // How many viewports a draw with this program rasterizes into: 1 unless the program
         // assigns gl_ViewportIndex AND the device enabled multiViewport. Both the pipeline's
         // baked viewportCount and the dynamic arrays come from this one answer, so they cannot
@@ -1365,108 +1698,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return programWritesViewportIndex && m_multiViewportFeatureEnabled ? m_maxRasterizableViewports : 1u;
         }
 
-        Bool UploadAndBindVertexBuffers(VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
-                                        const ProgramFactory::VkProgramObject& programObj,
-                                        const DrawCmdParam& drawParams,
-                                        const IndexBufferView* pIndexBufferView);
-        // Binds `entry`'s memoised buffers when every input it was resolved from is
-        // still live and unchanged, else returns false and leaves nothing bound.
-        // vaoContentHash is the VAO's memoised content hash (GetBackendHashMemo), which
-        // pins the layout AND the bound buffers without resolving the factory entry.
-        // Non-const entry: a cross-frame revalidation refreshes its serial/epoch stamps.
-        Bool TryBindResolvedVertexBindings(VkCommandBuffer commandBuffer,
-                                           const MG_State::GLState::VertexArrayObject& vao,
-                                           ResolvedVertexBindings& entry,
-                                           Uint64 vaoContentHash,
-                                           Uint32 activeAttribMask, Uint64 frameSerial);
-        Bool UploadAndBindIndexBuffer(FrameContext::FrameData& frame,
-                                     const MG_State::GLState::VertexArrayObject& vao,
-                                      const IndexBufferView* pIndexBufferView = nullptr);
         Bool InitializeBlitResources();
         Bool InitializeDepthMipmapResources();
         void ShutdownBlitResources();
         void ShutdownDepthMipmapResources();
         void CollectDeferredDepthMipmapCleanup(Uint32 frameIndex);
         void DestroyDeferredDepthMipmapCleanup();
-        Bool TryBlitToDefaultFramebufferWithShader(FrameContext::FrameData& frame,
-                                                   MG_State::GLState::FramebufferObject& readFbo,
-                                                   MG_State::GLState::FramebufferObject& drawFbo,
-                                                   GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                                                   GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-                                                   GLenum filter);
-        // Clears one layer of a colour image through a throwaway render pass whose entire content
-        // is its LOAD_OP_CLEAR. Two callers, both of which a transfer clear cannot serve: a z
-        // slice of a VK_IMAGE_TYPE_3D image (vkCmdClearColorImage cannot name one), and a
-        // MULTISAMPLE image (which carries no TRANSFER_DST usage at all). `finalLayout` is the
-        // layout the caller already tracks for the whole image, so this never has to touch
-        // resource->layout.
-        Bool ClearDepthSliceWithRenderPass(VkCommandBuffer commandBuffer,
-                                           MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
-                                           Uint32 depthSlice, const VkClearValue& clearValue,
-                                           VkImageLayout finalLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        // Records the texture's queued clears. By default the texture is synced first, which
-        // uploads any pending texels BEFORE the clear - right only for texels written before it.
-        // `uploadPendingTexels = false` leaves them pending (OrderPendingUploadAfterRecording).
-        Bool MaterializePendingClearForTexture(VkCommandBuffer commandBuffer,
-                                               MG_State::GLState::ITextureObject& texture,
-                                               Bool uploadPendingTexels = true);
-        // Texture uploads run in a batch submitted ahead of the frame's recording, so the upload
-        // the next sync of `texture` records would land BEFORE a write already recorded into the
-        // same image (a render, clear, blit or copy), and before a clear still queued for it (such
-        // a clear predates the texels: SettleTexelsBeforeQueuedClear). When either holds, this
-        // records the queued clear without the texels and submits the recording, so the upload
-        // follows both. An image the recording only READ keeps the old trade: no submit, and its
-        // earlier reads see the newer texels. It may end the render pass and replace
-        // frame.commandBuffer (recording again on return), so call it only where the caller holds
-        // no render-pass or command-buffer state across it. Returns whether it submitted.
-        Bool OrderPendingUploadAfterRecording(FrameContext::FrameData& frame,
-                                              MG_State::GLState::ITextureObject& texture);
-        // Called for each texture a glClear/glClearBuffer* is about to queue a clear on: uploads
-        // whatever texels are still pending (and mints the image if there is none), so that any
-        // texel pending when the clear is materialized was written after it.
-        void SettleTexelsBeforeQueuedClear(const MG_State::GLState::FramebufferObject& framebuffer,
-                                           const MG_State::GLState::FramebufferAttachmentObject& attachment);
-        // The multisample arm of the above. Split out rather than branched inline because it
-        // shares none of the transfer path: a multisample image carries no TRANSFER_DST usage, so
-        // neither the TRANSFER_DST transition nor vkCmdClearColorImage is legal on one.
-        Bool MaterializeMultisamplePendingClear(VkCommandBuffer commandBuffer,
-                                                MG_State::GLState::ITextureObject& texture,
-                                                VkTextureManager::TextureResource& resource,
-                                                const Vector<PendingClearEntry>& pendingClears);
-        Bool MaterializePendingClearForRenderbuffer(
-            VkCommandBuffer commandBuffer,
-            const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbuffer);
-        // The default framebuffer's twin of the two above. It cannot go through
-        // MaterializePendingClearForTexture: the default FBO's colour attachment is a
-        // placeholder texture object, and syncing THAT would clear a texture image nobody
-        // presents instead of the acquired swapchain image.
-        Bool MaterializePendingClearForDefaultFramebuffer(VkCommandBuffer commandBuffer,
-                                                          MG_State::GLState::FramebufferObject& fbo,
-                                                          FramebufferAttachmentType attachmentType);
-        // Its depth/stencil half: a different image (the swapchain's depth/stencil twin), a
-        // different clear command and per-aspect masking.
-        Bool MaterializePendingDepthStencilClearForDefaultFramebuffer(
-            VkCommandBuffer commandBuffer, const MG_State::GLState::FramebufferAttachmentObject& attachment,
-            const ClearAttachmentPayload& payload);
-        VkPipeline GetOrCreateBlitPipeline(const RenderPassEntry& renderPassEntry);
-        Bool GenerateDepthMipmapWithShader(FrameContext::FrameData& frame,
-                                           MG_State::GLState::ITextureObject& texture,
-                                           VkTextureManager::TextureResource& resource,
-                                           Uint32 baseMipLevel,
-                                           Uint32 generateMipLevelCount,
-                                           const IntVec3& storageBaseTexelSize,
-                                           VkImageLayout originalLayout,
-                                           VkImageLayout finalLayout);
         Bool SubmitReadbackCommandsAndWait(FrameContext::FrameData& frame);
 
     public:
-        // Submits whatever is recorded and waits for it. The CPU is about to read memory
-        // a shader wrote (a mapped shader storage buffer), and coherent host-visible
-        // storage only guarantees visibility once the work that produced it has retired.
-        Bool FinishPendingGpuWork();
-
     private:
-
         void ShutdownSwapchain();
 
         // Static functions

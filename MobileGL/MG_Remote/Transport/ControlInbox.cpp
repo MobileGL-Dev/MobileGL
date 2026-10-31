@@ -1,0 +1,116 @@
+// MobileGL - MobileGL/MG_Remote/Transport/ControlInbox.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+#include "ControlInbox.h"
+#include "Doorbell.h"
+#include "LogForward.h"
+#include "../Protocol/SurfaceOpCodec.h"
+#include <MG_Util/Debug/Log.h>
+#include <chrono>
+
+namespace MobileGL::MG_Remote::Transport {
+    ControlInbox::ControlInbox(ITransport& transport) : m_transport(transport), m_reader([this] { Read(); }) {}
+    ControlInbox::~ControlInbox() {
+        Stop();
+    }
+
+    void ControlInbox::Stop() {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_stop = true;
+            m_cv.notify_all();
+        }
+        // Receive uses a short bounded wait, so no shutdown of the data plane is needed.
+        if (m_reader.joinable()) m_reader.join();
+    }
+
+    void ControlInbox::PauseReadingForTest(bool paused) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_pausedForTest = paused;
+        m_cv.notify_all();
+    }
+
+    void ControlInbox::Read() {
+        for (;;) {
+            {
+                std::unique_lock<std::mutex> lock(m_mutex);
+                if (m_stop) return;
+                if (m_pausedForTest) {
+                    m_cv.wait(lock, [&] { return m_stop || !m_pausedForTest; });
+                    continue;
+                }
+            }
+            std::uint64_t size = 0;
+            auto result = m_transport.ReceiveFrame({nullptr, 0}, &size, 100);
+            if (result == MOBILEGL_ERR_TIMEOUT) continue;
+            std::vector<std::uint8_t> frame;
+            if (result == MOBILEGL_ERR_BUFFER_TOO_SMALL && size <= 64ull * 1024 * 1024) {
+                frame.resize(static_cast<std::size_t>(size));
+                result = m_transport.ReceiveFrame({frame.data(), frame.size()}, &size, 0);
+            }
+            if (result == MOBILEGL_OK) {
+                flatbuffers::Verifier verifier(frame.data(), frame.size());
+                if (!::MobileGL::Wire::VerifyCtrlEnvelopeBuffer(verifier))
+                    result = MOBILEGL_ERR_PROTOCOL_MISMATCH;
+                else {
+                    const auto* envelope = ::MobileGL::Wire::GetCtrlEnvelope(frame.data());
+                    if (const auto* log = envelope->msg_as_LogLine()) {
+                        // P9 W3: filed with the severity the server sent (LogForward.h's mapping).
+                        if (log->text())
+                            MG_Util::Debug::WritePeerLog(LogLevelFromWire(log->level()), log->text()->c_str());
+                        continue;
+                    }
+                }
+            }
+            std::unique_lock<std::mutex> lock(m_mutex);
+            if (result != MOBILEGL_OK) {
+                m_result = result;
+                m_cv.notify_all();
+                return;
+            }
+            m_cv.wait(lock, [&] { return m_stop || (m_frames.size() < 256 && m_bytes < 64ull * 1024 * 1024); });
+            if (m_stop) return;
+            m_bytes += frame.size();
+            m_frames.push_back(std::move(frame));
+            m_cv.notify_all();
+        }
+    }
+
+    MobileGLResult ControlInbox::Receive(std::vector<std::uint8_t>& frame, std::uint32_t timeoutMs) {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        const auto ready = [&] { return m_stop || !m_frames.empty() || m_result != MOBILEGL_OK; };
+        if (timeoutMs == kWaitForever)
+            m_cv.wait(lock, ready);
+        else if (!m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), ready))
+            return MOBILEGL_ERR_TIMEOUT;
+        if (m_frames.empty()) return m_result == MOBILEGL_OK ? MOBILEGL_ERR_TRANSPORT_CLOSED : m_result;
+        frame = std::move(m_frames.front());
+        m_frames.pop_front();
+        m_bytes -= frame.size();
+        m_cv.notify_all();
+        return MOBILEGL_OK;
+    }
+
+    std::uint64_t ControlInbox::Peek() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_frames.empty() ? 0 : m_frames.front().size();
+    }
+    bool ControlInbox::WaitClosed(std::uint32_t timeoutMs) {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        // Teardown has no outstanding control caller; discard queued snapshots
+        // so the reader can always reach EOF through its bounded inbox.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        for (;;) {
+            m_frames.clear();
+            m_bytes = 0;
+            m_cv.notify_all();
+            if (m_result != MOBILEGL_OK || m_stop) return true;
+            if (m_cv.wait_until(lock, deadline) == std::cv_status::timeout) return m_result != MOBILEGL_OK;
+        }
+    }
+} // namespace MobileGL::MG_Remote::Transport

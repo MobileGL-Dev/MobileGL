@@ -21,13 +21,13 @@
 using namespace MobileGL;
 using MobileGL::MG_Util::SelfTest::CollectGlesKnownDriverBugs;
 using MobileGL::MG_Util::SelfTest::DriverBugVerdict;
+using MobileGL::MG_Util::SelfTest::ProbeBlitIgnoresDestinationArrayLayer;
+using MobileGL::MG_Util::SelfTest::ProbeCopyImageMirrorsPacked16FieldOrder;
 using MobileGL::MG_Util::SelfTest::ProbeCrossStageImageQualifierMergeDropsWrites;
+using MobileGL::MG_Util::SelfTest::ProbeExplicitVertexInputLocationCeiling;
 using MobileGL::MG_Util::SelfTest::ProbeGeometryStageSsboWriteAfterEmitDropped;
 using MobileGL::MG_Util::SelfTest::ProbeImageLocationPerNameBudget;
 using MobileGL::MG_Util::SelfTest::ProbeImageWriteReadCoherencyResidual;
-using MobileGL::MG_Util::SelfTest::ProbeBlitIgnoresDestinationArrayLayer;
-using MobileGL::MG_Util::SelfTest::ProbeCopyImageMirrorsPacked16FieldOrder;
-using MobileGL::MG_Util::SelfTest::ProbeExplicitVertexInputLocationCeiling;
 using MobileGL::MG_Util::SelfTest::ProbeR32FMultisampleSwizzleCorruption;
 
 namespace {
@@ -55,7 +55,8 @@ namespace {
     // link log below is: the report shows it to a human, so a probe that stopped capturing it
     // would stop being useful long before it stopped detecting.
     const char* const kAttributeRangeCompileLog =
-        "ERROR: 0:2: '' : the location is not within attribute range [0, MAX_ATTRIBUTES-1] \nERROR: 1 compilation errors.  No code generated.";
+        "ERROR: 0:2: '' : the location is not within attribute range [0, MAX_ATTRIBUTES-1] \nERROR: 1 compilation "
+        "errors.  No code generated.";
 
     // The exact text an affected Adreno driver puts in the info log for this refusal.
     const char* const kImageLocationLinkLog =
@@ -103,7 +104,7 @@ namespace {
         // Probe 5's inconclusive path: nothing compiles, including the location-0 control.
         bool everyCompileFails = false;
         // Probe 6: a blit writes the destination array layer the framebuffer names, or always
-        // layer 0. The second knob is the inconclusive path - a driver that does not honour the
+        // layer 0. The second knob is the inconclusive path - a driver that does not honor the
         // SOURCE layer either fails the probe's control.
         bool blitIgnoresDestinationLayer = false;
         bool blitIgnoresSourceLayer = false;
@@ -111,7 +112,7 @@ namespace {
         // Probe 7: the driver stores a WHOLE 16-bit packed ALLOCATION with its fields packed
         // from the other end of the word - on the measured device, every level of the probe's
         // 30x30x12 three-level array, while same-shape plain-2D images stay in the canonical
-        // order. Modelled at the raw copy, which is the only path that can observe it (uploads
+        // order. Modeled at the raw copy, which is the only path that can observe it (uploads
         // and readbacks of the same image decode the driver's own layout consistently): a copy
         // whose SOURCE is any level of the mirrored allocation delivers the mirrored
         // re-encoding, which the plain-2D readback then decodes with the non-REV order -
@@ -177,7 +178,7 @@ namespace {
             // The device rule the probe reproduces: the mirrored layout is only picked when
             // the levels were uploaded onto a texture still at the driver defaults - any
             // glTexParameteri BEFORE the first upload steers the driver to the plain layout.
-            // Modelling it makes a params-first probe (the round-one regression: it measured
+            // Modeling it makes a params-first probe (the round-one regression: it measured
             // "clean" in the very context whose params-after textures mirrored) stop
             // detecting, which turns that mistake into a red test instead of a silent miss.
             bool paramsTouchedBeforeUpload = false;
@@ -202,7 +203,9 @@ namespace {
 
     FakeDriver g_fake;
 
-    void ResetFakeDriver() { g_fake = FakeDriver{}; }
+    void ResetFakeDriver() {
+        g_fake = FakeDriver{};
+    }
 
     const std::string& SourceOf(GLuint shader) {
         static const std::string empty;
@@ -238,7 +241,8 @@ namespace {
                 const std::size_t end = source.find_first_of(";,)", at);
                 if (end == std::string::npos) break;
                 std::string name = source.substr(at, end - at);
-                while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) name.pop_back();
+                while (!name.empty() && (name.back() == ' ' || name.back() == '\t'))
+                    name.pop_back();
                 if (std::find(names.begin(), names.end(), name) == names.end()) {
                     names.push_back(name);
                 }
@@ -362,8 +366,7 @@ namespace {
             ++g_fake.aliveShaders;
             return g_fake.nextShaderId++;
         };
-        funcs.glShaderSource = [](GLuint shader, GLsizei count, const GLchar* const* strings,
-                                  const GLint*) {
+        funcs.glShaderSource = [](GLuint shader, GLsizei count, const GLchar* const* strings, const GLint*) {
             std::string source;
             for (GLsizei i = 0; i < count; ++i) {
                 if (strings[i] != nullptr) source += strings[i];
@@ -387,8 +390,8 @@ namespace {
             if (bufSize <= 0) return;
             const auto it = g_fake.shaderInfoLogs.find(shader);
             const std::string& log = it == g_fake.shaderInfoLogs.end() ? std::string() : it->second;
-            const GLsizei copied = static_cast<GLsizei>(
-                std::min<std::size_t>(log.size(), static_cast<std::size_t>(bufSize - 1)));
+            const GLsizei copied =
+                static_cast<GLsizei>(std::min<std::size_t>(log.size(), static_cast<std::size_t>(bufSize - 1)));
             std::memcpy(infoLog, log.data(), static_cast<std::size_t>(copied));
             infoLog[copied] = '\0';
         };
@@ -409,9 +412,7 @@ namespace {
             ++g_fake.alivePrograms;
             return g_fake.nextProgramId++;
         };
-        funcs.glAttachShader = [](GLuint program, GLuint shader) {
-            g_fake.programShaders[program].push_back(shader);
-        };
+        funcs.glAttachShader = [](GLuint program, GLuint shader) { g_fake.programShaders[program].push_back(shader); };
         funcs.glLinkProgram = [](GLuint program) {
             const std::vector<std::string> names = DeclaredImageNames(program);
             const bool overBudget = static_cast<int>(names.size()) > g_fake.distinctImageNameBudget;
@@ -419,8 +420,7 @@ namespace {
             // refuses the LINK rather than the compile - which is the half of the vertex-input
             // probe that decides whether the attribute is reachable another way at all.
             bool attributeOutOfRange = false;
-            if (const auto it = g_fake.boundAttribLocations.find(program);
-                it != g_fake.boundAttribLocations.end()) {
+            if (const auto it = g_fake.boundAttribLocations.find(program); it != g_fake.boundAttribLocations.end()) {
                 for (const auto& [attributeName, location] : it->second) {
                     if (location >= g_fake.bindAttribLocationCeiling) attributeOutOfRange = true;
                 }
@@ -440,8 +440,8 @@ namespace {
             if (bufSize <= 0) return;
             const auto it = g_fake.programInfoLogs.find(program);
             const std::string& log = it == g_fake.programInfoLogs.end() ? std::string() : it->second;
-            const GLsizei copied = static_cast<GLsizei>(
-                std::min<std::size_t>(log.size(), static_cast<std::size_t>(bufSize - 1)));
+            const GLsizei copied =
+                static_cast<GLsizei>(std::min<std::size_t>(log.size(), static_cast<std::size_t>(bufSize - 1)));
             std::memcpy(infoLog, log.data(), static_cast<std::size_t>(copied));
             infoLog[copied] = '\0';
         };
@@ -469,8 +469,8 @@ namespace {
         };
         // One byte per layer: the layered-blit probe fills every texel of a layer with the same
         // value and only ever asks which layer a value ended up on.
-        funcs.glTexSubImage3D = [](GLenum target, GLint, GLint, GLint, GLint zoffset, GLsizei, GLsizei,
-                                   GLsizei, GLenum, GLenum, const void* pixels) {
+        funcs.glTexSubImage3D = [](GLenum target, GLint, GLint, GLint, GLint zoffset, GLsizei, GLsizei, GLsizei, GLenum,
+                                   GLenum, const void* pixels) {
             if (target != GL_TEXTURE_2D_ARRAY || pixels == nullptr) return;
             auto& fill = g_fake.arrayLayerFill[g_fake.boundArrayTexture];
             if (zoffset >= 0 && static_cast<std::size_t>(zoffset) < fill.size()) {
@@ -492,13 +492,11 @@ namespace {
         };
         funcs.glTexParameteri = [](GLenum target, GLenum pname, GLint param) {
             if (target == GL_TEXTURE_2D_MULTISAMPLE && pname == GL_TEXTURE_SWIZZLE_A) {
-                g_fake.multisampleAlphaSwizzle[g_fake.boundMultisampleTexture] =
-                    static_cast<GLenum>(param);
+                g_fake.multisampleAlphaSwizzle[g_fake.boundMultisampleTexture] = static_cast<GLenum>(param);
             }
             // A parameter write on a 2D array that has no uploaded level yet steers the
             // driver's layout choice to the plain order (see FakeArrayAllocation).
-            if (target == GL_TEXTURE_2D_ARRAY &&
-                g_fake.packedArrayAllocations.count(g_fake.boundArrayTexture) == 0) {
+            if (target == GL_TEXTURE_2D_ARRAY && g_fake.packedArrayAllocations.count(g_fake.boundArrayTexture) == 0) {
                 g_fake.packedArrayAllocations[g_fake.boundArrayTexture].paramsTouchedBeforeUpload = true;
             }
         };
@@ -506,8 +504,8 @@ namespace {
         // canonical (non-REV) order on every knob setting - the defect is confined to array
         // mip levels, and keeping the 2D side clean is what lets the readback below decode
         // with one order and still reproduce the mirror.
-        funcs.glTexImage2D = [](GLenum target, GLint level, GLint, GLsizei, GLsizei, GLint, GLenum,
-                                GLenum type, const void* pixels) {
+        funcs.glTexImage2D = [](GLenum target, GLint level, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum type,
+                                const void* pixels) {
             if (target != GL_TEXTURE_2D || type != GL_UNSIGNED_SHORT_5_5_5_1 || pixels == nullptr) return;
             GLushort word = 0;
             std::memcpy(&word, pixels, sizeof(word));
@@ -516,8 +514,8 @@ namespace {
         // Records the allocation shape the mirror below is gated on, and the uploaded word.
         // Under the upload-corruption knob the STORED word is already wrong - the "not this
         // bug" shape the probe's round-trip control must catch.
-        funcs.glTexImage3D = [](GLenum target, GLint level, GLint, GLsizei width, GLsizei height,
-                                GLsizei depth, GLint, GLenum, GLenum type, const void* pixels) {
+        funcs.glTexImage3D = [](GLenum target, GLint level, GLint, GLsizei width, GLsizei height, GLsizei depth, GLint,
+                                GLenum, GLenum type, const void* pixels) {
             if (target != GL_TEXTURE_2D_ARRAY || type != GL_UNSIGNED_SHORT_5_5_5_1 || pixels == nullptr) return;
             GLushort word = 0;
             std::memcpy(&word, pixels, sizeof(word));
@@ -534,9 +532,8 @@ namespace {
         // A raw texel-block move: the PHYSICAL word travels. The defect lives here - a source
         // in the mirrored ALLOCATION delivers the re-encoded word from EVERY level - and it
         // only exists for the allocation it was measured on: three levels of a 30x30x12 array.
-        funcs.glCopyImageSubData = [](GLuint srcName, GLenum, GLint srcLevel, GLint, GLint, GLint,
-                                      GLuint dstName, GLenum, GLint dstLevel, GLint, GLint, GLint,
-                                      GLsizei, GLsizei, GLsizei) {
+        funcs.glCopyImageSubData = [](GLuint srcName, GLenum, GLint srcLevel, GLint, GLint, GLint, GLuint dstName,
+                                      GLenum, GLint dstLevel, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei) {
             if (g_fake.packed16CopyDoesNothing) return;
             const auto source = g_fake.packedTexelWords.find({srcName, srcLevel});
             if (source == g_fake.packedTexelWords.end()) return;
@@ -544,16 +541,14 @@ namespace {
             const auto allocation = g_fake.packedArrayAllocations.find(srcName);
             const bool measuredShape = allocation != g_fake.packedArrayAllocations.end() &&
                                        allocation->second.width == 30 && allocation->second.height == 30 &&
-                                       allocation->second.layers == 12 &&
-                                       allocation->second.levelMask == 0b111u &&
+                                       allocation->second.layers == 12 && allocation->second.levelMask == 0b111u &&
                                        !allocation->second.paramsTouchedBeforeUpload;
             if (measuredShape && g_fake.packed16ArrayAllocationMirrored) {
                 word = MirrorPacked5551(word);
             }
             g_fake.packedTexelWords[{dstName, dstLevel}] = word;
         };
-        funcs.glTexSubImage2D = [](GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum,
-                                   const void*) {};
+        funcs.glTexSubImage2D = [](GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void*) {};
         funcs.glTexStorage2D = [](GLenum, GLsizei, GLenum, GLsizei, GLsizei) {};
         funcs.glTexStorage2DMultisample = [](GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLboolean) {};
         funcs.glGenFramebuffers = [](GLsizei n, GLuint* framebuffers) {
@@ -571,13 +566,13 @@ namespace {
             }
         };
         funcs.glFramebufferTexture2D = [](GLenum target, GLenum, GLenum, GLuint texture, GLint) {
-            const GLuint framebuffer = (target == GL_READ_FRAMEBUFFER) ? g_fake.boundReadFramebuffer
-                                                                       : g_fake.boundDrawFramebuffer;
+            const GLuint framebuffer =
+                (target == GL_READ_FRAMEBUFFER) ? g_fake.boundReadFramebuffer : g_fake.boundDrawFramebuffer;
             g_fake.framebuffer2DAttachment[framebuffer] = texture;
         };
         funcs.glFramebufferTextureLayer = [](GLenum target, GLenum, GLuint texture, GLint level, GLint layer) {
-            const GLuint framebuffer = (target == GL_READ_FRAMEBUFFER) ? g_fake.boundReadFramebuffer
-                                                                       : g_fake.boundDrawFramebuffer;
+            const GLuint framebuffer =
+                (target == GL_READ_FRAMEBUFFER) ? g_fake.boundReadFramebuffer : g_fake.boundDrawFramebuffer;
             g_fake.framebufferLayerAttachment[framebuffer] = {texture, layer};
             g_fake.framebufferLayerLevel[framebuffer] = level;
         };
@@ -585,8 +580,7 @@ namespace {
         // The defect itself: the source layer is read from where the READ framebuffer says (unless
         // that knob is on too), and the result is written to the layer the DRAW framebuffer names -
         // or to layer 0 regardless, which is what an affected driver does.
-        funcs.glBlitFramebuffer = [](GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield,
-                                     GLenum) {
+        funcs.glBlitFramebuffer = [](GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) {
             const auto source = g_fake.framebufferLayerAttachment.find(g_fake.boundReadFramebuffer);
             const auto destination = g_fake.framebufferLayerAttachment.find(g_fake.boundDrawFramebuffer);
             if (source == g_fake.framebufferLayerAttachment.end() ||
@@ -594,13 +588,11 @@ namespace {
                 return;
             }
             const GLint sourceLayer = g_fake.blitIgnoresSourceLayer ? 0 : source->second.second;
-            const GLint destinationLayer =
-                g_fake.blitIgnoresDestinationLayer ? 0 : destination->second.second;
+            const GLint destinationLayer = g_fake.blitIgnoresDestinationLayer ? 0 : destination->second.second;
             auto& sourceFill = g_fake.arrayLayerFill[source->second.first];
             auto& destinationFill = g_fake.arrayLayerFill[destination->second.first];
             if (sourceLayer < 0 || static_cast<std::size_t>(sourceLayer) >= sourceFill.size()) return;
-            if (destinationLayer < 0 ||
-                static_cast<std::size_t>(destinationLayer) >= destinationFill.size()) {
+            if (destinationLayer < 0 || static_cast<std::size_t>(destinationLayer) >= destinationFill.size()) {
                 return;
             }
             destinationFill[static_cast<std::size_t>(destinationLayer)] =
@@ -637,8 +629,7 @@ namespace {
                 int sampleIndex = -1;
                 char component = '?';
                 ParseSampledFetch(sampling, sampleIndex, component);
-                const GLenum swizzle = g_fake.multisampleAlphaSwizzle.count(
-                                           g_fake.boundMultisampleTexture) != 0
+                const GLenum swizzle = g_fake.multisampleAlphaSwizzle.count(g_fake.boundMultisampleTexture) != 0
                                            ? g_fake.multisampleAlphaSwizzle[g_fake.boundMultisampleTexture]
                                            : GL_ALPHA;
                 // An R32F texel filled with (1, 0, 0, -) reads 1.0 through both the ALPHA and the
@@ -648,7 +639,7 @@ namespace {
                     g_fake.lastSampledValue = 0.0f;
                 } else if (g_fake.msaaSwizzledAlphaCorrupted && swizzle == GL_RED && component == 'w' &&
                            sampleIndex != 0 && g_fake.sampledMultisampleProgramCount >= 2) {
-                    // Uninitialised memory: a value that is neither the answer nor the clear.
+                    // Uninitialized memory: a value that is neither the answer nor the clear.
                     g_fake.lastSampledValue = -1.34954e-17f;
                 }
                 return;
@@ -679,18 +670,16 @@ namespace {
             }
             if (!writeStage.empty() && !readStage.empty()) {
                 // The qualifier-merge pair: the stores are lost when the two halves share a name.
-                const bool sharedName =
-                    FirstImageNameIn(writeStage) == FirstImageNameIn(readStage) &&
-                    !FirstImageNameIn(writeStage).empty();
-                const bool lost = g_fake.everyVertexImageWriteDropped ||
-                                  (g_fake.sameNameImagePairDropsWrites && sharedName);
+                const bool sharedName = FirstImageNameIn(writeStage) == FirstImageNameIn(readStage) &&
+                                        !FirstImageNameIn(writeStage).empty();
+                const bool lost =
+                    g_fake.everyVertexImageWriteDropped || (g_fake.sameNameImagePairDropsWrites && sharedName);
                 g_fake.lastFailedTexelCount = lost ? 1 << 20 : 0;
                 return;
             }
             g_fake.lastFailedTexelCount = 0;
         };
-        funcs.glReadPixels = [](GLint, GLint, GLsizei width, GLsizei height, GLenum format, GLenum type,
-                                void* pixels) {
+        funcs.glReadPixels = [](GLint, GLint, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
             const std::size_t texels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
             // A read framebuffer naming a plain 2D texture that holds a 5551 word is the
             // packed16 probe reading its copy destination. The driver decodes its OWN storage
@@ -702,9 +691,7 @@ namespace {
                 // Gated on the texture actually holding a 5551 word, so every OTHER probe that
                 // attaches a plain 2D texture keeps the pass/fail readback paths below.
                 const GLushort w = g_fake.packedTexelWords[{attached->second, 0}];
-                const auto expand5 = [](GLushort v) {
-                    return static_cast<GLubyte>((v << 3) | (v >> 2));
-                };
+                const auto expand5 = [](GLushort v) { return static_cast<GLubyte>((v << 3) | (v >> 2)); };
                 GLubyte* out = static_cast<GLubyte*>(pixels);
                 for (std::size_t i = 0; i < texels; ++i) {
                     out[i * 4 + 0] = expand5((w >> 11) & 0x1F);
@@ -725,9 +712,7 @@ namespace {
                 if (const auto word = g_fake.packedTexelWords.find({layered->second.first, attachedLevel});
                     word != g_fake.packedTexelWords.end()) {
                     const GLushort w = word->second;
-                    const auto expand5 = [](GLushort v) {
-                        return static_cast<GLubyte>((v << 3) | (v >> 2));
-                    };
+                    const auto expand5 = [](GLushort v) { return static_cast<GLubyte>((v << 3) | (v >> 2)); };
                     GLubyte* out = static_cast<GLubyte*>(pixels);
                     for (std::size_t i = 0; i < texels; ++i) {
                         out[i * 4 + 0] = expand5((w >> 11) & 0x1F);
@@ -742,10 +727,9 @@ namespace {
                 // below share.
                 const auto& fill = g_fake.arrayLayerFill[layered->second.first];
                 const GLint layer = layered->second.second;
-                const GLubyte value =
-                    (layer >= 0 && static_cast<std::size_t>(layer) < fill.size())
-                        ? fill[static_cast<std::size_t>(layer)]
-                        : 0;
+                const GLubyte value = (layer >= 0 && static_cast<std::size_t>(layer) < fill.size())
+                                          ? fill[static_cast<std::size_t>(layer)]
+                                          : 0;
                 GLubyte* out = static_cast<GLubyte*>(pixels);
                 for (std::size_t i = 0; i < texels; ++i) {
                     out[i * 4 + 0] = value;
@@ -757,7 +741,8 @@ namespace {
             }
             if (format == GL_RED && type == GL_FLOAT) {
                 GLfloat* out = static_cast<GLfloat*>(pixels);
-                for (std::size_t i = 0; i < texels; ++i) out[i] = g_fake.lastSampledValue;
+                for (std::size_t i = 0; i < texels; ++i)
+                    out[i] = g_fake.lastSampledValue;
                 return;
             }
             GLubyte* out = static_cast<GLubyte*>(pixels);
@@ -790,8 +775,7 @@ namespace {
 // section would stop meaning "this device has these bugs".
 TEST(DriverBugProbes, AProbeThatCannotRunReportsNoBug) {
     const MG_External::GLESFunctionsTable gl = EmptyFunctionTable();
-    EXPECT_FALSE(ProbeBlitIgnoresDestinationArrayLayer(gl))
-        << "a probe with no entry points has measured nothing";
+    EXPECT_FALSE(ProbeBlitIgnoresDestinationArrayLayer(gl)) << "a probe with no entry points has measured nothing";
     EXPECT_FALSE(ProbeExplicitVertexInputLocationCeiling(gl).detected)
         << "a probe with no entry points has measured nothing";
     EXPECT_FALSE(ProbeGeometryStageSsboWriteAfterEmitDropped(gl))
@@ -800,8 +784,7 @@ TEST(DriverBugProbes, AProbeThatCannotRunReportsNoBug) {
     EXPECT_FALSE(ProbeImageLocationPerNameBudget(gl).detected);
     EXPECT_FALSE(ProbeCrossStageImageQualifierMergeDropsWrites(gl));
     EXPECT_FALSE(ProbeImageWriteReadCoherencyResidual(gl).detected);
-    EXPECT_FALSE(ProbeCopyImageMirrorsPacked16FieldOrder(gl))
-        << "a probe with no entry points has measured nothing";
+    EXPECT_FALSE(ProbeCopyImageMirrorsPacked16FieldOrder(gl)) << "a probe with no entry points has measured nothing";
 }
 
 // The section lists only bugs the device HAS, so a driver nothing could be probed on renders
@@ -819,8 +802,7 @@ TEST(DriverBugProbes, EveryFindingCarriesANameAndAnExplanation) {
     for (const auto& finding : CollectGlesKnownDriverBugs(gl)) {
         EXPECT_FALSE(finding.name.empty());
         EXPECT_FALSE(finding.detail.empty()) << finding.name << " must say what MobileGL does about it";
-        EXPECT_TRUE(finding.verdict == DriverBugVerdict::Fixed ||
-                    finding.verdict == DriverBugVerdict::Unfixable);
+        EXPECT_TRUE(finding.verdict == DriverBugVerdict::Fixed || finding.verdict == DriverBugVerdict::Unfixable);
     }
 }
 
@@ -971,7 +953,7 @@ TEST(DriverBugProbes, ImageCoherencyResidualIsDetectedAndQuantified) {
     ExpectProbeReleasedEverything();
 }
 
-// The reason the subject is the STRONGEST shape and not the one MobileGL emits. Mesa llvmpipe
+// The reason the subject is the STRONGEST shape and not the one MobileGL emits. llvmpipe
 // misses every texel with `coherent` + memoryBarrierImage() and none once the pair is also
 // `volatile` - a defect MobileGL could fix by emitting a different shape, which is not what
 // UNFIXABLE means and does not belong in this section.
@@ -1074,7 +1056,7 @@ TEST(DriverBugProbes, VertexInputLocationCeilingSaysWhenTheAttributeIsUnreachabl
 
 // ===================== LAYERED BLIT DESTINATION =====================
 
-TEST(DriverBugProbes, LayeredBlitDestinationIsCleanWhenTheLayerIsHonoured) {
+TEST(DriverBugProbes, LayeredBlitDestinationIsCleanWhenTheLayerIsHonored) {
     ResetFakeDriver();
     const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
     EXPECT_FALSE(ProbeBlitIgnoresDestinationArrayLayer(gl));
@@ -1108,8 +1090,7 @@ TEST(DriverBugProbes, LayeredBlitDestinationReportsNothingWhenTheBlitMovesNothin
     ResetFakeDriver();
     const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
     MG_External::GLESFunctionsTable inert = gl;
-    inert.glBlitFramebuffer = [](GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield,
-                                 GLenum) {};
+    inert.glBlitFramebuffer = [](GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) {};
     EXPECT_FALSE(ProbeBlitIgnoresDestinationArrayLayer(inert));
     ExpectProbeReleasedEverything();
 }
@@ -1170,4 +1151,56 @@ TEST(DriverBugProbes, Packed16FieldOrderReportsNothingWhenTheCopyLandsNothing) {
 TEST(DriverBugProbes, Packed16MirrorArithmeticMatchesTheDeviceEvidence) {
     EXPECT_EQ(MirrorPacked5551(0x0047), 0x8C20);
     EXPECT_EQ(MirrorPacked5551(0x3800), 0x0007);
+}
+
+// ===================== DEPTH/STENCIL RENDER-PASS RESOLVE (Vulkan) =====================
+//
+// The Vulkan table's row for MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.h's probe: a
+// pure function of its measurement. FIXED where the shader substitute can write every aspect,
+// UNFIXABLE where a stencil resolve still has to use the render pass that writes nothing, and no
+// row at all for a clean or inconclusive measurement.
+#if MOBILEGL_BUILD_DISAGGREGATED
+namespace {
+    MG_Backend::DirectVulkan::WireDepthResolveProbeMeasurement DepthResolveMeasurement(Uint32 renderPassMatches,
+                                                                                       Uint32 shaderMatches) {
+        MG_Backend::DirectVulkan::WireDepthResolveProbeMeasurement measurement;
+        measurement.ran = true;
+        MG_Backend::DirectVulkan::WireDepthResolveFormatReading reading;
+        reading.name = "D24_UNORM_S8_UINT";
+        reading.samples = 4;
+        reading.ran = true;
+        for (auto* aspect : {&reading.depth, &reading.stencil}) {
+            aspect->measured = true;
+            aspect->texels = 16;
+            aspect->renderPassMatches = renderPassMatches;
+            aspect->shaderRan = true;
+            aspect->shaderMatches = shaderMatches;
+        }
+        measurement.formats.push_back(reading);
+        return measurement;
+    }
+} // namespace
+#endif
+
+TEST(DriverBugProbes, DepthStencilResolvePassRowIsFixedWhereTheShaderSubstituteWritesEveryAspect) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    using MobileGL::MG_Util::SelfTest::DescribeDepthStencilResolvePassBug;
+    const auto broken = DepthResolveMeasurement(0, 16);
+    const auto fixed = DescribeDepthStencilResolvePassBug(broken, /*shaderStencilExport=*/true);
+    ASSERT_TRUE(fixed.has_value()) << "the render pass wrote nothing while the control resolved: a bug row";
+    EXPECT_EQ(fixed->verdict, DriverBugVerdict::Fixed);
+    EXPECT_FALSE(fixed->name.empty());
+    EXPECT_NE(fixed->detail.find("render pass 0/16"), std::string::npos) << fixed->detail;
+    const auto stencilLeft = DescribeDepthStencilResolvePassBug(broken, /*shaderStencilExport=*/false);
+    ASSERT_TRUE(stencilLeft.has_value());
+    EXPECT_EQ(stencilLeft->verdict, DriverBugVerdict::Unfixable)
+        << "without VK_EXT_shader_stencil_export a stencil resolve still lands on the broken pass";
+    EXPECT_FALSE(DescribeDepthStencilResolvePassBug(DepthResolveMeasurement(16, 16), true).has_value())
+        << "a clean render pass is no row";
+    EXPECT_FALSE(DescribeDepthStencilResolvePassBug(DepthResolveMeasurement(0, 0), true).has_value())
+        << "an inconclusive probe (the control failed too) must never be reported as the bug";
+    EXPECT_FALSE(DescribeDepthStencilResolvePassBug({}, true).has_value()) << "a probe that did not run is no row";
+#else
+    GTEST_SKIP() << "the Vulkan table exists only in the disaggregated build";
+#endif
 }

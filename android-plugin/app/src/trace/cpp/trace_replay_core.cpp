@@ -4,6 +4,7 @@
 #include "apitrace_exit.hpp"
 #include "png.h"
 #include "trace_benchmark.hpp"
+#include "trace_env_overrides.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -130,10 +131,35 @@ std::string JsonEscape(const std::string& value) {
     return out.str();
 }
 
+// Generic environment passthrough. One intent extra carries `K=V;K=V`, so a new
+// MOBILEGL_* knob costs nothing in the five files between the CI script and this
+// setenv - the per-knob plumbing above is what this replaces going forward
+// (PLAN-B.md §11 P0, which adds a batch of MOBILEGL_PIPE_* switches).
+//
+// Applied last, immediately before the library is loaded: it is the escape hatch, so it
+// has to be able to override the fields marshalled above, and MobileGL's ConfigLoader
+// reads the environment during dlopen. The decision of what each entry means lives in
+// trace_env_overrides.hpp so a host-side test can pin it; this is only the setenv.
+void ApplyEnvOverrides(const std::vector<std::string>& entries) {
+    for (const std::string& entry : entries) {
+        std::string key;
+        std::string value;
+        switch (ParseEnvOverride(entry, &key, &value)) {
+            case EnvOverrideAction::Set:
+                setenv(key.c_str(), value.c_str(), 1);
+                break;
+            case EnvOverrideAction::Unset:
+                unsetenv(key.c_str());
+                break;
+            case EnvOverrideAction::Ignore:
+                break;
+        }
+    }
+}
+
 bool LoadMobileGL(const Request& request, std::string& error) {
     setenv("MOBILEGL_BACKEND_TYPE", request.backend.c_str(), 1);
     setenv("MOBILEGL_TRACE_LIBRARY", request.mobileGlLibrary.c_str(), 1);
-    setenv("MOBILEGL_TRACE_SKIP_AUTODESTROY", "1", 1);
     // Retrace is a test lane on every platform, including the Android AVD one where
     // MobileGL's __ANDROID__ default would leave validation off. No overwrite: an outer
     // MOBILEGL_VALIDATE_SPIRV=0 must keep working as the escape hatch, and retracing the
@@ -167,20 +193,10 @@ bool LoadMobileGL(const Request& request, std::string& error) {
     } else {
         unsetenv("MOBILEGL_COHERENT_AS_FLUSH");
     }
-    if (request.fixIterationRPSubgroupScratch) {
-        setenv("MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH", "1", 1);
+    if (request.iterationRPFix) {
+        setenv("MOBILEGL_ITRP_FIX", "ForceOn", 1);
     } else {
-        unsetenv("MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
-    }
-    if (request.deriveNumSubgroups) {
-        setenv("MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS", "1", 1);
-    } else {
-        unsetenv("MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS");
-    }
-    if (request.iterationRPFixBarrier) {
-        setenv("MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER", "1", 1);
-    } else {
-        unsetenv("MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER");
+        unsetenv("MOBILEGL_ITRP_FIX");
     }
     if (request.fboAttachmentDumps.empty()) {
         unsetenv("MOBILEGL_TRACE_DUMP_FBO_ATTACHMENTS");
@@ -206,6 +222,8 @@ bool LoadMobileGL(const Request& request, std::string& error) {
         }
         setenv("MOBILEGL_TRACE_DUMP_TEXTURE_2D", dumpPoints.c_str(), 1);
     }
+
+    ApplyEnvOverrides(request.envOverrides);
 
     void* handle = dlopen(request.mobileGlLibrary.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (handle == nullptr) {
@@ -798,6 +816,42 @@ std::string BenchmarkResultPath(const Request& request) {
                                                : request.benchmarkResultPath;
 }
 
+// mean / median / nearest-rank p95 over the trailing `tail` entries of one per-frame series.
+//
+// Split out of SummarizeBenchmark rather than duplicated, because the wall series and the CPU
+// series have to be reduced IDENTICALLY or the delta between them stops meaning anything: the same
+// tail window, the same median rule for an even count, the same nearest-rank p95 (so the reported
+// value is always an observed frame, never an interpolation).
+struct SeriesSummary {
+    double meanMs = -1.0;
+    double medianMs = -1.0;
+    double p95Ms = -1.0;
+};
+
+SeriesSummary SummarizeSeries(const std::vector<double>& series, std::size_t tail) {
+    SeriesSummary summary;
+    if (series.empty() || tail == 0 || tail > series.size()) {
+        return summary;
+    }
+    std::vector<double> window(series.end() - static_cast<std::ptrdiff_t>(tail), series.end());
+    double sum = 0.0;
+    for (double value : window) {
+        sum += value;
+    }
+    summary.meanMs = sum / static_cast<double>(tail);
+
+    std::sort(window.begin(), window.end());
+    summary.medianMs =
+            (tail % 2 == 1) ? window[tail / 2] : 0.5 * (window[tail / 2 - 1] + window[tail / 2]);
+    // Nearest-rank p95, so the reported value is always an observed frame time.
+    std::size_t rank = static_cast<std::size_t>(std::ceil(0.95 * static_cast<double>(tail)));
+    if (rank == 0) {
+        rank = 1;
+    }
+    summary.p95Ms = window[rank - 1];
+    return summary;
+}
+
 // Folds the recorded frame times into the headline numbers. Everything but totalSeconds and
 // the frame count is computed over the trailing benchmarkTailFrames frames only.
 void SummarizeBenchmark(const Request& request, const benchmark::Report& report, Result& result) {
@@ -814,25 +868,20 @@ void SummarizeBenchmark(const Request& request, const benchmark::Report& report,
             std::min(static_cast<std::size_t>(requestedTail), report.frameMs.size());
     result.benchmarkTailFrames = static_cast<int>(tail);
 
-    std::vector<double> window(report.frameMs.end() - static_cast<std::ptrdiff_t>(tail),
-                               report.frameMs.end());
-    double sum = 0.0;
-    for (double frameMs : window) {
-        sum += frameMs;
-    }
-    result.benchmarkMeanMs = sum / static_cast<double>(tail);
-
-    std::sort(window.begin(), window.end());
-    result.benchmarkMedianMs = (tail % 2 == 1)
-                                       ? window[tail / 2]
-                                       : 0.5 * (window[tail / 2 - 1] + window[tail / 2]);
-    // Nearest-rank p95, so the reported value is always an observed frame time.
-    std::size_t rank = static_cast<std::size_t>(std::ceil(0.95 * static_cast<double>(tail)));
-    if (rank == 0) {
-        rank = 1;
-    }
-    result.benchmarkP95Ms = window[rank - 1];
+    const SeriesSummary wall = SummarizeSeries(report.frameMs, tail);
+    result.benchmarkMeanMs = wall.meanMs;
+    result.benchmarkMedianMs = wall.medianMs;
+    result.benchmarkP95Ms = wall.p95Ms;
     result.benchmarkFps = result.benchmarkMeanMs > 0.0 ? 1000.0 / result.benchmarkMeanMs : -1.0;
+
+    // The CPU series is the same length as the wall series or it is empty (trace_benchmark.cpp
+    // refuses to hand back a partial one), so the same tail window applies unchanged. When it is
+    // empty the three CPU fields stay at -1, which is what the platform having no per-thread CPU
+    // clock looks like - and is not the same reading as a genuine 0.0.
+    const SeriesSummary cpu = SummarizeSeries(report.frameCpuMs, tail);
+    result.benchmarkMeanCpuMs = cpu.meanMs;
+    result.benchmarkMedianCpuMs = cpu.medianMs;
+    result.benchmarkP95CpuMs = cpu.p95Ms;
 }
 
 bool WriteBenchmarkJson(const Request& request,
@@ -857,12 +906,27 @@ bool WriteBenchmarkJson(const Request& request,
     file << "  \"medianFrameMs\": " << result.benchmarkMedianMs << ",\n";
     file << "  \"p95FrameMs\": " << result.benchmarkP95Ms << ",\n";
     file << "  \"fps\": " << result.benchmarkFps << ",\n";
+    file << "  \"meanFrameCpuMs\": " << result.benchmarkMeanCpuMs << ",\n";
+    file << "  \"medianFrameCpuMs\": " << result.benchmarkMedianCpuMs << ",\n";
+    file << "  \"p95FrameCpuMs\": " << result.benchmarkP95CpuMs << ",\n";
     file << "  \"frameTimesMs\": [";
     for (std::size_t i = 0; i < report.frameMs.size(); ++i) {
         if (i > 0) {
             file << ", ";
         }
         file << report.frameMs[i];
+    }
+    file << "],\n";
+    // The WHOLE per-frame CPU array, beside the whole per-frame wall array. This is what makes
+    // p99 - and any other percentile a later question wants - a host-side computation over an
+    // artefact that already exists, instead of a device change. Empty when this platform has no
+    // per-thread CPU clock; an empty array and an array of zeroes are different claims.
+    file << "  \"frameCpuTimesMs\": [";
+    for (std::size_t i = 0; i < report.frameCpuMs.size(); ++i) {
+        if (i > 0) {
+            file << ", ";
+        }
+        file << report.frameCpuMs[i];
     }
     file << "]\n";
     file << "}\n";
@@ -916,10 +980,7 @@ bool WriteResultJson(const Request& request, const Result& result) {
          << (request.avoidAngleLlvmpipeSamplerMipmapMinFilter ? "true" : "false") << ",\n";
     file << "  \"avoidAngleLlvmpipeExplicitLodBias\": "
          << (request.avoidAngleLlvmpipeExplicitLodBias ? "true" : "false") << ",\n";
-    file << "  \"fixIterationRPSubgroupScratch\": " << (request.fixIterationRPSubgroupScratch ? "true" : "false")
-         << ",\n";
-    file << "  \"deriveNumSubgroups\": " << (request.deriveNumSubgroups ? "true" : "false") << ",\n";
-    file << "  \"iterationRPFixBarrier\": " << (request.iterationRPFixBarrier ? "true" : "false") << ",\n";
+    file << "  \"iterationRPFix\": " << (request.iterationRPFix ? "true" : "false") << ",\n";
     file << "  \"holdMs\": " << request.holdMs << ",\n";
     file << "  \"mismatchPixels\": " << result.mismatchPixels;
     if (request.benchmark) {
@@ -936,6 +997,9 @@ bool WriteResultJson(const Request& request, const Result& result) {
         file << "  \"benchmarkMeanFrameMs\": " << result.benchmarkMeanMs << ",\n";
         file << "  \"benchmarkMedianFrameMs\": " << result.benchmarkMedianMs << ",\n";
         file << "  \"benchmarkP95FrameMs\": " << result.benchmarkP95Ms << ",\n";
+        file << "  \"benchmarkMeanFrameCpuMs\": " << result.benchmarkMeanCpuMs << ",\n";
+        file << "  \"benchmarkMedianFrameCpuMs\": " << result.benchmarkMedianCpuMs << ",\n";
+        file << "  \"benchmarkP95FrameCpuMs\": " << result.benchmarkP95CpuMs << ",\n";
         file << "  \"benchmarkFps\": " << result.benchmarkFps << "\n";
     } else {
         file << "\n";
@@ -1016,6 +1080,9 @@ Result RunTraceReplay(const Request& request) {
                 << ", meanMs=" << result.benchmarkMeanMs
                 << ", medianMs=" << result.benchmarkMedianMs
                 << ", p95Ms=" << result.benchmarkP95Ms
+                << ", meanCpuMs=" << result.benchmarkMeanCpuMs
+                << ", medianCpuMs=" << result.benchmarkMedianCpuMs
+                << ", p95CpuMs=" << result.benchmarkP95CpuMs
                 << ", fps=" << result.benchmarkFps
                 << ", benchmarkResultPath=" << result.benchmarkResultPath;
         result.message = message.str();

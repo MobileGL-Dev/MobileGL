@@ -16,7 +16,7 @@
 //
 // So the first thing this asserts is simply that the process is still here. The second is that
 // the restart actually happened: the substitution rewrites the index data so the driver restarts
-// where the application asked, and the difference between "restart honoured" and "restart
+// where the application asked, and the difference between "restart honored" and "restart
 // silently dropped" is a triangle strip that welds its two halves together across the gap.
 //
 // Needs a real context on purpose. The GPU-free suite cannot reach a backend at all, and this is
@@ -64,21 +64,21 @@ void main()
         //
         // The spares exist so the restart index is a LEGAL vertex index: if the restart were
         // dropped the driver would still fetch a real vertex rather than read out of bounds, so
-        // the negative case is defined behaviour and the test measures the restart rather than
+        // the negative case is defined behavior and the test measures the restart rather than
         // whatever robust-buffer-access does.
         constexpr GLfloat kVertices[] = {
             -0.9f, -0.9f, // 0 - left triangle
             -0.1f, -0.9f, // 1
-            -0.9f,  0.9f, // 2
-             0.1f, -0.9f, // 3 - right triangle
-             0.9f, -0.9f, // 4
-             0.9f,  0.9f, // 5
-             0.0f,  0.0f, // 6 - spare
-             0.0f,  0.0f, // 7 - spare, and the application's restart index
+            -0.9f, 0.9f,  // 2
+            0.1f,  -0.9f, // 3 - right triangle
+            0.9f,  -0.9f, // 4
+            0.9f,  0.9f,  // 5
+            0.0f,  0.0f,  // 6 - spare
+            0.0f,  0.0f,  // 7 - spare, and the application's restart index
         };
         constexpr GLuint kRestartIndex = 7;
 
-        // A triangle STRIP, restarted in the middle: honoured, it is exactly the two triangles
+        // A triangle STRIP, restarted in the middle: honored, it is exactly the two triangles
         // above. Dropped, the strip welds vertices 2, 7 and 3 into extra triangles that spill
         // across the gap - which is what the middle probe below catches.
         constexpr GLuint kIndices[] = {0, 1, 2, kRestartIndex, 3, 4, 5};
@@ -112,12 +112,11 @@ void main()
                 glGenFramebuffers(1, &m_fbo);
                 glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_colorTexture, 0);
-                ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER),
-                          static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
+                ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
                 glViewport(0, 0, kSurface, kSurface);
 
                 m_program = BuildProgram();
-                ASSERT_NE(m_program, 0u) << "the flat-colour program did not build: " << m_buildLog;
+                ASSERT_NE(m_program, 0u) << "the flat-color program did not build: " << m_buildLog;
                 glUseProgram(m_program);
                 DrainErrors();
             }
@@ -142,8 +141,7 @@ void main()
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             GLuint BuildProgram() {
@@ -178,8 +176,7 @@ void main()
             std::vector<Pixel> DrawAndRead() {
                 glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT);
-                glDrawElements(GL_TRIANGLE_STRIP, static_cast<GLsizei>(std::size(kIndices)), GL_UNSIGNED_INT,
-                               nullptr);
+                glDrawElements(GL_TRIANGLE_STRIP, static_cast<GLsizei>(std::size(kIndices)), GL_UNSIGNED_INT, nullptr);
                 std::vector<Pixel> pixels(static_cast<std::size_t>(kSurface) * kSurface);
                 glReadPixels(0, 0, kSurface, kSurface, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
                 return pixels;
@@ -278,7 +275,7 @@ void main()
         // A second draw with a DIFFERENT restart index has to be rewritten again. The substitution
         // stages through one scratch buffer, so a cached or half-restored element-array binding
         // would show up here as the second draw reusing the first one's data.
-        TEST_F(PrimitiveRestartScenario, ChangingTheRestartIndexBetweenDrawsIsHonoured) {
+        TEST_F(PrimitiveRestartScenario, ChangingTheRestartIndexBetweenDrawsIsHonored) {
             if (!Ready()) GTEST_SKIP();
 
             glEnable(GL_PRIMITIVE_RESTART);

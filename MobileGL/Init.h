@@ -26,7 +26,21 @@ namespace MobileGL {
 
     namespace MG_ConfigLoader {
         void Init();
+        // One setting resolved the way Init() resolves it - the environment, then the system
+        // configuration files (ConfigLoader.cpp) - for the few readers that must decide something
+        // before MobileGL initializes, and for a verify build's comparator, which reads
+        // MOBILEGL_PIPE_VERIFY_CORRUPT when it arms. False when neither names it.
+        Bool LookupSetting(const char* key, String& outValue);
     } // namespace MG_ConfigLoader
+
+    // Whether this process can be served right now. False when MobileGL is configured to reach a
+    // server that is not there (or a split session already failed to come up), so a
+    // caller that can choose another implementation - the system's EGL/GLX/GBM loaders - should
+    // decline rather than hand out something that cannot draw. LIBGL_ALWAYS_SOFTWARE does NOT
+    // make it false: that variable selects the system GL's software renderer and is not a reason
+    // to disable MobileGL's entry points. Cheap: once true it stays true
+    // until the library is torn down, and a probe is one non-blocking connect with a short bound.
+    Bool ImplementationAvailable();
 
     namespace MG_Backend {
         void Init();
@@ -34,5 +48,9 @@ namespace MobileGL {
 
     namespace MG_Impl {
         void Init();
+        // GL framebuffer 0, built into the calling thread's GLContext (the process default at
+        // Init) and installed as the one every later context starts with. Init's step, and the
+        // rebuild after a recovered device loss, whose fresh session holds none of the old one's.
+        void BuildDefaultFramebuffer();
     } // namespace MG_Impl
 } // namespace MobileGL

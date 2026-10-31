@@ -1,0 +1,861 @@
+// MobileGL - MobileGL/MG_Util/Metrics/PipeStats.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+#include "PipeStats.h"
+
+#include <Config.h>
+#include <MG_Util/Debug/Log.h>
+
+#include <fstream>
+
+// ---------------------------------------------------------------------------------------
+// SITE INVENTORY - what these counters DO and DO NOT cover.
+//
+// This list is the contract. A byte class that reads 0 while a real copy runs uncounted is
+// worse than a missing counter, because the zero is then read as an answer, so every path
+// that moves bytes and is NOT wired is named here by file and function.
+//
+// Byte classes
+//   stage-buffer         ESPRYT (DirectGLES Managers.cpp): RespecifyStorageNow's
+//                        glBufferData, FlushPendingRangesNow's three shapes (map-write,
+//                        glBufferSubData, upload-ring stage), and the pool-recycle reseed
+//                        in SyncBufferObject.
+//                        MAGMA (DirectVulkan VkBufferManager.cpp): every host->device copy
+//                        of a buffer object's contents - SwapStorageAndUploadAll, the
+//                        StagedRangeCopy staging fill, the in-place uploads in OnRespecify /
+//                        OnSubData / OnFlushMappedRange, the AcquirePersistentMap seed, the
+//                        AcquireResidentSlice initial upload and the AcquireStreamedSlice
+//                        arena fill.
+//                        NOT covered IN A MONOLITH BUILD: bytes an app writes THROUGH a
+//                        persistent map. Those never pass through either backend (D4/D-B4) -
+//                        see persistent-map-push.
+//                        COVERED UNDER SPLIT, AND DELIBERATELY OVERLAPPING WITH
+//                        persistent-map-push (P5 b1, R-6). At adoption tier T2 there is no
+//                        adoption, so a pushed block IS an ordinary resource_subdata: it
+//                        reaches Ops_H_SubData, is queued into pendingRanges and is staged
+//                        here like any other write. The same bytes are therefore in BOTH
+//                        classes, on purpose - stage-buffer answers "what did the backend
+//                        move", persistent-map-push answers "what did the client have to ship
+//                        because the acquisition was declined", and subtracting one from the
+//                        other would make the first under-report the thing it exists to
+//                        measure. Read them as two questions about the same bytes, never as a
+//                        partition, and do not add them.
+//   stage-texture        ESPRYT (Managers.cpp texture upload): the bytes of whichever of
+//                        the three upload shapes ran (rect list / union box / whole level).
+//                        MAGMA (VkTextureManager.cpp): the packed staging slice of an
+//                        upload batch item set.
+//                        NOT covered: Espryt's compressed-texture path, and both backends'
+//                        readback (device->host) paths, which are a different direction and
+//                        want their own class when the reverse channel of section 7 exists.
+//   stage-ubo-global     ESPRYT (DirectGLES.cpp): the default-uniform-block image, both the
+//                        UBO-ring memcpy and the glBufferSubData fallback.
+//                        MAGMA (UniformManager::ResolveDynamicUboDescriptor): the same
+//                        image, counted after the per-frame slice memo, so a frame that
+//                        re-uses the slice correctly contributes nothing.
+//   stage-ubo-named      DirectVulkan UniformManager::ResolveUniformBufferPayload - the
+//                        bytes Magma repacks into its own UBO ring, counted AFTER the
+//                        zero-copy direct-bind decision (a direct bind repacks nothing).
+//                        Espryt contributes nothing by construction (D-B8).
+//   stage-vertex-client  ESPRYT: BackendVertexArrayObject::SyncClientSideAttributesFor-
+//                        DrawArrays (both the Float64-narrowing and the verbatim shapes)
+//                        and the VBO-backed Float64->Float32 narrowing scratch upload.
+//                        MAGMA: VkBufferManager::UploadTransient(BufferKind::Vertex), which
+//                        is the single chokepoint for the converted-vertex-stream and
+//                        client-array staging.
+//   stage-index-client   ESPRYT: the primitive-restart substitution buffer, and MultiDraw's
+//                        rewritten (rebased) index stream.
+//                        MAGMA: VkBufferManager::UploadTransient(BufferKind::Index).
+//   stage-indirect-cmd   ESPRYT MultiDraw.cpp: the DrawElementsIndirectCommand array staged
+//                        for the indirect tiers, and the compute tier's per-draw info
+//                        array. Kept out of stage-index-client because these are draw
+//                        PARAMETERS - the population that becomes MGPipe command-record
+//                        payload, not resource bytes.
+//                        NOT covered: Magma builds no such array (it issues one vkCmdDraw*
+//                        per sub-draw), so this class is Espryt-only by construction.
+//   persistent-map-push  WIRED IN P5 (b1), and only a split build can ever move it. The one
+//                        site is BufferObject::PushMappedSpanBlock, i.e. the client shipping
+//                        one 64 KiB block of a persistently mapped span because
+//                        MGPipeApplyMapPersistent declined the adoption (R-6,
+//                        tier T2). Zero in every monolith build, and that zero is CORRECT
+//                        rather than missing: a persistent map there is a permanent address
+//                        space donation (D4/D-B4), the application writes straight into GPU
+//                        memory, and there is no push to count. A split run where this stays
+//                        0 has NOT reached T2.
+//                        Read it against map-persistent-roundtrips (mpr), which it is
+//                        ANTI-CORRELATED with: mpr counts acquisition ATTEMPTS - one per
+//                        storage definition, the same number in both modes - and this counts
+//                        the bytes the client had to ship because the attempt was declined.
+//                        DOUBLE-COUNTED WITH stage-buffer, deliberately: see that entry
+//                        above. The two are different questions about the same bytes under
+//                        split, and adding them is wrong.
+//   residual-value-block Placeholder, always 0 until P2 (plan section 6.3).
+//   stage-segment-bytes  P6 gate 8, and the only class in this list that is neither a backend's
+//                        copy nor a client's blob declaration: it counts what the WIRE put into
+//                        SEG_STAGE. One site, PipeWireEncoder::StageAllocate, which is the single
+//                        allocation call behind PipeWireEncoder::StageBytes - so every writer
+//                        (the buffer content walks, the texture slabs, the CSO archives, the
+//                        storage-block names) is covered by construction rather than by being on
+//                        a list. Align8 slack and the allocator's wrap skip are real occupancy
+//                        and are deliberately NOT counted; see the ByteClass comment. It is a
+//                        per-frame average by construction, so the per-blob SHAPE - the thing
+//                        that says whether the chunk budget is cutting where it should - is the
+//                        staged-blob histogram in the JSON dump, not this number.
+//
+// Call classes
+//   draws                DirectGLES PrepareForDraw and DirectVulkan SetupDraw's entry. A
+//                        dispatch is not a draw and is not counted.
+//   wire-records         P6 gate 8: one per record the wire encoder COMMITTED, on
+//                        PipeWireEncoder::EncodeRecord's successful path. Post-chunking by
+//                        construction - an application call whose content is cut at
+//                        MGPipeStageChunkBytes() produces several. A kRecPad ring filler is not a
+//                        record and is not counted; an emission Reserve refused is counted once,
+//                        when the retry succeeds. The emitter-side Client*Emissions counters
+//                        answer a different question and the two together are what show what the
+//                        suppressors absorbed.
+//   accessor-calls       STATIC TALLIES at the instrumented entry points, NOT a wrapper
+//                        around all 293 pGLContext-> sites. Each instrumented function adds
+//                        the number of GLContext accessor calls that its OWN body executed
+//                        on the path taken, and each tally sits AFTER the last early return
+//                        that would skip those reads. Covered: PrepareForDraw's own reads,
+//                        SyncRenderState, CaptureDrawTextureSyncKeys/CurrentUnitBindings-
+//                        Epoch, SyncNeccessaryTextures' walk, TrySetupDrawFastPath,
+//                        GetOrCreatePipeline and ApplyDynamicDrawStateTail. NOT covered:
+//                        the reads inside the callees those functions invoke (buffer/VAO/
+//                        FBO/program sync, the pipeline payload builder's ~40 reads on a
+//                        memo miss), and every non-draw entry point. The number is
+//                        therefore a LOWER BOUND on the per-draw accessor count, and it is
+//                        the bound over exactly the six gates section 2.3.1 tabulates.
+//   texture-*            Per (target, level) emission, both backends.
+//   applier-resets       ServerVerbSink::OnApplierReset, once per record accepted.
+//   object-deaths        ServerVerbSink::OnObjectDeath, once per record dispatched.
+//
+// Gates: the six of section 2.3.1, each counted exactly once per probe.
+//
+// READING acc/draw. The accessor tally covers the instrumented functions wherever they
+// run, and three of them (SyncRenderState, the texture-key capture, SyncNeccessaryTextures)
+// are also reached from NON-draw call sites - Clear, readbacks, the DSA by-name entry
+// points - which the `draws` counter deliberately does not count. So acc/draw is the
+// per-draw steady-state number section 2.3.1 asks for only in a DRAW-DOMINATED window; in a
+// window dominated by clears and readbacks it is inflated by exactly those non-draw
+// probes, and the gate hit/miss pairs are the honest reading there.
+// ---------------------------------------------------------------------------------------
+
+namespace MobileGL::MG_Util::PipeStats {
+
+    Bool g_pipeStatsEnabled = false;
+
+    namespace {
+        constexpr Uint32 kByteClassCount = static_cast<Uint32>(ByteClass::Count);
+        constexpr Uint32 kCallClassCount = static_cast<Uint32>(CallClass::Count);
+        constexpr Uint32 kGateCount = static_cast<Uint32>(Gate::Count);
+
+        using Counter = std::atomic<Uint64>;
+
+        Counter g_frameBytes[kByteClassCount];
+        Counter g_totalBytes[kByteClassCount];
+        Counter g_frameCalls[kCallClassCount];
+        Counter g_totalCalls[kCallClassCount];
+        Counter g_frameGateHit[kGateCount];
+        Counter g_totalGateHit[kGateCount];
+        Counter g_frameGateMiss[kGateCount];
+        Counter g_totalGateMiss[kGateCount];
+        Counter g_totalPayloadBuckets[kPayloadHistogramBuckets];
+        Counter g_frameCount{0};
+        // P6 gate 8's second histogram, and push-only for the same reason its accessor is: its
+        // only sampler is the wire encoder, which a pull build does not compile.
+        Counter g_totalStagedBlobBuckets[kStagedBlobHistogramBuckets];
+
+        // Window bases: the run totals as of the previous summary line. Only ever touched
+        // from OnPresent()/Shutdown() (the present thread), so plain integers.
+        Uint64 g_windowBaseBytes[kByteClassCount] = {};
+        Uint64 g_windowBaseCalls[kCallClassCount] = {};
+        Uint64 g_windowBaseGateHit[kGateCount] = {};
+        Uint64 g_windowBaseGateMiss[kGateCount] = {};
+        Uint64 g_windowBaseFrames = 0;
+        Bool g_shutdownDone = false;
+        // The gauges' storage. Relaxed atomics like every other counter here: the publisher is
+        // the GL thread at a frame boundary and the reader is whoever formats the line, which
+        // under split can be the apply thread.
+        Counter g_gauges[static_cast<Uint32>(Gauge::Count)] = {};
+        constexpr Uint32 kGaugeCount = static_cast<Uint32>(Gauge::Count);
+
+        // Frames per summary line, latched by Init() from MOBILEGL_PIPE_STATS_PERIOD.
+        Uint64 g_summaryPeriod = kDefaultSummaryFramePeriod;
+        inline void Bump(Counter& counter, Uint64 amount) {
+            counter.fetch_add(amount, std::memory_order_relaxed);
+        }
+
+        inline Uint64 Read(const Counter& counter) {
+            return counter.load(std::memory_order_relaxed);
+        }
+
+        // Bucket 0 is "0 bytes", bucket n>0 holds [2^(n-1), 2^n). Saturates at the last
+        // bucket so a pathological record cannot index out of the array.
+        Uint32 PayloadBucketOf(Uint64 bytes) {
+            if (bytes == 0) {
+                return 0;
+            }
+            Uint32 bucket = 1;
+            while (bucket + 1 < kPayloadHistogramBuckets && bytes >= (Uint64{1} << bucket)) {
+                ++bucket;
+            }
+            return bucket;
+        }
+
+        // Two decimals without <iomanip>. Every per-frame and per-draw field in the summary
+        // goes through this: the numbers are small (a per-draw accessor count in the 10-25
+        // band, a per-frame byte count that sizes SEG_STAGE), so truncating integer division
+        // loses up to a whole unit on exactly the figures the package exists to produce.
+        // A zero denominator is "n/a" rather than a division by a faked 1.
+        String FormatFixed2(Uint64 numerator, Uint64 denominator) {
+            if (denominator == 0) {
+                return "n/a";
+            }
+            const Uint64 hundredths = (numerator * 100 + denominator / 2) / denominator;
+            return std::to_string(hundredths / 100) + "." + (hundredths % 100 < 10 ? "0" : "") +
+                   std::to_string(hundredths % 100);
+        }
+
+        const char* const kByteClassNames[kByteClassCount] = {
+            "stage-buffer",         "stage-texture",      "stage-ubo-global",    "stage-ubo-named",
+            "stage-vertex-client",  "stage-index-client", "stage-indirect-cmd",  "persistent-map-push",
+            "residual-value-block", "cso-blob-bytes",     "stage-segment-bytes",
+        };
+        const char* const kCallClassNames[kCallClassCount] = {
+            "draws",
+            "accessor-calls",
+            "tex-upload-emissions",
+            "tex-upload-box",
+            "tex-upload-rect",
+            "tex-upload-jobs",
+            "render-state-cso-mints",
+            "render-state-cso-binds",
+            "map-persistent-roundtrips",
+            "framebuffer-emissions",
+            "sampler-view-emissions",
+            "sampler-state-emissions",
+            "shader-image-emissions",
+            "client-tex-upload-emissions",
+            "tex-remint-pulls",
+            "resident-subdata-emissions",
+            "residual-pulls",
+            "server-verb-boundaries",
+            "wire-records",
+            "wire-indirect-native-draws",
+            "wire-indirect-cpu-expansions",
+            "wire-indirect-barriers",
+            "wire-host-waits",
+            "wire-host-waits-indirect",
+            "wire-host-wait-us",
+            "wire-indirect-native-dispatches",
+            "resource-readbacks",
+            "applier-resets",
+            "object-deaths",
+        };
+        const char* const kGateNames[kGateCount] = {
+            "espryt-render-state", "espryt-texture-sync-list", "espryt-unit-bindings-epoch",
+            "magma-draw-fastpath", "magma-pipeline-memo",      "magma-dynamic-tail",
+        };
+        // Tracy needs a stable string literal per series, and a gate is TWO series: plotting
+        // only the misses (which is what the first cut did) hides the denominator, and a
+        // gate's whole point is the ratio.
+        const char* const kGateHitPlotNames[kGateCount] = {
+            "espryt-render-state-hit", "espryt-texture-sync-list-hit", "espryt-unit-bindings-epoch-hit",
+            "magma-draw-fastpath-hit", "magma-pipeline-memo-hit",      "magma-dynamic-tail-hit",
+        };
+        const char* const kGateMissPlotNames[kGateCount] = {
+            "espryt-render-state-miss", "espryt-texture-sync-list-miss", "espryt-unit-bindings-epoch-miss",
+            "magma-draw-fastpath-miss", "magma-pipeline-memo-miss",      "magma-dynamic-tail-miss",
+        };
+        // Short forms, so the per-120-frame line stays one terminal line wide.
+        // "csob-blob" and not "csob": the cso[] bracket below already prints csob= for the
+        // render-state CSO BIND count, and two different numbers under one grep is how a
+        // recorded baseline stops meaning anything.
+        const char* const kByteClassShort[kByteClassCount] = {
+            "buf", "tex", "ubog", "ubon", "vtxc", "idxc", "icmd", "pmap", "resid", "csob-blob", "seg",
+        };
+        const char* const kGateShort[kGateCount] = {"ers", "etl", "eub", "mfp", "mpm", "mdt"};
+
+        void ResetCounters() {
+            for (Uint32 i = 0; i < kByteClassCount; ++i) {
+                g_frameBytes[i].store(0, std::memory_order_relaxed);
+                g_totalBytes[i].store(0, std::memory_order_relaxed);
+                g_windowBaseBytes[i] = 0;
+            }
+            for (Uint32 i = 0; i < kCallClassCount; ++i) {
+                g_frameCalls[i].store(0, std::memory_order_relaxed);
+                g_totalCalls[i].store(0, std::memory_order_relaxed);
+                g_windowBaseCalls[i] = 0;
+            }
+            for (Uint32 i = 0; i < kGateCount; ++i) {
+                g_frameGateHit[i].store(0, std::memory_order_relaxed);
+                g_totalGateHit[i].store(0, std::memory_order_relaxed);
+                g_frameGateMiss[i].store(0, std::memory_order_relaxed);
+                g_totalGateMiss[i].store(0, std::memory_order_relaxed);
+                g_windowBaseGateHit[i] = 0;
+                g_windowBaseGateMiss[i] = 0;
+            }
+            for (Uint32 i = 0; i < kPayloadHistogramBuckets; ++i) {
+                g_totalPayloadBuckets[i].store(0, std::memory_order_relaxed);
+            }
+            g_frameCount.store(0, std::memory_order_relaxed);
+            g_windowBaseFrames = 0;
+            for (Uint32 i = 0; i < kStagedBlobHistogramBuckets; ++i) {
+                g_totalStagedBlobBuckets[i].store(0, std::memory_order_relaxed);
+            }
+            for (Uint32 i = 0; i < kGaugeCount; ++i) {
+                g_gauges[i].store(0, std::memory_order_relaxed);
+            }
+        }
+
+        void EmitSummaryLine() {
+            const String line = FormatWindowLine();
+            // MGLOG_I on purpose, against the project's usual "MGLOG_D for anything
+            // non-critical" rule: the line has to survive an INFO build (that is the only
+            // build a device ever runs), it is emitted at most once per 120 frames, and it
+            // exists at all only when the operator set MOBILEGL_PIPE_STATS=1. It is an
+            // opt-in measurement channel, not per-frame noise.
+            MGLOG_I("%s", line.c_str());
+            AdvanceSummaryWindow();
+        }
+
+        void WriteJsonDump() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // ---- THE DUMP PATH IS ROLE-DERIVED, AND THIS BLOCK IS WHY IT IS INSIDE A GUARD ----
+            //
+            // Same reason as the log path it mirrors: under `spawn` there are two processes with
+            // two independent sets of counters, each reaching PipeStats::Shutdown(), and one
+            // configured path would have the second truncate and overwrite the first. A reader
+            // would then hold one role's numbers under a name that claims to be the run's, which is
+            // worse than a missing file because nothing about it looks wrong.
+            //
+            // THE BASE NAME RESOLVES TO NO FILE, deliberately. `<base>.client.json` and
+            // `<base>.server.json` are what exist; opening the bare configured name fails loudly.
+            // That is the log sink's own design ("with both names moved, an un-updated reader gets
+            // ENOENT and says so") and it is the right trade here too: a caller that has not been
+            // updated gets an error it must look at, rather than a file that is silently half a run.
+            //
+            // THE RULE IS NOT COPIED. MG_Util/Debug/Log.cpp owns `<stem>.<role><ext>` and exports
+            // it; a second implementation is a second thing to keep in step, and the one that falls
+            // behind opens a path nothing writes and reads as "the counters never dumped".
+            //
+            // ---- AND G1 IS WHY THE PULL ARM BELOW IS THE ORIGINAL, STATEMENT FOR STATEMENT ----
+            //
+            // A monolith build has exactly ONE role, so deriving the path there is a no-op - but
+            // "a no-op" is not "no bytes", and the gate caught three separate leaks as this was
+            // written. They are worth recording because none is guessable from the code:
+            //
+            //   1. deriving UNCONDITIONALLY put a std::string temporary and a call into the
+            //      monolith body: .text +24 bytes.
+            //   2. guarding it but keeping ONE shared `String` local in both arms still reds: the
+            //      two arms are different code even when they compute the same value, and
+            //      `Shutdown()` came out one byte different.
+            //   3. rewriting the two MGLOG_W format strings to name both the base and the derived
+            //      path moved .rodata by 64 bytes, because a literal is a literal in whichever
+            //      branch it sits and .rodata is measured too.
+            //
+            // So the rule for this file is stronger than "guard the new code": the OLD code must be
+            // left alone, character for character, and every addition lives inside the `#if`.
+            const String path = RoleDerivedJsonDumpPathForTesting();
+            if (path.empty()) {
+                return;
+            }
+#else
+            // The monolith arm, byte for byte as it was. Do not "tidy" this into the arm above.
+            const String& path = MG_Config::Features.PipeStatsFile;
+            if (path.empty()) {
+                return;
+            }
+#endif
+            std::ofstream out(path, std::ios::out | std::ios::trunc);
+            if (!out) {
+                MGLOG_W("PipeStats: could not open MOBILEGL_PIPE_STATS_FILE='%s' for writing", path.c_str());
+                return;
+            }
+            out << FormatJson();
+            out.flush();
+            if (!out) {
+                MGLOG_W("PipeStats: failed writing MOBILEGL_PIPE_STATS_FILE='%s'", path.c_str());
+                return;
+            }
+            MGLOG_I("MGPipe stats: wrote JSON dump to %s", path.c_str());
+        }
+    } // namespace
+
+    void Init() {
+        ResetCounters();
+        g_shutdownDone = false;
+        g_pipeStatsEnabled = MG_Config::Features.PipeStats;
+        g_summaryPeriod = MG_Config::Features.PipeStatsPeriod == 0
+                              ? kDefaultSummaryFramePeriod
+                              : static_cast<Uint64>(MG_Config::Features.PipeStatsPeriod);
+        if (g_pipeStatsEnabled) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // THE ROLE-DERIVED PATH IS WHAT IS PRINTED, not the base name. An operator reading
+            // this banner wants to know which file the run will write, and under split the base
+            // name is not it - printing the base would send them to a path that is deliberately
+            // never opened (see WriteJsonDump).
+            //
+            // THE PULL ARM OF THIS `#if` IS THE ORIGINAL LINE, and the split arm repeats the same
+            // format literal rather than sharing one, for the reason WriteJsonDump's header spells
+            // out: a shared literal or a shared temporary is a byte the monolith build gains for a
+            // branch it can never take. Two copies of one format string in two arms of one `#if` is
+            // the price G1 charges for adding anything to this file at all.
+            const String dumpPath = RoleDerivedJsonDumpPathForTesting();
+            MGLOG_I("MGPipe stats: counters ON (MOBILEGL_PIPE_STATS), summary every %llu frames%s%s",
+                    static_cast<unsigned long long>(g_summaryPeriod), dumpPath.empty() ? "" : ", JSON dump to ",
+                    dumpPath.c_str());
+#else
+            MGLOG_I("MGPipe stats: counters ON (MOBILEGL_PIPE_STATS), summary every %llu frames%s%s",
+                    static_cast<unsigned long long>(g_summaryPeriod),
+                    MG_Config::Features.PipeStatsFile.empty() ? "" : ", JSON dump to ",
+                    MG_Config::Features.PipeStatsFile.c_str());
+#endif
+        }
+    }
+
+    Uint64 SummaryFramePeriod() {
+        return g_summaryPeriod;
+    }
+
+    void Shutdown() {
+        if (!g_pipeStatsEnabled || g_shutdownDone) {
+            return;
+        }
+        g_shutdownDone = true;
+        EmitSummaryLine();
+        WriteJsonDump();
+    }
+
+    void AddBytes(ByteClass byteClass, Uint64 bytes) {
+        const Uint32 index = static_cast<Uint32>(byteClass);
+        Bump(g_frameBytes[index], bytes);
+        Bump(g_totalBytes[index], bytes);
+    }
+
+    void AddCalls(CallClass callClass, Uint64 count) {
+        const Uint32 index = static_cast<Uint32>(callClass);
+        Bump(g_frameCalls[index], count);
+        Bump(g_totalCalls[index], count);
+    }
+
+    // A STORE, NOT A BUMP, and the difference is the whole reason these are a separate kind.
+    // The publisher hands over its OWN run total (a maximum, or a count it has been keeping
+    // since the session opened), so accumulating deltas here would double every reading; and a
+    // maximum is not additive at all. Publishing the same value twice is a no-op, which is
+    // what makes it safe to call at every frame boundary.
+    void PublishGauge(Gauge gauge, Uint64 value) {
+        g_gauges[static_cast<Uint32>(gauge)].store(value, std::memory_order_relaxed);
+    }
+
+    Uint64 GaugeValue(Gauge gauge) {
+        return Read(g_gauges[static_cast<Uint32>(gauge)]);
+    }
+
+    void CountGate(Gate gate, Bool hit) {
+        const Uint32 index = static_cast<Uint32>(gate);
+        if (hit) {
+            Bump(g_frameGateHit[index], 1);
+            Bump(g_totalGateHit[index], 1);
+        } else {
+            Bump(g_frameGateMiss[index], 1);
+            Bump(g_totalGateMiss[index], 1);
+        }
+    }
+
+    void RecordDrawPayloadBytes(Uint64 bytes) {
+        Bump(g_totalPayloadBuckets[PayloadBucketOf(bytes)], 1);
+    }
+
+    // P6 gate 8's staged-blob distribution. A count, not a sum: the bytes already have a home
+    // in stage-segment-bytes, and what this exists to answer is the SHAPE (how many blobs there
+    // were and how big each one was), which a total cannot express.
+    void RecordStagedBlobBytes(Uint64 bytes) {
+        Bump(g_totalStagedBlobBuckets[PayloadBucketOf(bytes)], 1);
+    }
+
+    void OnPresent() {
+        // Every frame accumulator is EXCHANGED for zero, and the exchanged value is what gets
+        // plotted. A read followed by a store(0) would lose any Bump that lands in between -
+        // buffer and texture staging reach these counters from more than one thread - from
+        // the plot AND from every frame; an exchange hands every add to exactly one frame.
+        // Without Tracy the value is taken and dropped: the clear is still the point.
+        //
+        // One plot per counter, the frame's value. Tracy keeps the series by name, and the
+        // names are the static literals above, which is what TracyPlot requires. A gate is
+        // two series - hits and misses - because the ratio is the deliverable and a miss
+        // count alone cannot be read.
+        //
+        // The payload histogram is deliberately NOT plotted: it is a run-total distribution
+        // over draws (section 4.5.7), not a per-frame scalar, and Tracy has no histogram
+        // series. It reaches the operator through the JSON dump.
+        const auto take = [](Counter& counter) { return counter.exchange(0, std::memory_order_relaxed); };
+        for (Uint32 i = 0; i < kByteClassCount; ++i) {
+            const Uint64 value = take(g_frameBytes[i]);
+            (void)value;
+#ifdef TRACY_ENABLE
+            TracyPlot(kByteClassNames[i], static_cast<Int64>(value));
+#endif
+        }
+        for (Uint32 i = 0; i < kCallClassCount; ++i) {
+            const Uint64 value = take(g_frameCalls[i]);
+            (void)value;
+#ifdef TRACY_ENABLE
+            TracyPlot(kCallClassNames[i], static_cast<Int64>(value));
+#endif
+        }
+        for (Uint32 i = 0; i < kGateCount; ++i) {
+            const Uint64 hits = take(g_frameGateHit[i]);
+            const Uint64 misses = take(g_frameGateMiss[i]);
+            (void)hits;
+            (void)misses;
+#ifdef TRACY_ENABLE
+            TracyPlot(kGateHitPlotNames[i], static_cast<Int64>(hits));
+            TracyPlot(kGateMissPlotNames[i], static_cast<Int64>(misses));
+#endif
+        }
+        const Uint64 frames = g_frameCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (frames % g_summaryPeriod == 0) {
+            EmitSummaryLine();
+        }
+    }
+
+    Uint64 FrameBytes(ByteClass byteClass) {
+        return Read(g_frameBytes[static_cast<Uint32>(byteClass)]);
+    }
+    Uint64 TotalBytes(ByteClass byteClass) {
+        return Read(g_totalBytes[static_cast<Uint32>(byteClass)]);
+    }
+    Uint64 FrameCalls(CallClass callClass) {
+        return Read(g_frameCalls[static_cast<Uint32>(callClass)]);
+    }
+    Uint64 TotalCalls(CallClass callClass) {
+        return Read(g_totalCalls[static_cast<Uint32>(callClass)]);
+    }
+    Uint64 TotalGateHits(Gate gate) {
+        return Read(g_totalGateHit[static_cast<Uint32>(gate)]);
+    }
+    Uint64 TotalGateMisses(Gate gate) {
+        return Read(g_totalGateMiss[static_cast<Uint32>(gate)]);
+    }
+    Uint64 TotalPayloadBucket(Uint32 bucket) {
+        return bucket < kPayloadHistogramBuckets ? Read(g_totalPayloadBuckets[bucket]) : 0;
+    }
+    Uint64 TotalStagedBlobBucket(Uint32 bucket) {
+        return bucket < kStagedBlobHistogramBuckets ? Read(g_totalStagedBlobBuckets[bucket]) : 0;
+    }
+    Uint64 FrameCount() {
+        return Read(g_frameCount);
+    }
+
+    const char* NameOf(ByteClass byteClass) {
+        return kByteClassNames[static_cast<Uint32>(byteClass)];
+    }
+    const char* NameOf(CallClass callClass) {
+        return kCallClassNames[static_cast<Uint32>(callClass)];
+    }
+    const char* NameOf(Gate gate) {
+        return kGateNames[static_cast<Uint32>(gate)];
+    }
+
+    String FormatWindowLine() {
+        // Window values: everything since the previous summary. A run total over a workload
+        // whose shape changes (load, then steady state) hides exactly the number P2 wants.
+        const Uint64 frames = Read(g_frameCount);
+        const Uint64 windowFrames = frames - g_windowBaseFrames;
+        // A window with no Present in it (teardown before the first frame, or a slice whose
+        // whole workload runs off-screen) has NO per-frame reading. Printing the window
+        // totals under a "/f" label there is how a 47x overstatement of the SEG_STAGE sizing
+        // input got printed as a per-frame figure; the label changes instead.
+        const Bool perFrame = windowFrames != 0;
+
+        Uint64 bytes[kByteClassCount];
+        for (Uint32 i = 0; i < kByteClassCount; ++i) {
+            bytes[i] = Read(g_totalBytes[i]) - g_windowBaseBytes[i];
+        }
+        Uint64 calls[kCallClassCount];
+        for (Uint32 i = 0; i < kCallClassCount; ++i) {
+            calls[i] = Read(g_totalCalls[i]) - g_windowBaseCalls[i];
+        }
+        Uint64 gateHit[kGateCount];
+        Uint64 gateMiss[kGateCount];
+        for (Uint32 i = 0; i < kGateCount; ++i) {
+            gateHit[i] = Read(g_totalGateHit[i]) - g_windowBaseGateHit[i];
+            gateMiss[i] = Read(g_totalGateMiss[i]) - g_windowBaseGateMiss[i];
+        }
+
+        const Uint64 draws = calls[static_cast<Uint32>(CallClass::Draws)];
+        const Uint64 accessorCalls = calls[static_cast<Uint32>(CallClass::AccessorCalls)];
+
+        String line = "MGPipe stats:";
+        line += " frames=" + std::to_string(frames);
+        line += " window=" + std::to_string(windowFrames);
+        line += " draws=" + std::to_string(draws);
+        line += " draws/f=" + FormatFixed2(draws, windowFrames);
+        line += " acc=" + std::to_string(accessorCalls);
+        // Same rule as the per-frame fields: a window with no draw in it has no per-draw
+        // number, and "0.00" next to a non-zero acc= is the same lie in a smaller font.
+        line += " acc/draw=" + FormatFixed2(accessorCalls, draws);
+        // "bytes/f[...]" only when there IS a frame to divide by; otherwise the bracket is
+        // labeled "bytes[...]" and carries the window totals verbatim.
+        line += perFrame ? " bytes/f[" : " bytes[";
+        for (Uint32 i = 0; i < kByteClassCount; ++i) {
+            if (i != 0) {
+                line += " ";
+            }
+            line += kByteClassShort[i];
+            line += "=";
+            line += perFrame ? FormatFixed2(bytes[i], windowFrames) : std::to_string(bytes[i]);
+        }
+        line += "] tex[emit=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureUploadEmissions)]);
+        line += " box=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureUploadBoxEmissions)]);
+        line += " rect=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureUploadRectEmissions)]);
+        line += " jobs=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureUploadJobs)]);
+        // Push-only, like the two counters themselves: in a pull build there is no CSO to
+        // mint, and a "csom=0 csob=0" that can never be anything else is noise on the one
+        // line an operator greps.
+        line += "] cso[csom=" + std::to_string(calls[static_cast<Uint32>(CallClass::RenderStateCsoMints)]);
+        line += " csob=" + std::to_string(calls[static_cast<Uint32>(CallClass::RenderStateCsoBinds)]);
+        // P3a's persistent-map acquisition attempts, on the same bracket and for the same
+        // reason: it is push-only, and a window with an unexpected mpr= is the one number
+        // that says an adoption is happening per draw rather than per storage definition.
+        line += " mpr=" + std::to_string(calls[static_cast<Uint32>(CallClass::MapPersistentRoundtrips)]);
+        // P4a's four suppressor-visible emission counts and the client-side upload twin, on a
+        // bracket of their own so one grep reads the whole family. Every one of them is
+        // post-suppressor: a set that was resolved and then not sent does not appear here, and
+        // that is what makes fbe/sve/sse/sie the suppressors' hit rates rather than their call
+        // rates. ctu is the CLIENT's count of the same texture records Espryt's tex[emit=]
+        // counts on the server - the two agreeing is the whole reason both are printed.
+        line += "] emit[fbe=" + std::to_string(calls[static_cast<Uint32>(CallClass::FramebufferEmissions)]);
+        line += " sve=" + std::to_string(calls[static_cast<Uint32>(CallClass::SamplerViewEmissions)]);
+        line += " sse=" + std::to_string(calls[static_cast<Uint32>(CallClass::SamplerStateEmissions)]);
+        line += " sie=" + std::to_string(calls[static_cast<Uint32>(CallClass::ShaderImageEmissions)]);
+        line += " ctu=" + std::to_string(calls[static_cast<Uint32>(CallClass::ClientTextureUploadEmissions)]);
+        // trp is the texture re-mint count (ROADMAP open question 2): every one is a texture
+        // Espryt had already allocated and then had to re-mint image-bindable because
+        // ImageBindableHint reached it too late - replaying the client's shadow in monolith, the
+        // GPU level and the staged store on the server under a transport (P9 W2; no pull).
+        line += " trp=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureRemintPulls)]);
+        // rsd is P7's resident sub-data emission count (OQ-10): one per buffer_subdata_resident
+        // record (opcode 49) the client put on the wire. It is the ONLY observable that
+        // separates the resident arm from the in-place memcpy beside it - the bytes in the
+        // buffer are identical either way - so it is what the white-box cases read. Zero under
+        // monolith by construction, and zero under split too until the server publishes
+        // kCapResidentSubData off its own wire resource table (MG_Backend/Init.cpp).
+        line += " rsd=" + std::to_string(calls[static_cast<Uint32>(CallClass::ResidentSubDataEmissions)]);
+        // rsp is P5's residual-pull count: reads, on the server side, of a PipeInputs field no
+        // pushed record supplies, answered out of the client's residual fill under the verb
+        // barrier. It is the SIZE OF THE P6/P7/P8 DEBT and it is published on this line rather
+        // than only at teardown because the number an operator needs is per frame: a debt that
+        // tracks the draw count is a pull inside a loop, and one that tracks the frame count is
+        // a pull per verb. Zero in every monolith lane by construction.
+        line += " rsp=" + std::to_string(calls[static_cast<Uint32>(CallClass::ResidualPulls)]);
+        // P5e (gl), ID-115: `vbs` is the server's verb-boundary stamp count, and it is on this
+        // line so that "strict was armed on this entry" is a number a lane can read rather than
+        // an inference from an absence. Everything strict checks is downstream of that stamp and
+        // the monolith arm never stamps, so a green lane with vbs=0 says only that the mechanism
+        // never ran. It is deliberately NOT rsp: rsp reaches zero when the phase SUCCEEDS, so a
+        // positive control built on it would fail on the day the debt is paid.
+        line += " vbs=" + std::to_string(calls[static_cast<Uint32>(CallClass::ServerVerbBoundaries)]);
+        // The control records the server applied in this window (see the CallClass enum).
+        line += " ar=" + std::to_string(calls[static_cast<Uint32>(CallClass::ApplierResets)]);
+        line += " od=" + std::to_string(calls[static_cast<Uint32>(CallClass::ObjectDeaths)]);
+        // P6 GATE 8's SECOND NUMBER (CONTRACT-P6.md §9 item 8): records/frame AFTER chunking, i.e.
+        // the count of records the wire encoder actually committed this window rather than the
+        // number of times an emitter was asked for one. The gap between the two is the whole
+        // point of the counter: once the stage chunk budget landed, one application call can
+        // produce several records, so `wrec` is what a frame really costs SEG_CMD and the
+        // emitter-side counts can no longer answer it. It follows the line's ordinary
+        // per-frame/window rule - the run total when the window held no Present - like every
+        // field that is not one of the gauges, and the label says which it is.
+        //
+        // `wrec/f` AND NOT `wrec` ALONE, so the deliverable reads off the line directly. Both are
+        // printed because the pair is self-checking: a per-frame figure whose window total is not
+        // its numerator times the frame count is a formatting bug, and a per-frame figure over a
+        // window with no Present in it is the 47x overstatement PipeStatsTest already pins.
+        line += " wrec=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireRecords)]);
+        line += " wrec/f=" + (perFrame ? FormatFixed2(calls[static_cast<Uint32>(CallClass::WireRecords)], windowFrames)
+                                       : std::to_string(calls[static_cast<Uint32>(CallClass::WireRecords)]));
+        // P5's three wire gauges, and THEY ARE RUN TOTALS on a line whose every other field is
+        // a window - see the Gauge enum for the argument. `maxrec` is R-10's proof obligation
+        // (BRIEF 8 item 3): the largest single record this run wrote, in BYTES, beside the cap
+        // it has to stay under so nobody has to multiply MOBILEGL_IPC_RING_MB by hand. `maxcap`
+        // reads 0 when this process has no wire producer, which is what a monolith lane prints
+        // and is NOT the same statement as "the cap is zero".
+        //
+        // ringwraps / ringwaits are R-9's: SEG_CMD wrap pads and SEG_STAGE waits on retiredSeq.
+        // A small-ring lane whose ringwraps stays 0 ran the default lane's workload under a
+        // different environment block, which is exactly what exit gate E3(e) was recorded as
+        // NOT having proved (joint-v1.md 6).
+        line += " maxrec=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::MaxRecordBytes)]));
+        line += " maxcap=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::MaxRecordBytesCap)]));
+        line += " ringwraps=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWraps)]));
+        line += " ringpads=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWrapPads)]));
+        line += " ringwaits=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWaits)]));
+        // P5d round 3's wait ledger, on a bracket of its own so one grep reads the whole
+        // family, and RUN TOTALS like the gauges above it for the same reason: both sides
+        // publish a monotone counter of their own, and a windowed difference of two counters
+        // published by two threads at two different moments is not a quantity either of them
+        // ever held. `srv`/`cli` are entries into Doorbell::Wait; `srvpark`/`clipark` are the
+        // subset that stopped spinning and blocked. Read them as a ratio: parks near zero means
+        // the spin budget is covering the handoff, parks tracking the waits means it is not and
+        // every verb is paying a futex round trip.
+        line += "] wait[srv=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerWaits)]));
+        line += " srvpark=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerParks)]));
+        line += " cli=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientWaits)]));
+        line += " clipark=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientParks)]));
+        // P7 wave 4 M2: the Magma wire arm's buffer stores (see the Gauge enum). RUN MAXIMA on
+        // a windowed line for the wait ledger's reason and one more: the number that matters is
+        // the peak INSIDE a frame, which no swap-time sample can see.
+        line += "] wbuf[wbufs=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireBuffers)]));
+        line += " wlivepk=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireStoresPeak)]));
+        line += " wdefpk=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredBytesPeak)]));
+        line += " wdefsync=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredSyncs)]));
+        // P8-D: the Magma wire arm's indirect draws and its host-access waits, windowed like the
+        // other CallClass fields (per window, not per frame: the create fixtures hold one frame).
+        line += "] windr[wind=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectNativeDraws)]);
+        line += " wixp=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectCpuExpansions)]);
+        line += " wibar=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectBarriers)]);
+        line += " whw=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireHostWaits)]);
+        line += " whwi=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireHostWaitsIndirect)]);
+        line += " whwus=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireHostWaitMicros)]);
+        // P8-SV: the indirect dispatches, on the same bracket (their barriers are in `wibar`).
+        line += " wdsp=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectNativeDispatches)]);
+        line += "] gates[";
+        for (Uint32 i = 0; i < kGateCount; ++i) {
+            if (i != 0) {
+                line += " ";
+            }
+            line += kGateShort[i];
+            line += "=";
+            line += std::to_string(gateHit[i]);
+            line += "/";
+            line += std::to_string(gateMiss[i]);
+        }
+        line += "]";
+        return line;
+    }
+
+    void AdvanceSummaryWindow() {
+        for (Uint32 i = 0; i < kByteClassCount; ++i) {
+            g_windowBaseBytes[i] = Read(g_totalBytes[i]);
+        }
+        for (Uint32 i = 0; i < kCallClassCount; ++i) {
+            g_windowBaseCalls[i] = Read(g_totalCalls[i]);
+        }
+        for (Uint32 i = 0; i < kGateCount; ++i) {
+            g_windowBaseGateHit[i] = Read(g_totalGateHit[i]);
+            g_windowBaseGateMiss[i] = Read(g_totalGateMiss[i]);
+        }
+        g_windowBaseFrames = Read(g_frameCount);
+    }
+
+    String FormatJson() {
+        String json = "{\n";
+        json += "  \"frames\": " + std::to_string(Read(g_frameCount)) + ",\n";
+        json += "  \"bytes\": {\n";
+        for (Uint32 i = 0; i < kByteClassCount; ++i) {
+            json += "    \"";
+            json += kByteClassNames[i];
+            json += "\": " + std::to_string(Read(g_totalBytes[i]));
+            json += (i + 1 == kByteClassCount) ? "\n" : ",\n";
+        }
+        json += "  },\n  \"calls\": {\n";
+        for (Uint32 i = 0; i < kCallClassCount; ++i) {
+            json += "    \"";
+            json += kCallClassNames[i];
+            json += "\": " + std::to_string(Read(g_totalCalls[i]));
+            json += (i + 1 == kCallClassCount) ? "\n" : ",\n";
+        }
+        json += "  },\n  \"gates\": {\n";
+        for (Uint32 i = 0; i < kGateCount; ++i) {
+            json += "    \"";
+            json += kGateNames[i];
+            json += "\": {\"hit\": " + std::to_string(Read(g_totalGateHit[i])) +
+                    ", \"miss\": " + std::to_string(Read(g_totalGateMiss[i])) + "}";
+            json += (i + 1 == kGateCount) ? "\n" : ",\n";
+        }
+        // The gauges, under their long names. Run totals here as on the summary line.
+        json += "  },\n  \"wire\": {\n";
+        json +=
+            "    \"max-record-bytes\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::MaxRecordBytes)])) +
+            ",\n";
+        json += "    \"max-record-bytes-cap\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::MaxRecordBytesCap)])) + ",\n";
+        json += "    \"ring-wraps\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWraps)])) + ",\n";
+        json += "    \"ring-wrap-pads\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWrapPads)])) +
+                ",\n";
+        json += "    \"ring-waits\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWaits)])) + ",\n";
+        // The wait ledger under its long names, same run totals as the summary line's wait[].
+        json +=
+            "    \"server-waits\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerWaits)])) + ",\n";
+        json +=
+            "    \"server-parks\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerParks)])) + ",\n";
+        json +=
+            "    \"client-waits\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientWaits)])) + ",\n";
+        json +=
+            "    \"client-parks\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientParks)])) + ",\n";
+        // P7 wave 4 M2's four, run maxima / a run count as on the summary line's wbuf[].
+        json +=
+            "    \"wire-buffers\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireBuffers)])) + ",\n";
+        json +=
+            "    \"wire-stores-peak\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireStoresPeak)])) +
+            ",\n";
+        json += "    \"wire-deferred-bytes-peak\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredBytesPeak)])) + ",\n";
+        json += "    \"wire-deferred-syncs\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredSyncs)])) + "\n";
+        json += "  },\n  \"cmd-bytes-per-draw-histogram\": [";
+        for (Uint32 i = 0; i < kPayloadHistogramBuckets; ++i) {
+            if (i != 0) {
+                json += ", ";
+            }
+            json += std::to_string(Read(g_totalPayloadBuckets[i]));
+        }
+        // P6 gate 8's two per-frame numbers have their JSON homes where every other ByteClass and
+        // CallClass already does - the `bytes` and `calls` blocks above, under their long names
+        // (stage-segment-bytes, wire-records) - so there is nothing to add for them here. The
+        // staged-blob DISTRIBUTION does need one: it is the per-blob distribution after chunking,
+        // first measured through this dump, and like the draw-payload histogram above it is a run-total
+        // distribution, which is exactly what Tracy cannot plot and this dump exists to carry.
+        // Bucket 0 is "0 bytes" and bucket n>0 is [2^(n-1), 2^n): the same edges PayloadBucketOf
+        // gives both histograms, so the two are read the same way.
+        json += "],\n  \"staged-blob-bytes-histogram\": [";
+        for (Uint32 i = 0; i < kStagedBlobHistogramBuckets; ++i) {
+            if (i != 0) {
+                json += ", ";
+            }
+            json += std::to_string(Read(g_totalStagedBlobBuckets[i]));
+        }
+        json += "]\n}\n";
+        return json;
+    }
+
+    void SetEnabledForTesting(Bool enabled) {
+        g_pipeStatsEnabled = enabled;
+    }
+
+    void ResetForTesting() {
+        ResetCounters();
+    }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    String RoleDerivedJsonDumpPathForTesting() {
+        // The SAME expression WriteJsonDump and the Init banner use, reached through the same
+        // helper - so a change that stopped deriving at either site has to change this too, and the
+        // test reds. That is the whole point: see the header for why asserting on RoleLogPath
+        // directly was not a control.
+        if (MG_Config::Features.PipeStatsFile.empty()) {
+            return String();
+        }
+        return MG_Util::Debug::RoleLogPath(MG_Config::Features.PipeStatsFile.c_str(),
+                                           MG_Util::Debug::CurrentThreadRole());
+    }
+#endif
+
+} // namespace MobileGL::MG_Util::PipeStats

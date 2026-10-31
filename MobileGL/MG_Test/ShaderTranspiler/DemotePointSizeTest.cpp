@@ -245,8 +245,8 @@ TEST_F(DemotePointSizeTest, DemotesAFiveStageProgramWholesale) {
                                                             {GL_GEOMETRY_SHADER, kGeometrySource},
                                                             {GL_FRAGMENT_SHADER, kFragmentSource}});
     ASSERT_EQ(modules.size(), 5u);
-    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER,
-                               GL_GEOMETRY_SHADER, GL_FRAGMENT_SHADER};
+    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER, GL_GEOMETRY_SHADER,
+                               GL_FRAGMENT_SHADER};
 
     // The defect, pinned first: every tessellation/geometry stage really does declare the
     // capability the device lacks - the same probe production's declines use.
@@ -321,8 +321,8 @@ TEST_F(DemotePointSizeTest, DemotesAFiveStageProgramWholesale) {
     // the same modules finds nothing to arm on and must not touch a byte.
     Vector<Vector<Uint32>> again = modules;
     ShaderCompiler::PointSizeDemotionOutcome secondOutcome;
-    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-        again, types, true, true, true, secondOutcome, true, true));
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(again, types, true, true, true,
+                                                                              secondOutcome, true, true));
     EXPECT_FALSE(secondOutcome.demoted);
     EXPECT_TRUE(secondOutcome.declineDetail.empty()) << secondOutcome.declineDetail;
     EXPECT_EQ(again, modules);
@@ -334,19 +334,16 @@ TEST_F(DemotePointSizeTest, WithoutAGeometryStageTheEvaluationStageOwnsTheCaptur
                                                             {GL_TESS_EVALUATION_SHADER, kTessEvalSource},
                                                             {GL_FRAGMENT_SHADER, kFragmentSource}});
     ASSERT_EQ(modules.size(), 4u);
-    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER,
-                               GL_FRAGMENT_SHADER};
+    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER, GL_FRAGMENT_SHADER};
     ShaderCompiler::PointSizeDemotionOutcome outcome;
-    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-        modules, types, true, true, true, outcome, true, true));
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(modules, types, true, true, true, outcome,
+                                                                              true, true));
     EXPECT_TRUE(outcome.demoted) << outcome.declineDetail;
 
     const String tes = Disassemble(modules[2]);
     EXPECT_NE(tes.find("OpName %mg_PointSizeCapture"), String::npos) << tes;
     EXPECT_NE(tes.find("OpStore %mg_PointSizeCapture"), String::npos) << tes;
-    EXPECT_EQ(tes.find("OpName %mg_PointSizeIo2"), String::npos)
-        << "no geometry stage, no Io2 boundary:\n"
-        << tes;
+    EXPECT_EQ(tes.find("OpName %mg_PointSizeIo2"), String::npos) << "no geometry stage, no Io2 boundary:\n" << tes;
 }
 
 TEST_F(DemotePointSizeTest, AGeometryOnlyProgramReadsTheVertexBoundary) {
@@ -367,8 +364,7 @@ void main() {
     const Vector<GLenum> types{GL_VERTEX_SHADER, GL_GEOMETRY_SHADER, GL_FRAGMENT_SHADER};
     ShaderCompiler::PointSizeDemotionOutcome outcome;
     ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-        modules, types, /*demoteTessellation=*/false, /*demoteGeometry=*/true, false, outcome, true,
-        true));
+        modules, types, /*demoteTessellation=*/false, /*demoteGeometry=*/true, false, outcome, true, true));
     EXPECT_TRUE(outcome.demoted) << outcome.declineDetail;
 
     const String gs = Disassemble(modules[1]);
@@ -406,14 +402,13 @@ in vec4 g_color;
 layout(location = 0) out vec4 fragColor;
 void main() { fragColor = g_color; }
 )";
-    Vector<Vector<Uint32>> modules = CompileProgramToSpirv({{GL_VERTEX_SHADER, vsWithVarying},
-                                                            {GL_GEOMETRY_SHADER, gsWithVarying},
-                                                            {GL_FRAGMENT_SHADER, fsWithVarying}});
+    Vector<Vector<Uint32>> modules = CompileProgramToSpirv(
+        {{GL_VERTEX_SHADER, vsWithVarying}, {GL_GEOMETRY_SHADER, gsWithVarying}, {GL_FRAGMENT_SHADER, fsWithVarying}});
     ASSERT_EQ(modules.size(), 3u);
     const Vector<GLenum> types{GL_VERTEX_SHADER, GL_GEOMETRY_SHADER, GL_FRAGMENT_SHADER};
     ShaderCompiler::PointSizeDemotionOutcome outcome;
-    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-        modules, types, false, true, true, outcome, true, true));
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(modules, types, false, true, true,
+                                                                              outcome, true, true));
     EXPECT_TRUE(outcome.demoted) << outcome.declineDetail;
 
     // v_color / g_color occupy location 0, so every carrier must sit at 1 - in every stage,
@@ -426,18 +421,16 @@ void main() { fragColor = g_color; }
 }
 
 TEST_F(DemotePointSizeTest, APointSizeFreeProgramStaysByteIdentical) {
-    Vector<Vector<Uint32>> modules =
-        CompileProgramToSpirv({{GL_VERTEX_SHADER, kPlainVertexSource},
-                               {GL_TESS_CONTROL_SHADER, kPlainTessControlSource},
-                               {GL_TESS_EVALUATION_SHADER, kPlainTessEvalSource},
-                               {GL_FRAGMENT_SHADER, kFragmentSource}});
+    Vector<Vector<Uint32>> modules = CompileProgramToSpirv({{GL_VERTEX_SHADER, kPlainVertexSource},
+                                                            {GL_TESS_CONTROL_SHADER, kPlainTessControlSource},
+                                                            {GL_TESS_EVALUATION_SHADER, kPlainTessEvalSource},
+                                                            {GL_FRAGMENT_SHADER, kFragmentSource}});
     ASSERT_EQ(modules.size(), 4u);
     const Vector<Vector<Uint32>> before = modules;
-    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER,
-                               GL_FRAGMENT_SHADER};
+    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER, GL_FRAGMENT_SHADER};
     ShaderCompiler::PointSizeDemotionOutcome outcome;
-    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-        modules, types, true, true, false, outcome, true, true));
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(modules, types, true, true, false,
+                                                                              outcome, true, true));
     EXPECT_FALSE(outcome.demoted);
     EXPECT_TRUE(outcome.declineDetail.empty()) << outcome.declineDetail;
     EXPECT_EQ(modules, before);
@@ -450,12 +443,11 @@ TEST_F(DemotePointSizeTest, AHostingDeviceStaysByteIdentical) {
                                                             {GL_FRAGMENT_SHADER, kFragmentSource}});
     ASSERT_EQ(modules.size(), 4u);
     const Vector<Vector<Uint32>> before = modules;
-    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER,
-                               GL_FRAGMENT_SHADER};
+    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER, GL_FRAGMENT_SHADER};
     ShaderCompiler::PointSizeDemotionOutcome outcome;
     // Both verdicts say the device hosts the built-in: the un-forced lane's contract.
-    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-        modules, types, false, false, true, outcome, true, true));
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(modules, types, false, false, true,
+                                                                              outcome, true, true));
     EXPECT_FALSE(outcome.demoted);
     EXPECT_EQ(modules, before);
     EXPECT_TRUE(ShaderCompiler::ModuleDeclaresTessellationOrGeometryPointSize(modules[1]))
@@ -466,14 +458,12 @@ TEST_F(DemotePointSizeTest, ACaptureRequestForcesTheCarrierOnANonWritingCaptureS
     // The control stage writes point size (arming the demotion); the evaluation stage never
     // does - but a by-name capture must still find the carrier declared there, holding
     // whatever an unwritten varying holds, exactly as the unwritten built-in would have.
-    Vector<Vector<Uint32>> modules =
-        CompileProgramToSpirv({{GL_VERTEX_SHADER, kVertexSource},
-                               {GL_TESS_CONTROL_SHADER, kTessControlSource},
-                               {GL_TESS_EVALUATION_SHADER, kPlainTessEvalSource},
-                               {GL_FRAGMENT_SHADER, kFragmentSource}});
+    Vector<Vector<Uint32>> modules = CompileProgramToSpirv({{GL_VERTEX_SHADER, kVertexSource},
+                                                            {GL_TESS_CONTROL_SHADER, kTessControlSource},
+                                                            {GL_TESS_EVALUATION_SHADER, kPlainTessEvalSource},
+                                                            {GL_FRAGMENT_SHADER, kFragmentSource}});
     ASSERT_EQ(modules.size(), 4u);
-    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER,
-                               GL_FRAGMENT_SHADER};
+    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER, GL_FRAGMENT_SHADER};
     ShaderCompiler::PointSizeDemotionOutcome outcome;
     ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
         modules, types, true, true, /*captureRequestsPointSize=*/true, outcome, true, true));
@@ -552,8 +542,7 @@ void main() { fragColor = vec4(g_echo); }
     ASSERT_EQ(unrequested.size(), 3u);
     ShaderCompiler::PointSizeDemotionOutcome unrequestedOutcome;
     ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-        unrequested, types, false, true, /*captureRequestsPointSize=*/false, unrequestedOutcome, true,
-        true));
+        unrequested, types, false, true, /*captureRequestsPointSize=*/false, unrequestedOutcome, true, true));
     EXPECT_TRUE(unrequestedOutcome.demoted) << unrequestedOutcome.declineDetail;
     EXPECT_EQ(Disassemble(unrequested[1]).find("OpName %mg_PointSizeCapture"), String::npos)
         << "with no capture asking for it, the carrier must not be declared";
@@ -592,18 +581,16 @@ TEST_F(DemotePointSizeTest, ARedeclaredControlBlockPrintsAnUnaccessedPointSizeMe
 // driver still rejects is strictly worse than the honest refusal, because it also flips the
 // program-wide verdict and the L1 key.
 TEST_F(DemotePointSizeTest, AControlStageCarryingClipDistanceDeclinesTheProgram) {
-    Vector<Vector<Uint32>> modules =
-        CompileProgramToSpirv({{GL_VERTEX_SHADER, kVertexSource},
-                               {GL_TESS_CONTROL_SHADER, kClipDistanceTessControlSource},
-                               {GL_TESS_EVALUATION_SHADER, kTessEvalSource},
-                               {GL_FRAGMENT_SHADER, kFragmentSource}});
+    Vector<Vector<Uint32>> modules = CompileProgramToSpirv({{GL_VERTEX_SHADER, kVertexSource},
+                                                            {GL_TESS_CONTROL_SHADER, kClipDistanceTessControlSource},
+                                                            {GL_TESS_EVALUATION_SHADER, kTessEvalSource},
+                                                            {GL_FRAGMENT_SHADER, kFragmentSource}});
     ASSERT_EQ(modules.size(), 4u);
     const Vector<Vector<Uint32>> before = modules;
-    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER,
-                               GL_FRAGMENT_SHADER};
+    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER, GL_FRAGMENT_SHADER};
     ShaderCompiler::PointSizeDemotionOutcome outcome;
-    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-        modules, types, true, true, true, outcome, true, true));
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(modules, types, true, true, true, outcome,
+                                                                              true, true));
     EXPECT_FALSE(outcome.demoted);
     EXPECT_NE(outcome.declineDetail.find("clip/cull"), String::npos) << outcome.declineDetail;
     EXPECT_EQ(modules, before) << "a decline must leave every module byte-identical";
@@ -625,16 +612,15 @@ void main() {
     gl_PointSize = gl_in[0].gl_PointSize + 1.0;
 }
 )";
-    Vector<Vector<Uint32>> modules =
-        CompileProgramToSpirv({{GL_VERTEX_SHADER, kVertexSource},
-                               {GL_TESS_EVALUATION_SHADER, readingTessEval},
-                               {GL_FRAGMENT_SHADER, kFragmentSource}});
+    Vector<Vector<Uint32>> modules = CompileProgramToSpirv({{GL_VERTEX_SHADER, kVertexSource},
+                                                            {GL_TESS_EVALUATION_SHADER, readingTessEval},
+                                                            {GL_FRAGMENT_SHADER, kFragmentSource}});
     ASSERT_EQ(modules.size(), 3u);
     const Vector<Vector<Uint32>> before = modules;
     const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_EVALUATION_SHADER, GL_FRAGMENT_SHADER};
     ShaderCompiler::PointSizeDemotionOutcome outcome;
-    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-        modules, types, true, true, true, outcome, true, true));
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(modules, types, true, true, true, outcome,
+                                                                              true, true));
     EXPECT_FALSE(outcome.demoted);
     EXPECT_NE(outcome.declineDetail.find("control stage"), String::npos) << outcome.declineDetail;
     EXPECT_EQ(modules, before) << "a decline must leave every module byte-identical";
@@ -680,14 +666,13 @@ layout(location = 0) flat in i64vec4 g_wide;
 layout(location = 0) out vec4 fragColor;
 void main() { fragColor = vec4(float(g_wide.x)); }
 )";
-    Vector<Vector<Uint32>> modules = CompileProgramToSpirv({{GL_VERTEX_SHADER, wideVertex},
-                                                            {GL_GEOMETRY_SHADER, wideGeometry},
-                                                            {GL_FRAGMENT_SHADER, wideFragment}});
+    Vector<Vector<Uint32>> modules = CompileProgramToSpirv(
+        {{GL_VERTEX_SHADER, wideVertex}, {GL_GEOMETRY_SHADER, wideGeometry}, {GL_FRAGMENT_SHADER, wideFragment}});
     ASSERT_EQ(modules.size(), 3u);
     const Vector<GLenum> types{GL_VERTEX_SHADER, GL_GEOMETRY_SHADER, GL_FRAGMENT_SHADER};
     ShaderCompiler::PointSizeDemotionOutcome outcome;
-    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-        modules, types, false, true, true, outcome, true, true));
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(modules, types, false, true, true,
+                                                                              outcome, true, true));
     EXPECT_TRUE(outcome.demoted) << outcome.declineDetail;
 
     // v_wide / g_wide sit at location 0 and occupy 0 AND 1, so every carrier must clear 2.
@@ -709,11 +694,10 @@ TEST_F(DemotePointSizeTest, AWholeStructCopyDeclinesTheProgramByteIdentically) {
     Vector<Vector<Uint32>> modules{module};
     const Vector<GLenum> types{GL_TESS_EVALUATION_SHADER};
     ShaderCompiler::PointSizeDemotionOutcome outcome;
-    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-        modules, types, true, true, false, outcome, true, true));
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(modules, types, true, true, false,
+                                                                              outcome, true, true));
     EXPECT_FALSE(outcome.demoted);
-    EXPECT_FALSE(outcome.declineDetail.empty())
-        << "a shape the pass cannot express must say so, not silently no-op";
+    EXPECT_FALSE(outcome.declineDetail.empty()) << "a shape the pass cannot express must say so, not silently no-op";
     EXPECT_EQ(modules[0], module) << "a decline must not leave a half-demoted module behind";
     EXPECT_TRUE(ShaderCompiler::ModuleDeclaresTessellationOrGeometryPointSize(modules[0]))
         << "the declined module must still arm the existing honest refusals";

@@ -13,6 +13,8 @@
 #include "../VkIncludes.h"
 #include <Includes.h>
 #include <vk_mem_alloc.h>
+#include "MG_Pipe/MGPipeTypes.h"
+#include <unordered_map>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     enum class BufferKind : Uint8 {
@@ -36,56 +38,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool transformFeedbackUsageEnabled = false;
     };
 
-    // The DirectVulkan storage behind one frontend buffer (pipe_resource analogue).
-    // Owned (refcounted) by the frontend BufferObject; the manager holds only weak
-    // references (for shutdown) plus strong references on deferred-release lists.
-    class VkBufferResource : public MG_State::GLState::BackendBufferResource {
-    public:
-        ~VkBufferResource() override = default;
-
-        // Resident storage (may be invalid for streaming-only buffers).
-        VkBufferObject buffer;
-        VkDeviceSize storageSize = 0;
-        VkBufferUsageFlags usageFlags = 0;
-        // Frame serial of the last GPU reference; drives busy tracking.
-        Uint64 lastUseSerial = 0;
-        // Set when an immediate op could not be applied; forces a full re-upload
-        // on the next AcquireResidentSlice.
-        Bool pendingFullUpload = false;
-        // Backs a zero-copy coherent persistent map (PipeResource GPU residency): the
-        // buffer is HOST_VISIBLE+COHERENT, persistently mapped, carries every usage and is
-        // never orphaned or recreated. Draw-time acquire binds it directly, no re-upload.
-        Bool persistentMapped = false;
-
-        // Bumped from a manager-wide counter every time anything that decides which
-        // BufferSlice an Acquire*Slice call hands back changes: storage created or
-        // released, a full re-upload becoming due, a promotion/demotion between
-        // resident and streamed storage, or a new per-frame arena slice. Callers that
-        // memoise a resolved slice compare this to prove the memo still describes the
-        // buffer. The counter is manager-wide (never per-resource) so a freshly
-        // created resource - including one that replaces a destroyed resource at the
-        // same address - can never reproduce a value some memo already holds. 0 means
-        // "no slice has ever been handed out", which no memo can match.
-        Uint64 sliceEpoch = 0;
-
-        // Cached transient (streaming) slice for the current frame.
-        BufferSlice transientSlice{};
-        Uint64 transientFrameSerial = 0;
-        Uint64 transientChangeSerial = 0;
-        VkDeviceSize transientSize = 0;
-
-        // Streaming re-copies the whole store into the per-frame arena on every
-        // frame, which is right for genuinely per-frame data but pure waste for a
-        // Dynamic-hinted buffer the app stopped touching. After the content
-        // survives kStreamedPromotionStreak frame boundaries unchanged it is
-        // promoted to resident storage (one final upload, then zero per-frame
-        // cost); the first content change demotes it back to streaming, and the
-        // streaming path's existing downgrade releases the resident store.
-        Uint32 unchangedStreak = 0;
-        Bool promotedResident = false;
-        Uint64 promotedChangeSerial = 0;
-    };
-
     // Supplies a command buffer that is recording and outside any render pass,
     // for staged buffer-range copies. Implemented by VulkanRenderer.
     class IBufferCopyCommandProvider {
@@ -98,6 +50,62 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     public:
         Bool Initialize(const VkBufferManagerInitInfo& initInfo);
         void Shutdown();
+
+        // Registered before caps publication; the initialized renderer owns the storage.
+        static void RegisterWireResourceOps();
+        // Transport resources are owned by their complete wire handle, never by a
+        // frontend BufferObject. Acquires expose the full GPU store, without a CPU
+        // pointer: CPU consumers must use ReadWireBuffer for ordered, current bytes.
+        Bool AcquireWireSlice(BufferKind kind, MG_Pipe::MGPipeHandle res, BufferSlice& outSlice);
+        // The handle names a store this session created (whatever its size, zero included).
+        Bool IsKnownWireBuffer(MG_Pipe::MGPipeHandle res) { return FindWireBuffer(res) != nullptr; }
+        // Names, for a Fatal about an unknown handle, whether this manager ever saw it.
+        void DescribeWireBufferHistory(MG_Pipe::MGPipeHandle res) const;
+        Bool ReadWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, void* dst);
+        Bool CopyWireBufferRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, const BufferSlice& dst);
+        // P7 A.1, the sub-word half of the one above: the same copy for a window whose start
+        // or end does not land on a four-byte boundary. The read of the APPLICATION's store is
+        // rounded OUT to whole words and clamped to the store's end, so the widened window can
+        // never touch a byte the application does not own; it lands in a transient staging
+        // slice, and only the staging -> dst shift is sub-word - inside our own arena, where an
+        // unaligned region cannot alias anything else. vkCmdCopyBuffer places no alignment rule
+        // on a region's offsets or size (unlike vkCmdUpdateBuffer / vkCmdFillBuffer), so the
+        // shift is a plain legal copy. `dstSkip` is the byte inside `dst` the window starts at.
+        // This retires `uniform-buffer-byte-tail`.
+        Bool CopyWireBufferSubWordRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, Uint32 frameIndex,
+                                               const BufferSlice& dst, Uint64 dstSkip);
+        void MarkWireBufferGpuWritten(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size);
+        // P8-D: whether a shader write was marked on this store since the last indirect draw
+        // read it natively, clearing the mark. The caller records the INDIRECT_COMMAND_READ
+        // barrier before the draw when this answers true. Transfer writes need no mark: their own
+        // after-barriers already make them visible to MEMORY_READ at ALL_COMMANDS.
+        Bool TakeWireIndirectReadBarrier(MG_Pipe::MGPipeHandle res);
+        // P8-D: every WaitForWireBufferHostAccess that actually waited, over this manager's life -
+        // the attribution base a caller reads before and after its own ReadWireBuffer.
+        Uint64 GetWireHostWaitCount() const { return m_wireHostWaits; }
+        // P15 S0 (M4): busy writes that renamed their store instead of taking a staged copy.
+        Uint64 GetWireRenameCount() const { return m_wireRenames; }
+
+        // Resource-op entry points. All run on the server apply owner.
+        void CreateWireBuffer(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc);
+        void RespecifyWireBuffer(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc,
+                                 const void* initialBytes);
+        void WriteWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, const void* bytes);
+        void FlushWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, const void* bytes);
+        void ReadbackWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size);
+        void DestroyWireBuffer(MG_Pipe::MGPipeHandle res);
+        // P11 B2 (T0): make the client's AHardwareBuffer `ahb` (a BLOB of `size` bytes) buffer
+        // `res`'s store - a VkBuffer on memory imported through
+        // VK_ANDROID_external_memory_android_hardware_buffer, host-visible and mapped like every
+        // wire store, so every wire path (draw binds, WriteWireBuffer's ordered copy, CPU readers)
+        // applies unchanged. The T2 store it replaces goes through DeferWireRelease. False = not
+        // imported (the T2 store is untouched and the client is DECLINED).
+        Bool ImportWireBuffer(MG_Pipe::MGPipeHandle res, void* ahb, Uint64 size);
+        // P13 W4: monolith's record arm donates the wire store itself as the client's persistent
+        // map (see the definition). Null when the store cannot be handed over.
+        void* DonateWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 size, const void* seedBytes);
+        // The POST self-test of the sustained-lock pattern on this device (see the definition).
+        static Bool SelfTestWireImport(char* why, Uint64 whyBytes);
 
         // Recreate all per-frame transient arenas
         Bool RecreateTransientArenas(Uint32 frameCount);
@@ -116,6 +124,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // frameSerial-minus-frameCount inference.
         void NotifyFrameSerialComplete(Uint64 serial);
         void SetCopyCommandProvider(IBufferCopyCommandProvider* provider);
+        // The owning renderer's submission counter: AcquireWireSlice stamps the next submission
+        // from it directly rather than finding the renderer through the session-local slot on
+        // every bind (a thread-local probe per vertex, index and uniform buffer of every draw).
+        void SetSubmitCounterSource(const Uint64* submitCounter) { m_submitCounter = submitCounter; }
 
         Bool UploadTransient(BufferKind kind, Uint32 frameIndex, const void* data, VkDeviceSize size,
                              VkDeviceSize alignment, BufferSlice& outSlice);
@@ -141,65 +153,187 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // UniformManager::AcquireUnboundTexelBufferView.
         BufferSlice AcquireUnboundTexelBufferDescriptor();
 
-        // Draw-time acquire for resident (device-storage) buffers: ensures the
-        // resource exists and is fully uploaded, marks it used this frame.
-        Bool AcquireResidentSlice(BufferKind kind, const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
-                                  BufferSlice& outSlice);
-        // Draw-time acquire for streamed buffers: uploads the whole shadow into
-        // the per-frame arena (cached by change serial), releasing any resident
-        // storage the buffer may still own.
-        Bool AcquireStreamedSlice(BufferKind kind, const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
-                                  BufferSlice& outSlice);
-
-        // Zero-copy persistent map (PipeResource GPU residency): create (once) a
-        // HOST_VISIBLE+COHERENT, persistently mapped resident buffer carrying every usage,
-        // seed it from the shadow, and return its mapped base for the app to write into
-        // directly. Idempotent. Returns nullptr on failure (frontend keeps its shadow).
-        void* AcquirePersistentMap(MG_State::GLState::BufferObject& bufferObject);
-
-        // Immediate ops, dispatched from the frontend BufferBackendOps table.
-        void OnRespecify(MG_State::GLState::BufferObject& bufferObject);
-        void OnSubData(MG_State::GLState::BufferObject& bufferObject, SizeT offset, SizeT size);
-        void OnResidentSubData(MG_State::GLState::BufferObject& bufferObject, SizeT offset, DataPtr data);
-        void OnFlushMappedRange(MG_State::GLState::BufferObject& bufferObject, Range1D range,
-                                Flags<BufferMappingAccessBit> appAccess);
-        void OnResourceDestroyed(SharedPtr<MG_State::GLState::BackendBufferResource>&& resource);
-
         Uint64 GetFrameSerial() const { return m_frameSerial; }
-        // Highest value handed to any VkBufferResource::sliceEpoch. Unchanged since a
-        // memo was taken means no buffer this manager owns changed which slice it hands
-        // back, and none was persistently mapped, in between - so a memo of resolved
-        // slices needs no per-buffer re-check. See AcquirePersistentMap for the mapping half.
-        Uint64 GetSliceEpochCounter() const { return m_sliceEpochCounter; }
+        // Bumped every time this manager destroys a WIRE store's VkBuffer (see
+        // m_wireStoreDestroyEpoch). Unchanged since a memo was taken means no VkBuffer handle
+        // that memo names can have been freed and re-minted in between, which is the one
+        // fact a handle-keyed memo of wire descriptors needs and cannot read off the handle.
+        Uint64 GetWireStoreDestroyEpoch() const { return m_wireStoreDestroyEpoch; }
+        // P15 S0: the store's content state, as a process-wide monotonic serial: it moves on every
+        // host write, respecify and GPU-write mark, and on every bind a shader may write through
+        // (storage / texture-buffer slices). False for a store whose bytes the client writes
+        // directly (an imported or donated store), which no cache may key on.
+        Bool GetWireBufferContentSerial(MG_Pipe::MGPipeHandle res, Uint64& serial);
+        // P15 S0: CONVERTED WIRE VERTEX STREAMS, KEPT ACROSS FRAMES (the frontend arm's
+        // ConvertedVertexStream cache, lost with it, and longer-lived than it: that one was per
+        // frame). Key: the source store's content serial - process-wide monotonic, so no store or
+        // handle identity can alias - and the layout. Each entry owns a vertex buffer holding the
+        // converted elements; a newer conversion of the same store and layout replaces it, and the
+        // whole set is bounded by bytes (least recently used first). A replaced or evicted buffer
+        // is released when the frame slot that last used it comes round again.
+        struct ConvertedStreamKey {
+            Uint64 contentSerial = 0;
+            Uint64 baseOffset = 0;
+            Uint32 stride = 0, type = 0, size = 0, conversion = 0;
+            Bool normalized = false, isInteger = false, isBgra = false;
+            Bool operator==(const ConvertedStreamKey&) const = default;
+        };
+        Bool LookupConvertedStream(const ConvertedStreamKey& key, SizeT elementCount, BufferSlice& outSlice);
+        Bool StoreConvertedStream(const ConvertedStreamKey& key, MG_Pipe::MGPipeHandle source, SizeT elementCount,
+                                  const void* bytes, SizeT size, BufferSlice& outSlice);
         // Highest frame serial whose GPU work is known complete; serials at or
         // below it may be considered signaled. Drives IsResourceBusy and the
         // backend GL fence objects.
         Uint64 GetCompletedSerial() const;
-        // Busy = potentially referenced by GPU work that has not been fenced yet
-        // (including commands recorded for the current, unsubmitted frame).
-        Bool IsResourceBusy(const VkBufferResource& resource) const;
 
     private:
+        struct WireBufferResource {
+            VkBufferObject buffer;
+            Uint64 size = 0;
+            Uint64 lastUseSerial = 0;
+            // P7 wave 2 package B3: the submission expected to carry the most recent GPU use
+            // of this buffer - the busy predicate's DEFENSE term, not its guarantee (see
+            // WriteWireBuffer). IsSubmitIndexComplete polls the real fence and reports an
+            // unsubmitted index as incomplete, but the stamp is taken before the draw is
+            // recorded and a mid-draw flush can submit it without the draw.
+            Uint64 lastUseSubmitIndex = 0;
+            // P15 S0: see GetWireBufferContentSerial.
+            Uint64 contentSerial = 0;
+            // P15 S0 (M4): the store's bytes on the host, for a small store whose content only
+            // host writes have made since it was specified - what a busy write renames from (see
+            // WriteWireBuffer). Empty: no shadow (a large store, the budget was spent, or a GPU
+            // write, shader-writable bind or client mapping made the host copy unknowable).
+            Vector<Uint8> shadow;
+            // P15: buffers this store was renamed away from, kept for the next rename instead of
+            // allocating one (a UI store is renamed several times a frame). A spare is reused only
+            // once the submission that can name it has completed - DeferWireRelease's own rule -
+            // and its handle never died, so no handle-keyed memo can mistake it for another
+            // buffer. Bounded; the rest go through DeferWireRelease.
+            struct RenameSpare {
+                VkBufferObject buffer;
+                Uint64 submitIndex = 0;
+                Uint64 lastUseSerial = 0;
+            };
+            Vector<RenameSpare> renameSpares;
+            Bool gpuWritesPending = false;
+            // Only ranges actually submitted by resource_subdata are covered. No
+            // shadow is retained: flush cannot replay stale bytes over GPU writes.
+            Vector<Range1D> stagedCoverage;
+            // P11 B2 (T0): `buffer` is the client's imported AHardwareBuffer. Its readback posts
+            // no bytes (the client reads its own pages once the wait below it is done).
+            Bool imported = false;
+            // P8-D: a shader write was marked (MarkWireBufferGpuWritten) and no indirect draw has
+            // recorded its INDIRECT_COMMAND_READ barrier since (TakeWireIndirectReadBarrier).
+            Bool indirectReadBarrierPending = false;
+        };
+        // P8-D: see GetWireHostWaitCount.
+        Uint64 m_wireHostWaits = 0;
+        Uint64 m_wireRenames = 0;
+        SizeT m_wireShadowBytes = 0;
+        void DropWireShadow(WireBufferResource& resource);
+        void ReleaseRenameSpares(WireBufferResource& resource);
+        Bool CreateWireStoreBuffer(WireBufferResource& resource);
+        Bool RenameBusyWireStore(WireBufferResource& resource);
+        static Uint64 WireBufferKey(MG_Pipe::MGPipeHandle res) {
+            return (static_cast<Uint64>(res.Gen) << 32) | res.Slot;
+        }
+        WireBufferResource* FindWireBuffer(MG_Pipe::MGPipeHandle res);
+        Bool WaitForWireBufferHostAccess(WireBufferResource& resource);
+        // P11 B2: the serial a T0 store's release waits behind (never "destroy at once").
+        Uint64 T0ReleaseSerial(Uint64 lastUseSerial) const;
+
+        // P7 wave 4 (M2), ID-P7-27: THE WIRE ARM'S ORPHANS NEED A RECLAIM THAT IS NOT A FRAME
+        // BOUNDARY.
+        //
+        // RespecifyWireBuffer - which is every glBufferData that crosses the wire - orphans the
+        // old store unconditionally, because unlike OnRespecify it has no shadow to upload in
+        // place from and no cheap way to know the client is re-sending the same size. The orphan
+        // is legitimate (M1 measured the conditional-orphan mirror: 6701 live against 6702).
+        // What was missing is the RECLAIM. DeferRelease parks into m_deferredBufferReleases,
+        // whose only sweep is CollectDeferredReleases from a frame boundary, and on a pbuffer
+        // replay the server sees ONE present record for the whole run - so on
+        // minecraft-1.21.4-fabric-iris-bsl-esc-menu-854 the buckets held 25,923 dead stores
+        // against 28 live wire buffers, one memfd mapping each, and the server died in scudo's
+        // secondary allocator.
+        //
+        // So a wire store is parked HERE instead, with the facts that say when it is dead, and
+        // THE DEFER PATH ITSELF RECLAIMS - every park sweeps, and the frame boundary is only one
+        // more sweep point (CollectDeferredReleases), never the one this depends on:
+        //
+        //   * `lastUseSerial == 0` - read BEFORE RespecifyWireBuffer zeroes it. Zero means no
+        //     GPU command has named the store since it was minted or since the last host-access
+        //     wait proved every recorded command complete (WaitForWireBufferHostAccess); every
+        //     path that hands the store to the GPU stamps m_frameSerial, which starts at 1. Such
+        //     a store is destroyed at the park and never enters the list.
+        //   * `submitIndex` - the renderer's GetSyncPointSubmitIndex() at park time, which is by
+        //     construction the LAST submission that can name this store: every command that
+        //     names it was recorded before the park (the record left behind a bumped slice
+        //     epoch, so no memo can hand it out again), and a recorded command is either already
+        //     submitted (<= m_submitCounter) or in the batch that becomes m_submitCounter + 1.
+        //     IsSubmitIndexComplete(submitIndex) is a fence observation, so this is the gate
+        //     that empties the set MID-FRAME - the shape CollectWireObjects already uses for
+        //     the wire image/view tables.
+        //   * THE RENDERER IS IDLE - IsSubmitIndexComplete(GetSyncPointSubmitIndex()): nothing
+        //     is recorded and every submission has retired. Then every parked store is dead,
+        //     including one tagged for a batch that was abandoned rather than submitted (a
+        //     minimized Present drops its recording), whose own index may never complete.
+        //
+        // THE FRAME-SERIAL FLOOR IS DELIBERATELY NOT A PROOF HERE. It cannot move inside a
+        // frame (NotifyFrameSerialComplete refuses the current serial), so it frees nothing in
+        // the one-present replay this exists for; the submit index above is the fact that CAN
+        // move mid-frame, and it is a fence observation rather than a count.
+        //
+        // AND EVERY DESTROY HERE HAPPENS MID-FRAME, which the memos above this manager were not
+        // written for. UniformManager's descriptor memos are keyed on the VkBuffer HANDLE, and
+        // before M2 a wire store only ever died at the same boundary that clears those memos
+        // (UniformManager::BeginFrame, from Present or a drain). A store destroyed here can
+        // have its handle value re-minted by the next Create - a heap pointer under lavapipe -
+        // while a memo still maps that handle to a descriptor set baked to the dead store's
+        // memory: silent wrong bytes, no Fatal (ID-P7-43). m_wireStoreDestroyEpoch is the
+        // fact the memos fold in: every wire-store destroy bumps it, so a memo taken before
+        // the destroy cannot match after it. Deliberately not bumped by WriteWireBuffer, which
+        // would defeat the memo on every glBufferSubData.
+        struct DeferredWireRelease {
+            VkBufferObject buffer;
+            Uint64 lastUseSerial = 0;
+            Uint64 submitIndex = 0;
+            // Cached: GetSize() is gone once the object is destroyed, and the watermark's
+            // running total has to stay exact as entries leave.
+            Uint64 bytes = 0;
+        };
+        // Park a wire store, sweep, then hold the watermark. `lastUseSerial` is the releasing
+        // resource's, captured before the caller resets it.
+        void DeferWireRelease(VkBufferObject&& buffer, Uint64 lastUseSerial);
+        // Destroy every parked store proven dead by the rules above. Returns how many.
+        SizeT SweepDeferredWireReleases();
+        // MOBILEGL_IPC_WIRE_DEFERRED_MB (Config.h has the semantics): when the parked bytes
+        // still exceed the budget after a sweep, take the sync point WaitForWireBufferHostAccess
+        // takes - flush what is recorded, wait for it - and sweep again, which retires every
+        // parked store, because none can be tagged past the sync point it just waited out.
+        void EnforceWireDeferredWatermark();
+        // ...and the same sync point when more than this many stores are parked, whatever their
+        // bytes (see the definition for the measurement). Not a knob: it bounds an object count
+        // the byte budget cannot see, and MOBILEGL_IPC_WIRE_DEFERRED_MB=0 disables it too.
+        static constexpr SizeT kWireDeferredCountCeiling = 1024;
+        // Teardown: the caller has proven the device idle (Shutdown / RecreateTransientArenas).
+        void DestroyAllDeferredWireReleases();
+        // THE one Fatal{ResourceUnavailable, "buffer-write-sync"} site (rule I: no second abort
+        // for the census to count), shared by the host write that cannot wait for the GPU and
+        // the watermark that cannot. `site` says which.
+        [[noreturn]] static void WireBufferSyncFatal(const char* site);
+        // True when the wait or copy that just failed failed because the device is lost: the
+        // session has been latched (VulkanRenderer::LatchWireDeviceLoss) and the caller returns
+        // instead of taking its Fatal.
+        static Bool LatchedOnDeviceLoss(const char* site);
+        // The wbuf[] gauges (PipeStats.h, Gauge::WireBuffers..WireDeferredSyncs). The peaks are
+        // taken at the two points the numbers can rise - a park and a mint - and published when
+        // the stats channel is on; MagmaWireReclaimScenario reads them off the server's line.
+        void NoteWireStorePeaks();
+        void PublishWireReclaimGauges();
         Bool InitializeTransientArenas();
-        static VkBufferUsageFlags GetVkBufferUsage(BufferKind kind);
-        VkBufferResource* GetOrCreateResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
-        static VkBufferResource* ResourceOf(MG_State::GLState::BufferObject& bufferObject);
-        Bool CreateResidentStorage(VkBufferResource& resource, VkDeviceSize size, VkBufferUsageFlags usage,
-                                   VkMemoryPropertyFlags requiredFlags = 0);
-        // Swap storage (conditional orphan) and refill it from the shadow copy.
-        Bool SwapStorageAndUploadAll(VkBufferResource& resource, MG_State::GLState::BufferObject& bufferObject);
-        // Record a staging-slice copy into the resident storage, ordered against
-        // in-flight and already-recorded GPU work.
-        Bool StagedRangeCopy(VkBufferResource& resource, const void* data,
-                             SizeT offset, SizeT size);
-        void DeferRelease(VkBufferObject&& buffer);
+        Bool StagedWireRangeCopy(WireBufferResource& resource, const void* data, SizeT offset, SizeT size);
         void CollectDeferredReleases(Uint32 frameIndex);
         void DestroyAllDeferredReleases();
-        void TrackLiveResource(const SharedPtr<VkBufferResource>& resource);
-        void ReleaseAllLiveResources();
-        // See VkBufferResource::sliceEpoch.
-        void BumpSliceEpoch(VkBufferResource& resource) { resource.sliceEpoch = ++m_sliceEpochCounter; }
-
         VkBufferManagerInitInfo m_initInfo{};
         BufferArena m_transientUploadArena;
         // See AcquireUnboundStorageDescriptor. Lazily created, never re-created, torn down
@@ -208,17 +342,54 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // See AcquireUnboundTexelBufferDescriptor. Same lifetime rules.
         VkBufferObject m_unboundTexelBuffer;
         IBufferCopyCommandProvider* m_copyProvider = nullptr;
+        const Uint64* m_submitCounter = nullptr;
         Vector<Vector<VkBufferObject>> m_deferredBufferReleases;
-        Vector<Vector<SharedPtr<VkBufferResource>>> m_deferredResourceReleases;
-        Vector<WeakPtr<VkBufferResource>> m_liveResources;
-    // Size m_liveResources had just after the last sweep; the next sweep waits for it to double.
-    SizeT m_liveResourcesLastPruned = 0;
+        std::unordered_map<Uint64, WireBufferResource> m_wireBuffers;
+        // P14: a slot-indexed front for m_wireBuffers (every draw resolves each vertex, index and
+        // uniform buffer). An entry is believed only for the generation it was taken at ({slot,
+        // gen} is never reused), and the erase of that node clears it: a node never moves until
+        // erased. Slot-indexed rather than direct-mapped because a Minecraft frame draws from a
+        // few thousand live buffers, which a small hashed table mostly missed.
+        struct WireBufferLookup {
+            Uint32 gen = 0;
+            WireBufferResource* resource = nullptr;
+        };
+        static constexpr SizeT kWireBufferLookupMaxSlots = SizeT{1} << 20;
+        Vector<WireBufferLookup> m_wireBufferLookup;
+        void ForgetWireBufferLookup(Uint64 key) {
+            const SizeT slot = static_cast<SizeT>(key & 0xffffffffu);
+            if (slot < m_wireBufferLookup.size()) m_wireBufferLookup[slot] = {};
+        }
+        // See DeferredWireRelease. ONE FLAT LIST rather than the per-frame-slot buckets above:
+        // the whole point is that these entries do not wait for a frame slot to come round.
+        Vector<DeferredWireRelease> m_deferredWireReleases;
+        // Bytes currently parked in that list, kept exact so the watermark needs no walk.
+        Uint64 m_deferredWireBytes = 0;
+        // Live VkBuffers this arm owns: the stores held by m_wireBuffers plus the parked ones.
+        // Maintained rather than counted, because the publish runs on every park.
+        Uint64 m_wireStoreCount = 0;
+        // Run maxima of the two numbers above and the watermark's sync count, for the gauges.
+        Uint64 m_wireStoreCountPeak = 0;
+        Uint64 m_deferredWireBytesPeak = 0;
+        Uint64 m_wireDeferredSyncs = 0;
+        // See GetWireStoreDestroyEpoch and the DeferredWireRelease comment. Bumped on every
+        // path that destroys a wire store's VkBuffer, and never reset (not even by Shutdown),
+        // so that a memo taken before a re-initialize must not match
+        // a handle minted after it.
+        Uint64 m_wireStoreDestroyEpoch = 0;
+        Uint64 m_wireContentSerial = 0;
+        struct ConvertedStream {
+            ConvertedStreamKey key;
+            MG_Pipe::MGPipeHandle source = MG_Pipe::kMGPipeNullHandle;
+            SizeT elementCount = 0;
+            VkBufferObject buffer;
+            Uint64 lastUseFrameSerial = 0;
+        };
+        Vector<ConvertedStream> m_convertedStreams;
+        SizeT m_convertedStreamBytes = 0;
+        void RetireConvertedStream(SizeT index);
         Uint32 m_currentFrameIndex = 0;
         Uint64 m_frameSerial = 1;
         Uint64 m_completedSerialFloor = 0;
-        // Never reset (not even by Shutdown): a value handed to a resource must stay
-        // unique for the process, or a memo taken before a re-initialize could match
-        // a different resource's state after it.
-        Uint64 m_sliceEpochCounter = 0;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

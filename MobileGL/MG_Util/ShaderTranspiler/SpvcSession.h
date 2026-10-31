@@ -62,11 +62,11 @@ namespace MobileGL {
             // so a module that carries them and an implementation that ignores them capture
             // nothing at all.
             struct SpirvXfbCapture {
-                String name;        // the GL interface name: "gl_Position", or "Block.member"
-                Uint32 buffer = 0;  // XfbBuffer on the declaring variable
-                Uint32 offset = 0;  // Offset on the variable or on the member
-                Uint32 stride = 0;  // XfbStride on the declaring variable
-                Uint32 componentCount = 0;  // how many 32-bit components the capture occupies
+                String name;               // the GL interface name: "gl_Position", or "Block.member"
+                Uint32 buffer = 0;         // XfbBuffer on the declaring variable
+                Uint32 offset = 0;         // Offset on the variable or on the member
+                Uint32 stride = 0;         // XfbStride on the declaring variable
+                Uint32 componentCount = 0; // how many 32-bit components the capture occupies
             };
 
             enum class SessionUsageBit {
@@ -90,8 +90,7 @@ namespace MobileGL {
             public:
                 SpvcSession() = default;
 
-                explicit SpvcSession(const Vector<unsigned int>& spirv,
-                                     Flags<SessionUsageBit> usage);
+                explicit SpvcSession(const Vector<unsigned int>& spirv, Flags<SessionUsageBit> usage);
 
                 SpvcSession(SpvcSession&) = delete;
 
@@ -134,7 +133,7 @@ namespace MobileGL {
                 // stages; it may repeat a binding declared by several of them.
                 spvc_result SetAtomicCounterBlockBindings(Int topBinding, Vector<Int>& outGlBindings);
                 // Drops the Index decoration from every fragment output that carries the DEFAULT
-                // colour index 0, so the emitted ESSL does not print `index = 0`.
+                // color index 0, so the emitted ESSL does not print `index = 0`.
                 //
                 // Index 0 is what every single-source fragment output already is, in GL and in
                 // ESSL alike, and SPIR-V carries the decoration only because the application
@@ -143,14 +142,15 @@ namespace MobileGL {
                 // harmless: GLSL ES has no `index` layout qualifier in core, so the driver
                 // answers "index layout qualifier requires EXT_blend_func_extended" and refuses
                 // the stage. The program then links nothing and every draw with it renders
-                // NOTHING - verified on Mesa 26.1.4 llvmpipe with no MobileGL in the process,
+                // NOTHING - verified on llvmpipe 26.1.4 with no MobileGL in the process,
                 // and it is why KHR-GL43.shader_atomic_counters.basic-program-query read back a
                 // black render target.
                 //
                 // A NON-zero index is left exactly as it is: that one really does select the
                 // second dual-source input and cannot be expressed without the extension, so it
                 // must keep reaching the driver (the frontend's own glBindFragDataLocationIndexed
-                // path already emits only non-zero indices for the same reason).
+                // path already emits only non-zero indices for the same reason) - and the stage
+                // then requires GL_EXT_blend_func_extended, which ESSL wants enabled by name.
                 spvc_result DropDefaultFragmentOutputColorIndex();
                 // Drops `readonly` and `writeonly` from every shader storage block - and every
                 // block member - that carries BOTH of them.
@@ -162,9 +162,9 @@ namespace MobileGL {
                 // dropping it cannot change what the shader does.
                 //
                 // Emitting it does change whether the shader EXISTS. SPIRV-Cross hoists the
-                // qualifiers every member shares onto the block, and Mesa's ES compiler rejects
+                // qualifiers every member shares onto the block, and llvmpipe's ES compiler rejects
                 // that spelling outright ("Interface block sets both readonly and writeonly",
-                // verified on Mesa 26.1.4 llvmpipe with no MobileGL in the process, against the
+                // verified on llvmpipe 26.1.4 with no MobileGL in the process, against the
                 // exact source this transpiler emitted). The stage then never compiles, the
                 // program links without it, and every dispatch or draw is a silent no-op -
                 // which is how KHR-GL43.shader_storage_buffer_object.basic-readonly-writeonly
@@ -173,6 +173,20 @@ namespace MobileGL {
                 // A block carrying only ONE of the two is left exactly as it is: those really do
                 // constrain the accesses the shader makes, and the driver is entitled to know.
                 spvc_result RelaxReadWriteExclusiveStorageBuffers();
+                // GL_EXT_fragment_shading_rate in ESSL, in two halves around Compile().
+                //
+                // GLSL ES has the two built-ins - gl_ShadingRateEXT (fragment input) and
+                // gl_PrimitiveShadingRateEXT (vertex / geometry output) - under
+                // GL_EXT_fragment_shading_rate, but SPIRV-Cross only spells their SPIR-V
+                // counterparts (ShadingRateKHR / PrimitiveShadingRateKHR) for Vulkan GLSL and
+                // refuses the stage otherwise. So the first half strips the BuiltIn decoration
+                // from those variables, names them with a sentinel and requires the extension;
+                // SPIRV-Cross then emits them as an ordinary declaration plus ordinary uses, and
+                // FinishShadingRateBuiltinsForEssl deletes that declaration and puts the built-in
+                // name back at every use. Returns whether any variable was renamed - when it
+                // returns false the second half has nothing to do.
+                Bool PrepareShadingRateBuiltinsForEssl();
+                static void FinishShadingRateBuiltinsForEssl(String& essl);
                 // ---- GL_ARB_gl_spirv: an APPLICATION-supplied module, not one MobileGL emitted ----
                 // Select which OpEntryPoint of `model` this session compiles. A module may carry
                 // several of the same execution model, and glSpecializeShader names the one the
@@ -207,8 +221,7 @@ namespace MobileGL {
                 // sets `outUnknownConstantId` when an id the caller passed is not a
                 // specialization constant of this module, which the extension makes
                 // GL_INVALID_VALUE.
-                Bool SetSpecializationConstants(const Vector<Uint32>& constantIds,
-                                                const Vector<Uint32>& constantValues,
+                Bool SetSpecializationConstants(const Vector<Uint32>& constantIds, const Vector<Uint32>& constantValues,
                                                 Uint32& outUnknownConstantId);
                 spvc_result Compile(const char** result);
                 const SpvcMetadata& GetMetadata() const;

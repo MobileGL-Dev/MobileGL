@@ -9,8 +9,10 @@
 #pragma once
 
 #include "../VkIncludes.h"
+#include "../MagmaSession.h"
 #include "PipelineFactory.h"
-#include "MG_State/GLState/ProgramState/ProgramObject.h"
+#include "MagmaProgramSource.h"
+#include "NarrowIntegerVertexFormats.h"
 #include "MG_State/GLState/ProgramState/ShaderObject.h"
 #include "MG_State/GLState/TextureState/TextureEnum.h"
 
@@ -74,11 +76,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ZeroBaseVertex = 1 << 8,
         };
         using CompileOptionFlags = Flags<CompileOptionBit>;
+
+        // glClipControl folded into the position fixup's two bits. An upper-left origin negates
+        // clip-space Y on top of whatever the framebuffer needs (the fixup flips before it rotates,
+        // so this stays in the logical orientation), and inverts the cull sense with it, which
+        // keeps facing a property of the clip-space winding as the extension requires. A
+        // [0, 1] depth mode is Vulkan's own clip volume, so the remap is dropped. gl_FragCoord is
+        // a window coordinate, which clip control does not move.
+        static constexpr Uint32 ApplyClipControlToTransformFlags(Uint32 flags, GLenum origin, GLenum depthMode) {
+            if (origin == GL_UPPER_LEFT) flags ^= static_cast<Uint32>(CompileOptionBit::PositionYFlip);
+            if (depthMode == GL_ZERO_TO_ONE) flags &= ~static_cast<Uint32>(CompileOptionBit::PositionZRemap);
+            return flags;
+        }
         using HashType = Uint64;
 
         // The gl_PerVertex members a pass-through tessellation control stage may have to carry,
         // in the order glslang declares them - which is the order a redeclaration must use.
-        // Which of them exist is a function of the neighbouring stage's GLSL VERSION
+        // Which of them exist is a function of the neighboring stage's GLSL VERSION
         // (gl_CullDistance joins the block at #version 450), so the mask is read off that
         // stage's SPIR-V rather than assumed. See ReflectPerVertexInputMembers.
         enum class PerVertexMemberBit : Uint32 {
@@ -89,9 +103,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
         // What a program parsed below #version 450 carries, and the fallback when a module's
         // block cannot be read.
-        static constexpr Uint32 kDefaultPerVertexMembers =
-            static_cast<Uint32>(PerVertexMemberBit::Position) | static_cast<Uint32>(PerVertexMemberBit::PointSize) |
-            static_cast<Uint32>(PerVertexMemberBit::ClipDistance);
+        static constexpr Uint32 kDefaultPerVertexMembers = static_cast<Uint32>(PerVertexMemberBit::Position) |
+                                                           static_cast<Uint32>(PerVertexMemberBit::PointSize) |
+                                                           static_cast<Uint32>(PerVertexMemberBit::ClipDistance);
 
         struct UpdateAfterBindLimits {
             Bool enabled = false;
@@ -115,6 +129,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             HashType hash = 0;
             Vector<VkPipelineShaderStageCreateInfo> stages;
+            // `stages` for a draw into a NON-LAYERED framebuffer: the same list, except that every
+            // module storing gl_Layer is replaced by its ZeroLayerOutputPass variant (GL ignores
+            // gl_Layer there; Vulkan offsets the primitive out of the attachment). Empty for every
+            // program that never writes gl_Layer, which then uses `stages` for both. The variant
+            // modules are owned by `modules` like the others.
+            Vector<VkPipelineShaderStageCreateInfo> nonLayeredStages;
+            // The fragment module a draw without multisample fragment operations uses (a
+            // single-sample framebuffer, or MULTISAMPLE disabled): every gl_SampleMask store
+            // writes all-ones, since GL ignores the shader's mask there and Vulkan would discard
+            // on a clear bit 0 (FullCoverageSampleMaskPass). VK_NULL_HANDLE for every program
+            // whose fragment stage never writes gl_SampleMask. Owned by `modules`.
+            VkShaderModule fullCoverageFragmentModule = VK_NULL_HANDLE;
             Vector<VkShaderModule> modules;
             // Parallel to stages; identifies the exact module bytes handed to the driver when a
             // pipeline creation fails. Sixteen bytes per stage instead of keeping the SPIR-V.
@@ -175,6 +201,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Int globalUboBinding = -1;
             Uint32 activeVertexInputLocationMask = 0;
             Array<GLenum, kMaxVertexInputLocations> vertexInputTypes{};
+            // The locations of vertexInputTypes that are int / uint, for the per-draw narrow-integer
+            // variant decision (ResolveNarrowIntegerVertexInputs). Identical in every variant.
+            IntegerVertexInputMasks integerVertexInputs;
+            // The narrow-integer correction this entry's vertex stage was built with (none for the
+            // plain program): what a draw compares its own resolved set against.
+            NarrowIntegerVertexInputs narrowIntegerInputs;
             Uint32 activeFragmentOutputLocationMask = 0;
             Array<GLenum, kMaxVertexInputLocations> fragmentOutputTypes{};
             ShaderStage rasterizationProducerStage = ShaderStage::Unknown;
@@ -228,6 +260,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // the cache entry, so every later draw of the same program variant reads the same
             // answer instead of re-deciding it.
             Bool pointSizeCapabilityUnsupported = false;
+            // One of the program's final modules fails SPIR-V validation, so none of its modules
+            // was created and every draw or dispatch of it is refused by name (the ProgramInvalidSpirv /
+            // ComputeProgramInvalidSpirv wire declines) - see ProgramFactory::ScreenModuleForDriver.
+            // Sticky like the flag above: it lives on the cache entry, so the one log line is honest.
+            Bool invalidSpirvDeclined = false;
             Bool needsPassthroughTessControl = false;
             // ...and the pass-through this renderer can synthesize carries gl_Position and
             // nothing else, so it is only correct when the evaluation stage's inputs are
@@ -251,7 +288,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // entry pointer re-stamps use through a const reference (StampProgramUse).
             mutable Uint64 lastUsedFrame = 0;
 
-            static inline VkDevice s_device = VK_NULL_HANDLE;
+            static inline SessionLocal<VkDevice> s_device; // per Magma session (MagmaSession.h)
 
             VkProgramObject() = default;
             VkProgramObject(const VkProgramObject&) = delete;
@@ -259,6 +296,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkProgramObject(VkProgramObject&& other) noexcept {
                 hash = other.hash;
                 stages = std::move(other.stages);
+                nonLayeredStages = std::move(other.nonLayeredStages);
+                fullCoverageFragmentModule = other.fullCoverageFragmentModule;
+                other.fullCoverageFragmentModule = VK_NULL_HANDLE;
                 modules = std::move(other.modules);
                 // Must travel with `modules`: these digests name the SPIR-V those exact
                 // shader modules were built from, and the pipeline-failure diagnostics
@@ -282,15 +322,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 samplerTextureTargetByBinding = std::move(other.samplerTextureTargetByBinding);
                 samplerNumericDomainByBinding = std::move(other.samplerNumericDomainByBinding);
                 storageImageFormatByBinding = std::move(other.storageImageFormatByBinding);
-                storageImageUsesBindingFormatByBinding =
-                    std::move(other.storageImageUsesBindingFormatByBinding);
+                storageImageUsesBindingFormatByBinding = std::move(other.storageImageUsesBindingFormatByBinding);
                 storageBlockNameByBinding = std::move(other.storageBlockNameByBinding);
                 storageBlockIndexByBinding = std::move(other.storageBlockIndexByBinding);
                 hasStorageImages = other.hasStorageImages;
                 declinedDescriptors = other.declinedDescriptors;
+                // The three refusal flags travel like every other field: a robin-hood insert swaps
+                // entries, and a flag left behind would refuse (or admit) the wrong program.
+                invalidSpirvDeclined = other.invalidSpirvDeclined;
+                xfbCaptureDeclined = other.xfbCaptureDeclined;
+                pointSizeCapabilityUnsupported = other.pointSizeCapabilityUnsupported;
                 globalUboBinding = other.globalUboBinding;
                 activeVertexInputLocationMask = other.activeVertexInputLocationMask;
                 vertexInputTypes = other.vertexInputTypes;
+                integerVertexInputs = other.integerVertexInputs;
+                narrowIntegerInputs = other.narrowIntegerInputs;
                 activeFragmentOutputLocationMask = other.activeFragmentOutputLocationMask;
                 fragmentOutputTypes = other.fragmentOutputTypes;
                 rasterizationProducerStage = other.rasterizationProducerStage;
@@ -309,8 +355,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.pipelineLayout = VK_NULL_HANDLE;
                 other.hasStorageImages = false;
                 other.declinedDescriptors = false;
+                other.invalidSpirvDeclined = false;
+                other.xfbCaptureDeclined = false;
+                other.pointSizeCapabilityUnsupported = false;
                 other.globalUboBinding = -1;
                 other.activeVertexInputLocationMask = 0;
+                other.integerVertexInputs = {};
+                other.narrowIntegerInputs = {};
                 other.activeFragmentOutputLocationMask = 0;
                 other.rasterizationProducerStage = ShaderStage::Unknown;
                 other.producerOutputComponentCount = 0;
@@ -330,6 +381,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 Destroy();
                 hash = other.hash;
                 stages = std::move(other.stages);
+                nonLayeredStages = std::move(other.nonLayeredStages);
+                fullCoverageFragmentModule = other.fullCoverageFragmentModule;
+                other.fullCoverageFragmentModule = VK_NULL_HANDLE;
                 modules = std::move(other.modules);
                 stageSpirvDigests = std::move(other.stageSpirvDigests); // travels with `modules` - see the move ctor
                 descriptorSetLayout = other.descriptorSetLayout;
@@ -346,15 +400,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 samplerTextureTargetByBinding = std::move(other.samplerTextureTargetByBinding);
                 samplerNumericDomainByBinding = std::move(other.samplerNumericDomainByBinding);
                 storageImageFormatByBinding = std::move(other.storageImageFormatByBinding);
-                storageImageUsesBindingFormatByBinding =
-                    std::move(other.storageImageUsesBindingFormatByBinding);
+                storageImageUsesBindingFormatByBinding = std::move(other.storageImageUsesBindingFormatByBinding);
                 storageBlockNameByBinding = std::move(other.storageBlockNameByBinding);
                 storageBlockIndexByBinding = std::move(other.storageBlockIndexByBinding);
                 hasStorageImages = other.hasStorageImages;
                 declinedDescriptors = other.declinedDescriptors;
+                // The three refusal flags travel like every other field: a robin-hood insert swaps
+                // entries, and a flag left behind would refuse (or admit) the wrong program.
+                invalidSpirvDeclined = other.invalidSpirvDeclined;
+                xfbCaptureDeclined = other.xfbCaptureDeclined;
+                pointSizeCapabilityUnsupported = other.pointSizeCapabilityUnsupported;
                 globalUboBinding = other.globalUboBinding;
                 activeVertexInputLocationMask = other.activeVertexInputLocationMask;
                 vertexInputTypes = other.vertexInputTypes;
+                integerVertexInputs = other.integerVertexInputs;
+                narrowIntegerInputs = other.narrowIntegerInputs;
                 activeFragmentOutputLocationMask = other.activeFragmentOutputLocationMask;
                 fragmentOutputTypes = other.fragmentOutputTypes;
                 rasterizationProducerStage = other.rasterizationProducerStage;
@@ -373,8 +433,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.pipelineLayout = VK_NULL_HANDLE;
                 other.hasStorageImages = false;
                 other.declinedDescriptors = false;
+                other.invalidSpirvDeclined = false;
+                other.xfbCaptureDeclined = false;
+                other.pointSizeCapabilityUnsupported = false;
                 other.globalUboBinding = -1;
                 other.activeVertexInputLocationMask = 0;
+                other.integerVertexInputs = {};
+                other.narrowIntegerInputs = {};
                 other.activeFragmentOutputLocationMask = 0;
                 other.rasterizationProducerStage = ShaderStage::Unknown;
                 other.producerOutputComponentCount = 0;
@@ -389,29 +454,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return *this;
             }
 
-            ~VkProgramObject() {
-                Destroy();
-            }
+            ~VkProgramObject() { Destroy(); }
 
         private:
             void Destroy() {
-                if (s_device != VK_NULL_HANDLE) {
+                if (s_device.Get() != VK_NULL_HANDLE) {
                     if (pipelineLayout != VK_NULL_HANDLE) {
-                        vkDestroyPipelineLayout(s_device, pipelineLayout, nullptr);
+                        vkDestroyPipelineLayout(s_device.Get(), pipelineLayout, nullptr);
                         pipelineLayout = VK_NULL_HANDLE;
                     }
                     if (descriptorSetLayout != VK_NULL_HANDLE) {
-                        vkDestroyDescriptorSetLayout(s_device, descriptorSetLayout, nullptr);
+                        vkDestroyDescriptorSetLayout(s_device.Get(), descriptorSetLayout, nullptr);
                         descriptorSetLayout = VK_NULL_HANDLE;
                     }
                     for (auto module : modules) {
                         if (module != VK_NULL_HANDLE) {
-                            vkDestroyShaderModule(s_device, module, nullptr);
+                            vkDestroyShaderModule(s_device.Get(), module, nullptr);
                         }
                     }
                 }
                 modules.clear();
                 stages.clear();
+                nonLayeredStages.clear();
+                fullCoverageFragmentModule = VK_NULL_HANDLE;
                 stageSpirvDigests.clear(); // the modules they describe are gone
             }
         };
@@ -435,11 +500,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // repair passes patch modules AROUND them, and the emulation only replaces them
         // on opted-in devices with no subgroup support at all.
         struct SubgroupLoweringPolicy {
-            Bool emulateSubgroups = false;      // MOBILEGL_MAGMA_EMULATE_SUBGROUP, no-native-support devices
+            Bool emulateSubgroups = false;              // no-native-support devices, or MOBILEGL_SUBGROUP_EMULATION
             Bool fixIterationRPSubgroupScratch = false; // patch iterationRP's under-declared scratch
-            Bool fixIterationRPBarrier = false; // repair Program 203's shared-scratch race
-            Bool deriveNumSubgroups = false;    // repair the NumSubgroups builtin
-            Bool requireFullSubgroups = false;  // computeFullSubgroups enabled on the device
+            Bool fixIterationRPBarrier = false;         // repair Program 203's shared-scratch race
+            Bool deriveNumSubgroups = false;            // repair the NumSubgroups builtin
+            Bool requireFullSubgroups = false;          // computeFullSubgroups enabled on the device
             Uint32 nativeSubgroupSize = 0;
             // Full-subgroup launches are bounded by this device limit; a dispatch whose
             // workgroup needs more subgroups than this cannot request the flag.
@@ -450,20 +515,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         explicit ProgramFactory(VkDevice device, const VulkanRendererConfig& config, Uint32 maxBindings,
-                                Bool shaderDrawParametersEnabled,
-                                Bool unformattedFloatStorageImagesEnabled,
-                                Bool tessellationAndGeometryPointSizeEnabled,
-                                Bool enableSpirvValidation,
-                                UpdateAfterBindLimits updateAfterBindLimits,
-                                SubgroupLoweringPolicy subgroupPolicy)
+                                Bool shaderDrawParametersEnabled, Bool unformattedFloatStorageImagesEnabled,
+                                Bool tessellationAndGeometryPointSizeEnabled, Bool enableSpirvValidation,
+                                UpdateAfterBindLimits updateAfterBindLimits, SubgroupLoweringPolicy subgroupPolicy)
             : m_device(device), m_maxBindings(maxBindings), m_config(config),
               m_shaderDrawParametersEnabled(shaderDrawParametersEnabled),
               m_unformattedFloatStorageImagesEnabled(unformattedFloatStorageImagesEnabled),
               m_tessellationAndGeometryPointSizeEnabled(tessellationAndGeometryPointSizeEnabled),
-              m_enableSpirvValidation(enableSpirvValidation),
-              m_updateAfterBindLimits(updateAfterBindLimits),
+              m_enableSpirvValidation(enableSpirvValidation), m_updateAfterBindLimits(updateAfterBindLimits),
               m_subgroupPolicy(subgroupPolicy) {
-            VkProgramObject::s_device = device;
+            VkProgramObject::s_device.Get() = device;
         }
         // Destroys the pass-through tessellation control modules. Runs while the device is
         // still alive for the same reason ~VkProgramObject's does: this factory outlives
@@ -471,9 +532,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ~ProgramFactory();
         ProgramFactory(const ProgramFactory&) = delete;
 
-        HashType ComputeHash(const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags) const;
-        const VkProgramObject& GetOrCreateProgram(
-            const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags);
+        HashType ComputeHash(const MagmaProgramSource& program, CompileOptionFlags flags) const;
+        // `narrowIntegerInputs` selects the variant whose vertex stage widens narrow integer
+        // attribute data GL's way (ExtendNarrowIntegerVertexInputsPass). It is draw-time state like
+        // the flags, and the draw path asks for it only when ResolveNarrowIntegerVertexInputs finds
+        // a location that needs it, so every other program keeps a single entry. The variant
+        // returned is remembered per flags for GetOrCreateDrawProgram.
+        const VkProgramObject& GetOrCreateProgram(const MagmaProgramSource& program, CompileOptionFlags flags,
+                                                  const NarrowIntegerVertexInputs& narrowIntegerInputs = {});
+        // A draw's first lookup: the variant GetOrCreateProgram last returned for these flags, plain
+        // or narrow-integer. Every variant reflects the same vertex inputs and builtins, which is all
+        // a draw reads before it knows the variant it needs, so a program whose draws keep needing
+        // one variant costs a single lookup and its plain entry, never drawn with, ages out.
+        const VkProgramObject& GetOrCreateDrawProgram(const MagmaProgramSource& program, CompileOptionFlags flags);
+        // The cache identity of a narrow-integer variant: the hash of the same program and flags
+        // without it, mixed with the corrected locations. Content in, content out, so the variant's
+        // pipelines key apart from the plain program's through programHash alone.
+        static HashType MixNarrowIntegerVertexInputs(HashType hash, const NarrowIntegerVertexInputs& inputs) {
+            return XXH64(&inputs, sizeof(inputs), hash);
+        }
 
         // The default framebuffer's current image height, baked as a literal into every
         // FragCoordYFlip variant (there is no push-constant or specialization channel here, and
@@ -502,6 +579,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (their command buffers retired many frames ago), mirroring
         // VkRenderPassManager::OnPresent's sweep.
         void OnFrameBoundary();
+
+        // What the last look at a module's final bytes - the exact words vkCreateShaderModule
+        // would receive - decided.
+        enum class DriverModuleVerdict : Uint8 {
+            Valid,           // validates: handed to the driver
+            DeclinedInvalid, // fails validation: never handed over, the program's work is declined
+            AdmittedInvalid, // fails validation, handed over anyway (MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV)
+        };
+        // Validates `spirv` for the Vulkan environment its version word names and turns the
+        // result into a verdict. A driver is not a validating entry point: Adreno page-faulted
+        // into device loss on a module that carried a sampler inside a uniform block, Mali
+        // SIGSEGVs inside pipeline creation. So an invalid module is declined unless
+        // `allowInvalid` (the escape hatch) says to hand it over regardless.
+        //
+        // The validator's answer is remembered per module content (64-bit hash plus word count),
+        // process-wide: a program variant, an evicted-then-rebuilt entry and two programs that
+        // share a stage all re-screen the same bytes, and only the first pays for spirv-val.
+        // `outReason` receives the validator's message for an invalid module.
+        static DriverModuleVerdict ScreenModuleForDriver(const Vector<Uint>& spirv, Bool allowInvalid,
+                                                         String* outReason = nullptr);
+        // How many times ScreenModuleForDriver actually ran the validator (cache misses), for
+        // the tests that pin the cache.
+        static Uint64 DriverModuleValidatorRuns();
 
         static VkShaderStageFlagBits ToVkStage(ShaderStage stage);
         static VkFormat ConvertSpirvImageFormatToVkFormat(SpvImageFormat format);
@@ -547,16 +647,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // member set, because all three decide what the generator emits. The size comes from
         // PATCH_VERTICES and the levels from PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL
         // - draw state rather than link state, and the CTS case that motivated this links at the
-        // default 3 and draws at 4. The member set comes from the neighbouring evaluation stage's
+        // default 3 and draws at 4. The member set comes from the neighboring evaluation stage's
         // own SPIR-V, so two programs at different GLSL versions need different modules. The
         // pipeline cache re-keys on the same inputs, so the module a pipeline was built with is
         // part of that pipeline's identity. Compiling is bounded by the number of distinct
         // (size, levels, members) combinations a program draws with - one or two in practice -
         // and only ever happens for the rare program that has no control stage at all.
         VkPipelineShaderStageCreateInfo GetOrCreatePassthroughTessControlStage(Uint32 patchVertices,
-                                                                              const FloatVec4& defaultOuterLevel,
-                                                                              const FloatVec2& defaultInnerLevel,
-                                                                              Uint32 perVertexMembers);
+                                                                               const FloatVec4& defaultOuterLevel,
+                                                                               const FloatVec2& defaultInnerLevel,
+                                                                               Uint32 perVertexMembers);
 
         // Source of the module above. Exposed for tests: the generated GLSL is the whole
         // contract with the evaluation stage, so it is worth pinning independently of a device.
@@ -586,27 +686,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             HashType hash = 0;
         };
 
+        // The program's memo slot for `flags`, its plain hash computed on a miss.
+        MagmaProgramSource::BackendHashMemoEntry& ProgramHashMemo(const MagmaProgramSource& program,
+                                                                  CompileOptionFlags flags) const;
+        // The cache entry under `hash`, built as that variant of `program` when absent.
+        const VkProgramObject& FindOrBuildProgram(const MagmaProgramSource& program, CompileOptionFlags flags,
+                                                  const NarrowIntegerVertexInputs& narrowIntegerInputs, HashType hash);
+
         static TextureTarget UniformTypeToTextureTarget(GLenum glType);
         // `stages` is ALWAYS ProgramObject::GetLinkedShaderStages() - one entry per module of
         // `spirv`, at the same index. Taking the stages rather than the shader objects is what
         // keeps the program's live attach list, which is a longer and differently-indexed list
         // the moment a glAttachShader lands after the link, from being passed here by mistake.
-        void ReflectVertexInputs(const Vector<ShaderStage>& stages,
-                     const Vector<Vector<Uint>>& spirv,
-                     VkProgramObject& entry) const;
-        void ReflectViewportIndexUsage(const Vector<ShaderStage>& stages,
-                                       const Vector<Vector<Uint>>& spirv,
+        void ReflectVertexInputs(const Vector<ShaderStage>& stages, const Vector<Vector<Uint>>& spirv,
+                                 VkProgramObject& entry) const;
+        void ReflectViewportIndexUsage(const Vector<ShaderStage>& stages, const Vector<Vector<Uint>>& spirv,
                                        VkProgramObject& entry) const;
-        void ReflectFragmentOutputs(const Vector<ShaderStage>& stages,
-                        const Vector<Vector<Uint>>& spirv,
-                        VkProgramObject& entry) const;
-        void ReflectLayout(const MG_State::GLState::ProgramObject& program, const Vector<Vector<Uint>>& spirv,
+        void ReflectFragmentOutputs(const Vector<ShaderStage>& stages, const Vector<Vector<Uint>>& spirv,
+                                    VkProgramObject& entry) const;
+        void ReflectLayout(const MagmaProgramSource& program, const Vector<Vector<Uint>>& spirv,
                            VkProgramObject& entry) const;
         // Fills needsPassthroughTessControl / passthroughTessControlEmulatable off the linked
         // modules. Const and reflection-only: it decides nothing about the pipeline, it only
         // records what the evaluation stage's input interface is made of.
-        void ReflectPassthroughTessControlNeed(const Vector<ShaderStage>& stages,
-                                               const Vector<Vector<Uint>>& spirv,
+        void ReflectPassthroughTessControlNeed(const Vector<ShaderStage>& stages, const Vector<Vector<Uint>>& spirv,
                                                VkProgramObject& entry) const;
 
         VkDevice m_device = VK_NULL_HANDLE;
@@ -655,6 +758,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // and adds only a handful of values, so it does not move the cap in practice.
         static constexpr SizeT kMaxPassthroughTessControlStages = 64;
         UnorderedMap<Uint64, VkPipelineShaderStageCreateInfo> m_passthroughTessControlStages;
-        static inline XXH64_state_t* m_hashState = XXH64_createState();
+        static inline thread_local XXH64_state_t* m_hashState = XXH64_createState();
     };
+
+    // The FragCoordYFlip variant's module transform: every read of gl_FragCoord goes through a
+    // Private copy whose y is (framebufferHeight - y). Fails open (output = input, false). Exposed
+    // so a unit case can validate the bytes it hands the driver.
+    Bool TransformSpirvForFragCoordYFlip(const Vector<Uint>& input, Vector<Uint>& output, Uint32 framebufferHeight);
+
+    // The clip-space fix-up of the last pre-rasterization stage: gl_Position is rewritten in place
+    // per `transformFlags` before every vertex the stage produces. Fails open (output = input,
+    // false). Exposed, like the transform above, so a unit case can validate its bytes.
+    Bool TransformSpirvForVulkanPositionFix(const Vector<Uint>& input, Vector<Uint>& output,
+                                            ProgramFactory::CompileOptionFlags transformFlags);
 } // namespace MobileGL::MG_Backend::DirectVulkan

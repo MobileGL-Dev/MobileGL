@@ -14,6 +14,42 @@ option(MOBILEGL_ENABLE_TRACY      "Enable tracy for profiling"                  
 option(MOBILEGL_BUILD_TRACE_REPLAY "Build desktop apitrace replay runner"            OFF)
 option(MOBILEGL_TRACE_ANGLE_VARIANTS "Enable signed trace-APK ANGLE variant loading" OFF)
 option(MOBILEGL_IOS               "Build MobileGL for iOS instead of macOS when APPLE is set" OFF)
+# The disaggregated (two-process) shape. OFF is the shipping default and OFF
+# must stay byte-comparable to a tree without MG_Remote at all: nothing under
+# MobileGL/MG_Remote/ is compiled, no include path is added, and no library is
+# linked, so `nm --defined-only libMobileGL.so | grep -i MG_Remote` is empty.
+# That emptiness is one of the two byte-level equalities the plan's validation
+# gates keep (section 10.3).
+option(MOBILEGL_BUILD_DISAGGREGATED "Build the MG_Remote transport layer (two-process shape)" OFF)
+# The CI / debugging shape (ARCHITECTURE.md §16): both roles in ONE process, talking over the
+# same SEG_CMD ring and the same G3 codec a spawned server would use. It IMPLIES
+# MOBILEGL_BUILD_DISAGGREGATED (below) and additionally admits the role-isolation shims that
+# only make sense when the two roles share an address space. It is a SUPERSET, never a
+# substitute: MOBILEGL_TRANSPORT=inproc is what selects the shape at run time, and this option
+# only decides whether the shims are compiled in.
+option(MOBILEGL_BUILD_DISAGGREGATED_INPROC "Compile the in-process (one-process, two-role) split shims; implies MOBILEGL_BUILD_DISAGGREGATED" OFF)
+option(MOBILEGL_BUILD_SERVER_SPIKE "Build the P0 spike-A MobileGLServer delivery-chain executable (Android only)" OFF)
+option(MOBILEGL_BUILD_EXTMEM_PROBE "Package tools/spikes/extmem_probe as libMobileGLExtmemProbe.so for the trace APK's exec hook (P11 A3, Android only)" OFF)
+option(MOBILEGL_EXTMEM_PROBE_AS_SERVER "Spike only (P11 B2 step 1): also package the probe as libMobileGLServer.so, the real server as libMobileGLServerReal.so" OFF)
+# The PipeInputs strangler (ARCHITECTURE.md 9.2) is finished: since P13 every build pushes, and
+# there is neither an option nor a macro for it (W3a removed the option, W3b the `#if` guards and
+# the definition). A -DMOBILEGL_PIPE_PUSH=OFF (or the OFF that every pre-P13 build tree holds in its
+# cache, the old default) is named and dropped rather than honored: a warning, not an error, so an
+# existing tree reconfigures. The RUNTIME MOBILEGL_PIPE_PUSH environment bitmask is unrelated.
+if (DEFINED CACHE{MOBILEGL_PIPE_PUSH} AND NOT "$CACHE{MOBILEGL_PIPE_PUSH}")
+    message(WARNING "MobileGL: MOBILEGL_PIPE_PUSH=OFF asks for the pull build, which P13 retired; "
+                    "ignored - every build pushes now")
+endif()
+unset(MOBILEGL_PIPE_PUSH CACHE)
+option(MOBILEGL_PIPE_VERIFY "Compile SnapshotFromGLContext() and the G4 per-verb shadow comparator; never shipped" OFF)
+# Track H's old-versus-new arm (ARCHITECTURE.md 9.6) - MOBILEGL_PIPE_LEGACY_MEMOS - retired with the
+# pull path in P13 W3b: the pre-handle memo arm is no longer compiled anywhere. Named and dropped,
+# like MOBILEGL_PIPE_PUSH=OFF above (every pre-P13 tree holds the old default ON in its cache).
+if (DEFINED CACHE{MOBILEGL_PIPE_LEGACY_MEMOS} AND "$CACHE{MOBILEGL_PIPE_LEGACY_MEMOS}")
+    message(WARNING "MobileGL: MOBILEGL_PIPE_LEGACY_MEMOS=ON asks for the pre-handle memo arm, "
+                    "which P13 retired; ignored")
+endif()
+unset(MOBILEGL_PIPE_LEGACY_MEMOS CACHE)
 set(MOBILEGL_LOG_ACTIVE_LEVEL "MOBILEGL_LOG_LEVEL_INFO" CACHE STRING "MobileGL active log level macro")
 set(MOBILEGL_VULKAN_LIBRARY "" CACHE FILEPATH "Vulkan loader/MoltenVK library to link for iOS builds")
 
@@ -42,7 +78,7 @@ if (ANDROID)
     # Read the level back from the compiler target triple first. Its trailing
     # number (aarch64-none-linux-android26) is precisely what clang turns into
     # __ANDROID_API__, so it cannot disagree with the compile itself, and it is
-    # already past every NDK normalisation step - codename aliases, "latest",
+    # already past every NDK normalization step - codename aliases, "latest",
     # and per-ABI minimum pull-ups. ANDROID_PLATFORM_LEVEL is the fallback for
     # generators/languages where the triple variable is not populated.
     #
@@ -82,12 +118,15 @@ if (ANDROID)
             "(gradle builds get this from minSdk ${MOBILEGL_ANDROID_API_LEVEL}, so "
             "check that minSdk instead of adding an override).")
     elseif (_mobilegl_android_api GREATER MOBILEGL_ANDROID_API_LEVEL)
+        # A higher level is a separate artifact of the SAME source (gradle -Pmobilegl.androidApi=29:
+        # native ELF TLS instead of emulated TLS). Any post-${MOBILEGL_ANDROID_API_LEVEL} API use must
+        # sit behind a compile-time __ANDROID_API__ gate and never replace the API
+        # ${MOBILEGL_ANDROID_API_LEVEL} path; the minSdk-${MOBILEGL_ANDROID_API_LEVEL} build stays the
+        # enforcing compile.
         message(STATUS
             "MobileGL: configuring at Android API ${_mobilegl_android_api} "
-            "(> shipping minimum ${MOBILEGL_ANDROID_API_LEVEL}). Allowed, but the "
-            "tree must not use post-${MOBILEGL_ANDROID_API_LEVEL} APIs - the "
-            "minSdk-${MOBILEGL_ANDROID_API_LEVEL} gradle build is the enforcing "
-            "compile.")
+            "(> shipping minimum ${MOBILEGL_ANDROID_API_LEVEL}): a separate artifact; "
+            "post-${MOBILEGL_ANDROID_API_LEVEL} APIs only behind a compile-time __ANDROID_API__ gate.")
     endif()
 
     message(STATUS "MobileGL: Android API level ${_mobilegl_android_api}")
@@ -97,13 +136,14 @@ if (ANDROID)
     unset(_mobilegl_api_triple)
 endif()
 
-option(MOBILEGL_ENABLE_LTO "Build with ThinLTO/IPO" OFF)
+option(MOBILEGL_ENABLE_LTO "Build with ThinLTO/IPO and the release optimization flags" OFF)
 
 if ((NOT CMAKE_BUILD_TYPE STREQUAL "Debug" OR MOBILEGL_FORCE_RELEASE_OPT) AND MOBILEGL_ENABLE_LTO)
     # Check if ThinLTO or LTO is suppported
     include(CheckIPOSupported)
     include(CheckCCompilerFlag)
     include(CheckCXXCompilerFlag)
+    include(CheckLinkerFlag)
 
     check_ipo_supported(RESULT LTOSupported OUTPUT LTOError)
 
@@ -128,11 +168,49 @@ if ((NOT CMAKE_BUILD_TYPE STREQUAL "Debug" OR MOBILEGL_FORCE_RELEASE_OPT) AND MO
         message(STATUS "IPO not supported: ${LTOError}")
     endif()
 
-    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MATCHES "AppleClang")
-        add_compile_options(-O3 -ffunction-sections -fdata-sections)
-        add_link_options(-Wl,--gc-sections)
-    elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-#        add_compile_options(/O2)
+    # Every flag below is probed first, so a compiler or linker without it simply goes without.
+    # add_compile_options/add_link_options set directory properties, so they act from a function.
+    function(mobilegl_add_compile_flag_if_supported flag)
+        string(MAKE_C_IDENTIFIER "MGL_HAS_C${flag}" c_var)
+        string(MAKE_C_IDENTIFIER "MGL_HAS_CXX${flag}" cxx_var)
+        check_c_compiler_flag("${flag}" ${c_var})
+        check_cxx_compiler_flag("${flag}" ${cxx_var})
+        if (${c_var} AND ${cxx_var})
+            add_compile_options("${flag}")
+        endif()
+    endfunction()
+    function(mobilegl_add_link_flag_if_supported flag)
+        string(MAKE_C_IDENTIFIER "MGL_HAS_LINK${flag}" link_var)
+        check_linker_flag(CXX "${flag}" ${link_var})
+        if (${link_var})
+            add_link_options("${flag}")
+        endif()
+    endfunction()
+
+    if (MSVC)
+        # One COMDAT per function (/Gy) and per datum (/Gw), so /OPT:REF can drop the unreferenced
+        # ones and /OPT:ICF fold the identical ones - the sections/gc/icf trio below, MSVC-spelled.
+        add_compile_options(/Gy /Gw)
+        add_link_options(/OPT:REF /OPT:ICF)
+    elseif (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(-O3)
+        mobilegl_add_compile_flag_if_supported(-ffunction-sections)
+        mobilegl_add_compile_flag_if_supported(-fdata-sections)
+        # Hidden visibility and -Bsymbolic-functions already keep the library's calls inside it;
+        # this lets the optimizer rely on that and inline across what it would otherwise have to
+        # treat as interposable definitions.
+        mobilegl_add_compile_flag_if_supported(-fno-semantic-interposition)
+        if (APPLE)
+            mobilegl_add_link_flag_if_supported(LINKER:-dead_strip)
+        elseif (NOT WIN32)
+            mobilegl_add_link_flag_if_supported(LINKER:--gc-sections)
+            # Calls into libc and the GPU driver load their target from the GOT instead of going
+            # through a PLT stub. Bionic binds everything at load time anyway.
+            mobilegl_add_compile_flag_if_supported(-fno-plt)
+            # Identical code folding (lld, gold). Safe mode never folds a function whose address
+            # is taken, so function-pointer identity holds.
+            mobilegl_add_link_flag_if_supported(LINKER:--icf=safe)
+        endif()
     else ()
         add_compile_options(-O2)
     endif()
@@ -158,14 +236,60 @@ if (MSVC)
 endif()
 
 # Generate MGGitHash.h
+#
+# RESULT_VARIABLE, WHICH THIS CALL DID NOT HAVE (CONTRACT-P6 4.2). Without it a failed
+# `git rev-parse` yields "" and nothing says so. Verified live: building this worktree from WSL
+# produces an EMPTY hash, because the worktree's `.git` is a file holding a WINDOWS path that
+# WSL's git cannot resolve - so two builds from different commits got IDENTICAL ABI
+# fingerprints and the stamp silently stopped doing its documented job.
 execute_process(
     COMMAND git rev-parse HEAD
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     OUTPUT_VARIABLE GIT_COMMIT_HASH_FULL
     OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE MOBILEGL_GIT_STAMP_RESULT
+    ERROR_QUIET
 )
 
 string(SUBSTRING "${GIT_COMMIT_HASH_FULL}" 0 7 GIT_COMMIT_HASH_SHORT)
+
+# --- the BUILD STAMP, and why it is a second pair rather than a fix to the first -------------
+#
+# GIT_COMMIT_HASH_SHORT MAY NOT MOVE. It is baked into glGetString(GL_VERSION)
+# (MG_Impl/GLImpl/Getter/GL_Getter.cpp), so redefining it changes an APPLICATION-VISIBLE GL
+# string and the pull build's .rodata - a behavior leak and a G1 break at once. The handshake
+# gets its own pair instead, consumed only by the ABI fingerprint, which no pull build compiles.
+#
+# PRESENT IS A FIRST-CLASS INPUT, not the emptiness of VALUE. "this build has no stamp" and
+# "this build's stamp is the empty string" are different claims, and a fingerprint that could
+# not tell them apart is how two unrelated builds agreed in the first place.
+#
+# -DMOBILEGL_BUILD_STAMP=<anything> (or the environment variable) overrides, because a tree git
+# cannot read is not always a tree whose commit is unknown - CI has ${GITHUB_SHA} in hand.
+set(MOBILEGL_BUILD_STAMP "" CACHE STRING "Explicit ABI-fingerprint build stamp when git cannot be read")
+set(MOBILEGL_BUILD_STAMP_VALUE "")
+if(NOT "${MOBILEGL_BUILD_STAMP}" STREQUAL "")
+    set(MOBILEGL_BUILD_STAMP_VALUE "${MOBILEGL_BUILD_STAMP}")
+elseif(NOT "$ENV{MOBILEGL_BUILD_STAMP}" STREQUAL "")
+    set(MOBILEGL_BUILD_STAMP_VALUE "$ENV{MOBILEGL_BUILD_STAMP}")
+elseif(MOBILEGL_GIT_STAMP_RESULT EQUAL 0 AND NOT "${GIT_COMMIT_HASH_FULL}" STREQUAL "")
+    set(MOBILEGL_BUILD_STAMP_VALUE "${GIT_COMMIT_HASH_FULL}")
+endif()
+
+if("${MOBILEGL_BUILD_STAMP_VALUE}" STREQUAL "")
+    set(MOBILEGL_BUILD_STAMP_PRESENT 0)
+    # A WARNING AND NOT A FATAL: a build with no stamp is still a usable build, it just cannot
+    # prove that a peer was built from the same tree. Saying so once at configure time is the
+    # difference between a known limitation and the silent one 4.2 found.
+    message(WARNING
+        "MobileGL: no build stamp. `git rev-parse HEAD` failed (result "
+        "'${MOBILEGL_GIT_STAMP_RESULT}') and MOBILEGL_BUILD_STAMP was not set, so the ABI "
+        "fingerprint cannot distinguish two builds of the same sizes from different commits - "
+        "which is exactly what a stale MOBILEGL_IPC_SERVER_PATH looks like. Pass "
+        "-DMOBILEGL_BUILD_STAMP=<commit> to restore it.")
+else()
+    set(MOBILEGL_BUILD_STAMP_PRESENT 1)
+endif()
 
 configure_file(
     ${CMAKE_SOURCE_DIR}/MobileGL/MG_Util/Miscellany/MGGitHash.h.in
@@ -229,6 +353,7 @@ set(SOURCE_FILES
     MobileGL/ConfigLoader.cpp
 
     MobileGL/MG_Util/Debug/Log.cpp
+    MobileGL/MG_Util/X11/DisplayGuard.cpp
 
     MobileGL/MG_Util/Async/JobNode.cpp
     MobileGL/MG_Util/Async/ShaderCompilePool.cpp
@@ -237,6 +362,8 @@ set(SOURCE_FILES
     MobileGL/MG_Util/Metrics/TextureMetrics.cpp
 
     MobileGL/MG_Util/Metrics/BufferMetrics.cpp
+
+    MobileGL/MG_Util/Metrics/PipeStats.cpp
 
     MobileGL/MG_Util/Converters/GLToStr/GLEnumConverter.cpp
     MobileGL/MG_Util/Converters/EGLToStr/EGLEnumConverter.cpp
@@ -273,6 +400,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/TranslationCache.cpp
     MobileGL/MG_Util/ShaderTranspiler/glslang/TMglGlslIoResolver.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FlattenInterfaceStructPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/StripCompatPerVertexMembersPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/EliminateFloatEqualsZeroPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/RenameSamplerFunctionParameterPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/RenameBuiltinShadowingFunctionsPass.cpp
@@ -282,6 +410,8 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FlattenFloat64StorageBlockPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LowerDrawParametersPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LowerViewportIndexPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/DeferGeometryEmitsPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/RetainGeometryOutputsPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/PackDoubleVertexInputsPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FlattenXfbInterfaceBlocksPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/UniquifyIoBlockNamesPass.cpp
@@ -289,11 +419,17 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/SplitArrayVertexInputsPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/RebaseInstanceIndexPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/ZeroBaseVertexPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/ExtendNarrowIntegerVertexInputsPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/NarrowIntegerRuntimeWidths.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LowerPixelCenterIntegerPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/ZeroLayerOutputPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FullCoverageSampleMaskPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/DeriveNumSubgroupsPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FixIterationRPBarrierPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FixIterationRPSubgroupScratchPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/EmulateSubgroupsPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/NormalizeRectCoordinatesPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/DeduplicateImageTypesPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/Lower1DArrayImagesPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/Lower1DSampledImagesPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/BakeImageFormatsPass.cpp
@@ -320,13 +456,20 @@ set(SOURCE_FILES
 
     MobileGL/MG_Util/Texture/PixelStoreProcessor.cpp
     MobileGL/MG_Util/Texture/TextureFormatProcessor.cpp
+    MobileGL/MG_Util/Texture/EtcDecoder.cpp
 
     MobileGL/MG_Impl/GLXImpl/Exporting/Definitions.cpp
+    MobileGL/MG_Impl/GLXImpl/Exporting/GlvndVendor.cpp
     MobileGL/MG_Impl/GLXImpl/GLXImpl.cpp
+    MobileGL/MG_Impl/GLXImpl/X11Present.cpp
+    MobileGL/MG_Impl/GLXImpl/X11PresentXcb.cpp
     MobileGL/MG_Impl/GLXImpl/LookUp/LookUp.cpp
 
     MobileGL/MG_Impl/EGLImpl/Exporting/Definitions.cpp
+
+    MobileGL/MG_Impl/EGLImpl/Exporting/GlvndVendor.cpp
     MobileGL/MG_Impl/EGLImpl/EGLImpl.cpp
+    MobileGL/MG_Impl/EGLImpl/WaylandWindow.cpp
     
     # @INSERTION_POINT:SOURCE_FILE_GLIMPL@ #
     MobileGL/MG_Impl/GLImpl/Sampler/Validators.cpp
@@ -336,6 +479,7 @@ set(SOURCE_FILES
     MobileGL/MG_Impl/GLImpl/Framebuffer/Validators.cpp
     MobileGL/MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.cpp
     MobileGL/MG_Impl/GLImpl/Program/GL_Program.cpp
+    MobileGL/MG_Impl/GLImpl/Program/GL_ShaderObjectsARB.cpp
     MobileGL/MG_Impl/GLImpl/Program/ProgramInterface.cpp
     MobileGL/MG_Impl/GLImpl/Program/GL_ProgramPipeline.cpp
     MobileGL/MG_Impl/GLImpl/Texture/GL_Texture.cpp
@@ -356,17 +500,55 @@ set(SOURCE_FILES
 
     MobileGL/MG_Backend/Init.cpp
     MobileGL/MG_Backend/BackendObject.cpp
+    MobileGL/MG_Backend/EGLSurfaceRegistry.cpp
+    MobileGL/MG_Backend/BackendFunctions.cpp
+    MobileGL/MG_Backend/FormatCapabilities.cpp
+    MobileGL/MG_Backend/ClientReadback.cpp
+    MobileGL/MG_Backend/GpuHangWatch.cpp
 
     MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESBind.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESBlit.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESBuffers.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESContext.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESCopy.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESDraw.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESReadback.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESSharedImage.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESState.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESSync.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESTextures.cpp
     MobileGL/MG_Backend/DirectGLES/BackendObject_DirectGLES.cpp
     MobileGL/MG_Backend/DirectGLES/Utils.cpp
     MobileGL/MG_Backend/DirectGLES/Managers.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersBuffers.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersFramebuffers.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersPrograms.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersSamplers.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersTextureSync.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersTextures.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersVertexArrays.cpp
     MobileGL/MG_Backend/DirectGLES/MultiDraw.cpp
+    MobileGL/MG_Backend/DirectGLES/NarrowIntegerSeeds.cpp
 
     MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp
     MobileGL/MG_Backend/DirectVulkan/BackendObject_DirectVulkan.cpp
+    MobileGL/MG_Backend/DirectVulkan/MagmaSession.cpp
     MobileGL/MG_Backend/DirectVulkan/VmaImpl.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRendererCopy.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRendererDevice.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRendererDraw.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRendererPipeline.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRendererPresent.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRendererSubmit.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireColorBlit.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthMipmap.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireDraw.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireFramebuffer.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireMultisampleResolve.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireSharedImage.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvImage.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/SwapchainObject.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/FrameContext.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp
@@ -382,8 +564,10 @@ set(SOURCE_FILES
     MobileGL/MG_Backend/DirectVulkan/Renderer/VkSamplerManager.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VkClearManager.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VkRenderPassManager.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/GpuProgressMarkers.cpp
 
     MobileGL/MG_State/GLState/Core.cpp
+    MobileGL/MG_State/GLState/ShareGroupState.cpp
     MobileGL/MG_State/EGLState/Core.cpp
     MobileGL/MG_State/GLState/ErrorState/Error.cpp
     MobileGL/MG_State/GLState/BufferState/BufferState.cpp
@@ -418,6 +602,192 @@ set(SOURCE_FILES
     MobileGL/MG_State/GLState/RenderbufferState/RenderbufferState.cpp
 )
 
+# ---------------------------------------------------------------------------
+# MG_Remote (disaggregated transport). Everything below is gated: with the
+# option OFF not one file here is compiled and no include path is added.
+# ---------------------------------------------------------------------------
+
+# MOBILEGL_BUILD_DISAGGREGATED_INPROC implies MOBILEGL_BUILD_DISAGGREGATED. A normal
+# variable, not a forced cache write, for the reason the two implications below give: an
+# operator's cache entry stays theirs and only this configure is shadowed. Ordered BEFORE the
+# flatbuffers guard so that a missing submodule turns BOTH off together - an INPROC build
+# with the transport shadowed off would compile a role-isolation shim over no roles.
+if (MOBILEGL_BUILD_DISAGGREGATED_INPROC AND NOT MOBILEGL_BUILD_DISAGGREGATED)
+    message(STATUS "MobileGL: MOBILEGL_BUILD_DISAGGREGATED_INPROC=ON forces "
+                   "MOBILEGL_BUILD_DISAGGREGATED ON for this configure")
+    set(MOBILEGL_BUILD_DISAGGREGATED ON)
+endif()
+
+# FlatBuffers is a submodule and its runtime is header-only. Guard both ways:
+# a checkout without the submodule must configure and build, just without the
+# disaggregated shape, rather than fail with a missing-header error a hundred
+# lines later. Note this only checks for the RUNTIME headers - flatc is never
+# built here (see scripts/gen_protocol.py).
+if (MOBILEGL_BUILD_DISAGGREGATED AND
+    NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/flatbuffers/include/flatbuffers/flatbuffers.h")
+    message(WARNING
+        "MOBILEGL_BUILD_DISAGGREGATED=ON but 3rdparty/flatbuffers/include is missing. "
+        "Run `git submodule update --init 3rdparty/flatbuffers`. Building without the "
+        "disaggregated shape for this configure; the cached ON takes effect once the "
+        "submodule is present.")
+    # A NORMAL variable, deliberately not `CACHE BOOL ... FORCE`: forcing OFF into the cache
+    # made the plain re-configure after `git submodule update` stay OFF with no message at
+    # all. Shadowing the cache entry for this configure only keeps the operator's ON where it
+    # was, so the next configure - with the submodule there - honors it.
+    set(MOBILEGL_BUILD_DISAGGREGATED OFF)
+    # And with it the shim option, or the `-DMOBILEGL_BUILD_DISAGGREGATED_INPROC=1` below
+    # would still be defined over a build with no MG_Remote in it at all.
+    set(MOBILEGL_BUILD_DISAGGREGATED_INPROC OFF)
+endif()
+
+# P13 W5 (docs/archive/notes/p13/W5-DESIGN.md): the record arm is part of every library - the one without
+# MG_Remote (FCL's) runs it too. Its temporary guard, MOBILEGL_BUILD_RECORD_ARM, was folded away at
+# S8 (scripts/ci/retired_switches.py keeps it from coming back).
+
+message(STATUS "MobileGL: PipeInputs push ON, appending the MGPipe fill sources")
+list(APPEND SOURCE_FILES
+    MobileGL/MG_Backend/MGPipe/PipeInputs.cpp
+    MobileGL/MG_Impl/Pipe/PipeFill.cpp
+    # P2's contract: the chunk table and its subset hash, the in-process applier, and
+    # the client's {slot, gen} allocator. All three are push-only, which is how the
+    # pull build gains no symbol from P2 (G1) - a declaration emits nothing.
+    MobileGL/MG_Pipe/MGPipeRenderStateSpans.cpp
+    MobileGL/MG_Pipe/PipeApply.cpp
+    MobileGL/MG_Pipe/PipeDeviceLossKnobs.cpp
+    MobileGL/MG_Impl/Pipe/SlotAllocator.cpp
+    # P4a's contract: the reflection-archive serializer over ProgramArtifacts.h's
+    # VisitFields tables. Push-only for the same G1 reason as the three above - in
+    # monolith the archive never crosses (create_shader_state hands the two structs over
+    # by pointer beside the record), so the codec is live code only in the VERIFY lane,
+    # where the applier serializes, deserializes and field-compares before storing.
+    MobileGL/MG_State/GLState/ProgramState/ProgramArtifactsCodec.cpp
+    # P5's contract (integrator ruling R-17, package c1): the MONOLITH arm of the
+    # client->wire routing - the thirty-seven adapters that install gMGPipeScreen /
+    # gMGPipeContext over the MGPipeApply* entry points, and the reply mailbox the four
+    # acceptance rows answer through. Push-only for the same G1 reason as the five above:
+    # the two tables are inline variables that are zero in a pull build and nothing there
+    # can reach a thunk.
+    MobileGL/MG_Pipe/PipeRoute.cpp
+)
+
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    message(STATUS "MobileGL: disaggregated transport ON, appending MG_Remote sources")
+    list(APPEND SOURCE_FILES
+        MobileGL/MG_Remote/Transport/ShmLink.cpp
+        MobileGL/MG_Remote/Transport/LinkMetrics.cpp
+        MobileGL/MG_Remote/Transport/StreamLink.cpp
+        MobileGL/MG_Remote/Transport/Ring.cpp
+        MobileGL/MG_Remote/Transport/Doorbell.cpp
+        MobileGL/MG_Remote/Transport/ShmSegment.cpp
+        # Both platform halves are listed unconditionally and each is empty on
+        # the other OS, so neither can rot behind an `if (WIN32)` nobody
+        # configures.
+        MobileGL/MG_Remote/Transport/ShmSegmentPosix.cpp
+        MobileGL/MG_Remote/Transport/ShmSegmentWin32.cpp
+        MobileGL/MG_Remote/Transport/FdPassing.cpp
+        MobileGL/MG_Remote/Transport/InProcessTransport.cpp
+        MobileGL/MG_Remote/Transport/SocketTransport.cpp
+        MobileGL/MG_Remote/Transport/ControlInbox.cpp
+        # P9 W3: the server's log forward - a queue and a sender thread, graded by severity
+        # (<= WARN lossy, >= ERROR lossless and paced), so no logging thread writes the socket.
+        MobileGL/MG_Remote/Transport/LogForward.cpp
+        # Keeps MG_Util/Debug/Log.h - and through it the GL frontend's
+        # umbrella header - out of the header-only wire code (WireLog.h).
+        MobileGL/MG_Remote/Transport/WireLog.cpp
+        # P11 A1: the adopt tier settled at the handshake from the knob and the data plane, by
+        # both roles (so SERVER-partition code in the link ratchet, not the client's tracker).
+        MobileGL/MG_Remote/Transport/AdoptTier.cpp
+        # P11 B2: T0 - the client's AHardwareBuffer store and its hop descriptor (both roles).
+        MobileGL/MG_Remote/Transport/AdoptT0.cpp
+        # ---- P5: the three new directories ------------------------------
+        # Wire/   the G3 codec: MGPWireRec_* in and out of SEG_CMD, blobs and
+        #         var-tails in and out of SEG_STAGE.                    [w1]
+        # Client/ the emitting role: session, the 69-slot emit table, the
+        #         caps mirror.                                          [c1]
+        # Server/ the applying role: session, the applier bridge onto the
+        #         existing MGPipeApply* free functions, the apply thread. [v1]
+        #
+        # Every file below lands in P5 as a HEADER plus a .cpp of named
+        # Fatal stubs, so that all seven P5 packages compile and link on day
+        # one against signatures that cannot then move under them. A stub is
+        # MGLOG_F + std::abort, never a silent no-op: an unimplemented
+        # emitter that returns quietly is how a split lane runs monolith and
+        # goes green (ARCHITECTURE.md 10.3).
+        MobileGL/MG_Remote/CapsCodec.cpp
+        # P6 dl: the one place a session dies - Session::Fail's funnel (Fatal-family aware,
+        # publishes SessionFault, one telemetry point).
+        MobileGL/MG_Remote/FatalFunnel.cpp
+        MobileGL/MG_Remote/Wire/PipeWireCodec.cpp
+        MobileGL/MG_Remote/Client/ClientSession.cpp
+        # Whether the configured server is there at all, asked before a display is offered so the
+        # system's EGL/GLX/GBM loaders can move on to another implementation when it is not.
+        MobileGL/MG_Remote/Client/ServerProbe.cpp
+        MobileGL/MG_Remote/Client/EmitTables.cpp
+        MobileGL/MG_Remote/Client/CapsMirror.cpp
+        # P5 c1: the client role's BackendObject. pActiveBackendObject holds one of these
+        # under split (table 3); the hook that installs it is v1's, in MG_Backend/Init.cpp.
+        MobileGL/MG_Remote/Client/BackendObject_Remote.cpp
+        # P5 c1, ruling R-17: the ENCODE TWIN of gMGPipeWireRecordApply - the thirty-seven
+        # emitters installed over the two generated tables, which is what stops every
+        # resource/CSO/texture/program record executing synchronously on the GL thread under
+        # inproc. The monolith arm of the same routing is MG_Pipe/PipeRoute.cpp, in the
+        # PIPE_PUSH list above, because it must exist in a push build that has no MG_Remote.
+        MobileGL/MG_Remote/Client/WireTables.cpp
+        # P5 b1's two: the conservative GPU-write set the client must build because all six
+        # MarkGpuWritten producers are on the server's side of the line, and the
+        # block-granularity persistent-map push that tier T2 makes mandatory.
+        MobileGL/MG_Remote/Client/GpuWritePending.cpp
+        # P13 W5: the adoption tier's verdict (the tracker itself moved to the record arm below).
+        MobileGL/MG_Remote/Client/AdoptTierChoice.cpp
+        MobileGL/MG_Remote/Server/ServerSession.cpp
+        MobileGL/MG_Remote/Server/PipeApplier.cpp
+        MobileGL/MG_Remote/Server/ServerLoop.cpp
+        # P14 S2: the per-session runtime and the thread routing that lets one process serve
+        # several sessions (the real session a singleton accessor answers with on that
+        # session's own threads).
+        MobileGL/MG_Remote/Server/SessionRuntime.cpp
+        MobileGL/MG_Remote/Server/ServerMain.cpp
+        # P11 PAIR: a socket client's control and aux connections paired by the nonce each
+        # presents first (PairBind), not by arrival order - both unix supervisors take pairs here.
+        MobileGL/MG_Remote/Server/PairAcceptor.cpp
+        # P11 B2: T0's Offers on the aux socket, matched to their map_persistent records by seq.
+        MobileGL/MG_Remote/Server/AdoptInbox.cpp
+        # Shared images: server-allocated AHardwareBuffers exported to clients as dma-buf descriptors
+        # (docs/archive/notes/anland/plan-ahb-dmabuf.md).
+        MobileGL/MG_Remote/Server/SharedImageRegistry.cpp
+        MobileGL/MG_Remote/Server/ServerSpawn.cpp
+        # P5f fc: the value frame that replaced the control mailbox's function-pointer payload,
+        # and its codec against protocol.fbs's SurfaceOp/SurfaceReply (the spawn arm's seam).
+        MobileGL/MG_Remote/Server/SurfaceControlFrame.cpp
+        MobileGL/MG_Remote/Protocol/SurfaceOpCodec.cpp
+        # P12 (on-screen server window): the process-wide holder of the server's own window
+        # (the display Activity's SurfaceView on Android; nobody installs one on the host, so a
+        # ServerOwned request is refused by name there).
+        MobileGL/MG_Remote/Server/ServerDisplay.cpp
+        # Package-neutral C ABI for an APK that owns the server and its ANativeWindow.
+        MobileGL/MG_Remote/Server/EmbeddedServer.cpp
+    )
+endif()
+
+# P13 W5: the record arm's own sources, compiled into every library (MG_Remote or not).
+list(APPEND SOURCE_FILES
+    # P7 gate 5 (g5-msprobe): the Magma wire arm's two multisample depth/stencil resolve
+    # arms and the probe that measures the first against the second, shared by the
+    # renderer's bring-up and the Vulkan POST.
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireE5RawCopy.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireCopySliceProbe.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireDiscardStateProbe.cpp
+    # P5 b1: the block-granularity persistent-map push the record arm makes mandatory (T2).
+    MobileGL/MG_State/GLState/BufferState/PersistentMapTracker.cpp
+    # P13 W5: the verb emitters and the monolith verb port, and the client GPU-write set
+    # they mark before a draw or a dispatch (MG_Record; EmitTables.cpp resolves the session).
+    MobileGL/MG_Impl/Pipe/Verb/VerbPort.cpp
+    MobileGL/MG_Impl/Pipe/Verb/GpuWriteSet.cpp
+    # The record verbs' consumer (ServerVerbSink under a transport is this plus the session's).
+    MobileGL/MG_Backend/Record/RecordVerbSink.cpp
+)
+
 if (APPLE AND NOT MOBILEGL_IOS)
     list(APPEND SOURCE_FILES
         MobileGL/MG_Impl/CGLImpl/CGLImpl.cpp
@@ -432,6 +802,14 @@ if (ANDROID)
         MobileGL/MG_Util/SelfTest/DriverPostJni.cpp
         MobileGL/MG_Util/SelfTest/DriverBenchJni.cpp
     )
+    if (MOBILEGL_BUILD_DISAGGREGATED)
+        # P12 (on-screen server window): the APK's MobileGLDisplayActivity - the in-process
+        # display server's thread, its SurfaceView's ANativeWindow in and out of ServerDisplay, and
+        # the geometry up-call. Split build only: nothing else has an in-process server to drive.
+        list(APPEND SOURCE_FILES
+            MobileGL/MG_Remote/Server/DisplayServerJni.cpp
+        )
+    endif()
 endif()
 
 if (WIN32)
@@ -468,11 +846,23 @@ set(MOBILEGL_COMPILE_DEF
         -DASIO_NO_DEPRECATED
 )
 
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_BUILD_DISAGGREGATED=1)
+endif()
+
+if (MOBILEGL_PIPE_VERIFY)
+    list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_PIPE_VERIFY=1)
+endif()
+
 message(STATUS "MOBILEGL_COMPILE_DEF=${MOBILEGL_COMPILE_DEF}")
 
 set(MOBILEGL_INCLUDE_DIR
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/MobileGL
+        # The MGPipe boundary headers. They are reachable as <MG_Pipe/MGPipe.h> through the
+        # line above too; this entry lets the client, the backends and MG_Remote spell them
+        # as <MGPipe.h> once MG_Pipe stops being a leaf of the frontend tree.
+        ${CMAKE_SOURCE_DIR}/MobileGL/MG_Pipe
         ${spirv-tools_SOURCE_DIR}
         ${spirv-tools_SOURCE_DIR}/include
         ${spirv-tools_BINARY_DIR}
@@ -483,8 +873,92 @@ set(MOBILEGL_INCLUDE_DIR
         ${CMAKE_SOURCE_DIR}/3rdparty/asio/include
 )
 
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    # Header-only runtime: an include path, no add_subdirectory, no link
+    # target, and above all no flatc in the build graph. protocol_generated.h
+    # is committed and regenerated by scripts/gen_protocol.py.
+    list(APPEND MOBILEGL_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/3rdparty/flatbuffers/include)
+endif()
+# The vendored glvnd vendor-ABI headers (3rdparty/glvnd): the entry point a vendor library exposes so
+# the system libEGL - which IS glvnd - can dispatch to it. Every build compiles the two GlvndVendor.cpp
+# files, so the path is every build's (P13 W5: the Android library without MG_Remote - FCL's - did not
+# find <glvnd/libeglabi.h>; a Linux host only built because its system has the header).
+list(APPEND MOBILEGL_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/3rdparty/glvnd/include)
+
+# ---- P13 W7 (D12): MODULE TARGETS ------------------------------------------------------------
+#
+# One flat SOURCE_FILES list used to feed MobileGL and MobileGL_s separately (every file compiled
+# twice). It is split here into OBJECT libraries along the link ratchet's partition
+# (scripts/link_ratchet.py PARTITION, which is the written form of these boundaries):
+#
+#   mg_util            MG_Util, Init / GlobalObjects / ConfigLoader, MG_Remote/FatalFunnel   SHARED
+#   mg_pipe            MG_Pipe                                                             SERVER
+#   mg_backend         MG_Backend (both backends, the record arm's staged stores)          SERVER
+#   mg_frontend        MG_Impl + MG_State                                                  FRONTEND
+#   mg_remote_transport MG_Remote/{Transport,Protocol,Wire}, CapsCodec                      SERVER
+#   mg_remote_client   MG_Remote/Client                                                    FRONTEND
+#   mg_remote_server   MG_Remote/Server                                                    SERVER
+#
+# Both MobileGL and MobileGL_s link the same objects. mgl_build_iface carries every compile-side
+# usage requirement (include directories, definitions, the link libraries whose headers the
+# sources include), so a property set on it reaches every module and both libraries; a property
+# that only matters at link time may still be set on the libraries themselves.
+add_library(mgl_build_iface INTERFACE)
+target_include_directories(mgl_build_iface INTERFACE ${MOBILEGL_INCLUDE_DIR})
+target_link_libraries(mgl_build_iface INTERFACE ${MOBILEGL_LINK_LIBRARIES})
+target_compile_definitions(mgl_build_iface INTERFACE
+        ${MOBILEGL_COMPILE_DEF}
+        MOBILEGL_LOG_ACTIVE_LEVEL=${MOBILEGL_LOG_ACTIVE_LEVEL}
+        $<$<BOOL:${MOBILEGL_TRACE_ANGLE_VARIANTS}>:MOBILEGL_TRACE_ANGLE_VARIANTS=1>
+)
+
+set(MGL_MODULES util pipe backend frontend remote_transport remote_client remote_server)
+foreach(MGL_MODULE IN LISTS MGL_MODULES)
+    set(MGL_MODULE_SOURCES_${MGL_MODULE})
+endforeach()
+foreach(MGL_SOURCE IN LISTS SOURCE_FILES)
+    if (MGL_SOURCE MATCHES "^MobileGL/MG_Remote/Client/")
+        list(APPEND MGL_MODULE_SOURCES_remote_client ${MGL_SOURCE})
+    elseif (MGL_SOURCE MATCHES "^MobileGL/MG_Remote/Server/")
+        list(APPEND MGL_MODULE_SOURCES_remote_server ${MGL_SOURCE})
+    elseif (MGL_SOURCE MATCHES "^MobileGL/MG_Remote/(Transport|Protocol|Wire)/" OR
+            MGL_SOURCE STREQUAL "MobileGL/MG_Remote/CapsCodec.cpp")
+        list(APPEND MGL_MODULE_SOURCES_remote_transport ${MGL_SOURCE})
+    elseif (MGL_SOURCE MATCHES "^MobileGL/MG_(Impl|State)/")
+        list(APPEND MGL_MODULE_SOURCES_frontend ${MGL_SOURCE})
+    elseif (MGL_SOURCE MATCHES "^MobileGL/MG_Backend/")
+        list(APPEND MGL_MODULE_SOURCES_backend ${MGL_SOURCE})
+    elseif (MGL_SOURCE MATCHES "^MobileGL/MG_Pipe/")
+        list(APPEND MGL_MODULE_SOURCES_pipe ${MGL_SOURCE})
+    else()
+        list(APPEND MGL_MODULE_SOURCES_util ${MGL_SOURCE})
+    endif()
+endforeach()
+
+set(MGL_MODULE_OBJECTS)
+set(MGL_SERVER_MODULE_OBJECTS)
+foreach(MGL_MODULE IN LISTS MGL_MODULES)
+    if (NOT MGL_MODULE_SOURCES_${MGL_MODULE})
+        continue()  # MG_Remote's modules are empty without MOBILEGL_BUILD_DISAGGREGATED
+    endif()
+    add_library(mg_${MGL_MODULE} OBJECT ${MGL_MODULE_SOURCES_${MGL_MODULE}})
+    target_link_libraries(mg_${MGL_MODULE} PUBLIC mgl_build_iface)
+    set_target_properties(mg_${MGL_MODULE} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set_target_properties(mg_${MGL_MODULE} PROPERTIES
+            C_VISIBILITY_PRESET default CXX_VISIBILITY_PRESET default VISIBILITY_INLINES_HIDDEN OFF)
+    else()
+        set_target_properties(mg_${MGL_MODULE} PROPERTIES
+            C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+    endif()
+    list(APPEND MGL_MODULE_OBJECTS $<TARGET_OBJECTS:mg_${MGL_MODULE}>)
+    if (NOT MGL_MODULE STREQUAL "frontend" AND NOT MGL_MODULE STREQUAL "remote_client")
+        list(APPEND MGL_SERVER_MODULE_OBJECTS $<TARGET_OBJECTS:mg_${MGL_MODULE}>)
+    endif()
+endforeach()
+
 add_library(${CMAKE_PROJECT_NAME} SHARED
-    ${SOURCE_FILES}
+    ${MGL_MODULE_OBJECTS}
 )
 
 if (WIN32)
@@ -509,25 +983,11 @@ else()
     )
 endif()
 
-target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
-    ${MOBILEGL_INCLUDE_DIR}
-)
-
-target_link_libraries(${CMAKE_PROJECT_NAME}
-    PUBLIC
-    ${MOBILEGL_LINK_LIBRARIES}
-)
-
-target_compile_definitions(${CMAKE_PROJECT_NAME}
-        PUBLIC
-        ${MOBILEGL_COMPILE_DEF}
-        MOBILEGL_LOG_ACTIVE_LEVEL=${MOBILEGL_LOG_ACTIVE_LEVEL}
-        $<$<BOOL:${MOBILEGL_TRACE_ANGLE_VARIANTS}>:MOBILEGL_TRACE_ANGLE_VARIANTS=1>
-)
+target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC mgl_build_iface)
 
 if(UNIX AND NOT APPLE AND NOT ANDROID)
     foreach(MOBILEGL_LOADER_ALIAS
-            libEGL.so libEGL.so.1)
+            libEGL.so libEGL.so.1 libGL.so libGL.so.1 libGLX_mobilegl.so.0)
         add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E create_symlink
                     "$<TARGET_FILE_NAME:${CMAKE_PROJECT_NAME}>"
@@ -550,8 +1010,8 @@ if(WIN32)
 endif()
 
 if(NOT ANDROID)
-    add_library(${CMAKE_PROJECT_NAME}_s STATIC 
-        ${SOURCE_FILES}
+    add_library(${CMAKE_PROJECT_NAME}_s STATIC
+        ${MGL_MODULE_OBJECTS}
     )
 
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -568,28 +1028,80 @@ if(NOT ANDROID)
         )
     endif()
 
-    target_include_directories(${CMAKE_PROJECT_NAME}_s PUBLIC
-        ${MOBILEGL_INCLUDE_DIR}
-    )
-
-    target_link_libraries(${CMAKE_PROJECT_NAME}_s
-        PUBLIC
-        ${MOBILEGL_LINK_LIBRARIES}
-    )
-
-    target_compile_definitions(${CMAKE_PROJECT_NAME}_s
-            PUBLIC
-            ${MOBILEGL_COMPILE_DEF}
-            MOBILEGL_LOG_ACTIVE_LEVEL=${MOBILEGL_LOG_ACTIVE_LEVEL}
-    )
+    target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC mgl_build_iface)
 endif()
 
 if (TRACY_ENABLE)
-    target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC Tracy::TracyClient)
-    target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC Tracy::TracyClient)
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC -DTRACY_ENABLE)
-    target_compile_definitions(${CMAKE_PROJECT_NAME}_s PUBLIC -DTRACY_ENABLE)
+    target_link_libraries(mgl_build_iface INTERFACE Tracy::TracyClient)
+    target_compile_definitions(mgl_build_iface INTERFACE -DTRACY_ENABLE)
 endif ()
+
+# GLVND, AND WHY THIS IS A LINKER FLAG RATHER THAN A VISIBILITY ONE.
+#
+# MobileGL can serve as a glvnd EGL vendor - the library the system's libEGL.so.1 dispatches to -
+# and a vendor must hand glvnd ITS OWN entry points: glvnd calls whatever address it is given, so
+# an address that resolves to another libEGL in the process is a call back into the dispatcher.
+# With default visibility every reference inside this library resolves against the whole process,
+# and a process that loaded the system libEGL first wins.  Marking the entry points protected says
+# the same thing in the source, except the platform's own GL/EGL headers declare them default and
+# the two visibilities do not mix; this flag is that promise made by the linker instead.
+if (UNIX AND NOT APPLE)
+    target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "LINKER:-Bsymbolic-functions")
+endif()
+
+# ---- Shared images outside GL: the C ABI and the GBM backend (Linux client, split builds) ----
+# docs/archive/notes/anland/plan-ahb-dmabuf.md. libMobileGL.so exports the shared-image C ABI
+# (MG_Impl/SharedImageApi.h); mobilegl_gbm.so (MG_Gbm/) is a separate GBM loader module that reaches
+# it through dlsym. Self-contained: nothing outside this block refers to either.
+if (MOBILEGL_BUILD_DISAGGREGATED AND UNIX AND NOT APPLE AND NOT ANDROID)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE MobileGL/MG_Impl/SharedImageApi.cpp)
+    add_subdirectory(MobileGL/MG_Gbm)
+endif()
+
+# ---- P13 W7 (D12): THE SERVER-ONLY LINK CHECK ---------------------------------------------------
+# The server and shared modules linked WITHOUT mg_frontend / mg_remote_client, with --no-undefined:
+# the server half has to link from its own half of the tree. The frontend references it still makes
+# are the link ratchet's baseline, each a named exemption that resolves to an aborting stub through
+# a generated linker response file (scripts/ci/server_link_check.py refuses, before the link, any
+# server reference the baseline does not name). Built with the split shape on Linux hosts; never
+# installed or loaded. NOT in a verify build: the G4 comparator reads both halves by design (its
+# MGPipeVerifyReadHook and the program-artifact codec are frontend code the server half calls), the
+# baseline is the shipped split shape's, and a verify build never ships.
+if (MOBILEGL_BUILD_DISAGGREGATED AND NOT MOBILEGL_PIPE_VERIFY AND UNIX AND NOT APPLE AND NOT ANDROID)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if (Python3_Interpreter_FOUND)
+        set(MGL_SERVER_LINK_RSP "${CMAKE_BINARY_DIR}/mgl_server_link_exemptions.rsp")
+        set(MGL_ALL_MODULE_OBJECT_DEPS)
+        foreach(MGL_MODULE IN LISTS MGL_MODULES)
+            if (TARGET mg_${MGL_MODULE})
+                list(APPEND MGL_ALL_MODULE_OBJECT_DEPS $<TARGET_OBJECTS:mg_${MGL_MODULE}>)
+            endif()
+        endforeach()
+        add_custom_command(
+            OUTPUT "${MGL_SERVER_LINK_RSP}"
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/ci/server_link_check.py"
+                    --build-dir "${CMAKE_BINARY_DIR}"
+                    --baseline "${CMAKE_SOURCE_DIR}/scripts/data/link_ratchet_baseline.txt"
+                    --out "${MGL_SERVER_LINK_RSP}"
+            DEPENDS ${MGL_ALL_MODULE_OBJECT_DEPS}
+                    "${CMAKE_SOURCE_DIR}/scripts/ci/server_link_check.py"
+                    "${CMAKE_SOURCE_DIR}/scripts/link_ratchet.py"
+                    "${CMAKE_SOURCE_DIR}/scripts/data/link_ratchet_baseline.txt"
+            COMMENT "Server-only link check: naming the frontend references the baseline exempts"
+            VERBATIM)
+        add_custom_target(mgl_server_link_exemptions DEPENDS "${MGL_SERVER_LINK_RSP}")
+        add_library(MobileGL_server_linkcheck SHARED
+            ${MGL_SERVER_MODULE_OBJECTS}
+            tools/server_link_check/Exempt.cpp)
+        target_link_libraries(MobileGL_server_linkcheck PRIVATE mgl_build_iface)
+        target_link_options(MobileGL_server_linkcheck PRIVATE
+            "LINKER:--no-undefined" "@${MGL_SERVER_LINK_RSP}")
+        set_property(TARGET MobileGL_server_linkcheck APPEND PROPERTY LINK_DEPENDS "${MGL_SERVER_LINK_RSP}")
+        add_dependencies(MobileGL_server_linkcheck mgl_server_link_exemptions)
+    else()
+        message(STATUS "MobileGL: no Python3 interpreter - the server-only link check target is not configured")
+    endif()
+endif()
 
 if (ANDROID)
     target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
@@ -631,7 +1143,7 @@ if (APPLE AND NOT MOBILEGL_IOS)
 endif()
 
 if (APPLE AND MOBILEGL_IOS)
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC MOBILEGL_IOS=1 _LIBCPP_DISABLE_AVAILABILITY)
+    target_compile_definitions(mgl_build_iface INTERFACE MOBILEGL_IOS=1 _LIBCPP_DISABLE_AVAILABILITY)
     target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
         "-framework CoreGraphics"
         "-framework Foundation"
@@ -642,7 +1154,6 @@ if (APPLE AND MOBILEGL_IOS)
     endif()
 
     if(TARGET ${CMAKE_PROJECT_NAME}_s)
-        target_compile_definitions(${CMAKE_PROJECT_NAME}_s PUBLIC MOBILEGL_IOS=1 _LIBCPP_DISABLE_AVAILABILITY)
         target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC
             "-framework CoreGraphics"
             "-framework Foundation"
@@ -657,12 +1168,21 @@ endif()
 if (NOT ANDROID AND NOT MOBILEGL_IOS)
     find_package(Vulkan)
     if (Vulkan_FOUND)
-        target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC Vulkan::Vulkan Vulkan::Headers)
-        target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC Vulkan::Vulkan Vulkan::Headers)
-        target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC ${Vulkan_INCLUDE_DIR})
-        target_include_directories(${CMAKE_PROJECT_NAME}_s PUBLIC ${Vulkan_INCLUDE_DIR})
+        target_link_libraries(mgl_build_iface INTERFACE Vulkan::Vulkan Vulkan::Headers)
+        target_include_directories(mgl_build_iface INTERFACE ${Vulkan_INCLUDE_DIR})
     endif ()
 endif ()
+
+# Discover gtest cases when ctest starts, one binary after another, instead of in a post-build
+# step. The post-build discovery of the CMake releases that never pass the target name down
+# writes every binary's `--gtest_output=json` result to ONE per-directory file
+# (cmake_test_discovery_<hash of an empty name>.json), so binaries linked in parallel in the same
+# directory overwrite and delete each other's list: the registered count then differs between
+# runs of the same tree and a binary ends up with none or only some of its cases. The pre-test
+# mode reads the list from stdout, serially, and also works when the binary is cross-built.
+if (NOT DEFINED CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE)
+    set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+endif()
 
 if (NOT ANDROID)
     # Enable testing in the top-level scope so a CTestTestfile.cmake is emitted
@@ -698,4 +1218,164 @@ endif()
 # links libMobileGL.so and creates an AImageReader-backed window instead.
 if (ANDROID AND MOBILEGL_BUILD_INTEGRATION_TEST)
     add_subdirectory(MobileGL/MG_IntegrationTest)
+endif()
+
+# The replay runner also builds for Android: an adb-shell executable that can
+# dial a render server on the device (unix or TCP) without any Activity.
+if (ANDROID AND MOBILEGL_BUILD_TRACE_REPLAY)
+    add_subdirectory(tools/trace_replay)
+endif()
+
+# ---------------------------------------------------------------------------
+# P0 spike A: the Android delivery chain for a second native executable.
+#
+# The disaggregated design needs a server process on Android (PLAN-B.md §8.1,
+# inheriting PLAN.md §11.1-§11.6). An APK's only exec-able install location is
+# lib/<abi>/, and the packager only puts a file there if it is named lib*.so -
+# so a second executable has to be built with an .so name and exec'd out of
+# getApplicationInfo().nativeLibraryDir. This target is the stub that proves the
+# chain end to end: it is packaged like a library, exec'd from the app's own
+# untrusted_app process, and writes a marker the parent reads back.
+#
+# Off by default and ANDROID-only, so no shipping configuration builds it. The
+# trace flavour of the plugin APK turns it on (android-plugin/build.gradle).
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# P6 `sm`: the REAL server image. Unlike MOBILEGL_BUILD_SERVER_SPIKE below - the
+# P0 spike, which links no MobileGL library and exists only to prove the Android
+# delivery chain - this one links the library and runs mobilegl_server_main.
+#
+# ARCHITECTURE.md §15.2 called for a ~30-line stub that dlopen's libMobileGL.so and
+# dlsym's the entry point, so one shared library serves both roles. On a desktop
+# configure we link it directly instead: there is no APK packaging rule to satisfy
+# and a direct link is what makes an undefined symbol a BUILD error rather than a
+# runtime dlsym failure in a child whose stderr is /dev/null.
+#
+# Android keeps the lib*.so naming and the nativeLibraryDir output the spike
+# proved is the only exec-able location in an APK.
+if (MOBILEGL_BUILD_DISAGGREGATED AND NOT WIN32)
+    add_executable(MobileGLServer
+        ${CMAKE_CURRENT_SOURCE_DIR}/MobileGL/MG_Remote/Server/ServerEntry.cpp)
+
+    target_include_directories(MobileGLServer PRIVATE
+        ${MOBILEGL_INCLUDE_DIR})
+
+    target_link_libraries(MobileGLServer PRIVATE ${CMAKE_PROJECT_NAME})
+
+    set_target_properties(MobileGLServer PROPERTIES
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_options(MobileGLServer PRIVATE -fPIE)
+    target_link_options(MobileGLServer PRIVATE -pie)
+
+    # $ORIGIN, OR THE SERVER CANNOT START AT ALL ON ANDROID.
+    #
+    # This executable links libMobileGL.so, and it is EXEC'd rather than dlopen'd - so it gets a
+    # fresh linker namespace with the default search path, not the app's. An APK's lib/<abi>/ is
+    # not on that path, and the failure is the bluntest one there is:
+    #
+    #   F linker: CANNOT LINK EXECUTABLE ".../lib/arm64/libMobileGLServer.so":
+    #             library "libMobileGL.so" not found: needed by main executable
+    #
+    # It cost a device run to find because it is invisible on desktop: CMake gives build-tree
+    # targets an absolute RPATH automatically, so the WSL server resolved its dependency through a
+    # path that does not exist on a phone. $ORIGIN says "beside me", which is true in the APK, true
+    # in the build tree, and true wherever somebody copies the pair - and it is what makes a
+    # deployment that is NOT a build tree work at all, which the end state is.
+    # THE PROPERTIES, NOT target_link_options. A raw `-Wl,-rpath,$ORIGIN` reaches the generator
+    # unquoted and the SHELL expands $ORIGIN to nothing - measured on device, where the linker
+    # said `normalize_path - invalid input: "$"` and then failed to find libMobileGL.so anyway.
+    # BUILD_RPATH / INSTALL_RPATH are the supported spelling and CMake escapes them correctly.
+    set_target_properties(MobileGLServer PROPERTIES
+        BUILD_RPATH "$ORIGIN"
+        INSTALL_RPATH "$ORIGIN"
+        BUILD_WITH_INSTALL_RPATH TRUE)
+
+    if (ANDROID)
+        # An APK's only exec-able install location is lib/<abi>/, and the packager
+        # only puts a file there if it is named lib*.so. P0 spike A proved this
+        # works from the app's own untrusted_app domain on two devices.
+        set_target_properties(MobileGLServer PROPERTIES
+            PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "MobileGLServer")
+        if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+            set_target_properties(MobileGLServer PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+        endif()
+    else()
+        # Desktop: the name the dladdr fallback looks for beside libMobileGL.so.
+        set_target_properties(MobileGLServer PROPERTIES
+            PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "MobileGLServer"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    endif()
+endif()
+
+if (ANDROID AND MOBILEGL_BUILD_SERVER_SPIKE)
+    # Renamed by P6 sm: the real server took the name it had been holding.
+    add_executable(MobileGLServerSpike
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/spikes/server_stub/main.cpp)
+
+    # An executable that is named like a shared library still has to be a real
+    # PIE executable: Android has refused non-PIE executables since API 21, and
+    # the name alone does not change what the loader demands of the file.
+    set_target_properties(MobileGLServerSpike PROPERTIES
+        PREFIX "lib"
+        SUFFIX ".so"
+        OUTPUT_NAME "MobileGLServerSpike"
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_options(MobileGLServerSpike PRIVATE -fPIE)
+    target_link_options(MobileGLServerSpike PRIVATE -pie)
+
+    # AGP packages what the external native build drops into the per-ABI output
+    # directory, and it selects by the .so extension. CMake puts executables in
+    # CMAKE_RUNTIME_OUTPUT_DIRECTORY, which is not the directory AGP hands to
+    # CMAKE_LIBRARY_OUTPUT_DIRECTORY, so point this target's runtime output at
+    # the library directory when the generator gave us one.
+    if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+        set_target_properties(MobileGLServerSpike PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+    endif()
+endif()
+
+if (ANDROID AND MOBILEGL_BUILD_EXTMEM_PROBE)
+    # P11 A3 (open question 3): the spike-B external-memory probe, exec'd from the trace
+    # app's own process by the spike hook (`--es mobilegl_spike_spawn
+    # libMobileGLExtmemProbe.so`), so its rows answer for the untrusted_app domain. The
+    # same PIE-executable-named-like-a-library shape as MobileGLServerSpike above; it
+    # links nothing from MobileGL.
+    add_executable(MobileGLExtmemProbe
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/spikes/extmem_probe/extmem_probe.cpp)
+    set_target_properties(MobileGLExtmemProbe PROPERTIES
+        PREFIX "lib"
+        SUFFIX ".so"
+        OUTPUT_NAME "MobileGLExtmemProbe"
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_options(MobileGLExtmemProbe PRIVATE -fPIE)
+    target_link_options(MobileGLExtmemProbe PRIVATE -pie)
+    target_link_libraries(MobileGLExtmemProbe PRIVATE vulkan EGL GLESv3 android log)
+    if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+        set_target_properties(MobileGLExtmemProbe PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+    endif()
+    if (MOBILEGL_EXTMEM_PROBE_AS_SERVER)
+        # P11 B2 step 1, spike APKs only: MobileGLServerService execs `libMobileGLServer.so
+        # <endpoint> --serve` and B1's broker connects to whatever that listens on, so the probe
+        # takes the server's file name and answers "does a client's AHardwareBuffer cross this
+        # route into the server app" on the real route (tools/spikes/extmem_probe, route mode).
+        if (TARGET MobileGLServer)
+            set_target_properties(MobileGLServer PROPERTIES OUTPUT_NAME "MobileGLServerReal")
+        endif()
+        add_executable(MobileGLExtmemProbeAsServer
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/spikes/extmem_probe/extmem_probe.cpp)
+        set_target_properties(MobileGLExtmemProbeAsServer PROPERTIES
+            PREFIX "lib"
+            SUFFIX ".so"
+            OUTPUT_NAME "MobileGLServer"
+            POSITION_INDEPENDENT_CODE ON)
+        target_compile_options(MobileGLExtmemProbeAsServer PRIVATE -fPIE)
+        target_link_options(MobileGLExtmemProbeAsServer PRIVATE -pie)
+        target_link_libraries(MobileGLExtmemProbeAsServer PRIVATE vulkan EGL GLESv3 android log)
+        if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+            set_target_properties(MobileGLExtmemProbeAsServer PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+        endif()
+    endif()
 endif()

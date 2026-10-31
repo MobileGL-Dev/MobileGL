@@ -44,9 +44,9 @@ require 'key:MOBILEGL_BACKEND_TYPE' "$plugin_resource_text" 'V2 backend variable
 require 'defaultValue:DirectGLES' "$plugin_resource_text" 'V2 DirectGLES default'
 require 'DirectVulkan' "$plugin_resource_text" 'V2 DirectVulkan option'
 require 'key:MOBILEGL_DISABLE_TIMERQUERY' "$plugin_resource_text" 'V2 timer-query toggle'
-require 'key:MOBILEGL_MAGMA_DISABLE_SUBGROUP' "$plugin_resource_text" 'V2 Vulkan subgroup toggle'
+require 'key:MOBILEGL_SUBGROUP_EMULATION' "$plugin_resource_text" 'V2 subgroup emulation setting'
 require 'key:MOBILEGL_MAGMA_R11G11B10F_FALLBACK' "$plugin_resource_text" 'V2 Magma format fallback toggle'
-require 'key:MOBILEGL_MAGMA_FRAMESINFLIGHT' "$plugin_resource_text" 'V2 Magma frames-in-flight setting'
+require 'key:MOBILEGL_FRAMES_IN_FLIGHT' "$plugin_resource_text" 'V2 frames-in-flight setting'
 require 'key:MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER' "$plugin_resource_text" 'V2 sampler workaround toggle'
 require 'key:MOBILEGL_COHERENT_AS_FLUSH' "$plugin_resource_text" 'V2 coherent-as-flush toggle'
 require 'key:MOBILEGL_ESPRYT_USE_ANGLE' "$plugin_resource_text" 'V2 ANGLE toggle'
@@ -61,15 +61,40 @@ if ! grep -Eq '^lib/[^/]+/libMobileGL\.so$' <<<"$plugin_contents"; then
   exit 1
 fi
 
+# The render server is not trace-only: both flavors carry the control screen, the offscreen
+# service, the on-screen display activity, and (split native builds) the supervisor executable.
+# The plugin APK ships to users, so its build keeps the three components private (manifest
+# placeholder serverComponentsExported=false); only the debuggable trace APK exports them for adb.
+for component in ServerControlActivity MobileGLServerService MobileGLDisplayActivity; do
+  require "$component" "$plugin_manifest" "plugin render server component ($component)"
+  require "$component" "$trace_manifest" "trace render server component ($component)"
+done
+if [[ "${MOBILEGL_CI_DISAGGREGATED:-OFF}" == "ON" ]]; then
+  trace_contents=$(unzip -Z1 "$trace_apk")
+  for entry in "plugin:${plugin_contents}" "trace:${trace_contents}"; do
+    if ! grep -Eq '^lib/[^/]+/libMobileGLServer\.so$' <<<"${entry#*:}"; then
+      echo "::error::${entry%%:*} APK does not contain libMobileGLServer.so (both flavors ship the render server)" >&2
+      exit 1
+    fi
+  done
+fi
+
 require 'top.mobilegl.plugin.trace' "$trace_manifest" 'trace package name'
 require 'top.mobilegl.plugin.TRACE_REPLAY' "$trace_manifest" 'trace replay action'
 if grep -Fq 'fclPlugin' <<<"$trace_manifest"; then
   echo '::error::Trace APK must not advertise renderer-plugin metadata' >&2
   exit 1
 fi
-if grep -Fq 'android.intent.action.MAIN' <<<"$trace_manifest"; then
-  echo '::error::Trace APK must not expose a launcher activity' >&2
+# The trace APK IS a launchable app now: PostActivity (the POST self-test screen) is its
+# entry icon and the bottom navigation bar switches to the render server screen. What is
+# left of the old "no launcher" contract is the count - exactly ONE MAIN activity, so a
+# screen that accidentally grows a launcher entry (ServerControlActivity was one for a day)
+# reds here instead of shipping two icons.
+main_count=$(grep -Fc 'android.intent.action.MAIN' <<<"$trace_manifest")
+if [[ "$main_count" -ne 1 ]]; then
+  echo "::error::Trace APK must expose exactly one launcher activity (PostActivity); found ${main_count} android.intent.action.MAIN" >&2
   exit 1
 fi
+require 'PostActivity' "$trace_manifest" 'trace launcher activity (PostActivity)'
 
 echo 'Validated unified MobileGL plugin APK and isolated trace APK.'

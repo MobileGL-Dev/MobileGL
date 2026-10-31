@@ -9,15 +9,84 @@
 #include "Core.h"
 #include "MG_State/GLState/RenderbufferState/RenderbufferObject.h"
 #include "MG_State/EGLState/Core.h"
-#include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/BackendObject.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
 #include <Config.h>
 
+#include <atomic>
+#include <MG_Pipe/PipeMutation.h>
+
 namespace MobileGL::MG_State {
+    namespace {
+        // Leak-at-exit storage; see GlobalObjects.cpp.
+        SharedPtr<GLState::GLContext>& DefaultGLContextSlot() {
+            static SharedPtr<GLState::GLContext>* slot = new SharedPtr<GLState::GLContext>();
+            return *slot;
+        }
+
+        SharedPtr<GLState::FramebufferObject>& DefaultFramebufferSlot() {
+            static SharedPtr<GLState::FramebufferObject>* slot = new SharedPtr<GLState::FramebufferObject>();
+            return *slot;
+        }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        std::atomic<Uint64> g_wireEpoch{0};
+#endif
+    } // namespace
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Uint64 CurrentWireEpoch() {
+        return g_wireEpoch.load(std::memory_order_acquire);
+    }
+    void AdvanceWireEpoch() {
+        g_wireEpoch.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    SharedPtr<GLState::GLContext> ReplaceProcessDefaultGLContext() {
+        auto& slot = DefaultGLContextSlot();
+        SharedPtr<GLState::GLContext> old = slot;
+        const Bool callerOnOld = old && pGLContext == old;
+        DefaultFramebufferSlot().reset();
+        slot = MakeShared<GLState::GLContext>();
+        if (callerOnOld || !pGLContext) pGLContext = slot;
+        return old;
+    }
+#endif
+
+    const SharedPtr<GLState::GLContext>& ProcessDefaultGLContext() {
+        auto& slot = DefaultGLContextSlot();
+        if (!slot) {
+            slot = MakeShared<GLState::GLContext>();
+        }
+        return slot;
+    }
+
+    void ReleaseProcessDefaultGLContext() {
+        auto& slot = DefaultGLContextSlot();
+        // Only the calling thread's TLS is reachable here, and only when it is still holding the
+        // fallback rather than an EGL context of its own.
+        if (pGLContext == slot) pGLContext.reset();
+        DefaultFramebufferSlot().reset();
+        slot.reset();
+    }
+
+    void SetDefaultFramebuffer(SharedPtr<GLState::FramebufferObject> framebuffer) {
+        DefaultFramebufferSlot() = Move(framebuffer);
+    }
+
+    const SharedPtr<GLState::FramebufferObject>& DefaultFramebuffer() {
+        return DefaultFramebufferSlot();
+    }
+
     void Init() {
         MGLOG_D("Initializing MobileGL State...");
-        pGLContext = MakeUnique<GLState::GLContext>();
+        // Rebuilt on every Initialize(): the fallback context starts empty, so a thread that
+        // never crossed an eglMakeCurrent cannot see the previous run's objects. The default
+        // framebuffer is rebuilt too - MG_Impl::Init() installs the new one right after.
+        DefaultFramebufferSlot().reset();
+        DefaultGLContextSlot() = MakeShared<GLState::GLContext>();
+        pGLContext = ProcessDefaultGLContext();
         pEGLContext = MakeUnique<EGLState::EGLContext>();
     }
 
@@ -86,11 +155,11 @@ namespace MobileGL::MG_State {
 
         // Buffer
         void GLContext::GenBufferNames(Uint number, Vector<Uint>& buffers) {
-            m_bufferState.GenerateNames(number, buffers);
+            Group().GenerateBufferNames(number, buffers);
         }
 
         const SharedPtr<BufferObject>& GLContext::GetBufferObject(Uint index) {
-            return m_bufferState.GetBufferObject(index);
+            return Group().GetBufferObject(index);
         }
 
         BindingSlot<BufferObject>& GLContext::GetBufferBindingSlot(BufferTarget target) {
@@ -108,7 +177,7 @@ namespace MobileGL::MG_State {
         }
 
         const SharedPtr<BufferObject>& GLContext::CreateBufferObject(Uint index) {
-            return m_bufferState.CreateBufferObject(index);
+            return Group().CreateBufferObject(index);
         }
 
         void GLContext::MarkBufferObjectForDeletion(Uint index) {
@@ -120,7 +189,7 @@ namespace MobileGL::MG_State {
                 // previous every-VAO scan was wrong per spec and O(VAOs) per delete —
                 // with one VAO per chunk section, vanilla's steady buffer churn made it
                 // dominate the render thread and FPS decay over session time.
-                auto bufferObject = m_bufferState.GetBufferObject(index);
+                const auto bufferObject = Group().GetBufferObject(index);
                 const auto& vao = m_vertexArrayState.GetBoundVertexArray();
                 if (vao != nullptr) {
                     if (vao->GetIndexBufferBindingSlot().GetBoundObject() == bufferObject) {
@@ -132,17 +201,18 @@ namespace MobileGL::MG_State {
                         }
                     }
                 }
+                m_bufferState.UnbindBufferObject(bufferObject);
             }
 
-            m_bufferState.MarkBufferObjectForDeletion(index);
+            Group().MarkBufferObjectForDeletion(index);
         }
 
         Bool GLContext::ValidateBufferName(Uint index) const {
-            return m_bufferState.ValidateName(index);
+            return m_shareGroup->ValidateBufferName(index);
         }
 
         Bool GLContext::ValidateBufferObject(Uint index) const {
-            return m_bufferState.ValidateBufferObject(index);
+            return m_shareGroup->ValidateBufferObject(index);
         }
 
         // VertexArray
@@ -180,19 +250,32 @@ namespace MobileGL::MG_State {
 
         VertexAttribTypeInfo ClassifyVertexAttribType(GLenum glType) {
             switch (glType) {
-            case GL_FLOAT: return {VertexAttribBaseType::Float, 1};
-            case GL_FLOAT_VEC2: return {VertexAttribBaseType::Float, 2};
-            case GL_FLOAT_VEC3: return {VertexAttribBaseType::Float, 3};
-            case GL_FLOAT_VEC4: return {VertexAttribBaseType::Float, 4};
-            case GL_INT: return {VertexAttribBaseType::Int, 1};
-            case GL_INT_VEC2: return {VertexAttribBaseType::Int, 2};
-            case GL_INT_VEC3: return {VertexAttribBaseType::Int, 3};
-            case GL_INT_VEC4: return {VertexAttribBaseType::Int, 4};
-            case GL_UNSIGNED_INT: return {VertexAttribBaseType::Uint, 1};
-            case GL_UNSIGNED_INT_VEC2: return {VertexAttribBaseType::Uint, 2};
-            case GL_UNSIGNED_INT_VEC3: return {VertexAttribBaseType::Uint, 3};
-            case GL_UNSIGNED_INT_VEC4: return {VertexAttribBaseType::Uint, 4};
-            default: return {};
+            case GL_FLOAT:
+                return {VertexAttribBaseType::Float, 1};
+            case GL_FLOAT_VEC2:
+                return {VertexAttribBaseType::Float, 2};
+            case GL_FLOAT_VEC3:
+                return {VertexAttribBaseType::Float, 3};
+            case GL_FLOAT_VEC4:
+                return {VertexAttribBaseType::Float, 4};
+            case GL_INT:
+                return {VertexAttribBaseType::Int, 1};
+            case GL_INT_VEC2:
+                return {VertexAttribBaseType::Int, 2};
+            case GL_INT_VEC3:
+                return {VertexAttribBaseType::Int, 3};
+            case GL_INT_VEC4:
+                return {VertexAttribBaseType::Int, 4};
+            case GL_UNSIGNED_INT:
+                return {VertexAttribBaseType::Uint, 1};
+            case GL_UNSIGNED_INT_VEC2:
+                return {VertexAttribBaseType::Uint, 2};
+            case GL_UNSIGNED_INT_VEC3:
+                return {VertexAttribBaseType::Uint, 3};
+            case GL_UNSIGNED_INT_VEC4:
+                return {VertexAttribBaseType::Uint, 4};
+            default:
+                return {};
             }
         }
 
@@ -211,6 +294,10 @@ namespace MobileGL::MG_State {
                 current.intValue[component] = static_cast<Int32>(value[component]);
                 current.uintValue[component] = static_cast<Uint32>(value[component]);
             }
+            // The two views above are CONVERSIONS, not bit copies, so which one was written
+            // is part of the value; set_vertex_attrib_defaults carries it.
+            m_currentVertexAttributeClasses[index] = kVertexAttribValueClassFloat;
+            MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
         void GLContext::SetCurrentVertexAttributeInt(Uint index, const Array<Int32, 4>& value) {
@@ -225,6 +312,8 @@ namespace MobileGL::MG_State {
                 current.floatValue[component] = static_cast<Float>(value[component]);
                 current.uintValue[component] = static_cast<Uint32>(value[component]);
             }
+            m_currentVertexAttributeClasses[index] = kVertexAttribValueClassInt;
+            MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
         void GLContext::SetCurrentVertexAttributeUint(Uint index, const Array<Uint32, 4>& value) {
@@ -239,6 +328,8 @@ namespace MobileGL::MG_State {
                 current.floatValue[component] = static_cast<Float>(value[component]);
                 current.intValue[component] = static_cast<Int32>(value[component]);
             }
+            m_currentVertexAttributeClasses[index] = kVertexAttribValueClassUint;
+            MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
         const CurrentVertexAttributeValue& GLContext::GetCurrentVertexAttribute(Uint index) const {
@@ -252,11 +343,11 @@ namespace MobileGL::MG_State {
 
         // Texture
         void GLContext::GenTextureNames(Uint number, Vector<Uint>& textures) {
-            m_textureState.GenerateNames(number, textures);
+            Group().GenerateTextureNames(number, textures);
         }
 
         const SharedPtr<ITextureObject>& GLContext::GetTextureObject(Uint index) {
-            return m_textureState.GetTextureObject(index);
+            return Group().GetTextureObject(index);
         }
 
         const SharedPtr<ITextureObject>& GLContext::GetDefaultTextureObject(TextureTarget target) const {
@@ -264,14 +355,14 @@ namespace MobileGL::MG_State {
         }
 
         const SharedPtr<ITextureObject>& GLContext::CreateTextureObject(Uint index, TextureTarget target) {
-            return m_textureState.CreateTextureObject(index, target);
+            return Group().CreateTextureObject(index, target);
         }
 
         const SharedPtr<ITextureObject>& GLContext::CreateTextureViewObject(
             Uint index, TextureTarget target, const SharedPtr<ITextureObject>& storageOwner, Uint minLevel,
             Uint numLevels, Uint minLayer, Uint numLayers) {
-            return m_textureState.CreateTextureViewObject(index, target, storageOwner, minLevel, numLevels, minLayer,
-                                                          numLayers);
+            return Group().CreateTextureViewObject(index, target, storageOwner, minLevel, numLevels, minLayer,
+                                                   numLayers);
         }
 
         void GLContext::MarkTextureObjectForDeletion(Uint index) {
@@ -285,7 +376,8 @@ namespace MobileGL::MG_State {
             // contents rather than those of whatever the application put in its place - the name
             // it deleted usually comes straight back from the next glGenTextures, so the two are
             // indistinguishable from the outside (KHR-GL32.packed_pixels read a stale gradient).
-            if (const auto& textureObject = m_textureState.GetTextureObject(index)) {
+            const auto textureObject = Group().GetTextureObject(index);
+            if (textureObject) {
                 for (SizeT targetIndex = 0; targetIndex < SizeT(FramebufferTarget::FramebufferTargetCount);
                      ++targetIndex) {
                     const auto& framebuffer =
@@ -301,7 +393,10 @@ namespace MobileGL::MG_State {
                     }
                 }
             }
-            m_textureState.MarkTextureObjectForDeletion(index, IsRelaxedSemanticsActive());
+            // This context's units only: the object is gone for every context in the share
+            // group, but each of them detaches it from its own bindings (GL 4.6 core 8.1).
+            m_textureState.UnbindTextureFromUnits(textureObject);
+            Group().MarkTextureObjectForDeletion(index, IsRelaxedSemanticsActive());
         }
 
         TextureUnit& GLContext::GetTextureUnitObject(Int unit) {
@@ -317,11 +412,11 @@ namespace MobileGL::MG_State {
         }
 
         Bool GLContext::ValidateTextureName(Uint index) const {
-            return m_textureState.ValidateName(index);
+            return m_shareGroup->ValidateTextureName(index);
         }
 
         Bool GLContext::ValidateTextureObject(Uint index) const {
-            return m_textureState.ValidateTextureObject(index);
+            return m_shareGroup->ValidateTextureObject(index);
         }
 
         Int GLContext::GetActiveTextureUnit() const {
@@ -334,51 +429,67 @@ namespace MobileGL::MG_State {
 
         // Program
         Uint GLContext::CreateProgram() {
-            return m_programState.CreateProgram();
+            return Group().Programs().CreateProgram();
         }
 
         Uint GLContext::CreateShader(const ShaderStage stage) {
-            return m_programState.CreateShader(stage);
+            return Group().Programs().CreateShader(stage);
         }
 
         void GLContext::MarkProgramForDeletion(const Uint index) {
-            return m_programState.MarkProgramObjectForDeletion(index);
+            return Group().Programs().MarkProgramObjectForDeletion(index, m_currentProgram);
         }
 
         void GLContext::MarkShaderForDeletion(const Uint index) {
-            return m_programState.MarkShaderObjectForDeletion(index);
+            return Group().Programs().MarkShaderObjectForDeletion(index, m_currentProgram);
         }
 
         void GLContext::ReleaseShaderNameIfOrphaned(const Uint index) {
-            return m_programState.ReleaseShaderNameIfOrphaned(index);
+            return Group().Programs().ReleaseShaderNameIfOrphaned(index, m_currentProgram);
         }
 
         Bool GLContext::ValidateProgramName(const Uint index) const {
-            return m_programState.ValidateProgramObject(index);
+            return m_shareGroup->Programs().ValidateProgramObject(index);
         }
 
         Bool GLContext::ValidateShaderName(const Uint index) const {
-            return m_programState.ValidateShaderObject(index);
+            return m_shareGroup->Programs().ValidateShaderObject(index);
         }
 
         const SharedPtr<ProgramObject>& GLContext::GetProgramObject(const Uint index) {
-            return m_programState.GetProgramObject(index);
+            return Group().Programs().GetProgramObject(index);
         }
 
         const SharedPtr<ShaderObject>& GLContext::GetShaderObject(const Uint index) {
-            return m_programState.GetShaderObject(index);
+            return Group().Programs().GetShaderObject(index);
         }
 
         void GLContext::JoinAllPendingShaderWork() {
-            m_programState.JoinAllPendingWork();
+            Group().Programs().JoinAllPendingWork(m_currentProgram);
         }
 
         void GLContext::UseProgram(Uint program) {
-            return m_programState.UseProgram(program);
+            const SharedPtr<ProgramObject> previous = m_currentProgram;
+
+            if (program == 0) m_currentProgram.reset();
+
+            auto& programs = Group().Programs();
+            if (programs.HasProgramSlot(program)) {
+                m_currentProgram = programs.GetProgramObject(program);
+            }
+
+            // A deletion flagged while the program was current takes effect the moment it
+            // stops being current.
+            if (previous != nullptr && previous != m_currentProgram && previous->GetDeleteStatus()) {
+                const Uint previousName = previous->GetExternalIndex();
+                if (programs.HasProgramSlot(previousName) && programs.GetProgramObject(previousName) == previous) {
+                    programs.MarkProgramObjectForDeletion(previousName, m_currentProgram);
+                }
+            }
         }
 
         const SharedPtr<ProgramObject>& GLContext::GetCurrentProgram() {
-            return m_programState.GetCurrentProgram();
+            return m_currentProgram;
         }
 
         // Copies every default-block uniform value `source` holds into the same-named uniform of
@@ -483,7 +594,7 @@ namespace MobileGL::MG_State {
                         continue;
                     }
                     // Stop at the end of EITHER side's array rather than walking onto the
-                    // neighbouring uniform of whichever program has the shorter one.
+                    // neighboring uniform of whichever program has the shorter one.
                     if (!source.UniformLocationsAliasSameUniform(sourceBase, sourceLocation) ||
                         !destination.UniformLocationsAliasSameUniform(destinationBase, destinationLocation)) {
                         break;
@@ -505,7 +616,7 @@ namespace MobileGL::MG_State {
                     const Uint sourceOffset = source.GetUniformOffset(sourceLocation);
                     const Uint destinationOffset = destination.GetUniformOffset(destinationLocation);
                     // Either side can legitimately lack backing storage: the optimizer deletes a
-                    // uniform nothing reads, and a program whose SPIR-V phase settled cancelled
+                    // uniform nothing reads, and a program whose SPIR-V phase settled canceled
                     // has no shadow at all. Both report kInvalidUniformOffset / a null shadow.
                     if (sourceUbo == nullptr || destinationUbo == nullptr ||
                         sourceOffset == ProgramObject::kInvalidUniformOffset ||
@@ -517,7 +628,7 @@ namespace MobileGL::MG_State {
                         continue;
                     }
                     Memcpy(destinationUbo + destinationOffset, sourceUbo + sourceOffset, span);
-                    destination.MarkUBOContentDirty();
+                    destination.MarkUBOContentDirtyRange(destinationOffset, static_cast<Uint>(span));
                 }
             }
         }
@@ -562,7 +673,8 @@ namespace MobileGL::MG_State {
         // programs hold and it does not: uniform values, and interface block bindings. Runs on
         // every draw through a pipeline, so the common case is the version compare below and
         // nothing else.
-        static void RefreshCompositeUniforms(ProgramPipelineObject& pipeline, const SharedPtr<ProgramObject>& composite) {
+        static void RefreshCompositeUniforms(ProgramPipelineObject& pipeline,
+                                             const SharedPtr<ProgramObject>& composite) {
             if (!composite) return;
             const auto versions = pipeline.ComputeUniformMirrorVersions();
             if (versions == pipeline.GetMirroredUniformVersions()) return;
@@ -591,7 +703,7 @@ namespace MobileGL::MG_State {
 
         const SharedPtr<ProgramObject>& GLContext::GetProgramForDraw() {
             static const SharedPtr<ProgramObject> nullProgram = nullptr;
-            const auto& currentProgram = m_programState.GetCurrentProgram();
+            const auto& currentProgram = GetCurrentProgram();
             if (currentProgram) {
                 // P1 join site J1, plain glUseProgram half. The backends read a program's
                 // lifetimeId / backendStateVersion / UBO content version to decide whether
@@ -716,9 +828,8 @@ namespace MobileGL::MG_State {
             // the last one in a pipeline that has a TCS but no evaluation or geometry stage,
             // which is why it sits after TessEval. Same four stages, same order, as
             // ProgramLinkTask::ResolveTransformFeedbackVaryings - see rule (2).
-            for (const ShaderStage captureStage:
-                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::TessControl,
-                  ShaderStage::Vertex}) {
+            for (const ShaderStage captureStage :
+                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::TessControl, ShaderStage::Vertex}) {
                 if (!compositeHasStage[static_cast<SizeT>(captureStage)]) continue;
                 const auto& captureProgram = pipeline->GetStageProgram(captureStage);
                 if (!captureProgram) continue;
@@ -729,6 +840,9 @@ namespace MobileGL::MG_State {
                 }
                 break;
             }
+            // Separable, as every program it is assembled from is: a pipeline may leave the vertex
+            // stage to nobody, and that is the draw-time pipeline rule's to refuse, not the link's.
+            composite->SetSeparable(true);
             // A pipeline with no fragment stage still rasterises, so the default fragment
             // shader is wanted here even though the separable stage programs never get one.
             composite->Link(true);
@@ -745,7 +859,7 @@ namespace MobileGL::MG_State {
 
         const SharedPtr<ProgramObject>& GLContext::GetProgramForDispatch() {
             static const SharedPtr<ProgramObject> nullProgram = nullptr;
-            const auto& currentProgram = m_programState.GetCurrentProgram();
+            const auto& currentProgram = GetCurrentProgram();
             if (currentProgram) {
                 // Same join contract as GetProgramForDraw's glUseProgram half - see the note
                 // there. A dispatch reads the same non-artifact versions a draw does.
@@ -767,7 +881,7 @@ namespace MobileGL::MG_State {
         }
 
         const SharedPtr<ProgramObject>& GLContext::GetProgramForUniform() {
-            const auto& currentProgram = m_programState.GetCurrentProgram();
+            const auto& currentProgram = GetCurrentProgram();
             if (currentProgram) return currentProgram;
             static const SharedPtr<ProgramObject> nullProgram = nullptr;
             if (m_boundProgramPipeline == 0) return nullProgram;
@@ -1114,6 +1228,26 @@ namespace MobileGL::MG_State {
             return m_renderState.GetMinSampleShadingValue();
         }
 
+        void GLContext::SetShadingRate(Uint8 rate) {
+            m_renderState.SetShadingRate(rate);
+        }
+
+        Uint8 GLContext::GetShadingRate() const {
+            return m_renderState.GetShadingRate();
+        }
+
+        void GLContext::SetShadingRateCombinerOps(Uint8 op0, Uint8 op1) {
+            m_renderState.SetShadingRateCombinerOps(op0, op1);
+        }
+
+        Uint8 GLContext::GetShadingRateCombinerOp0() const {
+            return m_renderState.GetShadingRateCombinerOp0();
+        }
+
+        Uint8 GLContext::GetShadingRateCombinerOp1() const {
+            return m_renderState.GetShadingRateCombinerOp1();
+        }
+
         void GLContext::SetPixelStoreParam(PixelStoreParam param, Int value) {
             m_renderState.SetPixelStoreParam(param, value);
         }
@@ -1195,23 +1329,29 @@ namespace MobileGL::MG_State {
             return m_framebufferState.ValidateFramebufferObject(index);
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        SharedPtr<FramebufferObject> GLContext::FindFramebufferObjectByLifetimeId(Uint64 lifetimeId) const {
+            return m_framebufferState.FindFramebufferObjectByLifetimeId(lifetimeId);
+        }
+#endif
+
         // Sampler
         void GLContext::GenSamplerNames(Uint number, Vector<Uint>& samplers) {
-            m_samplerState.GenerateNames(number, samplers);
+            Group().Samplers().GenerateNames(number, samplers);
         }
 
         const SharedPtr<SamplerObject>& GLContext::GetSamplerObject(Uint index) {
-            return m_samplerState.GetSamplerObject(index);
+            return Group().Samplers().GetSamplerObject(index);
         }
 
         const SharedPtr<SamplerObject>& GLContext::CreateSamplerObject(Uint index) {
-            return m_samplerState.CreateSamplerObject(index);
+            return Group().Samplers().CreateSamplerObject(index);
         }
 
         void GLContext::MarkSamplerObjectForDeletion(Uint index) {
             // Unbind the sampler from all texture units
             if (ValidateSamplerObject(index)) {
-                auto sampler = m_samplerState.GetSamplerObject(index);
+                auto sampler = Group().Samplers().GetSamplerObject(index);
                 for (Int unit = 0; unit < TextureState::MAX_TEXTURE_IMAGE_UNITS; ++unit) {
                     auto& textureUnit = m_textureState.GetUnitObject(unit);
                     if (textureUnit.GetSamplerObject() == sampler) {
@@ -1219,24 +1359,24 @@ namespace MobileGL::MG_State {
                     }
                 }
             }
-            m_samplerState.MarkSamplerObjectForDeletion(index);
+            Group().Samplers().MarkSamplerObjectForDeletion(index);
         }
 
         Bool GLContext::ValidateSamplerName(Uint index) const {
-            return m_samplerState.ValidateName(index);
+            return m_shareGroup->Samplers().ValidateName(index);
         }
 
         Bool GLContext::ValidateSamplerObject(Uint index) const {
-            return m_samplerState.ValidateSamplerObject(index);
+            return m_shareGroup->Samplers().ValidateSamplerObject(index);
         }
 
         // Renderbuffer
         void GLContext::GenRenderbufferNames(Uint number, Vector<Uint>& renderbuffers) {
-            m_renderbufferState.GenerateNames(number, renderbuffers);
+            Group().GenerateRenderbufferNames(number, renderbuffers);
         }
 
         const SharedPtr<RenderbufferObject>& GLContext::GetRenderbufferObject(Uint index) {
-            return m_renderbufferState.GetRenderbufferObject(index);
+            return Group().GetRenderbufferObject(index);
         }
 
         BindingSlot<RenderbufferObject>& GLContext::GetRenderbufferBindingSlot(RenderbufferTarget target) {
@@ -1244,19 +1384,67 @@ namespace MobileGL::MG_State {
         }
 
         const SharedPtr<RenderbufferObject>& GLContext::CreateRenderbufferObject(Uint index) {
-            return m_renderbufferState.CreateRenderbufferObject(index);
+            return Group().CreateRenderbufferObject(index);
         }
 
         void GLContext::MarkRenderbufferObjectForDeletion(Uint index) {
-            m_renderbufferState.MarkRenderbufferObjectForDeletion(index);
+            const auto renderbufferObject = Group().GetRenderbufferObject(index);
+            m_renderbufferState.UnbindRenderbufferObject(renderbufferObject);
+            Group().MarkRenderbufferObjectForDeletion(index);
         }
 
         Bool GLContext::ValidateRenderbufferName(Uint index) const {
-            return m_renderbufferState.ValidateName(index);
+            return m_shareGroup->ValidateRenderbufferName(index);
         }
 
         Bool GLContext::ValidateRenderbufferObject(Uint index) const {
-            return m_renderbufferState.ValidateRenderbufferObject(index);
+            return m_shareGroup->ValidateRenderbufferObject(index);
+        }
+
+        Uint64 GLContext::AllocateTransformFeedbackLifetimeId() {
+            // Starts at 1 so a zero-initialized backend slot can never carry a live object's id.
+            static std::atomic<Uint64> nextId{1};
+            return nextId.fetch_add(1, std::memory_order_relaxed);
+        }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        Bool GLContext::IsFromEndedWireSession() const {
+            return m_wireEpoch != 0 && m_wireEpoch != CurrentWireEpoch();
+        }
+#endif
+
+        GLContext::GLContext() : GLContext(MakeShared<ShareGroupState>()) {}
+
+        GLContext::GLContext(SharedPtr<ShareGroupState> shareGroup)
+            : m_shareGroup(shareGroup ? Move(shareGroup) : MakeShared<ShareGroupState>()) {
+            // A second context in the group makes the dirty walk read the share clocks.
+            m_shareGroup->NoteContextAttached();
+            // The default transform feedback object (name 0) exists from the start of the context
+            // (GL 4.6 core 13.2.1), but nothing binds it, so nothing else would materialize it.
+            // Materializing it here is what lets GetBoundTransformFeedbackLifetimeId() be a plain
+            // const read instead of an operator[] insert on the draw path.
+            m_boundTransformFeedbackLifetimeId = m_transformFeedbackObjects[0].lifetimeId;
+            InstallDefaultFramebuffer(DefaultFramebuffer());
+        }
+
+        void GLContext::InstallDefaultFramebuffer(const SharedPtr<FramebufferObject>& framebuffer) {
+            if (!framebuffer) return;
+            m_framebufferState.RegisterFramebufferObject(0, framebuffer);
+            m_framebufferState.GetBindingSlot(FramebufferTarget::Draw).Bind(framebuffer);
+            m_framebufferState.GetBindingSlot(FramebufferTarget::Read).Bind(framebuffer);
+        }
+
+        Bool GLContext::HasOpenTransformFeedbackSpan(Uint64 lifetimeId) const {
+            if (lifetimeId == 0) return false;
+            for (const auto& [name, object] : m_transformFeedbackObjects) {
+                if (object.lifetimeId != lifetimeId) continue;
+                // The bound object's span state is live in the context; its saved copy is only
+                // written when a bind swaps it out.
+                return name == m_boundTransformFeedback ? m_transformFeedbackActive : object.active;
+            }
+            // No object carries this identity any more: it was deleted, and a deleted object can
+            // never resume.
+            return false;
         }
 
         void GLContext::SaveBoundTransformFeedbackState() {
@@ -1275,6 +1463,11 @@ namespace MobileGL::MG_State {
         }
 
         void GLContext::RestoreBoundTransformFeedbackState() {
+            // The FOURTH writer of the transform-feedback binding points (a bind or a delete of
+            // the bound transform-feedback object swaps the whole set in): it moves the generation
+            // like the other three, so bit 17 cannot miss a swap whose two objects happen to carry
+            // the same capture-span generation.
+            NoteBufferBindPointChanged(BufferTarget::TransformFeedback);
             const auto& object = m_transformFeedbackObjects[m_boundTransformFeedback];
             for (Uint i = 0; i < MAX_TRANSFORM_FEEDBACK_BUFFERS; ++i) {
                 auto& point = m_bufferState.GetBindingPoint(BufferTarget::TransformFeedback, i);
@@ -1285,6 +1478,7 @@ namespace MobileGL::MG_State {
                     point.ClearRange();
                 }
             }
+            ++m_transformFeedbackValuesGeneration;
             m_transformFeedbackActive = object.active;
             m_transformFeedbackPaused = object.paused;
             m_transformFeedbackPrimitiveMode = object.primitiveMode;
@@ -1295,6 +1489,9 @@ namespace MobileGL::MG_State {
             m_transformFeedbackGeneration = object.generation;
             m_transformFeedbackCapturedVertices = object.capturedVertices;
             m_transformFeedbackInputPrimitives = object.inputPrimitives;
+            // Every route that changes which object is bound - BindTransformFeedbackObject and the
+            // revert a delete of the bound object performs - comes through here.
+            m_boundTransformFeedbackLifetimeId = object.lifetimeId;
         }
 
         void GLContext::GenTransformFeedbackNames(Uint number, Vector<Uint>& ids) {
@@ -1383,7 +1580,6 @@ namespace MobileGL::MG_State {
             return GetProgramPipelineObject(m_boundProgramPipeline);
         }
 
-
         Bool GLContext::ValidateTransformFeedbackName(Uint index) const {
             return index == 0 || m_transformFeedbackNames.IsValid(index);
         }
@@ -1400,6 +1596,11 @@ namespace MobileGL::MG_State {
             if (index == 0 || !m_transformFeedbackNames.IsValid(index)) return false;
             const auto it = m_transformFeedbackObjects.find(index);
             return it != m_transformFeedbackObjects.end() && it->second.everBound;
+        }
+
+        Uint64 GLContext::GetTransformFeedbackLifetimeId(Uint index) const {
+            const auto found = m_transformFeedbackObjects.find(index);
+            return found == m_transformFeedbackObjects.end() ? 0 : found->second.lifetimeId;
         }
 
         void GLContext::MarkTransformFeedbackObjectForDeletion(Uint index) {
@@ -1469,6 +1670,15 @@ namespace MobileGL::MG_State {
                                                          Bool hasExplicitRange) {
             if (bufferIndex >= MAX_TRANSFORM_FEEDBACK_BUFFERS) return;
             if (index == m_boundTransformFeedback) {
+                // P5e (sb): the THIRD writer of a transform-feedback binding point, and the one
+                // a reader of GL_Buffer.cpp alone would miss - glTransformFeedbackBufferBase /
+                // ...Range on the CURRENTLY BOUND object land here rather than in
+                // BindBufferBase_State. Dirty bit 17 shutters on this generation, so a bump
+                // left out here would make the DSA spelling of a capture-point bind invisible
+                // while the non-DSA one was not. The saved-bindings arm below writes no binding
+                // POINT at all (it writes the named object's own table) and deliberately bumps
+                // nothing.
+                NoteBufferBindPointChanged(BufferTarget::TransformFeedback);
                 auto& point = m_bufferState.GetBindingPoint(BufferTarget::TransformFeedback, bufferIndex);
                 point.Bind(buffer);
                 if (buffer && hasExplicitRange) {
@@ -1484,5 +1694,43 @@ namespace MobileGL::MG_State {
     } // namespace GLState
 
     // Leak-at-exit storage; see GlobalObjects.cpp.
-    UniquePtr<GLState::GLContext>& pGLContext = *new UniquePtr<GLState::GLContext>();
+    constinit thread_local CurrentGLContextSlot pGLContext;
+
+    // The reference that keeps the calling thread's pGLContext alive (Core.h). Registered for
+    // destruction on the thread's first assignment. At thread exit it drops the reference first,
+    // with the slot still naming the context - what destroying the SharedPtr this used to be did
+    // - and then clears the slot, so no pointer outlives the context.
+    struct CurrentGLContextOwner {
+        SharedPtr<GLState::GLContext> context;
+        ~CurrentGLContextOwner() {
+            context.reset();
+            pGLContext.m_context = nullptr;
+        }
+    };
+    namespace {
+        thread_local CurrentGLContextOwner tCurrentGLContextOwner;
+    } // namespace
+
+    const SharedPtr<GLState::GLContext>& CurrentGLContextSlot::Shared() const {
+        return tCurrentGLContextOwner.context;
+    }
+
+    SharedPtr<GLState::GLContext> CurrentGLContextSlot::Take() {
+        m_context = nullptr;
+        return Move(tCurrentGLContextOwner.context);
+    }
+
+    CurrentGLContextSlot& CurrentGLContextSlot::operator=(SharedPtr<GLState::GLContext> context) {
+        auto& owner = tCurrentGLContextOwner;
+        m_context = context.get();
+        // The old context's last reference may run destructors that read pGLContext: the slot
+        // already names the new one, as it did when this was a SharedPtr assignment.
+        SharedPtr<GLState::GLContext> previous = Move(owner.context);
+        owner.context = Move(context);
+        return *this;
+    }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    constinit thread_local Bool tThreadReleasedLostContext = false;
+#endif
 } // namespace MobileGL::MG_State

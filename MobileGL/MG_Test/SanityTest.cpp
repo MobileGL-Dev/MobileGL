@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#include <MG_Backend/SubgroupImplementation.h>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cstdlib>
@@ -16,6 +17,7 @@
 #include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectVulkan/BackendObject_DirectVulkan.h>
+#include <MG_Backend/DirectVulkan/DirectVulkan.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
@@ -25,6 +27,11 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <MG_State/GLState/TextureState/TextureState.h>
+#include <MG_Test/ScopedPipeVerb.h>
+// P5 b1: MGPipeResourceTrackerInstance(), so the split probe case can ask the PRODUCTION
+// tracker for a buffer's handle instead of minting one by hand.
+#include <MG_Impl/Pipe/ResourceTracker.h>
+#include <MG_Impl/Pipe/Verb/VerbPort.h>
 #include <MG_Backend/DirectVulkan/Renderer/ProgramFactory.h>
 #include <MG_Backend/DirectVulkan/Renderer/UniformManager.h>
 #include <MG_Backend/DirectVulkan/Renderer/VkRenderPassManager.h>
@@ -35,9 +42,85 @@
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/Debug/Log.h>
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+// P5 c1 / R-8: the client's liveness gates read the caps mirror's consumer mask under split, so
+// a split-armed case has to arm that half too - registering an op table is the SERVER's arming.
+#include <MG_Remote/CapsCodec.h>
+#include <MG_Remote/Client/CapsMirror.h>
+// PH-2 (F2): the handle-keyed tables' backstop refusals die through MG_Pipe's session-fail seam.
+#include <MG_Pipe/PipeSessionFail.h>
+#include <cstdio>
+#endif
+#include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Types.h>
+#include <Config.h>
+#include <MG_Pipe/MGPipe.h>
+#include <MG_State/GLState/ProgramState/ProgramObject.h>
+#include <MG_State/GLState/RenderbufferState/RenderbufferObject.h>
+#include <MG_State/GLState/SamplerState/SamplerObject.h>
+#include <MG_State/GLState/StateObjectDeathNotice.h>
+#include <MG_State/GLState/TextureState/TextureObject2D.h>
+#include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
+#include <csignal>
+#include <chrono>
 #include <limits>
 #include <set>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
+// PipeApply.h does not guard itself (its push-only property comes from the root
+// CMakeLists), so it is included from inside this arm and nowhere else.
+#include <MG_Pipe/PipeApply.h>
+#include <MG_State/GLState/BufferState/BufferObject.h>
+
+namespace {
+    // Which arm of the twin table this binary runs on.
+    //
+    // SanityTest never calls MG_ConfigLoader::Init, so MG_Config::Features keeps its static
+    // defaults - and Features.PipePush's static default is 0 ("pull everything", Config.h),
+    // which is the value a PULL build ships. Without this the D13 "must not break" cases
+    // (the scratch-FBO scrub, the three context-generation guards on the texture /
+    // framebuffer / renderbuffer twins, the sampled-set staleness walk and the whole-registry
+    // ScopedDirectGLESTextureBindings fixture) exercised the legacy UnorderedMap arm in EVERY
+    // build directory - so a push build's 82 sanity cases said nothing about the code this
+    // package actually changed.
+    //
+    // P13 W3b: bits 0-13 are fixed on (ConfigLoader refuses any other mask), so the default is
+    // kMGPipeSubsystemsMigratedAtP5e. Before that it was kMGPipeSubsystemsMigratedAtP2, and the
+    // text below is the history of why it is set here at all.
+    //
+    // The default here is therefore ConfigLoader's own push-build default
+    // (kMGPipeSubsystemsMigratedAtP2, ConfigLoader.cpp), i.e. this binary runs the arm that
+    // SHIPS in the build it was compiled for: legacy in build-linux (where the handle arm is
+    // not compiled at all and every DirectGLESSlotTable case skips), handles in build-push and
+    // build-verify. MOBILEGL_PIPE_PUSH in the environment overrides it with the same
+    // decimal/0x contract ConfigLoader.cpp:172-192 gives it, so `MOBILEGL_PIPE_PUSH=0
+    // ctest -R Sanity` is the legacy-arm run of the same binary and the A/B is one env var.
+    //
+    // It runs as a gtest Environment rather than a static initializer on purpose:
+    // MG_Config::Features has a String member, so it is dynamically initialized, and writing
+    // to it from another TU's static initializer would be an initialization-order race.
+    // SetUp() runs inside RUN_ALL_TESTS, long after every static initializer, and before the
+    // first test - hence before anything can latch EsprytSlotTablesEnabled().
+    class EsprytSlotArmEnvironment final : public ::testing::Environment {
+    public:
+        void SetUp() override {
+            MobileGL::Uint64 bits = MobileGL::MG_Pipe::kMGPipeSubsystemsMigratedAtP5e;
+            const char* knob = std::getenv("MOBILEGL_PIPE_PUSH");
+            if (knob != nullptr && *knob != '\0') {
+                bits = std::strtoull(knob, nullptr, 0);
+            }
+            MobileGL::MG_Config::Features.PipePush = bits;
+        }
+    };
+
+    const ::testing::Environment* g_esprytSlotArmEnvironment =
+        ::testing::AddGlobalTestEnvironment(new EsprytSlotArmEnvironment());
+} // namespace
 
 namespace {
     class DynamicParameterBackend final : public MobileGL::MG_Backend::BackendObject {
@@ -49,8 +132,8 @@ namespace {
         // while the getter bounds it by "a backend object exists" - two spellings of the same
         // thing in production, and only in production.
         explicit DynamicParameterBackend(MobileGL::MG_Backend::DynamicBackendParameters params,
-                                         MobileGL::BackendType type = MobileGL::BackendType::Unknown):
-            m_params(params), m_type(type) {}
+                                         MobileGL::BackendType type = MobileGL::BackendType::Unknown)
+            : m_params(params), m_type(type) {}
 
         void Initialize() override {}
         MobileGL::Bool InitCapabilities() override { return true; }
@@ -60,24 +143,21 @@ namespace {
         const MobileGL::MG_Backend::GlobalBackendFunctionsTable& GetBackendFunctions() const override {
             return m_functions;
         }
-        const MobileGL::MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override {
-            return m_params;
-        }
+        const MobileGL::MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override { return m_params; }
         MobileGL::BackendType GetBackendType() const override { return m_type; }
 
     private:
         MobileGL::MG_Backend::DynamicBackendParameters m_params;
         MobileGL::BackendType m_type = MobileGL::BackendType::Unknown;
         MobileGL::MG_Backend::GlobalBackendFunctionsTable m_functions{};
-        MobileGL::RendererInfo m_info{
-            .RendererName = "Test",
-            .BackendName = "DynamicParameterBackend",
-            .ExtraVendor = MobileGL::Nullopt,
-            .RendererGLInfo = {.TargetGLVersion = {3, 3, 0},
-                               .TargetGLSLVersion = {4, 6, 0},
-                               .Extensions = {},
-                               .IsCompatibilityProfile = false},
-            .StaticBackendCapability = {.AllowVSOnlyPrograms = false}};
+        MobileGL::RendererInfo m_info{.RendererName = "Test",
+                                      .BackendName = "DynamicParameterBackend",
+                                      .ExtraVendor = MobileGL::Nullopt,
+                                      .RendererGLInfo = {.TargetGLVersion = {3, 3, 0},
+                                                         .TargetGLSLVersion = {4, 6, 0},
+                                                         .Extensions = {},
+                                                         .IsCompatibilityProfile = false},
+                                      .StaticBackendCapability = {.AllowVSOnlyPrograms = false}};
     };
 
     void SetEnvVar(const char* name, const char* value) {
@@ -109,11 +189,8 @@ namespace {
     // destruction, so tests that mutate g_GLESCapabilities cannot leak state into later
     // tests even if an assertion or exception unwinds the test body early.
     struct ScopedGLESCapabilitiesOverride {
-        ScopedGLESCapabilitiesOverride():
-            m_snapshot(MobileGL::MG_Backend::DirectGLES::g_GLESCapabilities) {}
-        ~ScopedGLESCapabilitiesOverride() {
-            MobileGL::MG_Backend::DirectGLES::g_GLESCapabilities = m_snapshot;
-        }
+        ScopedGLESCapabilitiesOverride() : m_snapshot(MobileGL::MG_Backend::DirectGLES::g_GLESCapabilities) {}
+        ~ScopedGLESCapabilitiesOverride() { MobileGL::MG_Backend::DirectGLES::g_GLESCapabilities = m_snapshot; }
         ScopedGLESCapabilitiesOverride(const ScopedGLESCapabilitiesOverride&) = delete;
         ScopedGLESCapabilitiesOverride& operator=(const ScopedGLESCapabilitiesOverride&) = delete;
 
@@ -151,12 +228,12 @@ namespace {
     // installs only the native ES entry points needed to construct/bind a backend texture and
     // restores the process-wide state even when a gtest assertion unwinds the test body.
     struct ScopedDirectGLESTextureBindings {
-        ScopedDirectGLESTextureBindings():
-            previousContext(MobileGL::Move(MobileGL::MG_State::pGLContext)),
-            previousFunctions(MobileGL::MG_Backend::DirectGLES::g_GLESFuncs),
-            previousActiveUnit(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_activeTextureUnit),
-            previousCache(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_boundTexturesCache),
-            previousRegistry(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_backendTextureObjects) {
+        ScopedDirectGLESTextureBindings()
+            : previousContext(MobileGL::MG_State::pGLContext.Take()),
+              previousFunctions(MobileGL::MG_Backend::DirectGLES::g_GLESFuncs),
+              previousActiveUnit(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_activeTextureUnit),
+              previousCache(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_boundTexturesCache),
+              previousRegistry(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_backendTextureObjects) {
             MobileGL::MG_State::pGLContext = MobileGL::MakeUnique<MobileGL::MG_State::GLState::GLContext>();
             MobileGL::MG_Backend::DirectGLES::TextureImpl::g_activeTextureUnit = 0;
             MobileGL::MG_Backend::DirectGLES::TextureImpl::g_boundTexturesCache = {};
@@ -187,7 +264,7 @@ namespace {
         MobileGL::Vector<TextureBindCall> bindCalls;
 
     private:
-        MobileGL::UniquePtr<MobileGL::MG_State::GLState::GLContext> previousContext;
+        MobileGL::SharedPtr<MobileGL::MG_State::GLState::GLContext> previousContext;
         MobileGL::MG_External::GLESFunctionsTable previousFunctions;
         MobileGL::Uint previousActiveUnit;
         decltype(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_boundTexturesCache) previousCache;
@@ -227,8 +304,7 @@ TEST(DirectGLESSanity, AdvertisesUniformBufferObjectAndStencilTexturing) {
 
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_uniform_buffer_object),
               extensions.end());
-    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_stencil_texturing),
-              extensions.end());
+    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_stencil_texturing), extensions.end());
 }
 
 TEST(DirectVulkanSanity, AdvertisesUniformBufferObjectAndStencilTexturing) {
@@ -237,8 +313,23 @@ TEST(DirectVulkanSanity, AdvertisesUniformBufferObjectAndStencilTexturing) {
 
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_uniform_buffer_object),
               extensions.end());
-    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_stencil_texturing),
-              extensions.end());
+    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_stencil_texturing), extensions.end());
+}
+
+// P11 M: THE SERVER HALF OF A SPLIT eglSwapInterval. The client's emit-table slot forwards the
+// call as one control frame (ServerLoopTest.TheEmitTableSwapIntervalSlotCrossesAsOneDispatchedFrame,
+// P10 B) and the server answers it with backend->SetEGLSwapInterval, whose base implementation
+// calls the backend table's SetSwapInterval. Magma's slot was null until dev@c60639db, so the
+// request was dropped there on every arm. Through the backend object, as the server calls it:
+// the request has to land where the next renderer and Present read it. No renderer exists here,
+// so nothing is rebuilt.
+TEST(DirectVulkanSanity, SetEglSwapIntervalReachesTheBackendTable) {
+    MobileGL::MG_Backend::DirectVulkan::BackendObject_DirectVulkan backend;
+    ASSERT_NE(backend.GetBackendFunctions().SetSwapInterval, nullptr);
+    backend.SetEGLSwapInterval(0);
+    EXPECT_EQ(MobileGL::MG_Backend::DirectVulkan::GetRequestedSwapInterval(), MobileGL::Optional<MobileGL::Int>(0));
+    backend.SetEGLSwapInterval(1);
+    EXPECT_EQ(MobileGL::MG_Backend::DirectVulkan::GetRequestedSwapInterval(), MobileGL::Optional<MobileGL::Int>(1));
 }
 
 // Voxy only ever needed the extensions, which stay advertised whatever the version is; the version
@@ -252,12 +343,10 @@ TEST(DirectGLESSanity, AdvertisesVoxyRequiredRenderingExtensions) {
     EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 6);
     EXPECT_EQ(rendererInfo.TargetGLVersion.Patch, 0);
 
-    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_compute_shader),
-              extensions.end());
+    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_compute_shader), extensions.end());
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_shader_storage_buffer_object),
               extensions.end());
-    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_texture_storage),
-              extensions.end());
+    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_texture_storage), extensions.end());
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_direct_state_access),
               extensions.end());
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_multi_draw_indirect),
@@ -266,136 +355,26 @@ TEST(DirectGLESSanity, AdvertisesVoxyRequiredRenderingExtensions) {
               extensions.end());
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_shader_draw_parameters),
               extensions.end());
-    EXPECT_EQ(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_gpu_shader_int64),
-              extensions.end());
-    EXPECT_EQ(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_KHR_shader_subgroup),
-              extensions.end());
-}
-
-// A multisample texture is fetched, never filtered, so the mip-chain completeness rules never
-// apply to it (GL 4.6 core 8.17). It has exactly one level and MIN_FILTER's initial value is
-// NEAREST_MIPMAP_LINEAR, so asking those rules anyway calls EVERY multisample texture incomplete
-// - and both backends express "incomplete" as "leave the native target unbound", which makes the
-// shader's sampler2DMS read zero from a texture that was written correctly.
-//
-// That is KHR-GL43.compute_shader.resource-texture: it clears its 2DMS texture to 123.0 through
-// an FBO (which succeeds - the ES clear is issued on a COMPLETE 4-sample framebuffer with no
-// error) and then fails at the first sampler2DMS element because the texture was never bound.
-TEST(DirectGLESSanity, BindsAMultisampleTextureDespiteTheDefaultMipmapFilter) {
-    using namespace MobileGL;
-    namespace DirectGLES = MG_Backend::DirectGLES;
-
-    ScopedDirectGLESTextureBindings state;
-
-    GLuint frontendTexture = 0;
-    MG_Impl::GLImpl::GenTextures(1, &frontendTexture);
-    ASSERT_NE(frontendTexture, 0u);
-    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE, frontendTexture);
-    const auto& textureObject = MG_State::pGLContext->GetTextureUnitObject(0)
-                                    .GetBindingSlot(TextureTarget::Texture2DMultisample)
-                                    .GetBoundObject();
-    ASSERT_NE(textureObject, nullptr);
-
-    textureObject->SetInternalFormat(TextureInternalFormat::RGBA8);
-    textureObject->SetSamples(4);
-    textureObject->SetFixedSampleLocations(false);
-    // One level, 4x4 - the shape glTexImage2DMultisample produces, and a size whose mip chain
-    // would need three levels if the filter rules were (wrongly) applied.
-    MG_State::GLState::AsMipmapTexture(textureObject.get())
-        ->AllocateStorage(TextureUploadTarget::Texture2DMultisample, 0, {{4, 4, 1}, 4});
-
-    // The precondition that used to poison it, asserted rather than assumed: the texture's own
-    // sampler still reports a mipmapping filter, because GL's initial MIN_FILTER is
-    // NEAREST_MIPMAP_LINEAR and a multisample texture has no way (and no reason) to change it.
-    // If a future default made this None the test would pass without covering anything.
-    const auto& sampler = textureObject->GetSamplerObject();
-    ASSERT_NE(sampler, nullptr);
-    ASSERT_NE(sampler->GetMipmapMode(), SamplerMipmapMode::None)
-        << "fixture is stale: the default sampler no longer asks for mipmapping, so this test "
-           "would not exercise the multisample guard";
-
-    EXPECT_FALSE(MG_State::GLState::SamplesAsIncompleteTexture(textureObject.get(), sampler.get()))
-        << "a multisample texture is never filter-incomplete";
-
-    auto& backendTexture = DirectGLES::TextureImpl::g_backendTextureObjects.GetOrCreate(textureObject);
-    backendTexture = MakeShared<DirectGLES::TextureImpl::BackendTextureObject>();
-    const GLuint backendTextureId = backendTexture->GetBackendTextureId();
-
-    // The symptom itself: the per-unit walk has to actually bind it.
-    DirectGLES::BindCurrentTextures();
-    ASSERT_EQ(state.bindCalls.size(), 1u)
-        << "the multisample texture was not bound; every texelFetch against it reads zero";
-    EXPECT_EQ(state.bindCalls[0].target, GL_TEXTURE_2D_MULTISAMPLE);
-    EXPECT_EQ(state.bindCalls[0].texture, backendTextureId);
-}
-
-TEST(DirectGLESSanity, BindingZeroClearsPreviousNativeTextureBinding) {
-    using namespace MobileGL;
-    namespace DirectGLES = MG_Backend::DirectGLES;
-
-    ScopedDirectGLESTextureBindings state;
-
-    GLuint frontendTexture = 0;
-    MG_Impl::GLImpl::GenTextures(1, &frontendTexture);
-    ASSERT_NE(frontendTexture, 0u);
-    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, frontendTexture);
-    const auto& frontendTextureObject = MG_State::pGLContext->GetTextureUnitObject(0)
-                                            .GetBindingSlot(TextureTarget::Texture2D)
-                                            .GetBoundObject();
-    ASSERT_NE(frontendTextureObject, nullptr);
-    ASSERT_EQ(frontendTextureObject->GetExternalIndex(), frontendTexture);
-
-    // A texture with no image is incomplete, and an incomplete texture samples as (0, 0, 0, 1) -
-    // which DirectGLES expresses by leaving the native target unbound (see "sample a
-    // mipmap-incomplete texture as black"). This test is about the bind-0 clear, so the texture
-    // has to be complete enough to get bound in the first place: a format plus a level 0. At 1x1
-    // that single level is the whole mip chain, so it stays complete under any filter. The state
-    // is set directly rather than through glTexImage2D because the mock GLES table below wires
-    // only the binding entry points, not the upload path.
-    frontendTextureObject->SetInternalFormat(TextureInternalFormat::RGBA8);
-    MG_State::GLState::AsMipmapTexture(frontendTextureObject.get())
-        ->AllocateStorage(TextureUploadTarget::Texture2D, 0, {{1, 1, 1}, 4});
-    ASSERT_FALSE(MG_State::GLState::SamplesAsIncompleteTexture(
-        frontendTextureObject.get(), frontendTextureObject->GetSamplerObject().get()));
-
-    auto& backendTexture = DirectGLES::TextureImpl::g_backendTextureObjects.GetOrCreate(frontendTextureObject);
-    backendTexture = MakeShared<DirectGLES::TextureImpl::BackendTextureObject>();
-    const GLuint backendTextureId = backendTexture->GetBackendTextureId();
-
-    DirectGLES::BindCurrentTextures();
-    ASSERT_EQ(state.bindCalls.size(), 1u);
-    EXPECT_EQ(state.bindCalls[0].target, GL_TEXTURE_2D);
-    EXPECT_EQ(state.bindCalls[0].texture, backendTextureId);
-
-    // The default 1D slot maps to the same native ES target as 2D. It must not clear and force a
-    // redundant rebind while the real 2D frontend object remains current.
-    DirectGLES::BindCurrentTextures();
-    EXPECT_EQ(state.bindCalls.size(), 1u);
-
-    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
-    ASSERT_TRUE(MG_State::GLState::IsUndefinedDefaultTexture(
-        MG_State::pGLContext->GetTextureUnitObject(0)
-            .GetBindingSlot(TextureTarget::Texture2D)
-            .GetBoundObject()
-            .get()));
-
-    DirectGLES::BindCurrentTextures();
-
-    ASSERT_EQ(state.bindCalls.size(), 2u);
-    EXPECT_EQ(state.bindCalls[1].target, GL_TEXTURE_2D);
-    EXPECT_EQ(state.bindCalls[1].texture, 0u);
-    EXPECT_EQ(DirectGLES::TextureImpl::g_boundTexturesCache[0][static_cast<SizeT>(TextureTarget::Texture2D)],
-              nullptr);
+    EXPECT_EQ(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_gpu_shader_int64), extensions.end());
+    EXPECT_EQ(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_KHR_shader_subgroup), extensions.end());
 }
 
 TEST(DirectGLESSanity, ProvidesNamedFramebufferBlitForDirectStateAccess) {
     MobileGL::MG_Backend::DirectGLES::BackendObject_DirectGLES backend;
+    // P13 W6: the backend applies a blit (BlitFramebuffer, which the record sink calls with the
+    // verb's framebuffer handles); the named-framebuffer DSA entries are the verb port's alone -
+    // they record a verb naming the framebuffer, and the backend never sees a frontend object.
     const auto& funcs = backend.GetBackendFunctions().GL;
-
-    EXPECT_NE(funcs.ClearNamedFramebufferfv, nullptr);
-    EXPECT_NE(funcs.ClearNamedFramebufferfi, nullptr);
     EXPECT_NE(funcs.BlitFramebuffer, nullptr);
-    EXPECT_NE(funcs.BlitNamedFramebuffer, nullptr);
+    EXPECT_EQ(funcs.ClearNamedFramebufferfv, nullptr);
+    EXPECT_EQ(funcs.BlitNamedFramebuffer, nullptr);
+
+    MobileGL::MG_Backend::GlobalBackendFunctionsTable table = backend.GetBackendFunctions();
+    MobileGL::MG_Record::InstallMonolithVerbPort(table);
+    EXPECT_NE(table.GL.ClearNamedFramebufferfv, nullptr);
+    EXPECT_NE(table.GL.ClearNamedFramebufferfi, nullptr);
+    EXPECT_NE(table.GL.BlitFramebuffer, nullptr);
+    EXPECT_NE(table.GL.BlitNamedFramebuffer, nullptr);
 }
 
 TEST(DirectGLESSanity, RewritesBaseInstanceBuiltinForEsslVertexShaders) {
@@ -406,8 +385,8 @@ void main() {
 }
 )";
 
-    const auto rewritten = MobileGL::MG_Backend::DirectGLES::EmulateBaseInstanceInVertexShader(
-        source, GL_VERTEX_SHADER);
+    const auto rewritten =
+        MobileGL::MG_Backend::DirectGLES::EmulateBaseInstanceInVertexShader(source, GL_VERTEX_SHADER);
 
     EXPECT_NE(rewritten.find("uniform highp int mg_BaseInstance;"), MobileGL::String::npos);
     EXPECT_NE(rewritten.find("uint drawId = mg_BaseInstance;"), MobileGL::String::npos);
@@ -418,8 +397,8 @@ void main() {
 TEST(DirectGLESSanity, LeavesBaseInstanceBuiltinAloneOutsideVertexShaders) {
     const MobileGL::String source = "#version 320 es\nuint value = gl_BaseInstance;\n";
 
-    const auto rewritten = MobileGL::MG_Backend::DirectGLES::EmulateBaseInstanceInVertexShader(
-        source, GL_FRAGMENT_SHADER);
+    const auto rewritten =
+        MobileGL::MG_Backend::DirectGLES::EmulateBaseInstanceInVertexShader(source, GL_FRAGMENT_SHADER);
 
     EXPECT_EQ(rewritten, source);
 }
@@ -448,8 +427,8 @@ void main() {
 }
 )";
 
-    const auto rewritten = MobileGL::MG_Backend::DirectGLES::PromoteDrawParameterGlobalsToUniforms(
-        source, GL_VERTEX_SHADER);
+    const auto rewritten =
+        MobileGL::MG_Backend::DirectGLES::PromoteDrawParameterGlobalsToUniforms(source, GL_VERTEX_SHADER);
 
     EXPECT_NE(rewritten.find("int instance = mg_ZeroBasedInstanceID + mg_BaseInstanceLowered;"),
               MobileGL::String::npos);
@@ -488,8 +467,8 @@ void main() {
 }
 )";
 
-    const auto rewritten = MobileGL::MG_Backend::DirectGLES::PromoteDrawParameterGlobalsToUniforms(
-        source, GL_VERTEX_SHADER);
+    const auto rewritten =
+        MobileGL::MG_Backend::DirectGLES::PromoteDrawParameterGlobalsToUniforms(source, GL_VERTEX_SHADER);
 
     EXPECT_NE(rewritten.find("#define mg_BaseInstanceLowered ((mg_BaseInstanceWordIndex > 0) ? "
                              "int(mg_indirectWords[uint(mg_BaseInstanceWordIndex - 1)]) : mg_BaseInstance)"),
@@ -518,8 +497,8 @@ void main() {
 }
 )";
 
-    const auto rewritten = MobileGL::MG_Backend::DirectGLES::PromoteDrawParameterGlobalsToUniforms(
-        source, GL_VERTEX_SHADER);
+    const auto rewritten =
+        MobileGL::MG_Backend::DirectGLES::PromoteDrawParameterGlobalsToUniforms(source, GL_VERTEX_SHADER);
 
     EXPECT_EQ(rewritten.find("mg_ZeroBasedInstanceID"), MobileGL::String::npos);
     EXPECT_NE(rewritten.find("int instance = gl_InstanceID + mg_BaseInstanceLowered;"), MobileGL::String::npos);
@@ -536,8 +515,8 @@ TEST(DirectGLESSanity, LeavesDrawParameterGlobalsAloneOutsideVertexShaders) {
     const MobileGL::String source =
         "#version 310 es\nhighp int mg_BaseInstanceLowered;\nint value = gl_InstanceID + mg_BaseInstanceLowered;\n";
 
-    const auto rewritten = MobileGL::MG_Backend::DirectGLES::PromoteDrawParameterGlobalsToUniforms(
-        source, GL_FRAGMENT_SHADER);
+    const auto rewritten =
+        MobileGL::MG_Backend::DirectGLES::PromoteDrawParameterGlobalsToUniforms(source, GL_FRAGMENT_SHADER);
 
     EXPECT_EQ(rewritten, source);
 }
@@ -563,7 +542,7 @@ TEST(DirectVulkanSanity, SampledViewAspectFollowsDepthStencilTextureMode) {
               static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT));
     EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(kPacked, GL_STENCIL_INDEX),
               static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_STENCIL_BIT));
-    // The default argument is the pre-existing behaviour, for the call sites with no texture.
+    // The default argument is the pre-existing behavior, for the call sites with no texture.
     EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(kPacked),
               static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT));
 
@@ -599,8 +578,7 @@ TEST(DirectVulkanSanity, AdvertisesVoxyRequiredRenderingExtensions) {
     EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 6);
     EXPECT_EQ(rendererInfo.TargetGLVersion.Patch, 0);
 
-    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_compute_shader),
-              extensions.end());
+    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_compute_shader), extensions.end());
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_shader_storage_buffer_object),
               extensions.end());
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_multi_draw_indirect),
@@ -609,8 +587,7 @@ TEST(DirectVulkanSanity, AdvertisesVoxyRequiredRenderingExtensions) {
               extensions.end());
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_shader_draw_parameters),
               extensions.end());
-    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_gpu_shader_int64),
-              extensions.end());
+    EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_gpu_shader_int64), extensions.end());
 }
 
 TEST(DirectVulkanSanity, ClampsAdvertisedTextureAndDrawBufferLimitsToFrontendState) {
@@ -632,8 +609,10 @@ TEST(DirectVulkanSanity, ClampsAdvertisedTextureAndDrawBufferLimitsToFrontendSta
     // Blaze3D's 128-entry TEXTURES[] so Iris' unbind loop cannot index out of bounds); the combined
     // limit clamps to the full texture-unit array capacity.
     EXPECT_EQ(highParams.MaxTextureImageUnits, MG_State::GLState::TextureState::MAX_PER_STAGE_TEXTURE_IMAGE_UNITS);
-    EXPECT_EQ(highParams.MaxVertexTextureImageUnits, MG_State::GLState::TextureState::MAX_PER_STAGE_TEXTURE_IMAGE_UNITS);
-    EXPECT_EQ(highParams.MaxComputeTextureImageUnits, MG_State::GLState::TextureState::MAX_PER_STAGE_TEXTURE_IMAGE_UNITS);
+    EXPECT_EQ(highParams.MaxVertexTextureImageUnits,
+              MG_State::GLState::TextureState::MAX_PER_STAGE_TEXTURE_IMAGE_UNITS);
+    EXPECT_EQ(highParams.MaxComputeTextureImageUnits,
+              MG_State::GLState::TextureState::MAX_PER_STAGE_TEXTURE_IMAGE_UNITS);
     EXPECT_LE(highParams.MaxTextureImageUnits, 128);
     EXPECT_EQ(highParams.MaxCombinedTextureImageUnits, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
     EXPECT_EQ(highParams.MaxDrawBuffers, MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
@@ -672,6 +651,8 @@ TEST(DirectVulkanSanity, GatesPerStageImageUniformLimitsOnPhysicalDeviceFeatures
 
     const auto& withoutGeometry = backend.GetDynamicParameters();
     EXPECT_EQ(withoutGeometry.MaxVertexImageUniforms, 10);
+    EXPECT_EQ(withoutGeometry.MaxTessControlImageUniforms, 10);
+    EXPECT_EQ(withoutGeometry.MaxTessEvaluationImageUniforms, 10);
     EXPECT_EQ(withoutGeometry.MaxGeometryImageUniforms, 0);
     EXPECT_EQ(withoutGeometry.MaxFragmentImageUniforms, 10);
     EXPECT_EQ(withoutGeometry.MaxComputeImageUniforms, 9);
@@ -684,6 +665,8 @@ TEST(DirectVulkanSanity, GatesPerStageImageUniformLimitsOnPhysicalDeviceFeatures
     caps.SupportsFragmentStoresAndAtomics = false;
     backend.ApplyVulkanCapabilitiesForTesting(caps);
     EXPECT_EQ(backend.GetDynamicParameters().MaxVertexImageUniforms, 0);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxTessControlImageUniforms, 0);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxTessEvaluationImageUniforms, 0);
     EXPECT_EQ(backend.GetDynamicParameters().MaxGeometryImageUniforms, 0);
     EXPECT_EQ(backend.GetDynamicParameters().MaxFragmentImageUniforms, 0);
     EXPECT_EQ(backend.GetDynamicParameters().MaxComputeImageUniforms, 9);
@@ -697,6 +680,8 @@ TEST(DirectGLESSanity, PreservesHostPerStageImageUniformLimits) {
     caps.MaxImageUnits = 8;
     caps.MaxCombinedImageUniforms = 16;
     caps.MaxVertexImageUniforms = 2;
+    caps.MaxTessControlImageUniforms = 6;
+    caps.MaxTessEvaluationImageUniforms = 7;
     caps.MaxGeometryImageUniforms = 3;
     caps.MaxFragmentImageUniforms = 4;
     caps.MaxComputeImageUniforms = 5;
@@ -704,6 +689,8 @@ TEST(DirectGLESSanity, PreservesHostPerStageImageUniformLimits) {
 
     const auto& params = backend.GetDynamicParameters();
     EXPECT_EQ(params.MaxVertexImageUniforms, 2);
+    EXPECT_EQ(params.MaxTessControlImageUniforms, 6);
+    EXPECT_EQ(params.MaxTessEvaluationImageUniforms, 7);
     EXPECT_EQ(params.MaxGeometryImageUniforms, 3);
     EXPECT_EQ(params.MaxFragmentImageUniforms, 4);
     EXPECT_EQ(params.MaxComputeImageUniforms, 5);
@@ -801,8 +788,7 @@ TEST(ProvokingVertexConventions, EachBackendReportsWhatItActuallyPins) {
     glesCaps.LayerProvokingVertex = GL_FIRST_VERTEX_CONVENTION;
     glesCaps.ViewportIndexProvokingVertex = GL_UNDEFINED_VERTEX;
     glesBackend.ApplyGLESCapabilitiesForTesting(glesCaps);
-    EXPECT_EQ(glesBackend.GetDynamicParameters().LayerProvokingVertex,
-              static_cast<GLenum>(GL_FIRST_VERTEX_CONVENTION));
+    EXPECT_EQ(glesBackend.GetDynamicParameters().LayerProvokingVertex, static_cast<GLenum>(GL_FIRST_VERTEX_CONVENTION));
     EXPECT_EQ(glesBackend.GetDynamicParameters().ViewportIndexProvokingVertex,
               static_cast<GLenum>(GL_UNDEFINED_VERTEX));
 
@@ -810,8 +796,7 @@ TEST(ProvokingVertexConventions, EachBackendReportsWhatItActuallyPins) {
     MG_External::VulkanCapabilities vkCaps;
     vkBackend.ApplyVulkanCapabilitiesForTesting(vkCaps);
     EXPECT_EQ(vkBackend.GetDynamicParameters().LayerProvokingVertex, static_cast<GLenum>(GL_UNDEFINED_VERTEX));
-    EXPECT_EQ(vkBackend.GetDynamicParameters().ViewportIndexProvokingVertex,
-              static_cast<GLenum>(GL_UNDEFINED_VERTEX));
+    EXPECT_EQ(vkBackend.GetDynamicParameters().ViewportIndexProvokingVertex, static_cast<GLenum>(GL_UNDEFINED_VERTEX));
 }
 
 TEST(FragmentInterpolationCapabilities, PlumbsGLESAndBothVulkanPropertyPaths) {
@@ -858,24 +843,38 @@ TEST(FragmentInterpolationCapabilities, PlumbsGLESAndBothVulkanPropertyPaths) {
     EXPECT_EQ(vkBackend.GetDynamicParameters().FragmentInterpolationOffsetBits, 4);
 }
 
-TEST(DirectVulkanSanity, AdvertisesSubgroupOnlyWhenVulkanReportsUsableSupport) {
+// Native subgroups whenever Vulkan reports usable support; otherwise the 32-lane compute
+// emulation by default, and nothing at all when MOBILEGL_SUBGROUP_EMULATION is ForceOff.
+TEST(DirectVulkanSanity, AdvertisesNativeSubgroupsOrTheEmulation) {
     using namespace MobileGL;
 
     MG_Backend::DirectVulkan::BackendObject_DirectVulkan backend;
+    const auto savedEmulation = MG_Config::Features.SubgroupEmulation;
 
     MG_External::VulkanCapabilities unsupportedCaps;
     unsupportedCaps.SupportsShaderSubgroup = false;
     unsupportedCaps.SubgroupSize = 32;
     unsupportedCaps.SubgroupSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
     unsupportedCaps.SubgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT;
-    backend.ApplyVulkanCapabilitiesForTesting(unsupportedCaps);
 
+    MG_Config::Features.SubgroupEmulation = MG_Config::QuirkOverride::ForceOff;
+    backend.ApplyVulkanCapabilitiesForTesting(unsupportedCaps);
     const auto& unsupportedExtensions = backend.GetRendererInfo().RendererGLInfo.Extensions;
     EXPECT_EQ(std::find(unsupportedExtensions.begin(), unsupportedExtensions.end(), E_GL_KHR_shader_subgroup),
               unsupportedExtensions.end());
     EXPECT_EQ(backend.GetDynamicParameters().SubgroupSize, 0u);
     EXPECT_EQ(backend.GetDynamicParameters().SubgroupSupportedStages, 0u);
     EXPECT_EQ(backend.GetDynamicParameters().SubgroupSupportedFeatures, 0u);
+
+    MG_Config::Features.SubgroupEmulation = MG_Config::QuirkOverride::Auto;
+    backend.ApplyVulkanCapabilitiesForTesting(unsupportedCaps);
+    const auto& emulatedExtensions = backend.GetRendererInfo().RendererGLInfo.Extensions;
+    EXPECT_NE(std::find(emulatedExtensions.begin(), emulatedExtensions.end(), E_GL_KHR_shader_subgroup),
+              emulatedExtensions.end());
+    EXPECT_EQ(backend.GetDynamicParameters().SubgroupSize, MG_Backend::kEmulatedSubgroupSize);
+    EXPECT_EQ(backend.GetDynamicParameters().SubgroupSupportedStages, MG_Backend::kEmulatedSubgroupStages);
+    EXPECT_EQ(backend.GetDynamicParameters().SubgroupSupportedFeatures, MG_Backend::kEmulatedSubgroupFeatures);
+    MG_Config::Features.SubgroupEmulation = savedEmulation;
 
     MG_External::VulkanCapabilities supportedCaps;
     supportedCaps.SupportsShaderSubgroup = true;
@@ -893,8 +892,7 @@ TEST(DirectVulkanSanity, AdvertisesSubgroupOnlyWhenVulkanReportsUsableSupport) {
     EXPECT_EQ(backend.GetDynamicParameters().SubgroupSupportedStages,
               static_cast<Uint32>(GL_FRAGMENT_SHADER_BIT | GL_COMPUTE_SHADER_BIT));
     EXPECT_EQ(backend.GetDynamicParameters().SubgroupSupportedFeatures,
-              static_cast<Uint32>(GL_SUBGROUP_FEATURE_BASIC_BIT_KHR |
-                                  GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR |
+              static_cast<Uint32>(GL_SUBGROUP_FEATURE_BASIC_BIT_KHR | GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR |
                                   GL_SUBGROUP_FEATURE_QUAD_BIT_KHR));
     EXPECT_TRUE(backend.GetDynamicParameters().SubgroupQuadOperationsInAllStages);
 }
@@ -902,7 +900,7 @@ TEST(DirectVulkanSanity, AdvertisesSubgroupOnlyWhenVulkanReportsUsableSupport) {
 TEST(DirectVulkanSanity, CapabilityRefreshInvalidatesTheCachedCompileEnvironment) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
 
@@ -1014,7 +1012,7 @@ TEST(GetterSanity, ClampsMaxVertexAttribsToCurrentValueStorageCapacity) {
 TEST(GetterSanity, ReportsFragmentInterpolationLimitsForFloatAndIntegerQueries) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
 
@@ -1064,7 +1062,7 @@ TEST(GetterSanity, ReportsFragmentInterpolationLimitsForFloatAndIntegerQueries) 
 TEST(GetterSanity, StorageAndUniformBufferOffsetAlignmentsAreSeparateLimits) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
 
@@ -1103,6 +1101,8 @@ TEST(GetterSanity, PerStageImageUniformQueriesMatchShaderCompilerLimits) {
     params.MaxImageUnits = 8;
     params.MaxCombinedImageUniforms = 8;
     params.MaxVertexImageUniforms = 1;
+    params.MaxTessControlImageUniforms = 5;
+    params.MaxTessEvaluationImageUniforms = 6;
     params.MaxGeometryImageUniforms = 2;
     params.MaxFragmentImageUniforms = 3;
     params.MaxComputeImageUniforms = 4;
@@ -1111,6 +1111,10 @@ TEST(GetterSanity, PerStageImageUniformQueriesMatchShaderCompilerLimits) {
     GLint reported = -1;
     MG_Impl::GLImpl::GetIntegerv(GL_MAX_VERTEX_IMAGE_UNIFORMS, &reported);
     EXPECT_EQ(reported, 1);
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS, &reported);
+    EXPECT_EQ(reported, 5);
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS, &reported);
+    EXPECT_EQ(reported, 6);
     MG_Impl::GLImpl::GetIntegerv(GL_MAX_GEOMETRY_IMAGE_UNIFORMS, &reported);
     EXPECT_EQ(reported, 2);
     MG_Impl::GLImpl::GetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &reported);
@@ -1153,7 +1157,7 @@ TEST(GetterSanity, AtomicCounterQueriesMatchShaderCompilerLimits) {
     using namespace MobileGL;
     namespace Transpiler = MG_Util::ShaderTranspiler;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
     MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
@@ -1167,8 +1171,7 @@ TEST(GetterSanity, AtomicCounterQueriesMatchShaderCompilerLimits) {
                                GL_MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS}) {
         reported = -1;
         MG_Impl::GLImpl::GetIntegerv(pname, &reported);
-        EXPECT_EQ(reported, static_cast<GLint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE))
-            << "pname " << pname;
+        EXPECT_EQ(reported, static_cast<GLint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE)) << "pname " << pname;
     }
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
@@ -1208,12 +1211,92 @@ out vec4 color;
 int mgBindings[gl_MaxAtomicCounterBindings];
 int mgCombinedBuffers[gl_MaxCombinedAtomicCounterBuffers];
 int mgFragmentBuffers[gl_MaxFragmentAtomicCounterBuffers];
-layout(binding = )" + lastBinding + R"(, offset = 0) uniform atomic_uint mgCounter;
+layout(binding = )" + lastBinding +
+                          R"(, offset = 0) uniform atomic_uint mgCounter;
 void main() {
-    color = vec4(float(mgBindings[)" + lastBinding + R"(] + mgCombinedBuffers[)" + lastBuffer +
-                         R"(] + mgFragmentBuffers[)" + lastBuffer + R"(] + int(atomicCounterIncrement(mgCounter))));
+    color = vec4(float(mgBindings[)" +
+                          lastBinding + R"(] + mgCombinedBuffers[)" + lastBuffer + R"(] + mgFragmentBuffers[)" +
+                          lastBuffer + R"(] + int(atomicCounterIncrement(mgCounter))));
 }
 )";
+    auto compiled = MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+        .shaderType = GL_FRAGMENT_SHADER,
+        .sourceStr = source,
+    });
+    EXPECT_TRUE(compiled) << (compiled ? "" : compiled.error().log);
+
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
+    MG_State::pGLContext = Move(previousContext);
+}
+
+// Every per-stage atomic-counter limit follows the backend's per-stage STORAGE-BLOCK budget,
+// because both backends serve a counter buffer as a lowered storage block in any stage: a stage
+// with storage blocks gets counter buffers (up to the binding count) and a full buffer's worth of
+// counters, a stage without gets 0 of both. glGetIntegerv and the gl_Max*AtomicCounter*
+// constants must say the same thing (KHR-GL43.shader_atomic_counters.basic-glsl-built-in).
+TEST(GetterSanity, AtomicCounterLimitsFollowTheStageStorageBlockBudget) {
+    using namespace MobileGL;
+    namespace Transpiler = MG_Util::ShaderTranspiler;
+
+    auto previousContext = MG_State::pGLContext.Take();
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+    MG_Backend::DynamicBackendParameters params{};
+    params.MaxShaderStorageBufferBindings = 24;
+    params.MaxCombinedShaderStorageBlocks = 24;
+    params.MaxVertexShaderStorageBlocks = 4;
+    params.MaxTessControlShaderStorageBlocks = 0;
+    params.MaxTessEvaluationShaderStorageBlocks = 0;
+    params.MaxGeometryShaderStorageBlocks = 2;
+    params.MaxFragmentShaderStorageBlocks = 4;
+    params.MaxComputeShaderStorageBlocks = 24;
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
+
+    const GLint fullBuffer = static_cast<GLint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFER_SIZE / 4);
+    const struct {
+        GLenum buffersPname;
+        GLenum countersPname;
+        GLint buffers;
+        GLint counters;
+        const char* buffersConstant;
+        const char* countersConstant;
+    } expected[] = {
+        {GL_MAX_VERTEX_ATOMIC_COUNTER_BUFFERS, GL_MAX_VERTEX_ATOMIC_COUNTERS, 4, fullBuffer,
+         "gl_MaxVertexAtomicCounterBuffers", "gl_MaxVertexAtomicCounters"},
+        {GL_MAX_TESS_CONTROL_ATOMIC_COUNTER_BUFFERS, GL_MAX_TESS_CONTROL_ATOMIC_COUNTERS, 0, 0,
+         "gl_MaxTessControlAtomicCounterBuffers", "gl_MaxTessControlAtomicCounters"},
+        {GL_MAX_TESS_EVALUATION_ATOMIC_COUNTER_BUFFERS, GL_MAX_TESS_EVALUATION_ATOMIC_COUNTERS, 0, 0,
+         "gl_MaxTessEvaluationAtomicCounterBuffers", "gl_MaxTessEvaluationAtomicCounters"},
+        {GL_MAX_GEOMETRY_ATOMIC_COUNTER_BUFFERS, GL_MAX_GEOMETRY_ATOMIC_COUNTERS, 2, fullBuffer,
+         "gl_MaxGeometryAtomicCounterBuffers", "gl_MaxGeometryAtomicCounters"},
+        {GL_MAX_FRAGMENT_ATOMIC_COUNTER_BUFFERS, GL_MAX_FRAGMENT_ATOMIC_COUNTERS, 4, fullBuffer,
+         "gl_MaxFragmentAtomicCounterBuffers", "gl_MaxFragmentAtomicCounters"},
+        {GL_MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS, GL_MAX_COMPUTE_ATOMIC_COUNTERS,
+         static_cast<GLint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS), fullBuffer,
+         "gl_MaxComputeAtomicCounterBuffers", "gl_MaxComputeAtomicCounters"},
+        // The combined pair: the stage sum (4 + 2 + 4 + 8 buffers), bounded by the combined
+        // storage-block budget the lowered blocks draw from.
+        {GL_MAX_COMBINED_ATOMIC_COUNTER_BUFFERS, GL_MAX_COMBINED_ATOMIC_COUNTERS, 18, 4 * fullBuffer,
+         "gl_MaxCombinedAtomicCounterBuffers", "gl_MaxCombinedAtomicCounters"},
+    };
+    String checks;
+    for (const auto& limit : expected) {
+        GLint reported = -1;
+        MG_Impl::GLImpl::GetIntegerv(limit.buffersPname, &reported);
+        EXPECT_EQ(reported, limit.buffers) << limit.buffersConstant;
+        reported = -1;
+        MG_Impl::GLImpl::GetIntegerv(limit.countersPname, &reported);
+        EXPECT_EQ(reported, limit.counters) << limit.countersConstant;
+        // A negative array size is a compile error, so each line compiles only while the
+        // constant expands to exactly the number glGetIntegerv answers.
+        checks += "int mg_" + String(limit.buffersConstant) + "[" + limit.buffersConstant +
+                  " == " + std::to_string(limit.buffers) + " ? 1 : -1];\n";
+        checks += "int mg_" + String(limit.countersConstant) + "[" + limit.countersConstant +
+                  " == " + std::to_string(limit.counters) + " ? 1 : -1];\n";
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const String source = "#version 430 core\nout vec4 color;\n" + checks + "void main() { color = vec4(1.0); }\n";
     auto compiled = MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
         .shaderType = GL_FRAGMENT_SHADER,
         .sourceStr = source,
@@ -1232,7 +1315,7 @@ void main() {
 TEST(GetterSanity, ComputeWorkGroupQueriesMatchShaderCompilerLimits) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
     MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
@@ -1258,14 +1341,13 @@ TEST(GetterSanity, ComputeWorkGroupQueriesMatchShaderCompilerLimits) {
     // A negative array size is a compile error, so the stage only compiles when EVERY component
     // of both built-in constants equals what the query above reported. Two-sided by construction:
     // a resource table that is too permissive fails it exactly like one that is too tight.
-    const String source = R"(#version 430 core
+    const String source =
+        R"(#version 430 core
 layout(local_size_x = 1) in;
 const int mgAgree = (gl_MaxComputeWorkGroupSize == ivec3()" +
-                         std::to_string(size[0]) + ", " + std::to_string(size[1]) + ", " +
-                         std::to_string(size[2]) + R"() &&
+        std::to_string(size[0]) + ", " + std::to_string(size[1]) + ", " + std::to_string(size[2]) + R"() &&
                      gl_MaxComputeWorkGroupCount == ivec3()" +
-                         std::to_string(count[0]) + ", " + std::to_string(count[1]) + ", " +
-                         std::to_string(count[2]) + R"()) ? 1 : -1;
+        std::to_string(count[0]) + ", " + std::to_string(count[1]) + ", " + std::to_string(count[2]) + R"()) ? 1 : -1;
 int mgProbe[mgAgree];
 void main() {
     mgProbe[0] = 0;
@@ -1280,10 +1362,10 @@ void main() {
 
     // The z ceiling is also what glslang checks a declared local_size_z against, so it has to
     // reject one invocation past the advertised limit and accept the limit itself.
-    const String atLimit = "#version 430 core\nlayout(local_size_z = " + std::to_string(size[2]) +
-                           ") in;\nvoid main() {}\n";
-    const String pastLimit = "#version 430 core\nlayout(local_size_z = " + std::to_string(size[2] + 1) +
-                             ") in;\nvoid main() {}\n";
+    const String atLimit =
+        "#version 430 core\nlayout(local_size_z = " + std::to_string(size[2]) + ") in;\nvoid main() {}\n";
+    const String pastLimit =
+        "#version 430 core\nlayout(local_size_z = " + std::to_string(size[2] + 1) + ") in;\nvoid main() {}\n";
     EXPECT_TRUE(MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
         .shaderType = GL_COMPUTE_SHADER,
         .sourceStr = atLimit,
@@ -1313,11 +1395,20 @@ void main() {
 TEST(GetterSanity, EveryLimitWithABuiltinAgreesWithItsQuery) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
-    MG_Backend::pActiveBackendObject =
-        MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{}, BackendType::DirectGLES);
+    // Distinct non-zero image-uniform limits, so the per-stage pairs below cannot agree by both
+    // falling back to the same default.
+    MG_Backend::DynamicBackendParameters params;
+    params.MaxVertexImageUniforms = 1;
+    params.MaxTessControlImageUniforms = 2;
+    params.MaxTessEvaluationImageUniforms = 3;
+    params.MaxGeometryImageUniforms = 4;
+    params.MaxFragmentImageUniforms = 5;
+    params.MaxComputeImageUniforms = 6;
+    params.MaxCombinedImageUniforms = 7;
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params, BackendType::DirectGLES);
 
     struct LimitPair {
         GLenum pname;
@@ -1338,6 +1429,13 @@ TEST(GetterSanity, EveryLimitWithABuiltinAgreesWithItsQuery) {
         {GL_MAX_FRAGMENT_INPUT_COMPONENTS, "gl_MaxFragmentInputComponents"},
         {GL_MAX_DRAW_BUFFERS, "gl_MaxDrawBuffers"},
         {GL_MAX_IMAGE_UNITS, "gl_MaxImageUnits"},
+        {GL_MAX_VERTEX_IMAGE_UNIFORMS, "gl_MaxVertexImageUniforms"},
+        {GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS, "gl_MaxTessControlImageUniforms"},
+        {GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS, "gl_MaxTessEvaluationImageUniforms"},
+        {GL_MAX_GEOMETRY_IMAGE_UNIFORMS, "gl_MaxGeometryImageUniforms"},
+        {GL_MAX_FRAGMENT_IMAGE_UNIFORMS, "gl_MaxFragmentImageUniforms"},
+        {GL_MAX_COMPUTE_IMAGE_UNIFORMS, "gl_MaxComputeImageUniforms"},
+        {GL_MAX_COMBINED_IMAGE_UNIFORMS, "gl_MaxCombinedImageUniforms"},
         // The SAME token (0x8F39) under two spellings, and the two glslang fields behind them
         // must therefore carry the same value.
         {GL_MAX_COMBINED_IMAGE_UNITS_AND_FRAGMENT_OUTPUTS, "gl_MaxCombinedImageUnitsAndFragmentOutputs"},
@@ -1380,15 +1478,14 @@ TEST(GetterSanity, EveryLimitWithABuiltinAgreesWithItsQuery) {
     for (const LimitPair& pair : pairs) {
         GLint reported = -424242;
         MG_Impl::GLImpl::GetIntegerv(pair.pname, &reported);
-        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR)
-            << pair.builtin << "'s pname is not answerable at all";
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << pair.builtin << "'s pname is not answerable at all";
 
         // A negative array size is a compile error, so the stage only compiles when the built-in
         // equals what the query just reported. Two-sided by construction: a resource table that
         // is too permissive fails it exactly like one that is too tight. One shader per pair, so
         // a failure names the limit instead of reporting "something disagreed".
-        const String source = String("#version 460 core\nout vec4 mgColor;\nconst int mgAgree = (") +
-                              pair.builtin + " == " + std::to_string(reported) +
+        const String source = String("#version 460 core\nout vec4 mgColor;\nconst int mgAgree = (") + pair.builtin +
+                              " == " + std::to_string(reported) +
                               ") ? 1 : -1;\nint mgProbe[mgAgree];\nvoid main() { mgProbe[0] = 0; mgColor = "
                               "vec4(float(mgProbe[0])); }\n";
         auto compiled = MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
@@ -1412,7 +1509,7 @@ TEST(GetterSanity, EveryLimitWithABuiltinAgreesWithItsQuery) {
 TEST(GetterSanity, MaxElementIndexIsTheFull32BitIndexCeiling) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
     MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
@@ -1434,12 +1531,12 @@ TEST(GetterSanity, MaxElementIndexIsTheFull32BitIndexCeiling) {
 // GL 4.6 core table 23.53 gives GL_MAX_SAMPLES a minimum of four and the three per-category
 // ceilings a minimum of ONE. Flooring the latter at four is the advertised-caps lie that made
 // KHR-GL46.sample_variables.mask.rgba8i run at all: the frontend promised four integer samples,
-// the backend clamped the realised allocation to the one the driver can back, and the application
+// the backend clamped the realized allocation to the one the driver can back, and the application
 // wrote per-sample data it could never read.
 TEST(GetterSanity, PerCategoryMultisampleCeilingsAreProbedRatherThanFlooredAtFour) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
 
@@ -1481,7 +1578,7 @@ TEST(GetterSanity, PerCategoryMultisampleCeilingsAreProbedRatherThanFlooredAtFou
 TEST(ShaderCompilerSanity, ArbCullDistanceIsUsableBelow450) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
     MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
@@ -1549,6 +1646,57 @@ void main() { mgColor = vec4(float(gl_MaxCullDistances)); }
     MG_State::pGLContext = Move(previousContext);
 }
 
+// GL_EXT_shader_integer_mix (KHR-GL4x.shader_integer_mix.*): a 3.30 shader that requires the
+// extension must see its macro and must be able to mix integer and boolean vectors under a
+// boolean selector. Both backends carry the result: SPIR-V lowers the call to OpSelect, which
+// ESSL 3.10+ and GLSL 4.50 print back as a core boolean mix.
+TEST(ShaderCompilerSanity, ExtShaderIntegerMixIsUsableAt330) {
+    using namespace MobileGL;
+
+    auto previousContext = MG_State::pGLContext.Take();
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
+    const auto env = MG_Util::ShaderTranspiler::CaptureCompileEnv();
+
+    const auto compile = [&env](GLenum stage, const String& source) {
+        return MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+            .shaderType = stage,
+            .sourceStr = source,
+            .env = env.get(),
+        });
+    };
+
+    const String defineProbe = R"(#version 330
+#extension GL_EXT_shader_integer_mix: require
+#if !defined GL_EXT_shader_integer_mix
+#  error GL_EXT_shader_integer_mix is not defined
+#elif GL_EXT_shader_integer_mix != 1
+#  error GL_EXT_shader_integer_mix is not equal to 1
+#endif
+void main(void) { gl_Position = vec4(0); }
+)";
+    auto define = compile(GL_VERTEX_SHADER, defineProbe);
+    EXPECT_TRUE(define) << (define ? String() : define.error().log);
+
+    const String mixes = R"(#version 330
+#extension GL_EXT_shader_integer_mix: enable
+uniform ivec4 a; uniform ivec4 b; uniform uvec4 c; uniform uvec4 d; uniform bvec4 sel;
+flat out ivec4 i; flat out uvec4 u; flat out ivec4 bo;
+void main(void) {
+    i = mix(a, b, sel);
+    u = mix(c, d, sel);
+    bo = ivec4(mix(bvec4(a), bvec4(b), sel));
+    gl_Position = vec4(0);
+}
+)";
+    auto mixed = compile(GL_VERTEX_SHADER, mixes);
+    EXPECT_TRUE(mixed) << (mixed ? String() : mixed.error().log);
+
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
+    MG_State::pGLContext = Move(previousContext);
+}
+
 TEST(GetterSanity, ReportsKhrSubgroupDynamicParameters) {
     using namespace MobileGL;
 
@@ -1557,10 +1705,8 @@ TEST(GetterSanity, ReportsKhrSubgroupDynamicParameters) {
     MG_Backend::DynamicBackendParameters params;
     params.SubgroupSize = 32;
     params.SubgroupSupportedStages = GL_VERTEX_SHADER_BIT | GL_FRAGMENT_SHADER_BIT | GL_COMPUTE_SHADER_BIT;
-    params.SubgroupSupportedFeatures = GL_SUBGROUP_FEATURE_BASIC_BIT_KHR |
-                                       GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR |
-                                       GL_SUBGROUP_FEATURE_CLUSTERED_BIT_KHR |
-                                       GL_SUBGROUP_FEATURE_QUAD_BIT_KHR;
+    params.SubgroupSupportedFeatures = GL_SUBGROUP_FEATURE_BASIC_BIT_KHR | GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR |
+                                       GL_SUBGROUP_FEATURE_CLUSTERED_BIT_KHR | GL_SUBGROUP_FEATURE_QUAD_BIT_KHR;
     params.SubgroupQuadOperationsInAllStages = true;
     MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
 
@@ -1605,22 +1751,20 @@ TEST(DirectVulkanSanity, ReadbackUsesTheSourceFormatTexelSize) {
 }
 
 TEST(DirectVulkanSanity, DefaultFramebufferQuarterTurnReadbackMapsRectAndPixels) {
-    using MobileGL::MG_Backend::DirectVulkan::VulkanRenderer;
     using MobileGL::Uint8;
+    using MobileGL::MG_Backend::DirectVulkan::VulkanRenderer;
 
     VkOffset2D offset{};
     VkExtent2D copyExtent{};
     ASSERT_TRUE(VulkanRenderer::MapDefaultFramebufferReadbackRect(
-        1, 0, 2, 1, VkExtent2D{2, 3}, VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR,
-        &offset, &copyExtent));
+        1, 0, 2, 1, VkExtent2D{2, 3}, VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR, &offset, &copyExtent));
     EXPECT_EQ(offset.x, 0);
     EXPECT_EQ(offset.y, 1);
     EXPECT_EQ(copyExtent.width, 1u);
     EXPECT_EQ(copyExtent.height, 2u);
 
     ASSERT_TRUE(VulkanRenderer::MapDefaultFramebufferReadbackRect(
-        1, 0, 2, 1, VkExtent2D{2, 3}, VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR,
-        &offset, &copyExtent));
+        1, 0, 2, 1, VkExtent2D{2, 3}, VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR, &offset, &copyExtent));
     EXPECT_EQ(offset.x, 1);
     EXPECT_EQ(offset.y, 0);
     EXPECT_EQ(copyExtent.width, 1u);
@@ -1633,13 +1777,13 @@ TEST(DirectVulkanSanity, DefaultFramebufferQuarterTurnReadbackMapsRectAndPixels)
     const Uint8 expected[] = {'a', 'b', 'c', 'd', 'e', 'f'};
     Uint8 result[sizeof(expected)]{};
 
-    ASSERT_TRUE(VulkanRenderer::RemapDefaultFramebufferReadback(
-        raw90, 3, 2, VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR, 1, result));
+    ASSERT_TRUE(VulkanRenderer::RemapDefaultFramebufferReadback(raw90, 3, 2, VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR, 1,
+                                                                result));
     EXPECT_TRUE(std::equal(std::begin(expected), std::end(expected), std::begin(result)));
 
     std::fill(std::begin(result), std::end(result), 0);
-    ASSERT_TRUE(VulkanRenderer::RemapDefaultFramebufferReadback(
-        raw270, 3, 2, VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR, 1, result));
+    ASSERT_TRUE(VulkanRenderer::RemapDefaultFramebufferReadback(raw270, 3, 2, VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR,
+                                                                1, result));
     EXPECT_TRUE(std::equal(std::begin(expected), std::end(expected), std::begin(result)));
 }
 
@@ -1649,48 +1793,43 @@ TEST(DirectVulkanSanity, ReadbackConvertsRgba8AndRgba16fPixels) {
 
     const MobileGL::Uint8 rgba8[] = {17, 34, 51, 68, 85, 102, 119, 136};
     MobileGL::Uint8 rgba8Result[sizeof(rgba8)]{};
-    ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(
-        rgba8, VK_FORMAT_R8G8B8A8_UNORM, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE,
-        sizeof(rgba8Result), rgba8Result));
+    ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(rgba8, VK_FORMAT_R8G8B8A8_UNORM, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                                                      sizeof(rgba8Result), rgba8Result));
     EXPECT_TRUE(std::equal(std::begin(rgba8), std::end(rgba8), std::begin(rgba8Result)));
 
     const MobileGL::Uint8 bgra8[] = {51, 34, 17, 68};
     MobileGL::Uint8 bgra8Result[4]{};
-    ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(
-        bgra8, VK_FORMAT_B8G8R8A8_UNORM, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE,
-        sizeof(bgra8Result), bgra8Result));
+    ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(bgra8, VK_FORMAT_B8G8R8A8_UNORM, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                                                      sizeof(bgra8Result), bgra8Result));
     const MobileGL::Uint8 expectedBgra8[] = {17, 34, 51, 68};
     EXPECT_TRUE(std::equal(std::begin(expectedBgra8), std::end(expectedBgra8), std::begin(bgra8Result)));
 
     const MobileGL::Uint16 rgba16f[] = {
-        EncodeFloatToHalfBits(-0.25f), EncodeFloatToHalfBits(0.5f), EncodeFloatToHalfBits(1.5f),
-        EncodeFloatToHalfBits(1.0f), EncodeFloatToHalfBits(0.25f), EncodeFloatToHalfBits(0.0f),
-        EncodeFloatToHalfBits(1.0f), EncodeFloatToHalfBits(0.5f),
-        EncodeFloatToHalfBits(0.75f), EncodeFloatToHalfBits(0.125f), EncodeFloatToHalfBits(-1.0f),
-        EncodeFloatToHalfBits(2.0f), EncodeFloatToHalfBits(1.0f), EncodeFloatToHalfBits(0.75f),
-        EncodeFloatToHalfBits(0.25f), EncodeFloatToHalfBits(0.0f),
+        EncodeFloatToHalfBits(-0.25f), EncodeFloatToHalfBits(0.5f),  EncodeFloatToHalfBits(1.5f),
+        EncodeFloatToHalfBits(1.0f),   EncodeFloatToHalfBits(0.25f), EncodeFloatToHalfBits(0.0f),
+        EncodeFloatToHalfBits(1.0f),   EncodeFloatToHalfBits(0.5f),  EncodeFloatToHalfBits(0.75f),
+        EncodeFloatToHalfBits(0.125f), EncodeFloatToHalfBits(-1.0f), EncodeFloatToHalfBits(2.0f),
+        EncodeFloatToHalfBits(1.0f),   EncodeFloatToHalfBits(0.75f), EncodeFloatToHalfBits(0.25f),
+        EncodeFloatToHalfBits(0.0f),
     };
     constexpr MobileGL::SizeT kDestinationRowStride = 12;
     MobileGL::Uint8 rgba16fResult[kDestinationRowStride * 2];
     std::fill(std::begin(rgba16fResult), std::end(rgba16fResult), 0xCD);
-    ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(
-        reinterpret_cast<const MobileGL::Uint8*>(rgba16f), VK_FORMAT_R16G16B16A16_SFLOAT,
-        2, 2, GL_RGBA, GL_UNSIGNED_BYTE, kDestinationRowStride, rgba16fResult));
+    ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(reinterpret_cast<const MobileGL::Uint8*>(rgba16f),
+                                                      VK_FORMAT_R16G16B16A16_SFLOAT, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE,
+                                                      kDestinationRowStride, rgba16fResult));
     const MobileGL::Uint8 expectedRgba16fRow0[] = {0, 128, 255, 255, 64, 0, 255, 128};
     const MobileGL::Uint8 expectedRgba16fRow1[] = {191, 32, 0, 255, 255, 191, 64, 0};
-    EXPECT_TRUE(std::equal(std::begin(expectedRgba16fRow0), std::end(expectedRgba16fRow0),
-                           std::begin(rgba16fResult)));
+    EXPECT_TRUE(std::equal(std::begin(expectedRgba16fRow0), std::end(expectedRgba16fRow0), std::begin(rgba16fResult)));
     EXPECT_TRUE(std::equal(std::begin(expectedRgba16fRow1), std::end(expectedRgba16fRow1),
                            std::begin(rgba16fResult) + kDestinationRowStride));
-    EXPECT_TRUE(std::all_of(std::begin(rgba16fResult) + 8,
-                            std::begin(rgba16fResult) + kDestinationRowStride,
+    EXPECT_TRUE(std::all_of(std::begin(rgba16fResult) + 8, std::begin(rgba16fResult) + kDestinationRowStride,
                             [](MobileGL::Uint8 value) { return value == 0xCD; }));
 
     MobileGL::Float rgba16fFloatResult[16]{};
     ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(
-        reinterpret_cast<const MobileGL::Uint8*>(rgba16f), VK_FORMAT_R16G16B16A16_SFLOAT,
-        2, 2, GL_RGBA, GL_FLOAT, sizeof(MobileGL::Float) * 8,
-        reinterpret_cast<MobileGL::Uint8*>(rgba16fFloatResult)));
+        reinterpret_cast<const MobileGL::Uint8*>(rgba16f), VK_FORMAT_R16G16B16A16_SFLOAT, 2, 2, GL_RGBA, GL_FLOAT,
+        sizeof(MobileGL::Float) * 8, reinterpret_cast<MobileGL::Uint8*>(rgba16fFloatResult)));
     EXPECT_FLOAT_EQ(rgba16fFloatResult[0], -0.25f);
     EXPECT_FLOAT_EQ(rgba16fFloatResult[1], 0.5f);
     EXPECT_FLOAT_EQ(rgba16fFloatResult[2], 1.5f);
@@ -1705,9 +1844,8 @@ TEST(DirectVulkanSanity, ReadbackDecodesSingleChannel32BitFormats) {
     const MobileGL::Float r32f[] = {0.75f, -2.0f};
     MobileGL::Float r32fResult[8]{};
     ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(
-        reinterpret_cast<const MobileGL::Uint8*>(r32f), VK_FORMAT_R32_SFLOAT,
-        2, 1, GL_RGBA, GL_FLOAT, sizeof(MobileGL::Float) * 8,
-        reinterpret_cast<MobileGL::Uint8*>(r32fResult)));
+        reinterpret_cast<const MobileGL::Uint8*>(r32f), VK_FORMAT_R32_SFLOAT, 2, 1, GL_RGBA, GL_FLOAT,
+        sizeof(MobileGL::Float) * 8, reinterpret_cast<MobileGL::Uint8*>(r32fResult)));
     EXPECT_FLOAT_EQ(r32fResult[0], 0.75f);
     EXPECT_FLOAT_EQ(r32fResult[1], 0.0f);
     EXPECT_FLOAT_EQ(r32fResult[2], 0.0f);
@@ -1717,9 +1855,8 @@ TEST(DirectVulkanSanity, ReadbackDecodesSingleChannel32BitFormats) {
     const MobileGL::Uint32 r32ui[] = {12345u};
     MobileGL::Float r32uiResult[4]{};
     ASSERT_TRUE(VulkanRenderer::ConvertReadbackPixels(
-        reinterpret_cast<const MobileGL::Uint8*>(r32ui), VK_FORMAT_R32_UINT,
-        1, 1, GL_RGBA, GL_FLOAT, sizeof(MobileGL::Float) * 4,
-        reinterpret_cast<MobileGL::Uint8*>(r32uiResult)));
+        reinterpret_cast<const MobileGL::Uint8*>(r32ui), VK_FORMAT_R32_UINT, 1, 1, GL_RGBA, GL_FLOAT,
+        sizeof(MobileGL::Float) * 4, reinterpret_cast<MobileGL::Uint8*>(r32uiResult)));
     EXPECT_FLOAT_EQ(r32uiResult[0], 12345.0f);
     EXPECT_FLOAT_EQ(r32uiResult[3], 1.0f);
 }
@@ -1749,8 +1886,8 @@ TEST(DirectVulkanSanity, UndefinedDepthStencilLayoutUsesDontCareForUnclearedAspe
     EXPECT_EQ(depthOnlyClear.stencilLoadOp, VK_ATTACHMENT_LOAD_OP_DONT_CARE);
     EXPECT_EQ(depthOnlyClear.initialLayout, VK_IMAGE_LAYOUT_UNDEFINED);
 
-    auto knownLayout = ResolveDepthStencilAttachmentLoadInfo(
-        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, false, false);
+    auto knownLayout =
+        ResolveDepthStencilAttachmentLoadInfo(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, false, false);
     EXPECT_EQ(knownLayout.depthLoadOp, VK_ATTACHMENT_LOAD_OP_LOAD);
     EXPECT_EQ(knownLayout.stencilLoadOp, VK_ATTACHMENT_LOAD_OP_LOAD);
     EXPECT_EQ(knownLayout.initialLayout, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
@@ -1765,9 +1902,9 @@ TEST(DirectVulkanSanity, SampledDepthStencilViewUsesSingleDepthAspect) {
               VK_IMAGE_ASPECT_DEPTH_BIT);
     EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(VK_IMAGE_ASPECT_STENCIL_BIT),
               VK_IMAGE_ASPECT_STENCIL_BIT);
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewAspectMask(
-                  VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT),
-              VK_IMAGE_ASPECT_DEPTH_BIT);
+    EXPECT_EQ(
+        VkTextureManager::ResolveSampledImageViewAspectMask(VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT),
+        VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
 TEST(DirectVulkanSanity, SpirvStorageImageFormatsMapToVulkanFormats) {
@@ -1831,42 +1968,23 @@ TEST(DirectVulkanSanity, SpirvStorageImageFormatsMapToVulkanFormats) {
     }
 }
 
-TEST(DirectVulkanSanity, MutableStorageImageViewsUseVulkanCompatibilityClasses) {
-    using MobileGL::MG_Backend::DirectVulkan::VkTextureManager;
-
-    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_UINT));
-    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R32_UINT, VK_FORMAT_R32_SINT));
-    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R16G16B16A16_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT));
-    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R8G8B8A8_UINT));
-    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_SFLOAT));
-    EXPECT_FALSE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT));
-    EXPECT_FALSE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R32_SFLOAT, VK_FORMAT_D32_SFLOAT));
-}
-
 TEST(DirectVulkanSanity, StorageImageViewFormatUsesBindingOnlyForFormatlessFloatPolicy) {
     using MobileGL::MG_Backend::DirectVulkan::UniformManager;
 
-    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(
-                  VK_FORMAT_UNDEFINED, GL_RGBA16F, VK_FORMAT_R16G16B16A16_UNORM, true),
+    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(VK_FORMAT_UNDEFINED, GL_RGBA16F,
+                                                            VK_FORMAT_R16G16B16A16_UNORM, true),
               VK_FORMAT_R16G16B16A16_SFLOAT);
-    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(
-                  VK_FORMAT_UNDEFINED, GL_RGBA16, VK_FORMAT_R16G16B16A16_SFLOAT, true),
+    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(VK_FORMAT_UNDEFINED, GL_RGBA16,
+                                                            VK_FORMAT_R16G16B16A16_SFLOAT, true),
               VK_FORMAT_R16G16B16A16_UNORM);
-    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(
-                  VK_FORMAT_R32_UINT, GL_RGBA16F, VK_FORMAT_R32_SFLOAT, false),
-              VK_FORMAT_R32_UINT);
-    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(
-                  VK_FORMAT_UNDEFINED, GL_RGBA16F, VK_FORMAT_R32_SFLOAT, false),
-              VK_FORMAT_R32_SFLOAT);
-    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(
-                  VK_FORMAT_UNDEFINED, GL_NONE, VK_FORMAT_R16G16B16A16_SFLOAT, true),
+    EXPECT_EQ(
+        UniformManager::ResolveStorageImageViewFormat(VK_FORMAT_R32_UINT, GL_RGBA16F, VK_FORMAT_R32_SFLOAT, false),
+        VK_FORMAT_R32_UINT);
+    EXPECT_EQ(
+        UniformManager::ResolveStorageImageViewFormat(VK_FORMAT_UNDEFINED, GL_RGBA16F, VK_FORMAT_R32_SFLOAT, false),
+        VK_FORMAT_R32_SFLOAT);
+    EXPECT_EQ(UniformManager::ResolveStorageImageViewFormat(VK_FORMAT_UNDEFINED, GL_NONE, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                            true),
               VK_FORMAT_UNDEFINED);
 }
 
@@ -1896,16 +2014,14 @@ TEST(DirectVulkanSanity, ProgramObjectMovePreservesStorageImageFormatPolicy) {
 TEST(DirectVulkanSanity, SamplerUniformTypesPreserveTheirNumericDomain) {
     using namespace MobileGL::MG_Backend::DirectVulkan;
 
-    EXPECT_EQ(ProgramFactory::UniformTypeToSamplerNumericDomain(GL_SAMPLER_2D),
-              SamplerNumericDomain::Float);
+    EXPECT_EQ(ProgramFactory::UniformTypeToSamplerNumericDomain(GL_SAMPLER_2D), SamplerNumericDomain::Float);
     EXPECT_EQ(ProgramFactory::UniformTypeToSamplerNumericDomain(GL_SAMPLER_CUBE_MAP_ARRAY_SHADOW),
               SamplerNumericDomain::Float);
     EXPECT_EQ(ProgramFactory::UniformTypeToSamplerNumericDomain(GL_INT_SAMPLER_2D_ARRAY),
               SamplerNumericDomain::SignedInteger);
     EXPECT_EQ(ProgramFactory::UniformTypeToSamplerNumericDomain(GL_UNSIGNED_INT_SAMPLER_2D),
               SamplerNumericDomain::UnsignedInteger);
-    EXPECT_EQ(ProgramFactory::UniformTypeToSamplerNumericDomain(GL_IMAGE_2D),
-              SamplerNumericDomain::Unknown);
+    EXPECT_EQ(ProgramFactory::UniformTypeToSamplerNumericDomain(GL_IMAGE_2D), SamplerNumericDomain::Unknown);
 }
 
 // The image half of the same question, which the sampler form above deliberately answers
@@ -1917,8 +2033,7 @@ TEST(DirectVulkanSanity, ImageUniformTypesPreserveTheirNumericDomain) {
 
     EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_IMAGE_2D), SamplerNumericDomain::Float);
     EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_IMAGE_BUFFER), SamplerNumericDomain::Float);
-    EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_IMAGE_CUBE_MAP_ARRAY),
-              SamplerNumericDomain::Float);
+    EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_IMAGE_CUBE_MAP_ARRAY), SamplerNumericDomain::Float);
     EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_INT_IMAGE_2D_ARRAY),
               SamplerNumericDomain::SignedInteger);
     EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_INT_IMAGE_BUFFER),
@@ -1935,26 +2050,25 @@ TEST(DirectVulkanSanity, ImageUniformTypesPreserveTheirNumericDomain) {
 TEST(DirectVulkanSanity, SampledViewFormatMatchesSamplerNumericDomainWithoutChangingComponentLayout) {
     using namespace MobileGL::MG_Backend::DirectVulkan;
 
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
-                  VK_FORMAT_R32_SFLOAT, SamplerNumericDomain::UnsignedInteger),
-              VK_FORMAT_R32_UINT);
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
-                  VK_FORMAT_R32_SFLOAT, SamplerNumericDomain::SignedInteger),
-              VK_FORMAT_R32_SINT);
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
-                  VK_FORMAT_R32_UINT, SamplerNumericDomain::Float),
+    EXPECT_EQ(
+        VkTextureManager::ResolveSampledImageViewFormat(VK_FORMAT_R32_SFLOAT, SamplerNumericDomain::UnsignedInteger),
+        VK_FORMAT_R32_UINT);
+    EXPECT_EQ(
+        VkTextureManager::ResolveSampledImageViewFormat(VK_FORMAT_R32_SFLOAT, SamplerNumericDomain::SignedInteger),
+        VK_FORMAT_R32_SINT);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(VK_FORMAT_R32_UINT, SamplerNumericDomain::Float),
               VK_FORMAT_R32_SFLOAT);
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
-                  VK_FORMAT_R16G16B16A16_SFLOAT, SamplerNumericDomain::UnsignedInteger),
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                              SamplerNumericDomain::UnsignedInteger),
               VK_FORMAT_R16G16B16A16_UINT);
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
-                  VK_FORMAT_R8G8B8A8_UNORM, SamplerNumericDomain::UnsignedInteger),
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(VK_FORMAT_R8G8B8A8_UNORM,
+                                                              SamplerNumericDomain::UnsignedInteger),
               VK_FORMAT_R8G8B8A8_UINT);
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
-                  VK_FORMAT_R32_UINT, SamplerNumericDomain::UnsignedInteger),
-              VK_FORMAT_R32_UINT);
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
-                  VK_FORMAT_B10G11R11_UFLOAT_PACK32, SamplerNumericDomain::UnsignedInteger),
+    EXPECT_EQ(
+        VkTextureManager::ResolveSampledImageViewFormat(VK_FORMAT_R32_UINT, SamplerNumericDomain::UnsignedInteger),
+        VK_FORMAT_R32_UINT);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(VK_FORMAT_B10G11R11_UFLOAT_PACK32,
+                                                              SamplerNumericDomain::UnsignedInteger),
               VK_FORMAT_UNDEFINED);
 
     // Depth/stencil formats never resolve through color-class reinterpretation; they pass
@@ -1962,26 +2076,23 @@ TEST(DirectVulkanSanity, SampledViewFormatMatchesSamplerNumericDomainWithoutChan
     // depth-stencil formats are multi-numeric (vkuFormatIsSampledFloat is false for them),
     // so without the passthrough a plain sampler2D/sampler2DShadow on GL_DEPTH24_STENCIL8
     // would resolve to UNDEFINED and the draw would be dropped.
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
-                  VK_FORMAT_D24_UNORM_S8_UINT, SamplerNumericDomain::Float),
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(VK_FORMAT_D24_UNORM_S8_UINT, SamplerNumericDomain::Float),
               VK_FORMAT_D24_UNORM_S8_UINT);
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
-                  VK_FORMAT_D32_SFLOAT_S8_UINT, SamplerNumericDomain::Float),
-              VK_FORMAT_D32_SFLOAT_S8_UINT);
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
-                  VK_FORMAT_D32_SFLOAT, SamplerNumericDomain::Float),
+    EXPECT_EQ(
+        VkTextureManager::ResolveSampledImageViewFormat(VK_FORMAT_D32_SFLOAT_S8_UINT, SamplerNumericDomain::Float),
+        VK_FORMAT_D32_SFLOAT_S8_UINT);
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(VK_FORMAT_D32_SFLOAT, SamplerNumericDomain::Float),
               VK_FORMAT_D32_SFLOAT);
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
-                  VK_FORMAT_D24_UNORM_S8_UINT, SamplerNumericDomain::UnsignedInteger),
+    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(VK_FORMAT_D24_UNORM_S8_UINT,
+                                                              SamplerNumericDomain::UnsignedInteger),
               VK_FORMAT_D24_UNORM_S8_UINT);
-    EXPECT_EQ(VkTextureManager::ResolveSampledImageViewFormat(
-                  VK_FORMAT_D32_SFLOAT, SamplerNumericDomain::UnsignedInteger),
-              VK_FORMAT_D32_SFLOAT);
+    EXPECT_EQ(
+        VkTextureManager::ResolveSampledImageViewFormat(VK_FORMAT_D32_SFLOAT, SamplerNumericDomain::UnsignedInteger),
+        VK_FORMAT_D32_SFLOAT);
 
-    EXPECT_TRUE(VkTextureManager::AreSampledImageViewFormatsCompatible(
-        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_UINT));
-    EXPECT_FALSE(VkTextureManager::AreSampledImageViewFormatsCompatible(
-        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_UINT));
+    EXPECT_TRUE(VkTextureManager::AreSampledImageViewFormatsCompatible(VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_UINT));
+    EXPECT_FALSE(
+        VkTextureManager::AreSampledImageViewFormatsCompatible(VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_UINT));
 }
 
 TEST(RenderStateSanity, ProvokingVertexUpdatesStateAndValidatesEnum) {
@@ -2028,7 +2139,16 @@ TEST(LogSanity, UsesEnvOverrideForFilePath) {
     UnsetEnvVar("MOBILEGL_LOG_FILE_PATH");
 
     {
-        std::ifstream logFile(logPath);
+        // P6: the sink writes ONE FILE PER ROLE, so the base name is not itself a file. This
+        // process logs on the main thread - the client role - so the line landed in the
+        // client-derived path. In a pull build there is no split and the base IS the file.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const fs::path readPath =
+            MobileGL::MG_Util::Debug::RoleLogPath(logPath.string().c_str(), MobileGL::MG_Util::Debug::LogRole::Client);
+#else
+        const fs::path readPath = logPath;
+#endif
+        std::ifstream logFile(readPath);
         ASSERT_TRUE(logFile.good());
 
         const std::string contents((std::istreambuf_iterator<char>(logFile)), std::istreambuf_iterator<char>());
@@ -2036,6 +2156,10 @@ TEST(LogSanity, UsesEnvOverrideForFilePath) {
     }
 
     fs::remove(logPath);
+#if MOBILEGL_BUILD_DISAGGREGATED
+    fs::remove(
+        MobileGL::MG_Util::Debug::RoleLogPath(logPath.string().c_str(), MobileGL::MG_Util::Debug::LogRole::Client));
+#endif
 }
 
 // ---- Pure-state entry points: glHint / glPointParameter* / glPixelStoref / glGetDoublev -----------
@@ -2186,7 +2310,8 @@ TEST(RenderStateSanity, GetDoublevMatchesGetFloatvWidened) {
     GetFloatv(GL_COLOR_CLEAR_VALUE, cf);
     GLdouble cd[4] = {};
     GetDoublev(GL_COLOR_CLEAR_VALUE, cd);
-    for (int i = 0; i < 4; ++i) EXPECT_DOUBLE_EQ(cd[i], static_cast<GLdouble>(cf[i]));
+    for (int i = 0; i < 4; ++i)
+        EXPECT_DOUBLE_EQ(cd[i], static_cast<GLdouble>(cf[i]));
 
     // Null params -> GL_INVALID_VALUE.
     GetDoublev(GL_DEPTH_RANGE, nullptr);
@@ -2294,11 +2419,14 @@ TEST(RenderStateSanity, ColorMaskIndexedStoresAndReadsBack) {
     // Default: every draw buffer's writemask is all-true.
     GLboolean b0[4] = {GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE};
     GetBooleanv(GL_COLOR_WRITEMASK, b0);
-    EXPECT_EQ(b0[0], GL_TRUE); EXPECT_EQ(b0[1], GL_TRUE);
-    EXPECT_EQ(b0[2], GL_TRUE); EXPECT_EQ(b0[3], GL_TRUE);
+    EXPECT_EQ(b0[0], GL_TRUE);
+    EXPECT_EQ(b0[1], GL_TRUE);
+    EXPECT_EQ(b0[2], GL_TRUE);
+    EXPECT_EQ(b0[3], GL_TRUE);
     GLboolean bi[4] = {GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE};
     GetBooleani_v(GL_COLOR_WRITEMASK, 3, bi);
-    EXPECT_EQ(bi[0], GL_TRUE); EXPECT_EQ(bi[3], GL_TRUE);
+    EXPECT_EQ(bi[0], GL_TRUE);
+    EXPECT_EQ(bi[3], GL_TRUE);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 
     // glColorMaski sets ONLY the addressed draw buffer; buffer 0 stays untouched, and the non-indexed
@@ -2306,14 +2434,17 @@ TEST(RenderStateSanity, ColorMaskIndexedStoresAndReadsBack) {
     ColorMaski(2, GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
     GetBooleani_v(GL_COLOR_WRITEMASK, 2, bi);
-    EXPECT_EQ(bi[0], GL_FALSE); EXPECT_EQ(bi[1], GL_TRUE);
-    EXPECT_EQ(bi[2], GL_FALSE); EXPECT_EQ(bi[3], GL_TRUE);
+    EXPECT_EQ(bi[0], GL_FALSE);
+    EXPECT_EQ(bi[1], GL_TRUE);
+    EXPECT_EQ(bi[2], GL_FALSE);
+    EXPECT_EQ(bi[3], GL_TRUE);
     GetBooleanv(GL_COLOR_WRITEMASK, b0);
-    EXPECT_EQ(b0[0], GL_TRUE); EXPECT_EQ(b0[1], GL_TRUE); // buffer 0 unchanged by ColorMaski(2, ...)
+    EXPECT_EQ(b0[0], GL_TRUE);
+    EXPECT_EQ(b0[1], GL_TRUE); // buffer 0 unchanged by ColorMaski(2, ...)
 
     // GLboolean coercion: any nonzero byte enables the component (NOT == GL_TRUE).
-    ColorMaski(1, static_cast<GLboolean>(2), static_cast<GLboolean>(0),
-               static_cast<GLboolean>(2), static_cast<GLboolean>(0));
+    ColorMaski(1, static_cast<GLboolean>(2), static_cast<GLboolean>(0), static_cast<GLboolean>(2),
+               static_cast<GLboolean>(0));
     GetBooleani_v(GL_COLOR_WRITEMASK, 1, bi);
     EXPECT_EQ(bi[0], GL_TRUE);  // 2 -> TRUE
     EXPECT_EQ(bi[1], GL_FALSE); // 0 -> FALSE
@@ -2323,9 +2454,11 @@ TEST(RenderStateSanity, ColorMaskIndexedStoresAndReadsBack) {
     // glColorMask (non-indexed) broadcasts to EVERY draw buffer, overwriting the per-buffer masks.
     ColorMask(GL_FALSE, GL_FALSE, GL_TRUE, GL_TRUE);
     GetBooleani_v(GL_COLOR_WRITEMASK, 2, bi);
-    EXPECT_EQ(bi[0], GL_FALSE); EXPECT_EQ(bi[2], GL_TRUE); // buffer 2 was overwritten by the broadcast
+    EXPECT_EQ(bi[0], GL_FALSE);
+    EXPECT_EQ(bi[2], GL_TRUE); // buffer 2 was overwritten by the broadcast
     GetBooleani_v(GL_COLOR_WRITEMASK, 1, bi);
-    EXPECT_EQ(bi[0], GL_FALSE); EXPECT_EQ(bi[3], GL_TRUE);
+    EXPECT_EQ(bi[0], GL_FALSE);
+    EXPECT_EQ(bi[3], GL_TRUE);
 
     // Out-of-range index -> GL_INVALID_VALUE, no state change.
     ColorMaski(kMaxDrawBuffers, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -2361,7 +2494,6 @@ TEST(RenderStateSanity, PrimitiveRestartIndexStoresAndReadsBack) {
 
     MG_State::pGLContext.reset();
 }
-
 
 // ---- DirectGLES readback driver-state shadows ----------------------------------------------------
 // Regression coverage for the readback-path state-leak overhaul: the pixel-PBO
@@ -2403,7 +2535,8 @@ namespace {
         SG_Log("PixelStorei:" + std::to_string(pname) + ":" + std::to_string(param));
     }
     void SG_GenFramebuffers(GLsizei count, GLuint* framebuffers) {
-        for (GLsizei i = 0; i < count; ++i) framebuffers[i] = g_nextStateGuardFBOId++;
+        for (GLsizei i = 0; i < count; ++i)
+            framebuffers[i] = g_nextStateGuardFBOId++;
     }
     void SG_FramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {
         SG_Log("FramebufferTexture2D:" + std::to_string(target) + ":" + std::to_string(attachment) + ":" +
@@ -2426,7 +2559,7 @@ namespace {
     // Installs the recording table and resets every readback driver-state shadow on
     // both ends, so these tests cannot bleed into (or inherit from) other tests.
     struct ScopedStateGuardMocks {
-        ScopedStateGuardMocks(): previousFunctions(MobileGL::MG_Backend::DirectGLES::g_GLESFuncs) {
+        ScopedStateGuardMocks() : previousFunctions(MobileGL::MG_Backend::DirectGLES::g_GLESFuncs) {
             ResetShadows();
             MobileGL::MG_External::GLESFunctionsTable functions{};
             functions.glBindBuffer = SG_BindBuffer;
@@ -2552,8 +2685,8 @@ TEST(DirectGLESStateGuards, ScratchFBODetachesCrossAspectResidue) {
                                       std::to_string(GL_DEPTH_STENCIL_ATTACHMENT) + ":" +
                                       std::to_string(GL_TEXTURE_2D) + ":0:0";
     const MobileGL::String colorAttach = "FramebufferTexture2D:" + std::to_string(GL_READ_FRAMEBUFFER) + ":" +
-                                         std::to_string(GL_COLOR_ATTACHMENT0) + ":" +
-                                         std::to_string(GL_TEXTURE_2D) + ":22:0";
+                                         std::to_string(GL_COLOR_ATTACHMENT0) + ":" + std::to_string(GL_TEXTURE_2D) +
+                                         ":22:0";
     EXPECT_EQ(mocks.log.Count(dsDetach), 1u);
     EXPECT_EQ(mocks.log.Count(colorAttach), 1u);
 
@@ -2579,8 +2712,8 @@ TEST(DirectGLESStateGuards, ScratchFBOTextureDeletionForcesFullScrub) {
     ScratchFBOImpl::EnsureColorAttachment2D(fb, GL_READ_FRAMEBUFFER, 22, GL_TEXTURE_2D, 0);
     EXPECT_GE(mocks.log.Count("FramebufferTexture2D:"), 2u); // scrub (color + depth) ...
     const MobileGL::String colorAttach = "FramebufferTexture2D:" + std::to_string(GL_READ_FRAMEBUFFER) + ":" +
-                                         std::to_string(GL_COLOR_ATTACHMENT0) + ":" +
-                                         std::to_string(GL_TEXTURE_2D) + ":22:0";
+                                         std::to_string(GL_COLOR_ATTACHMENT0) + ":" + std::to_string(GL_TEXTURE_2D) +
+                                         ":22:0";
     EXPECT_EQ(mocks.log.Count(colorAttach), 1u); // ... then the real re-attach
 }
 
@@ -2608,7 +2741,8 @@ namespace {
 
     void SG_DeleteTextures(GLsizei count, const GLuint* textures) {
         if (!g_deletedTextureIds) return;
-        for (GLsizei i = 0; i < count; ++i) g_deletedTextureIds->push_back(textures[i]);
+        for (GLsizei i = 0; i < count; ++i)
+            g_deletedTextureIds->push_back(textures[i]);
     }
 
     // Clears the recording hook even when a gtest assertion unwinds the test body
@@ -2672,25 +2806,31 @@ namespace {
     GLuint g_nextTwinDriverId = 900;
 
     void TW_GenFramebuffers(GLsizei count, GLuint* ids) {
-        for (GLsizei i = 0; i < count; ++i) ids[i] = g_nextTwinDriverId++;
+        for (GLsizei i = 0; i < count; ++i)
+            ids[i] = g_nextTwinDriverId++;
     }
     void TW_DeleteFramebuffers(GLsizei count, const GLuint* ids) {
         if (!g_twinDeletionSinks) return;
-        for (GLsizei i = 0; i < count; ++i) g_twinDeletionSinks->framebuffers.push_back(ids[i]);
+        for (GLsizei i = 0; i < count; ++i)
+            g_twinDeletionSinks->framebuffers.push_back(ids[i]);
     }
     void TW_GenRenderbuffers(GLsizei count, GLuint* ids) {
-        for (GLsizei i = 0; i < count; ++i) ids[i] = g_nextTwinDriverId++;
+        for (GLsizei i = 0; i < count; ++i)
+            ids[i] = g_nextTwinDriverId++;
     }
     void TW_DeleteRenderbuffers(GLsizei count, const GLuint* ids) {
         if (!g_twinDeletionSinks) return;
-        for (GLsizei i = 0; i < count; ++i) g_twinDeletionSinks->renderbuffers.push_back(ids[i]);
+        for (GLsizei i = 0; i < count; ++i)
+            g_twinDeletionSinks->renderbuffers.push_back(ids[i]);
     }
     void TW_GenSamplers(GLsizei count, GLuint* ids) {
-        for (GLsizei i = 0; i < count; ++i) ids[i] = g_nextTwinDriverId++;
+        for (GLsizei i = 0; i < count; ++i)
+            ids[i] = g_nextTwinDriverId++;
     }
     void TW_DeleteSamplers(GLsizei count, const GLuint* ids) {
         if (!g_twinDeletionSinks) return;
-        for (GLsizei i = 0; i < count; ++i) g_twinDeletionSinks->samplers.push_back(ids[i]);
+        for (GLsizei i = 0; i < count; ++i)
+            g_twinDeletionSinks->samplers.push_back(ids[i]);
     }
     void TW_BindFramebuffer(GLenum target, GLuint framebuffer) {
         SG_Log("BindFramebuffer:" + std::to_string(target) + ":" + std::to_string(framebuffer));
@@ -2701,7 +2841,7 @@ namespace {
     // Installs a table that can create and destroy all three twin kinds, and unwinds it (plus the
     // recording pointer) even when an assertion aborts the test body.
     struct ScopedBackendTwinMocks {
-        ScopedBackendTwinMocks(): previousFunctions(MobileGL::MG_Backend::DirectGLES::g_GLESFuncs) {
+        ScopedBackendTwinMocks() : previousFunctions(MobileGL::MG_Backend::DirectGLES::g_GLESFuncs) {
             MobileGL::MG_Backend::DirectGLES::FramebufferImpl::InvalidateFramebufferBindingCache();
             MobileGL::MG_External::GLESFunctionsTable functions{};
             functions.glGenFramebuffers = TW_GenFramebuffers;
@@ -2831,7 +2971,7 @@ TEST(DirectGLESStateGuards, DefaultFramebufferBindGoesThroughShadow) {
 // first mass eviction during world load - the failure FastSTL's double-advancing
 // erase actually produced before it was fixed).
 //
-// These pin the behaviour the call sites rely on, not one map's implementation, so
+// These pin the behavior the call sites rely on, not one map's implementation, so
 // they are written against MobileGL::UnorderedMap and survive changing what it
 // names. Under ska::flat_hash_map the mechanism is different - erase backward-shifts
 // the rest of the probe cluster into the hole and hands back the same slot, which
@@ -2933,15 +3073,16 @@ namespace {
     MobileGL::Vector<TexSpecCall>* g_texSpecCalls = nullptr;
     GLuint g_texSpecBoundTexture = 0;
 
-    void TS_BindTexture(GLenum, GLuint texture) { g_texSpecBoundTexture = texture; }
+    void TS_BindTexture(GLenum, GLuint texture) {
+        g_texSpecBoundTexture = texture;
+    }
     void TS_ActiveTexture(GLenum) {}
     void TS_TexParameteri(GLenum, GLenum, GLint) {}
     void TS_TexParameterf(GLenum, GLenum, GLfloat) {}
     void TS_TexParameterfv(GLenum, GLenum, const GLfloat*) {}
     void TS_PixelStorei(GLenum, GLint) {}
     void TS_BindBuffer(GLenum, GLuint) {}
-    void TS_TexImage2D(GLenum, GLint level, GLint, GLsizei width, GLsizei height, GLint, GLenum, GLenum,
-                       const void*) {
+    void TS_TexImage2D(GLenum, GLint level, GLint, GLsizei width, GLsizei height, GLint, GLenum, GLenum, const void*) {
         if (g_texSpecCalls && level == 0) {
             g_texSpecCalls->push_back({g_texSpecBoundTexture, width, height});
         }
@@ -2964,9 +3105,8 @@ namespace {
                                                                                            MobileGL::Int size) {
         using namespace MobileGL;
         MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, name);
-        auto object = MG_State::pGLContext->GetTextureUnitObject(0)
-                          .GetBindingSlot(TextureTarget::Texture2D)
-                          .GetBoundObject();
+        auto object =
+            MG_State::pGLContext->GetTextureUnitObject(0).GetBindingSlot(TextureTarget::Texture2D).GetBoundObject();
         object->SetInternalFormat(TextureInternalFormat::RGBA8);
         MG_State::GLState::AsMipmapTexture(object.get())
             ->AllocateStorage(TextureUploadTarget::Texture2D, 0, {{size, size, 1}, 4});
@@ -2974,81 +3114,86 @@ namespace {
     }
 } // namespace
 
-// The per-unit texture sync memo BORROWS the binding slot: an entry holds a pointer to the
-// slot's shared_ptr plus the backend twin of whatever was in it when the entry was built. Its
-// keys (context id, bind-generation epoch, high-water mark, sampling generation) are the primary
-// guard, but they are all derived state - so the memo also has to survive a slot swap that never
-// reached them.
+// P5e (tx2), CONTRACT-P5E §4.3: THE HANDLE ARM'S SIBLING OF UnitMemoRefusesToDriveATwinFromAnotherTexture,
+// WITH ABA AS THE HAZARD INSTEAD OF A SILENT SLOT SWAP. (P13 W3b retired that case: it ran only at
+// the P2 mask, whose legacy unit arm is gone now that subsystem bits 0-13 are fixed on.)
 //
-// It did not. The DSA by-name emulation swapped a slot silently, every key still matched, and
-// the replay drove texture A's backend twin from texture B's frontend object: A's backend
-// storage was re-specified with B's shape, destroying anything A only ever had on the GPU. On
-// Espryt + Iris/BSL that blanked Minecraft's 16x16 lightmap the moment a 2048x2048 shadow map
-// was uploaded through a by-name call, and since the text shader multiplies by the lightmap,
-// `if (color.a < 0.1) discard` then threw away every glyph in the process - HUD, menus and the
-// vanilla title screen alike.
-TEST(DirectGLESTextureSync, UnitMemoRefusesToDriveATwinFromAnotherTexture) {
+// That case pinned what the BORROWED-SLOT work list needs: a pointer compare per entry,
+// because its key is derived state and a slot swap that never reached the key would drive
+// texture A's twin from texture B. The by-handle work list carries no such pointer and no
+// PairingsIntact, and this is the argument for why it does not have to:
+//
+//   a handle is {slot, gen}. A slot recycled to a NEW object arrives as {s, g+1}, and
+//   GetOrCreateByHandle RESETS the entry on a forward generation (SlotTables.h) - so the
+//   successor gets a fresh twin with a fresh driver texture, and the predecessor's handle
+//   stops resolving. There is no window in which one handle names two objects, which is
+//   exactly the window the pointer compare above exists to close.
+//
+// THE RED: drop the forward-Gen reset (make GetOrCreate return the live entry for any
+// generation) and `reMinted` below is the SAME twin as `first` - the successor inherits its
+// predecessor's driver texture and its predecessor's synced serials, so the first draw that
+// samples it reads the dead object's pixels and the clean gate says there is nothing to do.
+TEST(DirectGLESTextureSync, ARecycledTextureSlotReMintsTheTwinOnTheHandleArm) {
     using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
     ScopedDirectGLESTextureBindings scoped; // fresh GLContext + registry + binding caches
-    Vector<TexSpecCall> specs;
-    ScopedTexSpecRecording recording(specs);
-
-    auto functions = MG_Backend::DirectGLES::g_GLESFuncs;
-    functions.glBindTexture = TS_BindTexture;
-    functions.glActiveTexture = TS_ActiveTexture;
-    functions.glTexImage2D = TS_TexImage2D;
-    functions.glTexParameteri = TS_TexParameteri;
-    functions.glTexParameterf = TS_TexParameterf;
-    functions.glTexParameterfv = TS_TexParameterfv;
-    functions.glPixelStorei = TS_PixelStorei;
-    functions.glBindBuffer = TS_BindBuffer;
-    MG_Backend::DirectGLES::SetGLESFuncsTable(functions);
-
-    GLuint names[2] = {};
-    MG_Impl::GLImpl::GenTextures(2, names);
-    // `foreign` stands in for the shadow map, `resident` for the lightmap. Both are fully
-    // specified BEFORE the first sync so that nothing between the two syncs can move the
-    // sampling-resolution generation and invalidate the memo for an unrelated reason.
-    const auto foreign = MakeComplete2DTexture(names[1], 32);
-    const auto resident = MakeComplete2DTexture(names[0], 16);
-    ASSERT_NE(foreign, nullptr);
-    ASSERT_NE(resident, nullptr);
-
-    // First sync: builds the memo with unit 0 -> `resident`, and gives `resident`'s twin its
-    // 16x16 backend storage.
-    MG_Backend::DirectGLES::TextureImpl::SyncNeccessaryTextures();
-    auto* residentSlot = MG_Backend::DirectGLES::TextureImpl::g_backendTextureObjects.Find(resident.get());
-    ASSERT_NE(residentSlot, nullptr);
-    ASSERT_NE(*residentSlot, nullptr);
-    const GLuint residentBackendId = (*residentSlot)->GetBackendTextureId();
-    ASSERT_NE(residentBackendId, 0u);
-    ASSERT_FALSE(specs.empty());
-    EXPECT_EQ(specs.back().texture, residentBackendId);
-    EXPECT_EQ(specs.back().width, 16);
-
-    // The hazard, reproduced at the state level: put `foreign` on the slot the memo borrows
-    // WITHOUT telling the binding accounting, exactly as the by-name emulation used to.
-    MG_State::pGLContext->GetTextureUnitObject(0).GetBindingSlot(TextureTarget::Texture2D).Bind(foreign);
-
-    const SizeT specsBeforeReplay = specs.size();
-    MG_Backend::DirectGLES::TextureImpl::SyncNeccessaryTextures();
-
-    // `foreign` must have been synced through its OWN twin...
-    auto* foreignSlot = MG_Backend::DirectGLES::TextureImpl::g_backendTextureObjects.Find(foreign.get());
-    ASSERT_NE(foreignSlot, nullptr);
-    ASSERT_NE(*foreignSlot, nullptr);
-    const GLuint foreignBackendId = (*foreignSlot)->GetBackendTextureId();
-    EXPECT_NE(foreignBackendId, residentBackendId);
-
-    // ...and above all, nothing may have re-specified the RESIDENT texture's backend storage.
-    // That single call is what destroyed the lightmap.
-    for (SizeT i = specsBeforeReplay; i < specs.size(); ++i) {
-        EXPECT_NE(specs[i].texture, residentBackendId)
-            << "the stale memo entry re-specified the resident texture's backend storage with "
-            << specs[i].width << "x" << specs[i].height;
+    // The {slot, gen} table is what this case is about; the FAMILY bit is not.
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the {slot, gen} twin table arm is not selected in this configuration";
     }
 
-    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    // ON THE REAL TEXTURE REGISTRY, not a fake one: id's DirectGLESSlotTable cases pin the
+    // TABLE's rule in isolation, and this pins that the table tx2's work list indexes is the one
+    // that keeps it. Two lifetime ids stand in for two frontend textures, so the client
+    // allocator hands the SAME SLOT back at a higher generation for the second - the hazard.
+    //
+    // No applier record and no SyncTextureToBackendByHandle here: MGPipeApplyResourceCreate
+    // declines for a texture on a process with no P4a consumer (NoP4aConsumer), which is every
+    // unit-lane process, and the ABA answer is the twin TABLE's rather than the record's.
+    auto firstOwner = MakeShared<MG_State::GLState::SamplerObject>(0u);
+    const MG_Pipe::MGPipeHandle first =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Texture, firstOwner->GetLifetimeId());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(first));
+
+    auto& registry = TextureImpl::g_backendTextureObjects;
+    auto* firstSlot = registry.GetOrCreateByHandle(first);
+    ASSERT_NE(firstSlot, nullptr);
+    if (!*firstSlot) *firstSlot = MakeShared<TextureImpl::BackendTextureObject>();
+    (*firstSlot)->NotePushedSyncHandle(first);
+    ASSERT_EQ((*firstSlot)->PushedSyncHandle().Slot, first.Slot);
+
+    // The recycle: the client frees the slot and hands it straight back out at {s, g+1}.
+    MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Texture, first);
+    auto secondOwner = MakeShared<MG_State::GLState::SamplerObject>(0u);
+    const MG_Pipe::MGPipeHandle second =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Texture, secondOwner->GetLifetimeId());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(second));
+    ASSERT_EQ(second.Slot, first.Slot) << "the allocator did not recycle the slot, so this case "
+                                          "is not exercising ABA at all";
+    ASSERT_GT(second.Gen, first.Gen);
+
+    auto* secondSlot = registry.GetOrCreateByHandle(second);
+    ASSERT_NE(secondSlot, nullptr);
+    EXPECT_EQ(*secondSlot, nullptr)
+        << "the successor at a recycled texture slot inherited its predecessor's twin: it would "
+           "sample the dead object's driver texture, and the twin's synced serials and noted "
+           "handle would tell the clean gate there is nothing to do";
+    // DELIBERATELY NOT A POINTER COMPARE against the predecessor's twin: the reset released it,
+    // so the allocator is free to hand the successor's twin the very same heap address - which
+    // it does, and which is exactly why a raw address is never an identity in this tree
+    // (section 4.2.1). "The slot came back empty" is the assertion; "it came back at a different
+    // address" is a coincidence that would make this case pass for the wrong reason.
+    if (!*secondSlot) *secondSlot = MakeShared<TextureImpl::BackendTextureObject>();
+    EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull((*secondSlot)->PushedSyncHandle()))
+        << "the re-minted twin kept the dead handle, so its sync prologues would resolve the "
+           "predecessor's record";
+
+    // ...and the predecessor's handle stops resolving, which is what makes a stale entry left in
+    // a by-handle work list harmless: the lookup answers null and the entry is skipped, where a
+    // borrowed slot would have been replayed against the wrong object.
+    EXPECT_EQ(registry.FindByHandle(first), nullptr) << "the predecessor's handle still resolves at a recycled slot";
+
+    MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Texture, second);
 }
 
 TEST(DirectVulkanSanity, GraphicsSamplerFeedbackOnlyAliasesWritableOverlappingMip) {
@@ -3083,8 +3228,9 @@ namespace {
             return sum;
         };
         while (flavourCapacity() < needed && pools.size() < 100000) {
-            pools.push_back({VK_NULL_HANDLE, UniformManager::NextDescriptorPoolMaxSets(pools, updateAfterBind, kBaseSets),
-                             0, updateAfterBind});
+            pools.push_back({VK_NULL_HANDLE,
+                             UniformManager::NextDescriptorPoolMaxSets(pools, updateAfterBind, kBaseSets), 0,
+                             updateAfterBind});
         }
         return pools;
     }
@@ -3174,8 +3320,8 @@ TEST(GetterSanity, CombinedUniformComponentsSaturateInsteadOfOverflowing) {
     // than from a frontend constant, i.e. the only call site where the saturation actually depends
     // on data a driver supplies.
     static constexpr GLenum kCombinedPnames[] = {
-        GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS,   GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS,
-        GL_MAX_COMBINED_GEOMETRY_UNIFORM_COMPONENTS, GL_MAX_COMBINED_TESS_CONTROL_UNIFORM_COMPONENTS,
+        GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS,          GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS,
+        GL_MAX_COMBINED_GEOMETRY_UNIFORM_COMPONENTS,        GL_MAX_COMBINED_TESS_CONTROL_UNIFORM_COMPONENTS,
         GL_MAX_COMBINED_TESS_EVALUATION_UNIFORM_COMPONENTS, GL_MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS,
     };
     // The GL 4.6 core table 23.64 floor, which all six combined pnames carry.
@@ -3186,7 +3332,7 @@ TEST(GetterSanity, CombinedUniformComponentsSaturateInsteadOfOverflowing) {
         params.MaxUniformBlockSize = std::numeric_limits<GLint>::max();
         MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
 
-        for (const GLenum pname: kCombinedPnames) {
+        for (const GLenum pname : kCombinedPnames) {
             GLint reported = 0;
             MG_Impl::GLImpl::GetIntegerv(pname, &reported);
             EXPECT_GT(reported, 0) << "pname 0x" << pname << " wrapped to a negative combined component count";
@@ -3212,3 +3358,1569 @@ TEST(GetterSanity, CombinedUniformComponentsSaturateInsteadOfOverflowing) {
 
     MG_State::pGLContext.reset();
 }
+
+namespace {
+    // A stand-in frontend object for the twin table. It carries the one thing the table asks of a
+    // state object - GetLifetimeId() - so these cases can pin the identity contract without a
+    // GLContext, a driver or a backend twin that would want ES entry points.
+    struct FakeStateObject {
+        explicit FakeStateObject(MobileGL::Uint64 lifetimeId) : m_lifetimeId(lifetimeId) {}
+        MobileGL::Uint64 GetLifetimeId() const { return m_lifetimeId; }
+
+    private:
+        MobileGL::Uint64 m_lifetimeId;
+    };
+
+    struct FakeBackendObject {
+        int marker = 0;
+    };
+
+    // Kinds Query and Fence are unused by every shipping path, so these cases cannot disturb
+    // the slot space any real twin table allocates out of.
+    //
+    // TWO of them, because MGPipeSlots() is a process-global singleton and three of the cases
+    // below read its per-kind LiveCount / HighWater. The two-holder case is the one that can
+    // perturb another, so it gets a kind of its own rather than a promise about gtest's
+    // registration order: --gtest_shuffle, --gtest_filter and a future case are all free to
+    // reorder them, and a shared kind would make that a flake.
+    using FakeSlotTable = MobileGL::MG_Backend::DirectGLES::BackendSlotTable<FakeStateObject, FakeBackendObject,
+                                                                             MobileGL::MG_Pipe::MGPipeKind::Query>;
+    using FakeSharedKindSlotTable =
+        MobileGL::MG_Backend::DirectGLES::BackendSlotTable<FakeStateObject, FakeBackendObject,
+                                                           MobileGL::MG_Pipe::MGPipeKind::Fence>;
+    // P5e (id): ShaderCso is the ONE kind with a composite band, so the band case needs a table
+    // of that kind. It never touches MGPipeSlots() - the whole case runs through the by-handle
+    // overloads - and the holder list is per TABLE TYPE, so this instantiation shares nothing
+    // with the real g_backendProgramObjects.
+    using FakeShaderCsoSlotTable =
+        MobileGL::MG_Backend::DirectGLES::BackendSlotTable<FakeStateObject, FakeBackendObject,
+                                                           MobileGL::MG_Pipe::MGPipeKind::ShaderCso>;
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // PH-2 (F2, ID-P7-54): on a disaggregated build the handle overload's backward-generation and
+    // past-the-bound refusals are NAMED session faults through MG_Pipe's seam, not a quiet null
+    // twin - the handle arrived in a peer's payload. The seam's no-hook default writes the line to
+    // the log FILE only, so a death child installs this hook first to put the same line where the
+    // death matcher reads it; the seam then logs and aborts exactly as it would have.
+    void EchoPipeSessionFailToStderr(MobileGL::MG_Pipe::MGPipeFatalFamily, const char* line) {
+        std::fputs(line, stderr);
+        std::fputc('\n', stderr);
+        std::fflush(stderr);
+    }
+#endif
+
+    // A log file path no other process and no other case can be writing to: the pid keeps two
+    // SanityTest processes on one host apart, the counter keeps two cases in one process apart.
+    std::filesystem::path UniqueScratchLogPath(const char* stem) {
+        static int counter = 0;
+#if defined(_WIN32)
+        const long pid = static_cast<long>(_getpid());
+#else
+        const long pid = static_cast<long>(::getpid());
+#endif
+        const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+        return std::filesystem::temp_directory_path() /
+               (std::string(stem) + "-" + std::to_string(pid) + "-" + std::to_string(++counter) + "-" +
+                std::to_string(ticks) + ".log");
+    }
+
+    // Points MobileGL's file log at `path` for the life of the guard and puts back whatever the
+    // operator had - the previous MOBILEGL_LOG_FILE_PATH, or none - on EVERY exit path,
+    // including a failed ASSERT. The log is closed on both sides of the switch, because Log.cpp
+    // reads the variable only when it opens the file.
+    struct ScopedLogFileRedirect {
+        explicit ScopedLogFileRedirect(const std::filesystem::path& path) : m_path(path) {
+            if (const char* previous = std::getenv("MOBILEGL_LOG_FILE_PATH")) {
+                m_hadPrevious = true;
+                m_previous = previous;
+            }
+            std::filesystem::remove(m_path);
+            MobileGL::MG_Util::Debug::Close();
+            SetEnvVar("MOBILEGL_LOG_FILE_PATH", m_path.string().c_str());
+        }
+        ~ScopedLogFileRedirect() {
+            MobileGL::MG_Util::Debug::Close();
+            if (m_hadPrevious) {
+                SetEnvVar("MOBILEGL_LOG_FILE_PATH", m_previous.c_str());
+            } else {
+                UnsetEnvVar("MOBILEGL_LOG_FILE_PATH");
+            }
+            std::error_code ignored;
+            std::filesystem::remove(m_path, ignored);
+        }
+        ScopedLogFileRedirect(const ScopedLogFileRedirect&) = delete;
+        ScopedLogFileRedirect& operator=(const ScopedLogFileRedirect&) = delete;
+
+        // Everything written so far. Closes the log first so the last line is on disk.
+        //
+        // P6: BOTH ROLES, because "everything written" now spans two files - the sink writes one
+        // per role - and a caller of a general "give me the log" helper cannot know which role
+        // wrote the line it wants. In a pull build there is no split and m_path is the file.
+        std::string Contents() const {
+            MobileGL::MG_Util::Debug::Close();
+#if MOBILEGL_BUILD_DISAGGREGATED
+            return MobileGL::MG_Util::Debug::ReadRoleLogs(m_path.string().c_str());
+#else
+            std::ifstream logFile(m_path);
+            if (!logFile.good()) return {};
+            return std::string(std::istreambuf_iterator<char>(logFile), std::istreambuf_iterator<char>());
+#endif
+        }
+
+    private:
+        std::filesystem::path m_path;
+        bool m_hadPrevious = false;
+        std::string m_previous;
+    };
+
+} // namespace
+
+namespace {
+    // The CLIENT's half of every case below, played by the case itself: the handle a record would
+    // carry, minted in the client's allocator. Since P13 the table never mints (it has no entry that
+    // could); it only receives handles, exactly as here.
+    MobileGL::MG_Pipe::MGPipeHandle MintFor(MobileGL::MG_Pipe::MGPipeKind kind, MobileGL::Uint64 lifetimeId) {
+        return MobileGL::MG_Pipe::MGPipeSlots().Acquire(kind, lifetimeId);
+    }
+} // namespace
+
+// The property the whole slice exists for. The pre-P2 registry keyed twins on the frontend heap
+// ADDRESS and defended the recycle with a weak_ptr; here the key is {slot, gen}, so a successor
+// landing on a slot its predecessor owned is a DIFFERENT handle, it is handed an EMPTY twin, and
+// the predecessor's handle resolves to nothing rather than to the successor's twin.
+TEST(DirectGLESSlotTable, ARecycledSlotIsANewHandleAndTheStaleOneResolvesToNothing) {
+    using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Query;
+
+    FakeSlotTable table;
+    const MG_Pipe::MGPipeHandle firstHandle = MintFor(kKind, 0xA1u);
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(firstHandle));
+    table.GetOrCreate(firstHandle) = MakeShared<FakeBackendObject>();
+    (*table.FindByHandle(firstHandle))->marker = 1;
+    EXPECT_EQ(table.LiveCount(), 1u);
+
+    // The object dies: the twin is released by its handle (the death notice's release), then the
+    // client returns the slot - which is the only moment Gen can move, on the next handout.
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(firstHandle));
+    MG_Pipe::MGPipeSlots().Free(kKind, firstHandle);
+    EXPECT_EQ(table.LiveCount(), 0u);
+    EXPECT_EQ(table.FindByHandle(firstHandle), nullptr) << "a handle whose object is gone still resolved to a twin";
+
+    const MG_Pipe::MGPipeHandle secondHandle = MintFor(kKind, 0xA2u);
+    EXPECT_EQ(secondHandle.Slot, firstHandle.Slot) << "the free list did not hand the slot back";
+    EXPECT_NE(secondHandle.Gen, firstHandle.Gen) << "the generation did not move on slot reuse";
+    EXPECT_EQ(table.GetOrCreate(secondHandle), nullptr)
+        << "the successor at a recycled slot inherited its predecessor's twin";
+    table.GetOrCreate(secondHandle) = MakeShared<FakeBackendObject>();
+    (*table.FindByHandle(secondHandle))->marker = 2;
+
+    // The stale handle must not resolve to its successor's twin. This is the ABA the address key
+    // could only paper over.
+    EXPECT_EQ(table.FindByHandle(firstHandle), nullptr);
+    ASSERT_NE(table.FindByHandle(secondHandle), nullptr);
+    EXPECT_EQ((*table.FindByHandle(secondHandle))->marker, 2);
+
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(secondHandle));
+    MG_Pipe::MGPipeSlots().Free(kKind, secondHandle);
+}
+
+// Gen moves on reuse and ONLY on reuse: a live entry that is resolved again - by GetOrCreate or by
+// FindByHandle, any number of times - keeps the one twin it was built with (MGPipeHandles.h).
+TEST(DirectGLESSlotTable, RepeatedLookupsOfALiveObjectKeepOneHandle) {
+    using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Query;
+
+    FakeSlotTable table;
+    const MG_Pipe::MGPipeHandle handle = MintFor(kKind, 0xB1u);
+    // A handle no record has resolved yet has no twin; asking is a miss, not a mint.
+    EXPECT_EQ(table.FindByHandle(handle), nullptr);
+    EXPECT_EQ(table.LiveCount(), 0u);
+    table.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    const FakeBackendObject* const twin = table.FindByHandle(handle)->get();
+
+    for (int i = 0; i < 8; ++i) {
+        EXPECT_EQ(table.GetOrCreate(handle).get(), twin) << "the twin was re-made on lookup " << i;
+        ASSERT_NE(table.FindByHandle(handle), nullptr);
+        EXPECT_EQ(table.FindByHandle(handle)->get(), twin);
+    }
+    EXPECT_EQ(table.LiveCount(), 1u);
+
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(handle));
+    MG_Pipe::MGPipeSlots().Free(kKind, handle);
+}
+
+// The lookup does not mutate the table: a returned pointer is an array element, so it survives any
+// later lookup - including one for a handle whose twin is gone - and only a release takes an entry.
+TEST(DirectGLESSlotTable, FindNeverMutatesTheTable) {
+    using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Query;
+
+    FakeSlotTable table;
+    const MG_Pipe::MGPipeHandle kept = MintFor(kKind, 0xC1u);
+    const MG_Pipe::MGPipeHandle doomed = MintFor(kKind, 0xC2u);
+    table.GetOrCreate(kept) = MakeShared<FakeBackendObject>();
+    table.GetOrCreate(doomed) = MakeShared<FakeBackendObject>();
+
+    auto* keptSlot = table.FindByHandle(kept);
+    ASSERT_NE(keptSlot, nullptr);
+    const FakeBackendObject* keptTwin = keptSlot->get();
+
+    // Lookups of the other entry, of a stale generation of it and of the null handle change
+    // nothing.
+    (void)table.FindByHandle(doomed);
+    (void)table.FindByHandle(MG_Pipe::MGPipeHandle{doomed.Slot, doomed.Gen + 1u});
+    (void)table.FindByHandle(MG_Pipe::kMGPipeNullHandle);
+    EXPECT_EQ(table.FindByHandle(kept), keptSlot);
+    EXPECT_EQ(table.LiveCount(), 2u) << "a lookup reclaimed a slot; only a release may do that";
+    EXPECT_EQ(keptSlot->get(), keptTwin);
+
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(doomed));
+    MG_Pipe::MGPipeSlots().Free(kKind, doomed);
+    EXPECT_EQ(table.LiveCount(), 1u);
+    EXPECT_EQ(table.FindByHandle(kept)->get(), keptTwin);
+
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(kept));
+    MG_Pipe::MGPipeSlots().Free(kKind, kept);
+}
+
+// ScopedDirectGLESTextureBindings saves a whole twin table by value, resets it with `= {}` and
+// restores it. The slot table has to keep that shape or the fixture stops isolating anything -
+// and the saved copy is a HOLDER for as long as it exists, so a release while it is held reaches
+// it too (the round-4 review's minor 2, in the fixture's own shape).
+TEST(DirectGLESSlotTable, AWholeTableSavesResetsAndRestores) {
+    using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Query;
+
+    const Uint32 holdersBefore = FakeSlotTable::HolderCount();
+    FakeSlotTable table;
+    const MG_Pipe::MGPipeHandle handle = MintFor(kKind, 0xD1u);
+    table.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    (*table.FindByHandle(handle))->marker = 7;
+
+    const FakeSlotTable saved = table;
+    EXPECT_EQ(FakeSlotTable::HolderCount(), holdersBefore + 2u) << "the by-value copy did not register as a holder";
+    table = {};
+    EXPECT_EQ(FakeSlotTable::HolderCount(), holdersBefore + 2u)
+        << "the reset changed the holder count - a temporary's registration leaked or the "
+           "table's own was lost";
+    EXPECT_EQ(table.FindByHandle(handle), nullptr) << "the reset left the twin reachable";
+
+    table = saved;
+    ASSERT_NE(table.FindByHandle(handle), nullptr);
+    EXPECT_EQ((*table.FindByHandle(handle))->marker, 7);
+
+    // The object dies while BOTH the working table and the saved copy hold its twin. One
+    // release, and neither may keep a live entry.
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(handle));
+    MG_Pipe::MGPipeSlots().Free(kKind, handle);
+    EXPECT_EQ(table.FindByHandle(handle), nullptr);
+    EXPECT_EQ(table.LiveCount(), 0u);
+    EXPECT_EQ(saved.LiveCount(), 0u)
+        << "the saved copy kept the dead object's twin - the release reached one holder only";
+}
+
+// One handle, two holders of the kind: the shared handle addresses each table's OWN twin, and
+// neither table's twin is the other's.
+TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindShareOneSlotAndKeepTheirOwnTwin) {
+    using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Fence;
+    auto& slots = MG_Pipe::MGPipeSlots();
+    const Uint32 liveBefore = slots.LiveCount(kKind);
+
+    FakeSharedKindSlotTable a;
+    FakeSharedKindSlotTable b;
+    const MG_Pipe::MGPipeHandle handle = MintFor(kKind, 0xE1u);
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
+    a.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    (*a.FindByHandle(handle))->marker = 1;
+    b.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    (*b.FindByHandle(handle))->marker = 2;
+
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore + 1u)
+        << "twinning one handle in two tables consumed more than the client's one slot";
+    ASSERT_NE(a.FindByHandle(handle), nullptr);
+    ASSERT_NE(b.FindByHandle(handle), nullptr);
+    EXPECT_EQ((*a.FindByHandle(handle))->marker, 1);
+    EXPECT_EQ((*b.FindByHandle(handle))->marker, 2);
+
+    // TWO HOLDERS OF ONE SLOT is a real configuration (the ScopedDirectGLESTextureBindings fixture
+    // holds a second live table of kind Texture for the length of a test);
+    // OneDeathNoticeDropsTheTwinInEveryHolderOfTheKind below is the case for its death.
+    EXPECT_TRUE(FakeSharedKindSlotTable::ReleaseTwinByHandle(handle));
+    slots.Free(kKind, handle);
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore) << "the shared slot outlived both holders";
+}
+
+// The round-4 review's minor 2, closed: one release, EVERY holder. Three holders here - two
+// independent tables and a by-value copy, which is exactly what the fixture makes - and a fourth
+// that never twinned the handle and must be untouched.
+TEST(DirectGLESSlotTable, OneDeathNoticeDropsTheTwinInEveryHolderOfTheKind) {
+    using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Fence;
+    auto& slots = MG_Pipe::MGPipeSlots();
+    const Uint32 liveBefore = slots.LiveCount(kKind);
+    const Uint32 holdersBefore = FakeSharedKindSlotTable::HolderCount();
+
+    FakeSharedKindSlotTable a;
+    FakeSharedKindSlotTable b;
+    FakeSharedKindSlotTable bystander;
+    const MG_Pipe::MGPipeHandle handle = MintFor(kKind, 0xE2u);
+    const MG_Pipe::MGPipeHandle uninvolved = MintFor(kKind, 0xE3u);
+
+    a.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    b.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    bystander.GetOrCreate(uninvolved) = MakeShared<FakeBackendObject>();
+    const FakeSharedKindSlotTable copyOfA = a; // the fixture's saved registry
+    EXPECT_EQ(FakeSharedKindSlotTable::HolderCount(), holdersBefore + 4u);
+
+    // Observers on the twins, so "dropped" means destroyed and not merely unreachable.
+    const std::weak_ptr<FakeBackendObject> twinA = *a.FindByHandle(handle);
+    const std::weak_ptr<FakeBackendObject> twinB = *b.FindByHandle(handle);
+
+    // ONE release.
+    EXPECT_TRUE(FakeSharedKindSlotTable::ReleaseTwinByHandle(handle));
+
+    EXPECT_EQ(a.FindByHandle(handle), nullptr) << "holder a kept the twin";
+    EXPECT_EQ(b.FindByHandle(handle), nullptr) << "holder b kept the twin";
+    EXPECT_EQ(copyOfA.LiveCount(), 0u) << "the by-value copy kept the twin";
+    EXPECT_EQ(a.LiveCount(), 0u);
+    EXPECT_EQ(b.LiveCount(), 0u);
+    EXPECT_TRUE(twinA.expired()) << "a's twin is unreachable but still allocated";
+    EXPECT_TRUE(twinB.expired()) << "b's twin is unreachable but still allocated";
+    EXPECT_FALSE(FakeSharedKindSlotTable::ReleaseTwinByHandle(handle))
+        << "a second release for the same handle found a twin to drop";
+
+    // The holder that never twinned the handle is exactly as it was.
+    EXPECT_EQ(bystander.LiveCount(), 1u);
+    ASSERT_NE(bystander.FindByHandle(uninvolved), nullptr);
+
+    slots.Free(kKind, handle);
+    EXPECT_TRUE(FakeSharedKindSlotTable::ReleaseTwinByHandle(uninvolved));
+    slots.Free(kKind, uninvolved);
+    EXPECT_EQ(bystander.LiveCount(), 0u);
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore);
+}
+
+// The sweep and both of its drivers are RETIRED, and this is
+// the property that replaces them: an announced death releases the twin before the next creation
+// asks for a slot, so NOTHING accumulates under object churn.
+TEST(DirectGLESSlotTable, AnnouncedDeathKeepsObjectChurnFromAccumulatingWithoutASweep) {
+    using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Query;
+
+    auto& slots = MG_Pipe::MGPipeSlots();
+    constexpr Uint32 kChurn = 256u;
+    const Uint32 highWaterBefore = slots.HighWater(kKind);
+    const Uint32 liveBefore = slots.LiveCount(kKind);
+
+    FakeSlotTable table;
+    Uint32 peakLive = 0;
+    for (Uint32 i = 0; i < kChurn; ++i) {
+        const MG_Pipe::MGPipeHandle handle = MintFor(kKind, 0xF0000000ull + i);
+        table.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+        peakLive = std::max(peakLive, table.LiveCount());
+        // What a real object's death delivers (Espryt's notice consumer releases by the handle
+        // the notice carries; the client frees after it). That the six real classes do raise it
+        // is EveryReKeyedObjectClassAnnouncesItsOwnDeath below.
+        EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(handle));
+        slots.Free(kKind, handle);
+    }
+
+    EXPECT_EQ(peakLive, 1u) << peakLive << " twins were live at once with " << kChurn
+                            << " objects churned and every death announced - the release stopped dropping the twin";
+    EXPECT_EQ(table.LiveCount(), 0u);
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore) << "the churn leaked slots";
+    // 2 and not 1: on a cold allocator the high-water mark counts the RESERVED slot 0
+    // (kMGPipeFirstAllocatableSlot is 1) as well as the one slot this loop recycles.
+    EXPECT_LE(slots.HighWater(kKind) - highWaterBefore, 2u)
+        << "the slot space grew with the churn instead of being recycled";
+}
+
+// P2 step e2, the backend half. A sweep is a stand-in for a death notice; this is the release the
+// notice drives. It is idempotent, and it is GENERATION-EXACT: a late release for a dead handle
+// must not drop the twin of the slot's next owner.
+TEST(DirectGLESSlotTable, AnAnnouncedDeathReturnsTheSlotWithoutASweep) {
+    using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Query;
+
+    auto& slots = MG_Pipe::MGPipeSlots();
+    const Uint32 liveBefore = slots.LiveCount(kKind);
+
+    FakeSlotTable table;
+    const MG_Pipe::MGPipeHandle handle = MintFor(kKind, 0x1E2A0001ull);
+    table.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore + 1u);
+
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(handle));
+    EXPECT_EQ(table.LiveCount(), 0u) << "the twin survived its own release";
+    EXPECT_EQ(table.FindByHandle(handle), nullptr);
+    // Idempotent: a repeated release finds nothing and says so.
+    EXPECT_FALSE(FakeSlotTable::ReleaseTwinByHandle(handle));
+    slots.Free(kKind, handle);
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore) << "the slot was not returned to the allocator";
+
+    // The successor at the recycled slot, and then a LATE release naming the dead generation.
+    const MG_Pipe::MGPipeHandle successor = MintFor(kKind, 0x1E2A0002ull);
+    ASSERT_EQ(successor.Slot, handle.Slot);
+    table.GetOrCreate(successor) = MakeShared<FakeBackendObject>();
+    EXPECT_FALSE(FakeSlotTable::ReleaseTwinByHandle(handle))
+        << "a release for a dead generation dropped the slot's next owner's twin";
+    EXPECT_NE(table.FindByHandle(successor), nullptr);
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(successor));
+    slots.Free(kKind, successor);
+}
+
+// The firing side of e2, on ALL SIX re-keyed object classes - the round-3 review's MAJOR 3.
+// Until this round only ProgramObject and RenderbufferObject raised the notice and the other
+// four discovered their death in a sweep; the sweep is now retired, so a class that stopped
+// announcing would leak its twin and the driver storage that twin owns for the life of the
+// process. The notice has to arrive when the LAST SharedPtr drops - not when glDelete* marks
+// the name, because a still-bound object goes on living - so the objects are simply dropped.
+TEST(DirectGLESSlotTable, EveryReKeyedObjectClassAnnouncesItsOwnDeath) {
+    using namespace MobileGL;
+
+    static Vector<std::pair<MG_Pipe::MGPipeKind, Uint64>> notices;
+    notices.clear();
+    const MG_State::GLState::StateObjectDeathOps recording = {
+        .OnDestroyed = [](MG_Pipe::MGPipeKind kind, Uint64 lifetimeId,
+                          MG_Pipe::MGPipeHandle) { notices.emplace_back(kind, lifetimeId); },
+    };
+    const MG_State::GLState::StateObjectDeathOps* previous = MG_State::GLState::GetStateObjectDeathOps();
+    MG_State::GLState::SetStateObjectDeathOps(&recording);
+
+    Vector<std::pair<MG_Pipe::MGPipeKind, Uint64>> expected;
+    Uint64 bufferLifetimeId = 0;
+    {
+        auto program = MakeShared<MG_State::GLState::ProgramObject>(0u);
+        auto renderbuffer = MakeShared<MG_State::GLState::RenderbufferObject>(0u);
+        auto texture = MakeShared<MG_State::GLState::TextureObject2D>(0u);
+        auto framebuffer = MakeShared<MG_State::GLState::FramebufferObject>(1u);
+        auto sampler = MakeShared<MG_State::GLState::SamplerObject>(0u);
+        auto vertexArray = MakeShared<MG_State::GLState::VertexArrayObject>(0u);
+
+        expected.emplace_back(MG_Pipe::MGPipeKind::ShaderCso, program->GetLifetimeId());
+        expected.emplace_back(MG_Pipe::MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId());
+        expected.emplace_back(MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId());
+        expected.emplace_back(MG_Pipe::MGPipeKind::Framebuffer, framebuffer->GetLifetimeId());
+        expected.emplace_back(MG_Pipe::MGPipeKind::SamplerCso, sampler->GetLifetimeId());
+        expected.emplace_back(MG_Pipe::MGPipeKind::VertexElementsCso, vertexArray->GetLifetimeId());
+
+        // P3a, and it is DELIBERATELY NOT in `expected`: the buffer is the seventh re-keyed
+        // class and the only one whose death does not travel on this notice. The catalog
+        // has a call for it - resource_destroy - so no seventh NotifyStateObjectDestroyed
+        // raiser was added (D-L). StateObjectDeathNotice.h exists for kinds that have NO
+        // such call, and a buffer raising one too would be two death signals for one object,
+        // i.e. a slot freed twice and a successor's twin dropped under it.
+        auto bufferObject = MakeShared<MG_State::GLState::BufferObject>(0u);
+        bufferLifetimeId = bufferObject->GetLifetimeId();
+
+        EXPECT_TRUE(notices.empty()) << "a live object announced its own death";
+    }
+
+    MG_State::GLState::SetStateObjectDeathOps(previous);
+
+    EXPECT_EQ(std::find(notices.begin(), notices.end(), std::make_pair(MG_Pipe::MGPipeKind::Buffer, bufferLifetimeId)),
+              notices.end())
+        << "a BufferObject raised a state-object death notice; P3a routes buffer death through "
+           "resource_destroy instead (D-L), and both firing would free the slot twice";
+
+    // Membership rather than a count or an order: every TextureObjectBase owns a private
+    // SamplerObject (TextureObject.cpp), so tearing a texture down legitimately raises a
+    // SamplerCso notice as well. What must hold is that each of the six classes announced its
+    // OWN id under its OWN kind.
+    for (const auto& want : expected) {
+        EXPECT_NE(std::find(notices.begin(), notices.end(), want), notices.end())
+            << "kind " << static_cast<Uint32>(want.first) << " lifetime id " << want.second
+            << " was destroyed without announcing it, so its twin would wait for a sweep that "
+               "this arm no longer runs";
+    }
+}
+
+// ... and that the backend actually installs a consumer for it, rather than the two halves
+// each being fine on their own. Registered from ResolveEsprytSlotTablesArm(), i.e. exactly
+// when the arm that can answer a notice is the arm that runs.
+TEST(DirectGLESSlotTable, TheHandleArmInstallsTheDeathNoticeConsumer) {
+    using namespace MobileGL;
+
+    if (!MG_Backend::DirectGLES::EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the legacy arm keys on the frontend address and cannot answer a notice";
+    }
+    ASSERT_NE(MG_State::GLState::GetStateObjectDeathOps(), nullptr)
+        << "the handle arm runs but nothing consumes a death notice, so every twin still waits "
+           "for a garbage sweep";
+    EXPECT_NE(MG_State::GLState::GetStateObjectDeathOps()->OnDestroyed, nullptr);
+}
+
+// The gate on MAJOR 1 of the round-2 review: this binary's OTHER 82 cases - among them every
+// D13 "must not break" item - are only evidence about this package if they run on the arm this
+// package wrote. Before EsprytSlotArmEnvironment existed they did not, in any build directory
+// the P2 brief defines, and nothing said so; a gdb breakpoint on MGPipeSlotAllocator::Acquire
+// was the only way to find out. This case is that breakpoint, made falsifiable: delete the
+// environment and it goes red, and it goes red naming the arm rather than the symptom.
+TEST(DirectGLESSlotTable, TheTwinRegistryCasesInThisBinaryRunOnTheHandleArm) {
+    const char* knob = std::getenv("MOBILEGL_PIPE_PUSH");
+    if (knob != nullptr && *knob != '\0') {
+        GTEST_SKIP() << "the operator pinned the arm with MOBILEGL_PIPE_PUSH=" << knob;
+    }
+    EXPECT_TRUE(MobileGL::MG_Backend::DirectGLES::EsprytSlotTablesEnabled())
+        << "a push build of SanityTest resolved the LEGACY twin registry, so every case in this "
+           "binary that builds a twin - the scratch-FBO scrub, the three context-generation "
+           "guards, the sampled-set staleness walk, ScopedDirectGLESTextureBindings - is "
+           "exercising code this package did not change";
+    EXPECT_NE(MobileGL::MG_Config::Features.PipePush & MobileGL::MG_Pipe::kMGPipeSubsystemEsprytSlots, 0ull);
+}
+
+namespace {
+    // One kind's worth of the walk the re-key exists for - acquire, look up by object, look up
+    // by handle, delete, re-acquire - driven through the REAL registry global that every
+    // shipping path uses, and therefore through StateBackendObjectRegistry's arm dispatch.
+    //
+    // That "through the real registry" is the whole point of this helper. The eleven
+    // DirectGLESSlotTable cases above drive BackendSlotTable directly on the throwaway kinds
+    // Query and Fence, so they would pass unchanged had the six registries never been re-keyed;
+    // and of the D13 "must not break" cases only the sampled-set staleness walk makes a twin at
+    // all, all four of them of kind Texture. Five of the six re-keyed kinds therefore had no
+    // case that could go red for the switch-over. This is that case.
+    //
+    // No backend twin is constructed: every one of the six twin classes generates a driver id
+    // in its constructor, and none of that is what was re-keyed. What is asserted instead is
+    // that GetOrCreate, Find(object) and FindByHandle(handle) all name the SAME twin storage,
+    // that the handle is a real {slot, gen} rather than the null handle the legacy arm answers,
+    // and that a successor object landing on the freed slot gets a different Gen while the
+    // predecessor's handle resolves to nothing.
+    template <typename Registry, typename MakeObject>
+    void ExpectTheHandleArmDrivesThisKind(const char* kindName, MobileGL::MG_Pipe::MGPipeKind kind, Registry& registry,
+                                          MakeObject make) {
+        using namespace MobileGL;
+
+        auto first = make();
+        ASSERT_NE(first, nullptr) << kindName;
+        // The client's mint (the record would carry this handle), then the backend's adoption.
+        const Uint64 firstLifetimeId = first->GetLifetimeId();
+        const MG_Pipe::MGPipeHandle firstHandle = MG_Pipe::MGPipeSlots().Acquire(kind, firstLifetimeId);
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(firstHandle)) << kindName;
+        auto* const firstTwin = registry.GetOrCreateByHandle(firstHandle);
+        ASSERT_NE(firstTwin, nullptr) << kindName
+                                      << ": the real registry refused a handle the client minted, so this kind is "
+                                         "not running on the {slot, gen} arm at all";
+        ASSERT_NE(MG_State::GLState::GetStateObjectDeathOps(), nullptr)
+            << kindName << ": no death-notice consumer is installed";
+        EXPECT_EQ(registry.FindByHandle(firstHandle), firstTwin)
+            << kindName << ": the handle does not address the twin GetOrCreateByHandle handed back";
+
+        // The frontend object dies. NOTHING below sweeps - the destructor's own notice (which
+        // carries the handle) releases the twin and the client frees the slot after it, which is
+        // what makes this the e2/e3 pair end to end.
+        first.reset();
+        EXPECT_EQ(registry.FindByHandle(firstHandle), nullptr)
+            << kindName << ": the twin outlived the announced death of its object";
+        EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(MG_Pipe::MGPipeSlots().FindByLifetimeId(kind, firstLifetimeId)))
+            << kindName << ": the slot was still held after its object announced its death";
+
+        auto second = make();
+        ASSERT_NE(second, nullptr) << kindName;
+        const MG_Pipe::MGPipeHandle secondHandle = MG_Pipe::MGPipeSlots().Acquire(kind, second->GetLifetimeId());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(secondHandle)) << kindName;
+        EXPECT_EQ(secondHandle.Slot, firstHandle.Slot)
+            << kindName
+            << ": the freed slot was not handed back, so this walk did not exercise "
+               "the recycle it exists to test";
+        EXPECT_NE(secondHandle.Gen, firstHandle.Gen)
+            << kindName
+            << ": Gen did not move on slot reuse - the predecessor's handle would "
+               "resolve to the successor's twin";
+        auto* const secondTwin = registry.GetOrCreateByHandle(secondHandle);
+        ASSERT_NE(secondTwin, nullptr) << kindName;
+        EXPECT_EQ(registry.FindByHandle(firstHandle), nullptr) << kindName << ": the STALE handle resolved to a twin";
+        EXPECT_EQ(registry.FindByHandle(secondHandle), secondTwin) << kindName;
+
+        second.reset();
+        EXPECT_EQ(registry.FindByHandle(secondHandle), nullptr) << kindName;
+    }
+} // namespace
+
+// The gate on MAJOR 2 of the round-3 review: every kind this package re-keyed, exercised
+// through the registry the shipping code calls, on the arm this package wrote.
+TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleArm) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the legacy arm keys twins on the frontend heap address and answers the "
+                        "null handle, so there is no {slot, gen} walk to drive";
+    }
+
+    ExpectTheHandleArmDrivesThisKind("Texture", MG_Pipe::MGPipeKind::Texture, TextureImpl::g_backendTextureObjects,
+                                     [] { return SharedPtr<ITextureObject>(MakeShared<TextureObject2D>(0u)); });
+    ExpectTheHandleArmDrivesThisKind("Framebuffer", MG_Pipe::MGPipeKind::Framebuffer,
+                                     FramebufferImpl::g_backendFramebufferObjects,
+                                     [] { return MakeShared<FramebufferObject>(1u); });
+    ExpectTheHandleArmDrivesThisKind("Renderbuffer", MG_Pipe::MGPipeKind::Renderbuffer,
+                                     RenderbufferImpl::g_backendRenderbufferObjects,
+                                     [] { return MakeShared<RenderbufferObject>(0u); });
+    ExpectTheHandleArmDrivesThisKind("SamplerCso", MG_Pipe::MGPipeKind::SamplerCso,
+                                     SamplerImpl::g_backendSamplerObjects,
+                                     [] { return MakeShared<SamplerObject>(0u); });
+    ExpectTheHandleArmDrivesThisKind("ShaderCso", MG_Pipe::MGPipeKind::ShaderCso, PrgramImpl::g_backendProgramObjects,
+                                     [] { return MakeShared<ProgramObject>(0u); });
+    ExpectTheHandleArmDrivesThisKind("VertexElementsCso", MG_Pipe::MGPipeKind::VertexElementsCso,
+                                     VertexArrayImpl::g_backendVertexArrayObjects,
+                                     [] { return MakeShared<VertexArrayObject>(0u); });
+
+    // P3a: the SEVENTH table, and the only one the helper above cannot drive - which is the
+    // point of it. Every other kind is a TwinRegistry whose GetOrCreate MINTS the handle off a
+    // frontend object's lifetime id from inside MG_Backend; this one is a bare BackendSlotTable
+    // that only ever receives a handle the CALL carried, so there is no HandleOf, no
+    // Find(object), no stateRef and no death notice. Its walk is the family's own:
+    // client mints -> backend twins by handle -> resource_destroy retires the twin -> the
+    // CLIENT frees the slot, in that order (D-L), and a successor at the recycled slot gets a
+    // Gen that leaves the predecessor's handle resolving to nothing.
+    {
+        using MobileGL::MG_Backend::DirectGLES::BufferImpl::g_backendBufferResources;
+        using MobileGL::MG_Backend::DirectGLES::BufferImpl::GLESBufferResource;
+        auto& table = g_backendBufferResources;
+
+        auto owner = MakeShared<BufferObject>(0u);
+        const MG_Pipe::MGPipeHandle first =
+            MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, owner->GetLifetimeId());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(first))
+            << "Buffer: the client allocator minted no handle for a live buffer";
+        auto& firstTwin = table.GetOrCreate(first);
+        firstTwin = MakeShared<GLESBufferResource>();
+        const GLESBufferResource* const firstRaw = firstTwin.get();
+        EXPECT_EQ(table.FindByHandle(first), &firstTwin)
+            << "Buffer: the handle does not address the twin GetOrCreate handed back";
+
+        // resource_destroy: the twin comes OUT first (so the pool / delete / deferred-release
+        // decision is reached with the entry already retired), and only then does the client
+        // free the slot - the allocator forgets the lifetime id on Free.
+        const SharedPtr<GLESBufferResource> released = table.ReleaseByHandle(first);
+        EXPECT_NE(released, nullptr) << "Buffer: resource_destroy found no twin to retire";
+        EXPECT_EQ(table.FindByHandle(first), nullptr) << "Buffer: the twin outlived its resource_destroy";
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, first);
+
+        auto successor = MakeShared<BufferObject>(0u);
+        const MG_Pipe::MGPipeHandle second =
+            MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, successor->GetLifetimeId());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(second)) << "Buffer";
+        EXPECT_EQ(second.Slot, first.Slot)
+            << "Buffer: the freed slot was not handed back, so this walk did not exercise the "
+               "recycle it exists to test";
+        EXPECT_NE(second.Gen, first.Gen)
+            << "Buffer: Gen did not move on slot reuse - the predecessor's handle would resolve "
+               "to the successor's storage, which is the ABA the {slot, gen} key exists to stop";
+        EXPECT_EQ(table.FindByHandle(first), nullptr) << "Buffer: the STALE handle resolved to a twin";
+
+        auto& secondTwin = table.GetOrCreate(second);
+        EXPECT_EQ(secondTwin, nullptr)
+            << "Buffer: a resource at a recycled slot inherited its predecessor's backend storage";
+        secondTwin = MakeShared<GLESBufferResource>();
+        EXPECT_EQ(table.FindByHandle(second), &secondTwin) << "Buffer";
+        EXPECT_NE(table.FindByHandle(second)->get(), firstRaw) << "Buffer";
+
+        table.ReleaseByHandle(second);
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, second);
+    }
+
+    // P4a: the EIGHTH table and the SIXTH kind - the sampler view, which is the only kind in
+    // the phase with no frontend object at all. MobileGL has no sampler-view class: GL binds a
+    // texture to a unit and the sampler uniform's type plus the two completeness predicates
+    // decide what the shader sees, a one-view-per-slot model IS that resolved form, and the
+    // resolution moves to the CLIENT (D-F3). So this table is handle-keyed only, like the
+    // buffer resource table above, and its twin owns no driver id whatsoever - what it holds is
+    // the server's memo of one resolved view plus the raw-depth-fetch substitution decision,
+    // which is one of the two backend post-processings ARCHITECTURE.md §5.5 keeps on the server.
+    //
+    // The handle is minted off the TEXTURE's lifetime id (D-F2: one view per ITextureObject),
+    // which is what makes HandleOf resolve at all - and it is legal precisely because the two
+    // kinds have separate slot spaces, so the same lifetime id names a Texture slot and a
+    // SamplerViewCso slot without either shadowing the other.
+    {
+        using MobileGL::MG_Backend::DirectGLES::SamplerViewImpl::BackendSamplerViewObject;
+        using MobileGL::MG_Backend::DirectGLES::SamplerViewImpl::g_backendSamplerViews;
+        auto& table = g_backendSamplerViews;
+
+        SharedPtr<ITextureObject> owner = MakeShared<TextureObject2D>(0u);
+        const MG_Pipe::MGPipeHandle first =
+            MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::SamplerViewCso, owner->GetLifetimeId());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(first))
+            << "SamplerViewCso: the client allocator minted no handle for a live texture's view";
+
+        // The same lifetime id, two kinds, two independent slot spaces.
+        const MG_Pipe::MGPipeHandle textureHandle =
+            MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Texture, owner->GetLifetimeId());
+        EXPECT_FALSE(first == textureHandle)
+            << "SamplerViewCso: the view handle and the texture handle are the same {slot, gen}, so "
+               "one kind's slot space is aliasing the other's";
+
+        auto& firstTwin = table.GetOrCreate(first);
+        firstTwin = MakeShared<BackendSamplerViewObject>();
+        firstTwin->SyncedSerial = 0xABCDEFull;
+        const BackendSamplerViewObject* const firstRaw = firstTwin.get();
+        EXPECT_EQ(table.FindByHandle(first), &firstTwin)
+            << "SamplerViewCso: the handle does not address the twin GetOrCreate handed back";
+
+        const SharedPtr<BackendSamplerViewObject> released = table.ReleaseByHandle(first);
+        EXPECT_NE(released, nullptr) << "SamplerViewCso: delete_sampler_view found no twin to retire";
+        EXPECT_EQ(table.FindByHandle(first), nullptr) << "SamplerViewCso: the twin outlived its delete_sampler_view";
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerViewCso, first);
+
+        auto successorOwner = MakeShared<TextureObject2D>(0u);
+        const MG_Pipe::MGPipeHandle second =
+            MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::SamplerViewCso, successorOwner->GetLifetimeId());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(second)) << "SamplerViewCso";
+        EXPECT_EQ(second.Slot, first.Slot)
+            << "SamplerViewCso: the freed slot was not handed back, so this walk did not exercise "
+               "the recycle it exists to test";
+        EXPECT_NE(second.Gen, first.Gen)
+            << "SamplerViewCso: Gen did not move on slot reuse - the predecessor's handle would "
+               "resolve to the successor's view, which is the ABA the {slot, gen} key exists to stop";
+        EXPECT_EQ(table.FindByHandle(first), nullptr) << "SamplerViewCso: the STALE handle resolved";
+
+        auto& secondTwin = table.GetOrCreate(second);
+        EXPECT_EQ(secondTwin, nullptr)
+            << "SamplerViewCso: a view at a recycled slot inherited its predecessor's memo, so the "
+               "raw-depth-fetch decision of a dead texture would be replayed for a live one";
+        secondTwin = MakeShared<BackendSamplerViewObject>();
+        EXPECT_NE(table.FindByHandle(second)->get(), firstRaw) << "SamplerViewCso";
+
+        // BACKWARD generations are REFUSED rather than adopted, exactly as they are on every
+        // other handle-keyed table (SlotTables.h:301-321). Forward is a recycle; adopting a
+        // backward one would retire the incumbent LIVE twin and then stamp the slot back to the
+        // dead view's generation.
+        //
+        // m-8: THE FIRST ASSERTION BELOW CANNOT DISTINGUISH THE TWO OUTCOMES and its message
+        // must not claim it does. GetOrCreate(handle) calls entry.backend.reset() before it
+        // stamps, so an ADOPTED backward generation yields a null BackendPtr& just as a refused
+        // one does. What separates refusal from adoption is the SECOND assertion: after an
+        // adoption the live twin at `second` is gone. The first is kept because a non-null there
+        // would mean the table handed back the incumbent's own twin under the dead handle, which
+        // is a third outcome and a worse one.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // PH-2: the refusal is a named session fault here, so it is asserted in a death child;
+        // the live twin below is then the parent's, untouched by construction AND by assertion.
+        EXPECT_DEATH(
+            {
+                MG_Pipe::MGPipeInstallSessionFailHook(&EchoPipeSessionFailToStderr);
+                (void)table.GetOrCreate(first);
+            },
+            "BackendSlotTable.Generation");
+#else
+        auto& stale = table.GetOrCreate(first);
+        EXPECT_EQ(stale, nullptr) << "SamplerViewCso: a stale handle was answered with the LIVE twin at its slot (this "
+                                     "assertion cannot tell a refusal from an adoption - the next one does)";
+#endif
+        EXPECT_NE(table.FindByHandle(second), nullptr)
+            << "SamplerViewCso: the live twin was destroyed by a handle from its slot's past - "
+               "the backward generation was ADOPTED rather than refused";
+
+        table.ReleaseByHandle(second);
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerViewCso, second);
+    }
+}
+
+// P4a (ID-8): the backend death notice is the REDUNDANT SECOND PATH for every kind the client
+// mints, and it must be IDEMPOTENT - the client's own helper emits the wire delete, raises this
+// notice and frees the slot, in that order, so whichever of the two frees first wins and the
+// other must find nothing and do nothing.
+//
+// Driven through the REAL consumer the backend installed rather than through a recording stub:
+// what is under test is Espryt's OnFrontendStateObjectDestroyed arm, including the SamplerViewCso
+// arm P4a adds, and a stub would prove only that the test can call itself.
+TEST(DirectGLESSlotTable, ADeathNoticeForEveryP4aKindIsIdempotent) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the legacy arm keys twins on the frontend heap address and cannot answer "
+                        "a death notice at all";
+    }
+
+    const MG_State::GLState::StateObjectDeathOps* ops = MG_State::GLState::GetStateObjectDeathOps();
+    ASSERT_NE(ops, nullptr) << "the backend installed no death-notice consumer";
+    ASSERT_NE(ops->OnDestroyed, nullptr);
+
+    // The sampler view first, because it is the arm P4a adds and the only kind whose notice
+    // names a lifetime id belonging to ANOTHER object (the texture the view was minted off).
+    {
+        using SamplerViewImpl::BackendSamplerViewObject;
+        using SamplerViewImpl::g_backendSamplerViews;
+
+        auto owner = MakeShared<TextureObject2D>(0u);
+        const Uint64 lifetimeId = owner->GetLifetimeId();
+        const MG_Pipe::MGPipeHandle view =
+            MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId);
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(view));
+        g_backendSamplerViews.GetOrCreate(view) = MakeShared<BackendSamplerViewObject>();
+        ASSERT_NE(g_backendSamplerViews.FindByHandle(view), nullptr);
+
+        ops->OnDestroyed(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId, view);
+        EXPECT_EQ(g_backendSamplerViews.FindByHandle(view), nullptr)
+            << "the sampler-view notice left the twin behind, so the slot's next owner would "
+               "inherit a dead texture's resolved view";
+
+        // The second path, in the order the client's helper runs it: the notice, then the Free
+        // (since P13 the notice releases by handle and never frees - the slot is the client's).
+        // A redundant notice before and after the Free finds nothing to release.
+        ops->OnDestroyed(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId, view);
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerViewCso, view);
+        ops->OnDestroyed(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId, view);
+        EXPECT_EQ(g_backendSamplerViews.FindByHandle(view), nullptr);
+        EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(
+            MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId)))
+            << "the Free did not return the slot";
+
+        // And the slot really is back: a successor gets it with a moved generation, which is
+        // the property a double free would break by skipping one.
+        auto successor = MakeShared<TextureObject2D>(0u);
+        const MG_Pipe::MGPipeHandle reused =
+            MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::SamplerViewCso, successor->GetLifetimeId());
+        EXPECT_EQ(reused.Slot, view.Slot);
+        EXPECT_NE(reused.Gen, view.Gen);
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerViewCso, reused);
+    }
+
+    // The five kinds that DO have a frontend object: their notice is raised by the object's own
+    // destructor today and by the client's helper after P4a's client packages land, so it is
+    // delivered twice for one death. A second delivery must be a no-op rather than a second
+    // free - which is what would drop a successor's twin under it.
+    struct KindCase {
+        const char* name;
+        MG_Pipe::MGPipeKind kind;
+        Uint64 lifetimeId;
+        // m-9: the handle the object held before it died, so the ABA leg below can prove the
+        // slot came back AT A MOVED GENERATION. ID-8's third case ("a notice for a slot
+        // re-minted at a new generation") was covered for SamplerViewCso only; a double free
+        // skips a generation, and nothing here would have caught that for the other five.
+        MG_Pipe::MGPipeHandle handle;
+    };
+    Vector<KindCase> cases;
+    {
+        auto texture = MakeShared<TextureObject2D>(0u);
+        auto renderbuffer = MakeShared<RenderbufferObject>(0u);
+        auto framebuffer = MakeShared<FramebufferObject>(1u);
+        auto sampler = MakeShared<SamplerObject>(0u);
+        auto program = MakeShared<ProgramObject>(0u);
+
+        // The client's mint, then the backend's adoption by that handle.
+        const auto handleFor = [](MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+            return MG_Pipe::MGPipeSlots().Acquire(kind, lifetimeId);
+        };
+        (void)TextureImpl::g_backendTextureObjects.GetOrCreateByHandle(
+            handleFor(MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId()));
+        (void)RenderbufferImpl::g_backendRenderbufferObjects.GetOrCreateByHandle(
+            handleFor(MG_Pipe::MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId()));
+        (void)FramebufferImpl::g_backendFramebufferObjects.GetOrCreateByHandle(
+            handleFor(MG_Pipe::MGPipeKind::Framebuffer, framebuffer->GetLifetimeId()));
+        (void)SamplerImpl::g_backendSamplerObjects.GetOrCreateByHandle(
+            handleFor(MG_Pipe::MGPipeKind::SamplerCso, sampler->GetLifetimeId()));
+        (void)PrgramImpl::g_backendProgramObjects.GetOrCreateByHandle(
+            handleFor(MG_Pipe::MGPipeKind::ShaderCso, program->GetLifetimeId()));
+        cases.push_back({"Texture", MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId(),
+                         handleFor(MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId())});
+        cases.push_back({"Renderbuffer", MG_Pipe::MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId(),
+                         handleFor(MG_Pipe::MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId())});
+        cases.push_back({"Framebuffer", MG_Pipe::MGPipeKind::Framebuffer, framebuffer->GetLifetimeId(),
+                         handleFor(MG_Pipe::MGPipeKind::Framebuffer, framebuffer->GetLifetimeId())});
+        cases.push_back({"SamplerCso", MG_Pipe::MGPipeKind::SamplerCso, sampler->GetLifetimeId(),
+                         handleFor(MG_Pipe::MGPipeKind::SamplerCso, sampler->GetLifetimeId())});
+        cases.push_back({"ShaderCso", MG_Pipe::MGPipeKind::ShaderCso, program->GetLifetimeId(),
+                         handleFor(MG_Pipe::MGPipeKind::ShaderCso, program->GetLifetimeId())});
+
+        for (const auto& one : cases) {
+            EXPECT_FALSE(MG_Pipe::MGPipeHandleIsNull(MG_Pipe::MGPipeSlots().FindByLifetimeId(one.kind, one.lifetimeId)))
+                << one.name << ": nothing was twinned, so this walk proves nothing";
+        }
+        // The real destructors run here and raise the first notice.
+    }
+
+    for (const auto& one : cases) {
+        EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(MG_Pipe::MGPipeSlots().FindByLifetimeId(one.kind, one.lifetimeId)))
+            << one.name << ": the object's own death did not return its slot";
+        // Second and third deliveries of the dead handle: nothing to release, no abort.
+        ops->OnDestroyed(one.kind, one.lifetimeId, one.handle);
+        ops->OnDestroyed(one.kind, one.lifetimeId, one.handle);
+        EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(MG_Pipe::MGPipeSlots().FindByLifetimeId(one.kind, one.lifetimeId)))
+            << one.name << ": a redundant notice resurrected a mapping";
+
+        // m-9, THE ABA LEG: the slot really came back, and its generation MOVED. Two redundant
+        // notices plus the object's own death are three chances to free one slot twice, and a
+        // double free is invisible in every assertion above - it shows up here, as a successor
+        // handed the same {slot, gen} the dead object held, which is precisely the handle a
+        // surviving memo would still be naming.
+        auto successor = MakeShared<TextureObject2D>(0u);
+        const MG_Pipe::MGPipeHandle reused = MG_Pipe::MGPipeSlots().Acquire(one.kind, successor->GetLifetimeId());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(reused)) << one.name;
+        if (reused.Slot == one.handle.Slot) {
+            EXPECT_NE(reused.Gen, one.handle.Gen) << one.name
+                                                  << ": the slot came back at the SAME generation, so a memo holding "
+                                                     "the dead object's handle would resolve to its successor's twin";
+        }
+        MG_Pipe::MGPipeSlots().Free(one.kind, reused);
+    }
+}
+
+// The two-holder fix, end to end through the REAL Texture registry and the REAL destructor:
+// a by-value copy of TextureImpl::g_backendTextureObjects - which is precisely what
+// ScopedDirectGLESTextureBindings keeps in `previousRegistry` for the length of a test - must
+// drop the twin on the same notice the registry global does, with no sweep and no second call.
+TEST(DirectGLESSlotTable, ASavedCopyOfARealRegistryDropsTheTwinOnTheSameNotice) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the legacy arm keys twins on the frontend heap address and cannot "
+                        "answer a death notice";
+    }
+
+    auto& registry = TextureImpl::g_backendTextureObjects;
+    SharedPtr<ITextureObject> texture = MakeShared<TextureObject2D>(0u);
+    const MG_Pipe::MGPipeHandle handle =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
+    ASSERT_NE(registry.GetOrCreateByHandle(handle), nullptr);
+
+    // The fixture's shape: copy the registry while the twin is live.
+    auto saved = registry;
+    ASSERT_NE(saved.FindByHandle(handle), nullptr) << "the copy did not carry the live entry";
+
+    // The real destructor raises the real notice; nothing else runs.
+    texture.reset();
+    EXPECT_EQ(registry.FindByHandle(handle), nullptr) << "the registry global kept the twin";
+    EXPECT_EQ(saved.FindByHandle(handle), nullptr)
+        << "the saved copy kept the dead texture's twin - the dispatcher told one holder only";
+}
+
+// P5 b1's half of the case above: THE PIN IS LIFTED, AND THIS IS WHAT REPLACED IT.
+//
+// The case above exists because answering the live-map question from HasLiveHostWrites alone
+// read draw-CLEAN forever. P5 gives that field a producer and retires the last frontend read
+// in IsBufferDrawCleanByHandle under split, because under a spawn there is no frontend object
+// on that side to ask.
+//
+// EVERYTHING THE CASE OBSERVES IS WRITTEN BY THE PRODUCER, NOT BY THE CASE. A first cut of
+// this test set `record.HasLiveHostWrites = true` by hand and therefore passed with the
+// producer deleted - a test that constructs the state it is supposed to be observing cannot
+// fail for the reason it exists. So the resource subsystem is armed with an empty ops table
+// (MG_Test/Pipe's PushArm shape), the map and the unmap are made through the ordinary
+// frontend entry points, and the record is only ever READ. Delete
+// BufferObject::NotePersistentMapStateChanged's emission, or PipeFill.cpp's
+// `record.HasLiveHostWrites = ...`, and this goes red.
+TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQuestion) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the handle-keyed resource table only exists on the {slot, gen} arm";
+    }
+#if !MOBILEGL_BUILD_DISAGGREGATED
+    GTEST_SKIP() << "MG_Config::Transport is a constexpr Monolith without the transport built in, "
+                    "so the split arm of this probe cannot be entered";
+#else
+    // The subsystem, armed the way MG_Test/Pipe arms it: an EMPTY op table is enough, because
+    // MGPipeResourceSubsystemEnabled() only asks whether one is registered, and every hook this
+    // case reaches is optional.
+    const Uint64 previousPush = MG_Config::Features.PipePush;
+    const auto previousTransport = MG_Config::Transport;
+    MG_Pipe::MGPipeResourceOps ops{};
+    MG_Config::Features.PipePush |= MG_Pipe::kMGPipeSubsystemResources;
+    MG_Pipe::MGPipeSetResourceOps(&ops);
+    MG_Config::Transport = MG_Config::TransportMode::InProcess;
+    // P5 c1 / R-8: UNDER SPLIT THE OP TABLE IS NO LONGER THE ARMING CONDITION, and this case is
+    // the first place that shows. `MGPipeSetResourceOps(&ops)` is the SERVER's registration; the
+    // client's liveness gate now reads the caps mirror's consumer mask instead, because under a
+    // spawn the client process has no op table at all and reading one would silently stop five
+    // record families. So the probe has to arm BOTH halves - and the fact that it did not is the
+    // defect R-8 exists to catch, reproduced here by a change rather than argued about.
+    const Uint64 previousCapsGeneration = MG_Remote::Client::CapsMirrorInstance().Generation();
+    {
+        MG_Pipe::MGPCaps caps{};
+        caps.CallMask = MG_Remote::MGCapsConsumerBits(MG_Pipe::kMGPipeSubsystemResources);
+        MG_Remote::Client::CapsMirrorInstance().Adopt(caps, MG_Backend::FormatCapabilityCache{}, RendererInfo{},
+                                                      String{}, BackendType::DirectGLES);
+    }
+    (void)previousCapsGeneration;
+
+    {
+        // The constructor mints the handle and emits resource_create; Respecify emits the
+        // descriptor. Both through the production path.
+        auto owner = MakeShared<BufferObject>(0u);
+        owner->Respecify(256, nullptr);
+
+        const MG_Pipe::MGPipeHandle res = MG_Pipe::MGPipeResourceTrackerInstance().Find(*owner);
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(res));
+        auto& applier = MG_Pipe::MGPipeApplier();
+        ASSERT_GT(applier.Resources.size(), static_cast<SizeT>(res.Slot));
+        auto& record = applier.Resources[res.Slot];
+        ASSERT_TRUE(record.Live) << "resource_create did not reach the applier";
+        ASSERT_EQ(record.Desc.Width, 256u) << "resource_respecify did not reach the applier";
+        EXPECT_FALSE(record.HasLiveHostWrites) << "nothing maps this buffer yet";
+
+        auto& twin = BufferImpl::g_backendBufferResources.GetOrCreate(res);
+        twin = MakeShared<BufferImpl::GLESBufferResource>();
+        auto* const resource = twin.get();
+        resource->id = 1; // a name, never used: this probe issues no GL
+        resource->contextGeneration = BufferImpl::CurrentBufferContextGeneration();
+        resource->storageInitialized = true;
+        resource->storageSize = 256;
+        const auto stampSynced = [&]() {
+            resource->syncedChangeSerial = record.Serial;
+            const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+            resource->pendingRanges.clear();
+            resource->pendingResidentWrites.clear();
+        };
+        stampSynced();
+
+        // The probe is given NO frontend object at all, which is the point: this is the
+        // question a spawned server has to answer, and it has nothing to ask.
+        ASSERT_TRUE(BufferImpl::IsBufferDrawCleanByHandle(res, resource, nullptr))
+            << "the fixture is not clean before the map, so this case cannot isolate the "
+               "live-map question it exists for";
+
+        // ---- map. The RISING EDGE is what has to publish, and nothing else can. -----------
+        void* const mapped = owner->AcquireMemoryRange(Range1D{0, 256}, BufferMappingAccessBit::Write |
+                                                                            BufferMappingAccessBit::Persistent);
+        ASSERT_NE(mapped, nullptr);
+        ASSERT_TRUE(owner->IsMapped());
+        ASSERT_FALSE(owner->IsBackendPersistentMapped())
+            << "the acquisition was minted, so R-6's decline did not happen and this is the "
+               "adopted arm rather than the emulated one";
+
+        EXPECT_TRUE(record.HasLiveHostWrites)
+            << "the map published nothing the server can see. Without it the probe below answers "
+               "CLEAN, the ensure path is skipped and then latched (SyncVaoAttributeBuffersByRecord's vboCleanEpoch), "
+               "SyncPersistentMappedRange is never reached again, and the frame draws the last "
+               "uploaded bytes for ever with no diagnostic";
+
+        // Absorb the rising-edge record so the ONLY thing left dirty is the flag.
+        stampSynced();
+        EXPECT_FALSE(BufferImpl::IsBufferDrawCleanByHandle(res, resource, nullptr))
+            << "a live host map read draw-CLEAN from the record alone";
+
+        // ---- a write with no API call announcing it, then the per-draw push --------------
+        static_cast<Uint8*>(mapped)[0] = 0x5Au;
+        const Uint64 serialBeforePush = record.Serial;
+        owner->SyncPersistentMappedRange();
+        EXPECT_GT(record.Serial, serialBeforePush)
+            << "the block push emitted nothing, so a write made through the pointer never left "
+               "the client";
+
+        // ---- unmap. The FALLING EDGE has to put it back. ---------------------------------
+        owner->ReleaseMemory(false);
+        EXPECT_FALSE(record.HasLiveHostWrites)
+            << "the unmap published nothing, so the record stays dirty for the buffer's life and "
+               "every later draw re-uploads it";
+        stampSynced();
+        EXPECT_TRUE(BufferImpl::IsBufferDrawCleanByHandle(res, resource, nullptr))
+            << "the probe stayed dirty after the unmap, i.e. it is not the record that is "
+               "being read";
+
+        BufferImpl::g_backendBufferResources.ReleaseByHandle(res);
+    }
+
+    MG_Config::Transport = previousTransport;
+    MG_Pipe::MGPipeSetResourceOps(nullptr);
+    MG_Config::Features.PipePush = previousPush;
+#endif
+}
+
+// R-8's NEGATIVE CONTROL, at the level of the probe above rather than at the level of the
+// accessor. `CapsMirrorTest.AMaskWithoutAFamilyRefusesItAndNamesIt` already pins that
+// `ServerConsumes` counts and names a refusal; what it cannot pin is that the LIVENESS GATE
+// the probe above depends on actually asks it. This case is the pair: the op table is
+// registered - so the pre-R-8 read (`MGPipeGetResourceOps() != nullptr`) would answer
+// "enabled" - and the caps mask is EMPTY, so the only honest answer is "no consumer".
+//
+// AND THE REFUSAL IS COUNTED, NOT INFERRED. "No record appeared" is satisfied by a client that
+// never ran at all: a typo in the fixture, a subsystem bit left clear, a BufferObject that
+// threw. Asking `ConsumerRefusals()` for a DELTA and `LastRefusedSubsystem()` for the family's
+// own bit is a statement that the gate was reached, asked the mirror, and was told no - which
+// is the fact R-8 exists to establish. Put `MGPipeGetResourceOps() != nullptr` back into
+// MGPipeResourceSubsystemEnabled() and this goes red on the record, not on the counter.
+TEST(DirectGLESBufferDrawProbe, ACapsMaskWithoutTheResourceFamilyEmitsNothingAndCountsTheRefusal) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the handle-keyed resource table only exists on the {slot, gen} arm";
+    }
+#if !MOBILEGL_BUILD_DISAGGREGATED
+    GTEST_SKIP() << "MG_Config::Transport is a constexpr Monolith without the transport built in, "
+                    "so the split arm of this probe cannot be entered";
+#else
+    const Uint64 previousPush = MG_Config::Features.PipePush;
+    const auto previousTransport = MG_Config::Transport;
+    MG_Pipe::MGPipeResourceOps ops{};
+    MG_Config::Features.PipePush |= MG_Pipe::kMGPipeSubsystemResources;
+    // THE SERVER's registration is present. Under the pre-R-8 gate this alone armed the client.
+    MG_Pipe::MGPipeSetResourceOps(&ops);
+    MG_Config::Transport = MG_Config::TransportMode::InProcess;
+
+    {
+        // The CLIENT's answer: a snapshot that names no consumer at all. R-12 makes a second
+        // arrival the invalidation, so adopting is how a mask is replaced; there is no
+        // Invalidate() to call and inventing one would be a second spelling of the same edge.
+        MG_Pipe::MGPCaps caps{};
+        caps.CallMask = 0;
+        MG_Remote::Client::CapsMirrorInstance().Adopt(caps, MG_Backend::FormatCapabilityCache{}, RendererInfo{},
+                                                      String{}, BackendType::DirectGLES);
+    }
+    ASSERT_FALSE(MG_Remote::Client::CapsMirrorInstance().ServerConsumes(MG_Pipe::kMGPipeSubsystemResources))
+        << "the fixture's own mask consumes the family, so this case cannot observe a refusal";
+
+    MG_Remote::Client::ResetConsumerRefusalsForTest();
+    {
+        auto owner = MakeShared<BufferObject>(0u);
+        owner->Respecify(256, nullptr);
+
+        // The MINT is unconditional in a push build (set_vertex_buffers names a buffer by
+        // handle whether or not the resource family is on), so a handle is the expected state
+        // and is NOT what this case reads.
+        const MG_Pipe::MGPipeHandle res = MG_Pipe::MGPipeResourceTrackerInstance().Find(*owner);
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(res))
+            << "the mint is unconditional; without a handle this case is observing the wrong "
+               "absence";
+
+        auto& applier = MG_Pipe::MGPipeApplier();
+        if (applier.Resources.size() > static_cast<SizeT>(res.Slot)) {
+            EXPECT_FALSE(applier.Resources[res.Slot].Live)
+                << "resource_create reached the applier for a family the server told this client "
+                   "it does not consume - which is ID-39's 66 lost uploads in the other "
+                   "direction: records emitted to a consumer that is not there";
+        }
+    }
+
+    // THE COUNTED HALF. Both statements, because either alone is satisfiable by an accident:
+    // a non-zero count alone could come from any family, and the family id alone could be left
+    // over from an earlier case.
+    EXPECT_GT(MG_Remote::Client::ConsumerRefusals(), 0u)
+        << "the liveness gate never asked the caps mirror. It is still reading "
+           "MGPipeGetResourceOps(), which is the SERVER's registration and is null under a "
+           "spawn - R-8's whole defect";
+    EXPECT_EQ(MG_Remote::Client::LastRefusedSubsystem(), MG_Pipe::kMGPipeSubsystemResources)
+        << "a refusal was counted for some other family, so this case is not observing the "
+           "resource gate it names";
+
+    MG_Config::Transport = previousTransport;
+    MG_Pipe::MGPipeSetResourceOps(nullptr);
+    MG_Config::Features.PipePush = previousPush;
+    MG_Remote::Client::ResetConsumerRefusalsForTest();
+#endif
+}
+
+// P3a REWORK M-1's gate (contract-review M2). The minting overload's symmetric `!=` is safe
+// because its handle comes out of the allocator and can never be behind the entry; the HANDLE
+// overload's input ARRIVES in a payload, so a generation BEHIND the live entry's is reachable -
+// and adopting it destroyed the incumbent's twin (a driver id, a persistent map, a pooled
+// store, dropped by a defaulted destructor that deletes nothing) and stamped the slot back to
+// the dead generation, after which the incumbent's own FindByHandle refused it.
+TEST(DirectGLESSlotTable, AGenerationBehindTheLiveTwinIsRefusedRatherThanAdopted) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+
+    FakeSlotTable table;
+    const MG_Pipe::MGPipeHandle current{7u, 2u};
+    const MG_Pipe::MGPipeHandle stale{7u, 1u};
+
+    auto& incumbent = table.GetOrCreate(current);
+    incumbent = MakeShared<FakeBackendObject>();
+    incumbent->marker = 0xC0FFEE;
+    const FakeBackendObject* const raw = incumbent.get();
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // PH-2 (F2): the backwards generation is a NAMED session fault on this build - the handle is a
+    // peer's payload - so the refusal is asserted in a death child and the incumbent below is the
+    // parent's, which the refused call never touched.
+    EXPECT_DEATH(
+        {
+            MobileGL::MG_Pipe::MGPipeInstallSessionFailHook(&EchoPipeSessionFailToStderr);
+            (void)table.GetOrCreate(stale);
+        },
+        "BackendSlotTable.Generation");
+#else
+    auto& answer = table.GetOrCreate(stale);
+    EXPECT_EQ(answer, nullptr) << "a backwards generation was handed a twin rather than refused; FindByHandle refuses "
+                                  "the same input, so the two entry points disagreed";
+#endif
+
+    auto* const still = table.FindByHandle(current);
+    ASSERT_NE(still, nullptr) << "the live twin's entry was retired by a handle from its past";
+    EXPECT_EQ(still->get(), raw)
+        << "the incumbent's twin was destroyed by a stale handle - the driver storage it owned "
+           "went with it, and the incumbent would silently be handed a fresh empty twin";
+    EXPECT_EQ((*still)->marker, 0xC0FFEE);
+
+    // Forward is still a recycle, which is the direction the comment always covered.
+    const MG_Pipe::MGPipeHandle successor{7u, 3u};
+    auto& next = table.GetOrCreate(successor);
+    EXPECT_EQ(next, nullptr) << "a successor at a recycled slot inherited its predecessor's twin";
+    EXPECT_EQ(table.FindByHandle(current), nullptr) << "the predecessor's handle still resolves";
+
+    // And a slot past the table's bound is refused rather than resized to.
+#if MOBILEGL_BUILD_DISAGGREGATED
+    EXPECT_DEATH(
+        {
+            MobileGL::MG_Pipe::MGPipeInstallSessionFailHook(&EchoPipeSessionFailToStderr);
+            (void)table.GetOrCreate(MG_Pipe::MGPipeHandle{FakeSlotTable::kMaxHandleSlot, 1u});
+        },
+        "BackendSlotTable.HandleSlot");
+#else
+    auto& absurd = table.GetOrCreate(MG_Pipe::MGPipeHandle{FakeSlotTable::kMaxHandleSlot, 1u});
+    EXPECT_EQ(absurd, nullptr) << "an unbounded client slot decided a vector resize";
+#endif
+    EXPECT_EQ(table.FindByHandle(MG_Pipe::MGPipeHandle{FakeSlotTable::kMaxHandleSlot, 1u}), nullptr);
+}
+
+// P5e (id), CONTRACT-P5E §4.3's last paragraph: THE COMPOSITE BAND, and why it is a P5e
+// prerequisite rather than a follow-up.
+//
+// A program-pipeline composite's ShaderCso slot comes out of the reserved top 1/16 of the slot
+// space (kMGPipeShaderCsoCompositeSlotBase = 983040). EntryAt indexes BY SLOT and resizes to
+// it, so before the band a single composite grew g_backendProgramObjects to ~983k entries of
+// ~40 B - ~40 MB for one glBindProgramPipeline. That was reachable only through
+// GetOrCreate(StatePtr) for a composite program; after id's rekey the by-handle resolution IS
+// the ordinary path (ResolveProgramTwin), so every composite bind would pay it.
+//
+// THE RED: make EntryAt index m_slots unconditionally again (drop the SlotIsBanded branch) and
+// the first assertion below goes from 0 to 983044. LiveCount alone could not see that - the
+// table would hold exactly one live entry either way - which is why the case asserts on the
+// two spaces' CAPACITIES and not on liveness.
+TEST(DirectGLESSlotTable, ACompositeHandleDoesNotGrowTheOrdinaryTable) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+
+    FakeShaderCsoSlotTable table;
+    const MG_Pipe::MGPipeHandle composite{MG_Pipe::kMGPipeShaderCsoCompositeSlotBase + 3u, 1u};
+    ASSERT_TRUE(MG_Pipe::MGPipeIsCompositeShaderSlot(composite.Slot));
+
+    auto& twin = table.GetOrCreate(composite);
+    twin = MakeShared<FakeBackendObject>();
+    twin->marker = 0x5A;
+
+    EXPECT_EQ(table.OrdinaryCapacityForTest(), 0u)
+        << "a composite slot grew the ORDINARY table - one program pipeline is ~40 MB of twin "
+           "entries for a single live program";
+    EXPECT_EQ(table.CompositeCapacityForTest(), 4u)
+        << "the band is indexed by (slot - base), so slot base+3 needs exactly four entries";
+    EXPECT_EQ(table.LiveCount(), 1u);
+    EXPECT_EQ(table.CompositeLiveCount(), 1u) << "the live composite was counted in the wrong space";
+
+    auto* const found = table.FindByHandle(composite);
+    ASSERT_NE(found, nullptr) << "the band entry is invisible to the lookup that has to find it";
+    EXPECT_EQ((*found)->marker, 0x5A);
+
+    // An ordinary ShaderCso lands in the ordinary space and disturbs neither the band's
+    // contents nor its size: the two are dense against their OWN high-water marks.
+    auto& ordinary = table.GetOrCreate(MG_Pipe::MGPipeHandle{5u, 1u});
+    ordinary = MakeShared<FakeBackendObject>();
+    EXPECT_EQ(table.OrdinaryCapacityForTest(), 6u);
+    EXPECT_EQ(table.CompositeCapacityForTest(), 4u);
+    EXPECT_EQ(table.CompositeLiveCount(), 1u);
+
+    // ForEachLive reports the composite at THE SLOT THE CLIENT MINTED, never the band index -
+    // the handle it hands over is the one a caller turns straight back into a record lookup.
+    Vector<Uint32> walked;
+    table.ForEachLive(
+        [&](MG_Pipe::MGPipeHandle handle, const SharedPtr<FakeBackendObject>&) { walked.push_back(handle.Slot); });
+    ASSERT_EQ(walked.size(), 2u);
+    EXPECT_EQ(walked[0], 5u) << "the ordinary space is walked first, at its own slot";
+    EXPECT_EQ(walked[1], composite.Slot)
+        << "the band was reported at its INDEX rather than at the client's slot, so a caller "
+           "resolving the record for it would read another program's";
+
+    // §4.3's recycle answer holds inside the band exactly as it does outside it.
+    auto& recycled = table.GetOrCreate(MG_Pipe::MGPipeHandle{composite.Slot, 2u});
+    EXPECT_EQ(recycled, nullptr) << "a successor at a recycled composite slot inherited its "
+                                    "predecessor's driver program";
+    EXPECT_EQ(table.FindByHandle(composite), nullptr) << "the predecessor's handle still resolves";
+    EXPECT_EQ(table.CompositeCapacityForTest(), 4u) << "the recycle re-grew the band";
+}
+
+// ==========================================================================================
+// P5e (vi), CONTRACT-P5E §5.1: THE DRAW'S BUFFERS COME FROM THE RECORD, NOT FROM THE VAO.
+// ==========================================================================================
+//
+// The two cases below are BRIEF-P5E's red-onces (2) and (3) for this package, and they are
+// built the way ID-102 says a red-once has to be: the thing under test is THE PRODUCTION
+// DECISION ITSELF (BufferImpl::ResolveDrawVertexBuffersFromRecord and
+// ResolveDrawIndexBufferFromRecord, which are the only enumeration
+// SyncNeccessaryBuffers' record arm has), not a copy of it written here. Both take the applier
+// state and NOTHING ELSE, so the only way to revert §5.1's substitution is to put a frontend
+// read back inside one of them - and then these go red naming the field.
+//
+// THE SETUP IS THE DIVERGENCE ITSELF: the frontend VAO is pointed at a buffer the RECORD does
+// not name. That state is unreachable in one process today (the client re-emits at every
+// validate point, so the two always agree); under run-ahead it is the ordinary state of the
+// world, because the client has moved on by the time the record is applied. Producing it here
+// by hand is the only way to ask "which one did you read" at all.
+//
+// WHAT IS NOT HERE, and deliberately: the ensure, the memo and the clean probe. They need an ES
+// context and a driver, and DirectGLES.Split.* is where they are exercised
+// (ClientVertexArrayScenario, TriangleScenario, IndexedDrawFamilyScenario and the rest of the
+// lane draw through exactly this arm).
+TEST(DirectGLESVertexInputDraw, TheAttributeWalkTakesItsBuffersFromTheRecordNotTheFrontendVao) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+#if !MOBILEGL_BUILD_DISAGGREGATED
+    GTEST_SKIP() << "the record arm of the attribute walk is compiled only under "
+                    "MOBILEGL_BUILD_DISAGGREGATED";
+#else
+    // A, B and C, with handles minted the way the client mints them.
+    auto bufferA = MakeShared<BufferObject>(0u);
+    auto bufferB = MakeShared<BufferObject>(0u);
+    auto bufferC = MakeShared<BufferObject>(0u);
+    const MG_Pipe::MGPipeHandle a =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, bufferA->GetLifetimeId());
+    const MG_Pipe::MGPipeHandle b =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, bufferB->GetLifetimeId());
+    const MG_Pipe::MGPipeHandle c =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, bufferC->GetLifetimeId());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(a));
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(b));
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(c));
+
+    // THE PUBLISHED STATE: attribute 0 fetches from A, attribute 1 from B, attribute 2 from A
+    // again (the dedupe), attribute 3 is a client-memory array (null Res, nothing to ensure).
+    MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
+    // P14 S5: the applier is not copyable any more (its object tables are references into the
+    // share group it belongs to), so the case saves the WORKING fields it is about to move
+    // instead of the whole object - which is also the smaller blast radius: nothing here
+    // touches a record.
+    const Uint32 savedVertexBufferStart = st.VertexBufferStart;
+    const Uint32 savedVertexBufferCount = st.VertexBufferCount;
+    const Array<MG_Pipe::MGPVertexBuffer, VertexArrayObject::MAX_VERTEX_ATTRIBS> savedVertexBuffers = st.VertexBuffers;
+    st.VertexBufferStart = 0;
+    st.VertexBufferCount = 4;
+    for (Uint32 i = 0; i < 4; ++i) {
+        st.VertexBuffers[i] = MG_Pipe::MGPVertexBuffer{};
+        st.VertexBuffers[i].BindingIndex = i;
+    }
+    st.VertexBuffers[0].Res = a;
+    st.VertexBuffers[1].Res = b;
+    st.VertexBuffers[2].Res = a;
+    st.VertexBuffers[3].Res = MG_Pipe::kMGPipeNullHandle;
+
+    // THE FRONTEND, MOVED ON: every enabled attribute now points at C, and nothing was
+    // re-emitted. A walk that read GetAllAttributes() answers {C}. The VAO is BOUND IN A REAL
+    // CONTEXT rather than free-standing, because that is the only shape in which the revert
+    // this case exists to catch - gPipeInputs->GetBoundVertexArray()->GetAllAttributes() - has
+    // anything to read at all; a free-standing object would make the revert crash instead of
+    // disagree, which is a red for the wrong reason.
+    SharedPtr<GLContext> previousContext = MG_State::pGLContext.Take();
+    MG_State::pGLContext = MakeUnique<GLContext>();
+    MG_State::pGLContext->CreateVertexArrayObject(1);
+    MG_State::pGLContext->BindVertexArray(1);
+    const SharedPtr<VertexArrayObject> vao = MG_State::pGLContext->GetBoundVertexArray();
+    ASSERT_NE(vao, nullptr);
+    for (Uint i = 0; i < 4; ++i) {
+        vao->SetAttributeFormat(i, 2, DataType::Float32, false, 8, 0, false, false, 8);
+        vao->BindAttributeBuffer(i, bufferC);
+        vao->EnableAttribute(i);
+    }
+
+    BufferImpl::DrawVertexBufferRequest requests[VertexArrayObject::MAX_VERTEX_ATTRIBS];
+    const Uint count =
+        BufferImpl::ResolveDrawVertexBuffersFromRecord(st, requests, VertexArrayObject::MAX_VERTEX_ATTRIBS);
+
+    ASSERT_EQ(count, 2u) << "the walk did not resolve st.VertexBuffers[Start..+Count): two DISTINCT handles are "
+                            "named there (A twice and B), plus one client-memory array with no store to ensure";
+    EXPECT_EQ(requests[0].Res, a)
+        << "the first buffer is not st.VertexBuffers[0].Res. If it is the frontend VAO's C, the "
+           "walk went back to GetAllAttributes() and §5.1's substitution is reverted";
+    EXPECT_EQ(requests[1].Res, b) << "the second buffer is not st.VertexBuffers[1].Res";
+    EXPECT_EQ(requests[0].BindingIndex, 0u);
+    EXPECT_EQ(requests[1].BindingIndex, 1u);
+    for (Uint i = 0; i < count; ++i) {
+        EXPECT_NE(requests[i].Res, c)
+            << "the walk ensured the buffer the FRONTEND VAO points at, which is the object a "
+               "run-ahead client has already moved on from";
+    }
+
+    st.VertexBufferStart = savedVertexBufferStart;
+    st.VertexBufferCount = savedVertexBufferCount;
+    st.VertexBuffers = savedVertexBuffers;
+    MG_State::pGLContext.reset();
+    MG_State::pGLContext = Move(previousContext);
+    MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, a);
+    MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, b);
+    MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, c);
+#endif
+}
+
+// Red-once (3), the index half. The claim has TWO parts and the second is what this package
+// added: the handle comes from st.IndexBuffer.Res, and IndexBufferSerial comes with it - the
+// legacy and push-monolith arms re-read the VAO's element slot on every indexed draw and so see
+// a rebind for free, while this arm reads nothing and needs the serial in the key
+// (ResolvedDrawBuffers::iboSerial). A rebind of the SAME buffer still moves the serial, which is
+// exactly the case an identity-only compare would call a hit.
+TEST(DirectGLESVertexInputDraw, TheIndexArmTakesItsBufferAndItsSerialFromTheRecord) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+#if !MOBILEGL_BUILD_DISAGGREGATED
+    GTEST_SKIP() << "the record arm of the index-buffer sync is compiled only under "
+                    "MOBILEGL_BUILD_DISAGGREGATED";
+#else
+    auto published = MakeShared<BufferObject>(0u);
+    auto rebound = MakeShared<BufferObject>(0u);
+    const MG_Pipe::MGPipeHandle publishedHandle =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, published->GetLifetimeId());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(publishedHandle));
+
+    MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
+    const MG_Pipe::MGPIndexBuffer savedIndexBuffer = st.IndexBuffer;
+    const Uint64 savedIndexBufferSerial = st.IndexBufferSerial;
+    st.IndexBuffer = MG_Pipe::MGPIndexBuffer{};
+    st.IndexBuffer.Res = publishedHandle;
+    st.IndexBufferSerial = 11;
+
+    // The frontend's element slot has moved to another buffer with nothing emitted, in a real
+    // context for the reason the case above gives.
+    SharedPtr<GLContext> previousContext = MG_State::pGLContext.Take();
+    MG_State::pGLContext = MakeUnique<GLContext>();
+    MG_State::pGLContext->CreateVertexArrayObject(1);
+    MG_State::pGLContext->BindVertexArray(1);
+    const SharedPtr<VertexArrayObject> vao = MG_State::pGLContext->GetBoundVertexArray();
+    ASSERT_NE(vao, nullptr);
+    vao->GetIndexBufferBindingSlot().Bind(rebound);
+
+    BufferImpl::DrawIndexBufferRequest request = BufferImpl::ResolveDrawIndexBufferFromRecord(st);
+    EXPECT_EQ(request.Res, publishedHandle)
+        << "the index arm did not read st.IndexBuffer.Res; if it answered the VAO's element "
+           "slot it is reading a binding the client has already changed";
+    EXPECT_EQ(request.Serial, 11u) << "IndexBufferSerial did not travel with the handle";
+
+    // The same buffer re-bound: the handle is unchanged and ONLY the serial says so.
+    st.IndexBufferSerial = 12;
+    request = BufferImpl::ResolveDrawIndexBufferFromRecord(st);
+    EXPECT_EQ(request.Res, publishedHandle);
+    EXPECT_EQ(request.Serial, 12u)
+        << "a re-emitted set_index_buffer on the SAME handle is invisible to this arm without "
+           "the serial, and the memo would read clean over it";
+
+    st.IndexBuffer = savedIndexBuffer;
+    st.IndexBufferSerial = savedIndexBufferSerial;
+    MG_State::pGLContext.reset();
+    MG_State::pGLContext = Move(previousContext);
+    MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, publishedHandle);
+#endif
+}
+
+// P12 (on-screen server window): A SERVER SESSION ENDS IN A PROCESS THAT OUTLIVES IT.
+//
+// The in-process display server (the display Activity's process) runs its sessions one after
+// another in ONE process, and each new client mints its handles from the same {slot, gen} space
+// again. The twin tables are process globals, so the twins the previous session built - naming ids
+// of the context its backend destroyed - answered for the next session's objects: on the device
+// the second on-screen OpenRA replay linked no program (ssim 0.00004) and the third crashed inside
+// Adreno's glDrawElements; on llvmpipe the second replay failed the same way. The server backend's
+// destruction under a transport - the end of a session - now drops every twin (without a driver
+// call), and monolith keeps its twins. Red once: remove the DropEveryTwinForEndedServerSession
+// call from ~BackendObject_DirectGLES and the first half of this case fails at every kind.
+#if MOBILEGL_BUILD_DISAGGREGATED
+TEST(EsprytServerSession, TheServerBackendsDestructionDropsEveryTwinTheSessionBuilt) {
+    using namespace MobileGL;
+    namespace GL = MG_Backend::DirectGLES;
+    const auto previousTransport = MG_Config::Transport;
+    const MG_Pipe::MGPipeHandle program{7u, 3u};
+    const MG_Pipe::MGPipeHandle texture{4u, 2u};
+    const MG_Pipe::MGPipeHandle buffer{5u, 1u};
+    // A session's twins: LIVE entries at the generations its client minted. A null twin object is
+    // enough for the program and texture kinds - what the next session trips over is the live
+    // entry itself (its generation, and the driver id a real twin would carry).
+    const auto populate = [&] {
+        ASSERT_NE(GL::PrgramImpl::g_backendProgramObjects.GetOrCreateByHandle(program), nullptr);
+        ASSERT_NE(GL::TextureImpl::g_backendTextureObjects.GetOrCreateByHandle(texture), nullptr);
+        GL::BufferImpl::g_backendBufferResources.GetOrCreate(buffer) = MakeShared<GL::BufferImpl::GLESBufferResource>();
+        ASSERT_EQ(GL::PrgramImpl::g_backendProgramObjects.LiveGenAt(program.Slot), 3u);
+        ASSERT_EQ(GL::TextureImpl::g_backendTextureObjects.LiveGenAt(texture.Slot), 2u);
+        ASSERT_NE(GL::BufferImpl::g_backendBufferResources.FindByHandle(buffer), nullptr);
+    };
+
+    // Under a transport this backend is the SERVER's: its destruction ends the session.
+    MG_Config::Transport = MG_Config::TransportMode::Spawn;
+    populate();
+    { GL::BackendObject_DirectGLES serverBackend; }
+    EXPECT_EQ(GL::PrgramImpl::g_backendProgramObjects.LiveGenAt(program.Slot), 0u)
+        << "the ended session's program twin is still live: the next session's client mints {7, 0} "
+           "and is refused as ProtocolCorruption, or adopts a program of the destroyed context";
+    EXPECT_EQ(GL::TextureImpl::g_backendTextureObjects.LiveGenAt(texture.Slot), 0u)
+        << "the ended session's texture twin is still live";
+    EXPECT_EQ(GL::BufferImpl::g_backendBufferResources.FindByHandle(buffer), nullptr)
+        << "the ended session's buffer twin is still live";
+    // The next session starts from empty tables: its first handle at that slot is a fresh twin.
+    MG_Pipe::MGPipeHandle nextSession{7u, 0u};
+    auto* fresh = GL::PrgramImpl::g_backendProgramObjects.GetOrCreateByHandle(nextSession);
+    ASSERT_NE(fresh, nullptr);
+    EXPECT_EQ(*fresh, nullptr);
+
+    // Monolith keeps its twins: its backend is not a session's, and nothing here changed for it.
+    GL::PrgramImpl::g_backendProgramObjects = {};
+    MG_Config::Transport = MG_Config::TransportMode::Monolith;
+    populate();
+    { GL::BackendObject_DirectGLES monolithBackend; }
+    EXPECT_EQ(GL::PrgramImpl::g_backendProgramObjects.LiveGenAt(program.Slot), 3u);
+    EXPECT_EQ(GL::TextureImpl::g_backendTextureObjects.LiveGenAt(texture.Slot), 2u);
+    EXPECT_NE(GL::BufferImpl::g_backendBufferResources.FindByHandle(buffer), nullptr);
+
+    GL::PrgramImpl::g_backendProgramObjects = {};
+    GL::TextureImpl::g_backendTextureObjects = {};
+    GL::BufferImpl::g_backendBufferResources = {};
+    MG_Config::Transport = previousTransport;
+}
+
+// P12 review fix (major): THE UNIT SHADOWS GO WITH THE TWINS THEY POINT AT. A texture / sampler twin
+// scrubs itself out of g_boundTexturesCache / g_boundSamplersCache in its destructor, except under
+// InProcessTeardown() - which answers true for every twin the session end drops. The shadows then
+// held raw pointers to freed twins, and the next session's twin allocated at a recycled address read
+// "already bound" and skipped its glBindTexture / glBindSampler on the new context: its uploads went
+// to texture 0 and it rendered black. The shadow entries here stand for the ended session's binds (the
+// addresses are never dereferenced), and the active-unit shadow for its last glActiveTexture. Red with
+// the three resets in DropEveryTwinForEndedServerSession deleted: every expectation below fails.
+TEST(EsprytServerSession, TheServerBackendsDestructionEmptiesTheTextureAndSamplerUnitShadows) {
+    using namespace MobileGL;
+    namespace GL = MG_Backend::DirectGLES;
+    const auto previousTransport = MG_Config::Transport;
+    const auto previousTextures = GL::TextureImpl::g_boundTexturesCache;
+    const auto previousSamplers = GL::SamplerImpl::g_boundSamplersCache;
+    const auto previousUnit = GL::TextureImpl::g_activeTextureUnit;
+    alignas(64) static unsigned char endedTexture[64];
+    alignas(64) static unsigned char endedSampler[64];
+    const auto texture2DSlot = static_cast<SizeT>(TextureTarget::Texture2D);
+
+    MG_Config::Transport = MG_Config::TransportMode::Spawn;
+    GL::TextureImpl::g_boundTexturesCache[0][texture2DSlot] =
+        reinterpret_cast<GL::TextureImpl::BackendTextureObject*>(endedTexture);
+    GL::TextureImpl::g_boundTexturesCache[3][texture2DSlot] =
+        reinterpret_cast<GL::TextureImpl::BackendTextureObject*>(endedTexture);
+    GL::SamplerImpl::g_boundSamplersCache[3] = reinterpret_cast<GL::SamplerImpl::BackendSamplerObject*>(endedSampler);
+    GL::TextureImpl::g_activeTextureUnit = 3;
+    { GL::BackendObject_DirectGLES serverBackend; }
+    EXPECT_EQ(GL::TextureImpl::g_boundTexturesCache[0][texture2DSlot], nullptr)
+        << "unit 0's texture shadow still names the ended session's twin: a twin recycled at that address "
+           "skips its glBindTexture and the next session's upload lands on texture 0";
+    EXPECT_EQ(GL::TextureImpl::g_boundTexturesCache[3][texture2DSlot], nullptr);
+    EXPECT_EQ(GL::SamplerImpl::g_boundSamplersCache[3], nullptr)
+        << "unit 3's sampler shadow still names the ended session's sampler twin";
+    EXPECT_EQ(GL::TextureImpl::g_activeTextureUnit, 0u)
+        << "the new context's active unit is GL_TEXTURE0, and a shadow saying 3 skips glActiveTexture(3)";
+
+    GL::TextureImpl::g_boundTexturesCache = previousTextures;
+    GL::SamplerImpl::g_boundSamplersCache = previousSamplers;
+    GL::TextureImpl::g_activeTextureUnit = previousUnit;
+    MG_Config::Transport = previousTransport;
+}
+#else
+TEST(EsprytServerSession, TheServerBackendsDestructionDropsEveryTwinTheSessionBuilt) {
+    GTEST_SKIP() << "a server backend exists only in the split build (MOBILEGL_BUILD_DISAGGREGATED)";
+}
+TEST(EsprytServerSession, TheServerBackendsDestructionEmptiesTheTextureAndSamplerUnitShadows) {
+    GTEST_SKIP() << "a server backend exists only in the split build (MOBILEGL_BUILD_DISAGGREGATED)";
+}
+#endif

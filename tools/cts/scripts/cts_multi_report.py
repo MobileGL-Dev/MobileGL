@@ -1,5 +1,13 @@
 #!/usr/bin/env python
-"""Summarise any number of GL CTS suites and MobileGL backends.
+# MobileGL - tools/cts/scripts/cts_multi_report.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
+"""Summarize any number of GL CTS suites and MobileGL backends.
 
 Each repeatable suite specification consists of four values: backend, label,
 caselist, and result directory.  For example::
@@ -163,7 +171,7 @@ def _read_provenance(
         raise MultiReportInputError(f"suite run identity must be a JSON object: {path}")
     if state.get("backend") != spec.backend:
         raise MultiReportInputError(
-            f"suite {spec.suite_id} is labelled {spec.backend}, but run_state.json "
+            f"suite {spec.suite_id} is labeled {spec.backend}, but run_state.json "
             f"records {state.get('backend')!r}"
         )
     fingerprint, case_count = _caselist_fingerprint(spec.caselist)
@@ -242,7 +250,7 @@ def build_report(
     require_run_state: bool = True,
     expected_run_identity: Optional[str] = None,
 ) -> dict:
-    """Build suite, per-backend, and overall serialisable reports."""
+    """Build suite, per-backend, and overall serializable reports."""
 
     provenance = _validate_specs(
         specs, require_run_state, expected_run_identity
@@ -409,7 +417,7 @@ def _write_json(path: str, report: dict) -> None:
     _write_text(path, json.dumps(report, indent=2, sort_keys=True) + "\n")
 
 
-def _normalise_compact_suite_args(argv: Sequence[str]) -> list[str]:
+def _normalize_compact_suite_args(argv: Sequence[str]) -> list[str]:
     """Expand ``--suite=b,l,c,r`` into the four-value argparse form."""
 
     result: list[str] = []
@@ -499,11 +507,11 @@ def _specs_from_args(values: Sequence[Sequence[str]]) -> list[SuiteSpec]:
 def main(argv: Optional[Iterable[str]] = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     try:
-        normalised = _normalise_compact_suite_args(raw_argv)
+        normalized = _normalize_compact_suite_args(raw_argv)
     except MultiReportInputError as exc:
         print(f"cts_multi_report: {exc}", file=sys.stderr)
         return 2
-    args = _parser().parse_args(normalised)
+    args = _parser().parse_args(normalized)
 
     if os.path.normcase(os.path.abspath(args.markdown)) == os.path.normcase(
         os.path.abspath(args.json_out)

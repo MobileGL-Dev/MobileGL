@@ -48,7 +48,7 @@
 //
 // One of them turned out not to be a DirectVulkan bug at all. glFramebufferTexture on
 // GL_DEPTH_STENCIL_ATTACHMENT is a shorthand the front end splits into a depth and a stencil
-// attachment, and the split dropped the call's `layered` flag - so a layered colour attachment
+// attachment, and the split dropped the call's `layered` flag - so a layered color attachment
 // sat beside a non-layered depth/stencil one and BOTH backends silently lost the draw. That is
 // the shape texture_cube_map_array.stencil_attachments_*_layered and
 // geometry_shader.layered_framebuffer.stencil_support are built on, and it is why they fail on
@@ -93,11 +93,11 @@ namespace MGITest {
         // state-side HEIGHT, not in z, which is the whole reason it is here.
         constexpr int kOneDArrayLayers = 4;
 
-        // A colour no pass paints, uploaded before every draw. A layer that reads it back was
+        // A color no pass paints, uploaded before every draw. A layer that reads it back was
         // never rendered to.
         constexpr GLubyte kPoison = 0xAB;
 
-        // The glClear colour the two materialise cases use. Chosen as exact 8-bit values and fed
+        // The glClear color the two materialize cases use. Chosen as exact 8-bit values and fed
         // to glClearColor as n/255, so the round trip through a UNORM8 target is lossless and a
         // mismatch means a real miss rather than rounding.
         constexpr Rgba8 kClearColor{17, 68, 187, 255};
@@ -115,8 +115,8 @@ namespace MGITest {
         }
 
         std::string Describe(const Rgba8& color) {
-            return "(" + std::to_string(color.r) + ", " + std::to_string(color.g) + ", " +
-                   std::to_string(color.b) + ", " + std::to_string(color.a) + ")";
+            return "(" + std::to_string(color.r) + ", " + std::to_string(color.g) + ", " + std::to_string(color.b) +
+                   ", " + std::to_string(color.a) + ")";
         }
 
         // A full-viewport triangle built from gl_VertexID, so nothing here needs a vertex buffer
@@ -215,11 +215,14 @@ void main()
                 if (!Ready()) return;
                 glUseProgram(0);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                for (const GLuint fbo : m_fbos) glDeleteFramebuffers(1, &fbo);
+                for (const GLuint fbo : m_fbos)
+                    glDeleteFramebuffers(1, &fbo);
                 m_fbos.clear();
-                for (const GLuint texture : m_textures) glDeleteTextures(1, &texture);
+                for (const GLuint texture : m_textures)
+                    glDeleteTextures(1, &texture);
                 m_textures.clear();
-                for (const GLuint program : m_programs) glDeleteProgram(program);
+                for (const GLuint program : m_programs)
+                    glDeleteProgram(program);
                 m_programs.clear();
                 glBindVertexArray(0);
                 if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
@@ -230,8 +233,7 @@ void main()
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             // 0 on a DirectGLES driver without GL_EXT_geometry_shader and on a DirectVulkan
@@ -283,14 +285,17 @@ void main()
                 if (ok && geometrySource != nullptr) ok = compile(GL_GEOMETRY_SHADER, geometrySource);
                 if (ok) ok = compile(GL_FRAGMENT_SHADER, fragmentSource);
                 if (!ok) {
-                    for (const GLuint shader : shaders) glDeleteShader(shader);
+                    for (const GLuint shader : shaders)
+                        glDeleteShader(shader);
                     return 0;
                 }
 
                 const GLuint program = glCreateProgram();
-                for (const GLuint shader : shaders) glAttachShader(program, shader);
+                for (const GLuint shader : shaders)
+                    glAttachShader(program, shader);
                 glLinkProgram(program);
-                for (const GLuint shader : shaders) glDeleteShader(shader);
+                for (const GLuint shader : shaders)
+                    glDeleteShader(shader);
                 GLint linked = 0;
                 glGetProgramiv(program, GL_LINK_STATUS, &linked);
                 if (linked == GL_FALSE) {
@@ -323,11 +328,10 @@ void main()
                 glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 glTexStorage3D(GL_TEXTURE_3D, 1, GL_RGBA8, kExtent, kExtent, k3DSlices);
-                const std::vector<GLubyte> seed(
-                    static_cast<std::size_t>(kExtent) * kExtent * k3DSlices * 4, kPoison);
+                const std::vector<GLubyte> seed(static_cast<std::size_t>(kExtent) * kExtent * k3DSlices * 4, kPoison);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, kExtent, kExtent, k3DSlices, GL_RGBA,
-                                GL_UNSIGNED_BYTE, seed.data());
+                glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, kExtent, kExtent, k3DSlices, GL_RGBA, GL_UNSIGNED_BYTE,
+                                seed.data());
                 glBindTexture(GL_TEXTURE_3D, 0);
                 return texture;
             }
@@ -339,11 +343,11 @@ void main()
                 glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 glTexStorage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 1, GL_RGBA8, kExtent, kExtent, kCubeLayerFaces);
-                const std::vector<GLubyte> seed(
-                    static_cast<std::size_t>(kExtent) * kExtent * kCubeLayerFaces * 4, kPoison);
+                const std::vector<GLubyte> seed(static_cast<std::size_t>(kExtent) * kExtent * kCubeLayerFaces * 4,
+                                                kPoison);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                glTexSubImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, 0, 0, 0, kExtent, kExtent, kCubeLayerFaces,
-                                GL_RGBA, GL_UNSIGNED_BYTE, seed.data());
+                glTexSubImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, 0, 0, 0, kExtent, kExtent, kCubeLayerFaces, GL_RGBA,
+                                GL_UNSIGNED_BYTE, seed.data());
                 glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, 0);
                 return texture;
             }
@@ -367,7 +371,7 @@ void main()
                 return texture;
             }
 
-            // A cube map whose six faces are UPLOADED with their own colours - the same
+            // A cube map whose six faces are UPLOADED with their own colors - the same
             // ExpectedColor(face, 0) the painted cube of case (8) ends up holding, so both can be
             // checked with one expectation. Uploaded rather than rendered means the CPU shadow and
             // the image agree, which is the premise the BY-NAME readback needs; see case (8).
@@ -379,8 +383,7 @@ void main()
                 glTexStorage2D(GL_TEXTURE_CUBE_MAP, 1, GL_RGBA8, kExtent, kExtent);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
                 for (int face = 0; face < 6; ++face) {
-                    const std::vector<Rgba8> seed(static_cast<std::size_t>(kExtent) * kExtent,
-                                                  ExpectedColor(face, 0));
+                    const std::vector<Rgba8> seed(static_cast<std::size_t>(kExtent) * kExtent, ExpectedColor(face, 0));
                     glTexSubImage2D(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), 0, 0, 0, kExtent,
                                     kExtent, GL_RGBA, GL_UNSIGNED_BYTE, seed.data());
                 }
@@ -398,13 +401,13 @@ void main()
                 glTexParameteri(GL_TEXTURE_1D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 const std::vector<GLubyte> seed(static_cast<std::size_t>(kExtent) * kOneDArrayLayers * 4, kPoison);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                glTexImage2D(GL_TEXTURE_1D_ARRAY, 0, GL_RGBA8, kExtent, kOneDArrayLayers, 0, GL_RGBA,
-                             GL_UNSIGNED_BYTE, seed.data());
+                glTexImage2D(GL_TEXTURE_1D_ARRAY, 0, GL_RGBA8, kExtent, kOneDArrayLayers, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                             seed.data());
                 glBindTexture(GL_TEXTURE_1D_ARRAY, 0);
                 return texture;
             }
 
-            // A scratch 2D colour target for the sampling draw. It exists only so the draw has
+            // A scratch 2D color target for the sampling draw. It exists only so the draw has
             // somewhere to go that is NOT the layered attachment under test - a draw into that
             // would open a render pass and consume the pending clear through LOAD_OP_CLEAR, which
             // is the other consumer and the one that was already right.
@@ -446,7 +449,7 @@ void main()
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
             }
 
-            // Every texel of `texels` is the clear colour. +/-1 per channel, which no rounding can
+            // Every texel of `texels` is the clear color. +/-1 per channel, which no rounding can
             // exceed and which cannot be confused with the poison (0xAB) it replaced.
             void ExpectAllCleared(const std::vector<Rgba8>& texels, int perTexelStride, const char* what) {
                 for (std::size_t i = 0; i < texels.size(); ++i) {
@@ -493,23 +496,21 @@ void main()
                 return texels;
             }
 
-            // Every texel of every layer must be that layer's expected colour. Reported per layer
+            // Every texel of every layer must be that layer's expected color. Reported per layer
             // so a failure names which one, and the poison is called out by name.
             void ExpectEveryLayer(const std::vector<Rgba8>& texels, int layers, int pass, const char* what) {
                 for (int layer = 0; layer < layers; ++layer) {
                     const Rgba8 expected = ExpectedColor(layer, pass);
                     for (int y = 0; y < kExtent; ++y) {
                         for (int x = 0; x < kExtent; ++x) {
-                            const std::size_t index =
-                                (static_cast<std::size_t>(layer) * kExtent + y) * kExtent + x;
+                            const std::size_t index = (static_cast<std::size_t>(layer) * kExtent + y) * kExtent + x;
                             const Rgba8 actual = texels[index];
                             if (actual == expected) continue;
-                            ADD_FAILURE()
-                                << what << ": layer " << layer << " texel (" << x << ", " << y << ") is "
-                                << Describe(actual) << ", expected " << Describe(expected)
-                                << (actual.r == kPoison && actual.g == kPoison
-                                        ? " - the poison, so nothing was ever rendered into this layer"
-                                        : "");
+                            ADD_FAILURE() << what << ": layer " << layer << " texel (" << x << ", " << y << ") is "
+                                          << Describe(actual) << ", expected " << Describe(expected)
+                                          << (actual.r == kPoison && actual.g == kPoison
+                                                  ? " - the poison, so nothing was ever rendered into this layer"
+                                                  : "");
                             // One message per layer is enough to say what happened.
                             y = kExtent;
                             break;
@@ -518,10 +519,10 @@ void main()
                 }
             }
 
-            // Every texel of one cube FACE is that face's own colour. When it is not, the message
-            // says whose colour answered instead - which is the whole point here: a readback that
+            // Every texel of one cube FACE is that face's own color. When it is not, the message
+            // says whose color answered instead - which is the whole point here: a readback that
             // ignores the face token does not return garbage, it returns another face's perfectly
-            // plausible texels, and "+X's colour came back for -Y" is the sentence that names the
+            // plausible texels, and "+X's color came back for -Y" is the sentence that names the
             // defect. `what` is the spelling under test, since three of them read the same faces.
             void ExpectFaceColor(const std::vector<Rgba8>& texels, int face, const char* what) {
                 const Rgba8 expected = ExpectedColor(face, 0);
@@ -534,7 +535,7 @@ void main()
                     } else {
                         for (int other = 0; other < 6; ++other) {
                             if (other != face && actual == ExpectedColor(other, 0)) {
-                                blame = std::string(" - which is face ") + kFaceNames[other] + "'s colour";
+                                blame = std::string(" - which is face ") + kFaceNames[other] + "'s color";
                                 break;
                             }
                         }
@@ -570,7 +571,7 @@ void main()
             std::vector<GLuint> m_programs;
         };
 
-        // (1) A LAYERED GL_TEXTURE_3D colour attachment. Pre-fix this is the null VkImageView:
+        // (1) A LAYERED GL_TEXTURE_3D color attachment. Pre-fix this is the null VkImageView:
         // the attachment asked for a 3D view, whose [0, 4) layer span was measured against the
         // image's arrayLayers == 1 and refused, and VK_NULL_HANDLE went to vkCreateFramebuffer.
         TEST_F(LayeredAttachmentShapeScenario, LayeredThreeDColorAttachmentReachesEverySlice) {
@@ -601,7 +602,7 @@ void main()
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             const std::vector<Rgba8> texels = ReadLevel(GL_TEXTURE_3D, color, k3DSlices);
             EXPECT_EQ(FirstGLError(), 0u) << "reading the 3D level back errored";
-            ExpectEveryLayer(texels, k3DSlices, /*pass=*/0, "layered GL_TEXTURE_3D colour attachment");
+            ExpectEveryLayer(texels, k3DSlices, /*pass=*/0, "layered GL_TEXTURE_3D color attachment");
 
             Gl().EndFrame();
         }
@@ -653,8 +654,7 @@ void main()
                 const Rgba8& target = (slice == kSubjectSlice) ? expected : poison;
                 for (int y = 0; y < kExtent; ++y) {
                     for (int x = 0; x < kExtent; ++x) {
-                        const std::size_t index =
-                            (static_cast<std::size_t>(slice) * kExtent + y) * kExtent + x;
+                        const std::size_t index = (static_cast<std::size_t>(slice) * kExtent + y) * kExtent + x;
                         const Rgba8 actual = texels[index];
                         if (actual == target) continue;
                         ADD_FAILURE() << "slice " << slice << " texel (" << x << ", " << y << ") is "
@@ -671,7 +671,7 @@ void main()
             Gl().EndFrame();
         }
 
-        // (3) A LAYERED GL_TEXTURE_CUBE_MAP_ARRAY colour attachment. Pre-fix this is the other
+        // (3) A LAYERED GL_TEXTURE_CUBE_MAP_ARRAY color attachment. Pre-fix this is the other
         // exit: a valid CUBE_ARRAY view of a type no framebuffer may take, handed straight to
         // vkCreateFramebuffer.
         TEST_F(LayeredAttachmentShapeScenario, LayeredCubeMapArrayColorAttachmentReachesEveryLayerFace) {
@@ -704,8 +704,7 @@ void main()
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             const std::vector<Rgba8> texels = ReadLevel(GL_TEXTURE_CUBE_MAP_ARRAY, color, kCubeLayerFaces);
             EXPECT_EQ(FirstGLError(), 0u) << "reading the cube-map-array level back errored";
-            ExpectEveryLayer(texels, kCubeLayerFaces, /*pass=*/0,
-                             "layered GL_TEXTURE_CUBE_MAP_ARRAY colour attachment");
+            ExpectEveryLayer(texels, kCubeLayerFaces, /*pass=*/0, "layered GL_TEXTURE_CUBE_MAP_ARRAY color attachment");
 
             Gl().EndFrame();
         }
@@ -715,7 +714,7 @@ void main()
         //   pass 0 paints at z = 0 against a depth buffer cleared to 1;
         //   pass 1 paints at z = +0.5, which GL_LESS must reject.
         //
-        // A layer that reads back pass 1's colour is a layer the depth attachment never covered -
+        // A layer that reads back pass 1's color is a layer the depth attachment never covered -
         // which is exactly what attaching one layer-face of it, or none, looks like. Runs on both
         // backends: this is the cross-backend control for the packed case below.
         TEST_F(LayeredAttachmentShapeScenario, LayeredCubeMapArrayDepthAttachmentGatesEveryLayerFace) {
@@ -741,7 +740,7 @@ void main()
             glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, color, 0);
             glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, depth, 0);
             glDrawBuffer(GL_COLOR_ATTACHMENT0);
-            ASSERT_EQ(FirstGLError(), 0u) << "attaching the layered colour + depth pair failed";
+            ASSERT_EQ(FirstGLError(), 0u) << "attaching the layered color + depth pair failed";
             ASSERT_TRUE(FramebufferIsComplete());
 
             glViewport(0, 0, kExtent, kExtent);
@@ -763,7 +762,7 @@ void main()
             const std::vector<Rgba8> texels = ReadLevel(GL_TEXTURE_CUBE_MAP_ARRAY, color, kCubeLayerFaces);
             EXPECT_EQ(FirstGLError(), 0u) << "reading the cube-map-array level back errored";
             ExpectEveryLayer(texels, kCubeLayerFaces, /*pass=*/0,
-                             "layered cube-map-array depth attachment (pass 1's colour on a layer means the "
+                             "layered cube-map-array depth attachment (pass 1's color on a layer means the "
                              "depth test did not cover it)");
 
             Gl().EndFrame();
@@ -783,12 +782,12 @@ void main()
         // point ITSELF was broken: glFramebufferTexture(GL_DEPTH_STENCIL_ATTACHMENT) is a
         // shorthand that the front end splits into a depth and a stencil attachment, and the split
         // dropped the call's `layered` flag (GL_Framebuffer.cpp,
-        // AttachFramebufferTextureWithUploadTarget). A layered colour attachment therefore sat
+        // AttachFramebufferTextureWithUploadTarget). A layered color attachment therefore sat
         // beside a NON-layered depth/stencil one, and both backends lost the draw entirely - with
         // no GL error and glCheckFramebufferStatus answering COMPLETE. DirectVulkan built the
         // depth/stencil view with layerCount 1 under a framebuffer declaring 12 layers
         // (VUID-VkFramebufferCreateInfo-flags-04535, which the validation layers report on this
-        // exact case); DirectGLES attached one layer of it beside a layered colour target, which
+        // exact case); DirectGLES attached one layer of it beside a layered color target, which
         // the driver answers with GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS. Case (4) above is what
         // isolates it to the attachment point: the same cube-map array on GL_DEPTH_ATTACHMENT
         // rendered and gated correctly throughout.
@@ -806,8 +805,7 @@ void main()
 
             const GLuint depthStencil = MakeCubeArrayDepth(GL_DEPTH24_STENCIL8);
             if (const GLenum error = FirstGLError()) {
-                GTEST_SKIP() << "no depth-stencil GL_TEXTURE_CUBE_MAP_ARRAY on this backend: "
-                             << GLErrorName(error);
+                GTEST_SKIP() << "no depth-stencil GL_TEXTURE_CUBE_MAP_ARRAY on this backend: " << GLErrorName(error);
             }
 
             const std::string geometrySource = MakeGeometrySource(kCubeLayerFaces);
@@ -817,7 +815,7 @@ void main()
             glViewport(0, 0, kExtent, kExtent);
             glDisable(GL_SCISSOR_TEST);
 
-            // The probe: its own colour attachment (so the subject texture keeps its poison), the
+            // The probe: its own color attachment (so the subject texture keeps its poison), the
             // same depth-stencil attachment, and both tests off - so every layer-face must come
             // back painted, whatever the gating below then decides.
             {
@@ -827,7 +825,7 @@ void main()
                 glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, probeColor, 0);
                 glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, depthStencil, 0);
                 glDrawBuffer(GL_COLOR_ATTACHMENT0);
-                ASSERT_EQ(FirstGLError(), 0u) << "attaching the layered colour + depth-stencil pair failed";
+                ASSERT_EQ(FirstGLError(), 0u) << "attaching the layered color + depth-stencil pair failed";
                 ASSERT_TRUE(FramebufferIsComplete());
                 glDisable(GL_DEPTH_TEST);
                 glDisable(GL_STENCIL_TEST);
@@ -837,10 +835,10 @@ void main()
                     ReadLevel(GL_TEXTURE_CUBE_MAP_ARRAY, probeColor, kCubeLayerFaces);
                 EXPECT_EQ(FirstGLError(), 0u) << "the probe draw or readback errored";
                 ExpectEveryLayer(probeTexels, kCubeLayerFaces, /*pass=*/3,
-                                 "a layered draw with the depth and stencil tests DISABLED, into a colour + "
+                                 "a layered draw with the depth and stencil tests DISABLED, into a color + "
                                  "GL_DEPTH_STENCIL_ATTACHMENT cube-map-array pair (all poison means the "
                                  "attachment pair lost the draw outright, which is what a non-layered "
-                                 "depth/stencil attachment beside a layered colour one looks like)");
+                                 "depth/stencil attachment beside a layered color one looks like)");
                 // The gating assertions below can only add noise once the shape itself is broken.
                 if (::testing::Test::HasNonfatalFailure()) return;
             }
@@ -850,7 +848,7 @@ void main()
             glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, color, 0);
             glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, depthStencil, 0);
             glDrawBuffer(GL_COLOR_ATTACHMENT0);
-            ASSERT_EQ(FirstGLError(), 0u) << "attaching the layered colour + depth-stencil pair failed";
+            ASSERT_EQ(FirstGLError(), 0u) << "attaching the layered color + depth-stencil pair failed";
             ASSERT_TRUE(FramebufferIsComplete());
 
             glDepthMask(GL_TRUE);
@@ -884,7 +882,7 @@ void main()
             const std::vector<Rgba8> texels = ReadLevel(GL_TEXTURE_CUBE_MAP_ARRAY, color, kCubeLayerFaces);
             EXPECT_EQ(FirstGLError(), 0u) << "reading the cube-map-array level back errored";
             ExpectEveryLayer(texels, kCubeLayerFaces, /*pass=*/0,
-                             "layered cube-map-array depth-stencil attachment (a later pass's colour means "
+                             "layered cube-map-array depth-stencil attachment (a later pass's color means "
                              "the depth or stencil test did not cover that layer)");
 
             Gl().EndFrame();
@@ -910,8 +908,8 @@ void main()
         // earlier cases use both carry their count in z, so they agree either way and cannot see it.
         //
         // The draw goes into a scratch 2D target, never into the layered attachment, so the
-        // materialise path is the only consumer that can fire.
-        TEST_F(LayeredAttachmentShapeScenario, LayeredCubeMapClearMaterialisedBySamplingReachesEveryFace) {
+        // materialize path is the only consumer that can fire.
+        TEST_F(LayeredAttachmentShapeScenario, LayeredCubeMapClearMaterializedBySamplingReachesEveryFace) {
             if (!Ready()) return;
 
             const GLuint program = BuildProgram(nullptr, kCubeSampleFragmentSource);
@@ -944,13 +942,13 @@ void main()
             //
             // Not glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face): when this case was written
             // that spelling could not see per-face state on DirectVulkan at all - measured against
-            // a tree where only +X had been cleared it returned the cleared colour for all six
+            // a tree where only +X had been cleared it returned the cleared color for all six
             // faces - so a case built on it would have been unfalsifiable. That is a readback
             // defect rather than an attachment one, and case (8) below is where it is pinned and
             // fixed; this case keeps the independent spelling deliberately, because it must go on
             // measuring the CLEAR whatever the readback does. glFramebufferTexture2D +
             // glReadPixels names one face and nothing else, and the pending clear is long gone by
-            // now (materialised and popped above), so this readback cannot alter what it is
+            // now (materialized and popped above), so this readback cannot alter what it is
             // measuring.
             for (int face = 0; face < 6; ++face) {
                 const GLuint faceFbo = TrackFramebuffer();
@@ -965,7 +963,7 @@ void main()
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 EXPECT_EQ(FirstGLError(), 0u) << "reading cube face " << kFaceNames[face] << " back errored";
                 ExpectAllCleared(texels, kExtent * kExtent,
-                                 (std::string("layered GL_TEXTURE_CUBE_MAP glClear materialised by sampling, "
+                                 (std::string("layered GL_TEXTURE_CUBE_MAP glClear materialized by sampling, "
                                               "face ") +
                                   kFaceNames[face])
                                      .c_str());
@@ -976,7 +974,7 @@ void main()
 
         // The 1D-array half of the same divergence. Pre-existing rather than introduced by this
         // branch (the clear copy never had ToVulkanLevelExtent), and fixed by the same hoist.
-        TEST_F(LayeredAttachmentShapeScenario, LayeredOneDArrayClearMaterialisedBySamplingReachesEveryLayer) {
+        TEST_F(LayeredAttachmentShapeScenario, LayeredOneDArrayClearMaterializedBySamplingReachesEveryLayer) {
             if (!Ready()) return;
 
             const GLuint program = BuildProgram(nullptr, kOneDArraySampleFragmentSource);
@@ -1015,16 +1013,16 @@ void main()
             glBindTexture(GL_TEXTURE_1D_ARRAY, 0);
             EXPECT_EQ(FirstGLError(), 0u) << "reading the 1D-array level back errored";
             ExpectAllCleared(texels, kExtent,
-                             "layered GL_TEXTURE_1D_ARRAY glClear materialised by sampling (unit = layer)");
+                             "layered GL_TEXTURE_1D_ARRAY glClear materialized by sampling (unit = layer)");
 
             Gl().EndFrame();
         }
 
-        // (8) THE CUBE FACE TOKEN A READBACK IS GIVEN, AND WHETHER IT HONOURS IT.
+        // (8) THE CUBE FACE TOKEN A READBACK IS GIVEN, AND WHETHER IT HONORS IT.
         //
         // Case (6) above had to route around glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face)
         // entirely: measured against a tree where only the +X face had been cleared, that spelling
-        // returned +X's colour for all six face tokens. This case is that observation turned into
+        // returned +X's color for all six face tokens. This case is that observation turned into
         // an assertion, and it is about the READBACK, not the attachment.
         //
         // THE DEFECT. DirectVulkan's GetTextureImage derived its copy geometry from the IMAGE's
@@ -1046,7 +1044,7 @@ void main()
         // the one face's worth of buffer a single-face read has any reason to pass was rejected as
         // too small.
         //
-        // Each face is painted its OWN colour, so a collapse onto layer 0 does not merely read
+        // Each face is painted its OWN color, so a collapse onto layer 0 does not merely read
         // "wrong": the failure names the face that answered. The cube is poisoned first and then
         // painted through the GPU, so an answer served from the stale CPU shadow is also called out
         // by name rather than passing. And the per-face FBO + glReadPixels read is the control: it
@@ -1062,7 +1060,7 @@ void main()
             const GLuint cube = MakePoisonedCubeMap();
             ASSERT_EQ(FirstGLError(), 0u) << "creating the RGBA8 cube map failed";
 
-            // Paint every face its own colour through an FBO that names that one face. A clear
+            // Paint every face its own color through an FBO that names that one face. A clear
             // rather than a draw, so nothing here depends on a shader stage being present.
             glDisable(GL_SCISSOR_TEST);
             glDisable(GL_DEPTH_TEST);
@@ -1100,8 +1098,8 @@ void main()
             glPixelStorei(GL_PACK_ALIGNMENT, 1);
             for (int face = 0; face < 6; ++face) {
                 std::vector<Rgba8> texels(static_cast<std::size_t>(kExtent) * kExtent, Rgba8{});
-                glGetTexImage(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), 0, GL_RGBA,
-                              GL_UNSIGNED_BYTE, texels.data());
+                glGetTexImage(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                              texels.data());
                 EXPECT_EQ(FirstGLError(), 0u) << "glGetTexImage of face " << kFaceNames[face] << " errored";
                 ExpectFaceColor(texels, face, "glGetTexImage(GL_TEXTURE_CUBE_MAP_<face>)");
             }

@@ -1,0 +1,397 @@
+// MobileGL - MobileGL/MG_Pipe/PipeMutation.h
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+#pragma once
+#ifndef MOBILEGL_MG_PIPE_MUTATION_H // belt and braces: reachable as <MG_Pipe/..> and <..>
+#define MOBILEGL_MG_PIPE_MUTATION_H
+// Frontend mutation notices. The verb fill (MG_Impl/Pipe/PipeFill.cpp) copies a verb's may-read
+// set out of the live GLContext at the verb boundary, and the backend reads that copy for the
+// whole verb. A frontend value written inside the verb (Magma synthesising a fallback texture,
+// materializing a queued clear, overriding a sampler's filter) would leave the copy stale, so
+// the mutator calls MGP_NOTE_MUTATION(Field) where it moves the value. The notice refreshes
+// that one field when it belongs to the verb in flight. It never touches the poison stamp, so a
+// stamp the fill withheld (negative control B) stays withheld.
+#include <MG_Pipe/MGPipe.h>
+namespace MobileGL::MG_Pipe {
+    // MG_Impl/Pipe/PipeFill.cpp (the client side, the only place that may spell pGLContext).
+    // A no-op unless a context is live, a verb has been filled, and `field` is in that verb
+    // class's may-read mask; a forwarded (sticky) field has no storage and is never copied.
+    void MGPipeNoteFrontendMutation(MGPipeInputField field);
+
+    // ---- aggregate generations (ARCHITECTURE.md §5.2) ----
+    //
+    // MGP_NOTE_AGGREGATE answers "did any object of this class move since the tracker last
+    // looked", one monotonic Uint64 per class, so the per-verb dirty walk is a few compares
+    // instead of a scan over attributes, attachments, texture units and binding points. The
+    // counters live in the owning MG_State container; objects have no back-pointer to it, so the
+    // note finds the live GLContext through a free function. Never reset. Over-firing costs one
+    // re-push and under-firing renders stale, so each counter is coarser than the state it guards.
+    enum class MGPipeAggregate : Uint32 {
+        // VertexArrayState: any VAO attribute format / buffer / enable moved.
+        VaoAttribute = 0,
+        // FramebufferState: any FBO attachment or default-geometry write, or a bind - and, since
+        // P4a (fable seam F-3), any STORAGE DEFINITION of a texture or a renderbuffer, because
+        // set_framebuffer_state inlines an attachment's format, extent and samples and those
+        // setters are the only writers of what it inlines (TextureObject.cpp /
+        // RenderbufferObject.cpp, PipePublishDescriptor).
+        FramebufferAttachment,
+        // TextureState: any texture object CONTENT moved (an upload, a dirty region).
+        TextureContent,
+        // TextureState: any texture object or sampler object PARAMETER moved.
+        TextureParams,
+        // BufferState: any buffer object contents moved.
+        BufferChange,
+        // GLContext: a glVertexAttrib* default value moved. Not one of D4 five: the bit it
+        // shutters (NEW_VERTEX_ATTRIB_DEFAULTS) is specified there as a ContentHash over
+        // all 32 CurrentVertexAttributeValues, and hashing 768 bytes on EVERY draw does not
+        // fit inside the T1 ceiling. The hash still decides whether to EMIT (D11 set-hash
+        // suppressor); this decides whether to hash at all.
+        VertexAttribDefault,
+        Count,
+    };
+
+    // MG_Impl/Pipe/PipeFill.cpp. A no-op unless a context is live.
+    void MGPipeNoteAggregate(MGPipeAggregate aggregate);
+
+    // ---- P3a: the resource family's emission points (brief D-A1) ----
+    //
+    // The seven BufferBackendOps hooks already dispatch at the GL call that causes them
+    // (ARCHITECTURE.md 5.1 names them as the ONE exception to push-at-validate), so their
+    // pipe calls are emitted from the same BufferObject dispatchers rather than from the
+    // validate point. That puts the emission inside MG_State, which is why these are
+    // DECLARED here beside the two notices and DEFINED in MG_Impl/Pipe/PipeFill.cpp: this
+    // header is the one MG_State already includes for exactly this, and the closure gate
+    // (check_include_closure.py's mutation-header probe) keeps it a declaration - reaching
+    // MG_Impl/Pipe/ResourceTracker.h from BufferObject.cpp would pull the client's tracker
+    // into the state machine that calls it.
+    //
+    // The forward declaration is the whole coupling: none of these needs the definition of
+    // BufferObject, and this header must not gain it.
+} // namespace MobileGL::MG_Pipe
+
+namespace MobileGL::MG_State::GLState {
+    class BufferObject;
+    // P4a's five, for the BIRTH half at the tail of this header. Declarations only, exactly as
+    // BufferObject is: none of the hooks below needs a definition, and this header must not
+    // gain one - reaching a frontend class header from here would put the state machine's own
+    // types in front of every mutator that spells MGP_NOTE_MUTATION.
+    class ITextureObject;
+    class RenderbufferObject;
+    class FramebufferObject;
+    class SamplerObject;
+    class ProgramObject;
+} // namespace MobileGL::MG_State::GLState
+
+namespace MobileGL::MG_Pipe {
+    // (Features.PipePush & kMGPipeSubsystemResources) != 0 && MGPipeGetResourceOps() != nullptr.
+    //
+    // BOTH HALVES MATTER. The bit is the operator's per-subsystem A/B; the table is "has a
+    // backend taken this family over at all". Until one has, every dispatch below falls
+    // through to the BufferBackendOps table it replaces and the tree behaves exactly as it
+    // did - which is what lets the client half land on its own.
+    Bool MGPipeResourceSubsystemEnabled();
+    // The nullable member, asked the way the frontend asks g_bufferBackendOps->ResidentSubData
+    // today: one backend deliberately does not implement it and the caller has a different
+    // path when it is absent (BufferObject::FillSubData).
+    Bool MGPipeResourceOpsHaveSubDataResident();
+
+    // Minted from the constructor and released from the destructor, both unconditionally in
+    // a push build: a handle is CLIENT state and set_vertex_buffers names it whether or not
+    // the resource family is switched on. The CALLS are what the predicate above gates.
+    void MGPipeMintResourceHandle(MG_State::GLState::BufferObject& buffer);
+    // In this order, and it is not negotiable (D-L): the destroy resolves the handle, and
+    // MGPipeSlotAllocator::Free erases the lifetimeId -> slot mapping it resolves through.
+    //
+    // RETURNS whether resource_destroy was emitted, which is the LATCH taken at this buffer's
+    // create and not a second reading of MGPipeResourceSubsystemEnabled(). The destructor
+    // needs that answer to decide whether the legacy OnDestroy still owes a call: asking the
+    // predicate twice pairs a create emitted under one registration with a destroy gated on
+    // another, and either direction leaks - a live applier record on a slot about to be
+    // re-handed-out, or a backend object nobody releases.
+    Bool MGPipeEmitResourceDestroyAndFree(MG_State::GLState::BufferObject& buffer);
+
+    // THE VERTEX-ELEMENTS CSO's DEATH, and it is BACKEND-NEUTRAL - which is the whole point.
+    // Before this, the only thing that ever returned a VertexElementsCso slot was DirectGLES'
+    // StateObjectDeathOps table; under a backend that installed none - DirectVulkan/Magma at
+    // P3a, which keeps its own age-reclaimed identity table on purpose and which P7 wave 2
+    // package C gave an EMIT-only table that still frees no slot - every VAO ever created
+    // held its slot and its ~1.3 KB applier record for the life of the process, on the shipped
+    // 0x1ff mask, and past 65536 slots every create_vertex_elements became a permanent
+    // Fatal{ProtocolCorruption}. The client mints the slot, so the client is where the death
+    // has to be spoken from.
+    //
+    // Takes the lifetime id and not the object for StateObjectDeathNotice.h's reason: the last
+    // SharedPtr has already dropped by the time this runs, and the lifetime id is what the
+    // slot allocator resolves the handle from. Returns whether delete_vertex_elements went
+    // out, i.e. whether the applier actually held a record - see the definition for why that
+    // is asked rather than assumed.
+    Bool MGPipeEmitVertexElementsDestroyAndFree(Uint64 lifetimeId);
+
+    // ---- client-side death helpers, one per kind the client mints ----
+    //
+    // Whoever mints a handle owns its death, so these are backend-neutral; a backend death
+    // notice is a redundant, idempotent second path (MGPipeSlotAllocator::Free refuses a slot not
+    // live at that generation). Fixed order: emit the wire delete while the applier record
+    // exists, then NotifyStateObjectDestroyed while the allocator still resolves the handle, then
+    // free the slot. All take the lifetime id because they run from destructors. Each returns
+    // whether its delete went out, decided by the publication latch taken at create.
+
+    // ResourceDestroy, and then the SamplerViewCso minted off this same lifetime id (P4a
+    // D-F2: one sampler view per ITextureObject). Called from TextureObjectBase's VIRTUAL
+    // destructor, so 2D / 3D / cube / buffer / view all announce exactly once.
+    Bool MGPipeEmitTextureDestroyAndFree(Uint64 lifetimeId);
+    // ResourceDestroy.
+    Bool MGPipeEmitRenderbufferDestroyAndFree(Uint64 lifetimeId);
+    // NO WIRE CALL AT ALL (D-I2). PipeCalls.def has no framebuffer delete, because a
+    // framebuffer is not a resource and is not a CSO - it is STATE, and set_framebuffer_state
+    // is the only call that names one - and the catalog is closed, so P4a does not invent a
+    // row. The handle is minted and freed entirely client-side and this helper does steps 2
+    // and 3 only. A recycled framebuffer handle is distinguished by Gen, which is inside the
+    // record's ContentHash, so it can never be suppressed against its predecessor's record.
+    Bool MGPipeEmitFramebufferDestroyAndFree(Uint64 lifetimeId);
+    // DeleteSamplerState. Also the path the content-addressed CSO cache's LRU eviction takes,
+    // which is why it is addressed by lifetime id and not by "the object that owns it".
+    Bool MGPipeEmitSamplerCsoDestroyAndFree(Uint64 lifetimeId);
+    // DeleteSamplerView. Called by the texture helper above; a sampler view has no frontend
+    // object of its own, so this is the only path there is.
+    Bool MGPipeEmitSamplerViewCsoDestroyAndFree(Uint64 lifetimeId);
+    // DeleteShaderState, for an ordinary program AND for a program-pipeline COMPOSITE, whose
+    // slot has two independent release paths - the pipeline cache's LRU eviction and the
+    // composite ProgramObject's own destructor. One helper for both, and the second call is a
+    // proven no-op.
+    Bool MGPipeEmitShaderCsoDestroyAndFree(Uint64 lifetimeId);
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // ---- deferred destroy queue ----
+    //
+    // The helpers above act for the client, so they run only on the GL thread. When the apply
+    // thread drops an object's last reference, the helper its destructor calls starts with
+    // MGPipeDeferDestroyAndFreeIfOnApplyThread, which queues (kind, lifetime id); the GL thread
+    // replays the helper at its next verb hook (MGPipeDrainDeferredDestroys), so only slot reuse
+    // is delayed. Only a barriered record should hold such a reference: an enqueue from an
+    // unbarriered one logs once, and is Fatal under MOBILEGL_IPC_STRICT_ERRORS.
+    Bool MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind kind, Uint64 lifetimeId);
+    void MGPipeDrainDeferredDestroys();
+
+    // P5e (ra), CONTRACT-P5E §2.3: drop the four O-class SharedPtr rows the residual fill left
+    // in gPipeInputs (the bound VAO and the three programs, PipeInputs.h's O block). Called by
+    // ClientSession on the GL thread once a BARRIERED apply has returned - the one instant
+    // under run-ahead at which the applier is provably idle and this block has no other
+    // reader. Under lockstep nothing calls it: the next verb's fill overwrites those rows
+    // within a verb, and dropping them early would only cost a re-pin.
+    //
+    // It is HERE rather than in ClientSession because the rows are PipeInputs' private storage
+    // and MGPipeFillAccess - the client-side door to it - lives in MG_Impl (PipeFill.cpp).
+    // MG_Remote says when; MG_Impl says what.
+    void MGPipeReleaseResidualFillPins();
+
+    // P5e (ra), CONTRACT-P5E §2.5: glFinish's whole body under a transport. Declared here
+    // rather than on ClientSession so that MG_Impl's GL entry points - which are BELOW
+    // MG_Remote - can reach it without learning that a session exists; the implementation in
+    // PipeFill.cpp is one forward to ClientSession::Finish. A no-op with no live session, on a
+    // monolith transport, and on a lockstep one (there the client waited out every command it
+    // issued before it could reach the call).
+    void MGPipeClientFinish();
+    // Submit a stream link's published prefix; never wait for appliedSeq.
+    void MGPipeClientFlush();
+    // The texture sub-data drain of a validate point, outside one: a shared-image producer's
+    // glFlush (an X server's PutImage into a window pixmap is followed by no draw of its own)
+    // has to get its uploads to the server before the flush publishes the images. Gated as the
+    // validate point's drain is; a no-op on a monolith and on the server role.
+    void MGPipeClientDrainTextureUploads();
+
+    // A FRESH SESSION REPLACES AN ENDED ONE (a device loss recovered, or an eglTerminate /
+    // eglInitialize): every client-side answer to "what does the server hold" describes the
+    // ended session's server, and the new one holds nothing. The publication latch, the
+    // content-addressed caches (render-state and sampler CSOs, their slots freed), the
+    // resource tracker's published bits, the texture emitter's records and owed uploads, every
+    // emitter's per-context latches, the dirty tracker, the deferred destroys and the residual
+    // fill's pins all start over. Emits nothing; ClientSession::FinishStartup calls it before
+    // the new session serves its first record. Objects of the ended session that are still
+    // alive find themselves unpublished, so their deaths put nothing on the new wire.
+    void MGPipeForgetEndedSession();
+#else
+    // P13 W5: without a transport nothing applies off the GL thread, so no destroy is ever
+    // deferred to the next verb hook (the record arm's BeforeReadOnlyVerb still calls this).
+    inline void MGPipeDrainDeferredDestroys() {}
+#endif
+
+    void MGPipeEmitResourceCreate(MG_State::GLState::BufferObject& buffer);
+    void MGPipeEmitResourceRespecify(MG_State::GLState::BufferObject& buffer);
+    void MGPipeEmitResourceSubData(MG_State::GLState::BufferObject& buffer, SizeT offset, SizeT size);
+    void MGPipeEmitBufferSubDataResident(MG_State::GLState::BufferObject& buffer, SizeT offset, const void* bytes,
+                                         SizeT size);
+    void MGPipeEmitResourceFlushRange(MG_State::GLState::BufferObject& buffer, SizeT offset, SizeT size,
+                                      Uint32 accessFlags);
+    void MGPipeEmitResourceReadback(MG_State::GLState::BufferObject& buffer);
+    // The ranged form, for the split arm's sliced whole-buffer readback: the writeback's
+    // bytes travel INLINE in a SEG_EVENT record, so a buffer larger than the ring can hold
+    // is read back as [offset, offset+size) slices, each its own record. Monolith never
+    // calls it - the direct callback carries a pointer, not a copy.
+    void MGPipeEmitResourceReadbackRange(MG_State::GLState::BufferObject& buffer, SizeT offset, SizeT size);
+    // Returns the coherent host pointer the resource owner donated, or null for a DECLINE -
+    // which is a real answer. Every call, mint or decline, is one map-persistent roundtrip.
+    void* MGPipeEmitMapPersistent(MG_State::GLState::BufferObject& buffer);
+
+    // ================================================================================
+    // Birth hooks, one per client path MG_State owns
+    // ================================================================================
+    //
+    // Emitted from MG_State where the event happens, like the buffer family (ARCHITECTURE.md
+    // §5.1). Declared here because this header is MG_State's one door into the client
+    // (check_include_closure.py); PipeFill.cpp owns the family gate and the mints and forwards to
+    // the family emitter (MG_Impl/Pipe/<Family>Emit.h), which owns the payload and the latch.
+
+    // ---- the publication latch (D-I1), and it is the ONE answer both halves read ----
+    //
+    // The create is gated at its call site and the destroy inside the death helper, so the
+    // two ask the same question at two different moments. An object born while its subsystem
+    // bit was clear and destroyed after it was set would otherwise free its slot with the
+    // applier's record still Live - on a slot the allocator is about to hand out again. A
+    // slot is NOT evidence of a record either: a backend twin table mints one through
+    // MGPipeSlots().Acquire whether or not the subsystem ever asked this client to emit a
+    // create, and a delete_* on such a handle is a refused call the applier asserts on.
+    //
+    // So the emitter latches the answer when its create actually goes out, the death helper
+    // reads the latch, and the latch is keyed by {kind, slot, gen} so a recycled slot cannot
+    // inherit its predecessor's answer. Defined in PipeFill.cpp beside the six death helpers,
+    // declared here because both the helpers and the five emit headers read it.
+    void MGPipeNoteHandlePublished(MGPipeKind kind, MGPipeHandle handle);
+    Bool MGPipeHandleIsPublished(MGPipeKind kind, MGPipeHandle handle);
+    void MGPipeNoteHandleUnpublished(MGPipeKind kind, MGPipeHandle handle);
+
+    // ---- the four mints (pure allocator work, no family knowledge) ----
+    //
+    // UNCONDITIONAL in a push build, for MGPipeMintResourceHandle's reason: a handle is CLIENT
+    // state and other subsystems name these objects by handle whether or not their own family
+    // is switched on - MGPSurface::Res names a Texture or a Renderbuffer out of the framebuffer
+    // subsystem, MGPBoundView::Texture and MGPImageView::Res name a Texture out of the sampler
+    // one. Gating the mint on the family bit would make those emit null handles in exactly the
+    // A/B arm that exists to isolate the families. Each costs one free-list pop and one map
+    // insert per object and emits nothing.
+    void MGPipeMintTextureHandle(MG_State::GLState::ITextureObject& texture);
+    void MGPipeMintRenderbufferHandle(MG_State::GLState::RenderbufferObject& renderbuffer);
+    // A framebuffer has a handle and NO wire lifetime (D-I2): set_framebuffer_state is the only
+    // call that names one, and there is no create or destroy for the kind. The mint is still
+    // the object's, so the identity exists before the first validate point that pushes it.
+    void MGPipeMintFramebufferHandle(MG_State::GLState::FramebufferObject& framebuffer);
+    // Ordinary programs only. A program-pipeline COMPOSITE is minted by the composite resolver
+    // out of the reserved band through MGPipeSlotAllocator::AllocateComposite, which is the one
+    // door into it, and it is not a frontend construction event.
+    void MGPipeMintShaderCsoHandle(MG_State::GLState::ProgramObject& program);
+
+    // ---- textures and renderbuffers: MG_Impl/Pipe/TextureEmit.h ----
+    //
+    // resource_create from the ITextureObject and RenderbufferObject constructors,
+    // resource_respecify from every storage-defining entry point (renderbuffer storage included),
+    // set_texture_params from the parameter mutators. MGPipeTextureEmitter provides, as void:
+    //   EmitResourceCreate, EmitResourceRespecify(.., scope, uploadTarget, level),
+    //   EmitTextureParams, NoteLevelDirty(storageOwner, uploadTarget, level),
+    //   EmitRenderbufferCreate, EmitRenderbufferRespecify. Each takes the object by reference.
+    void MGPipeEmitTextureResourceCreate(MG_State::GLState::ITextureObject& texture);
+
+    // WHICH STORAGE A TEXTURE RESPECIFY REPLACES (P4a final review C-1). The applier scopes
+    // its pending-upload clear on this answer and not on the descriptor, because the
+    // descriptor cannot give it: AllocateStorage is per (uploadTarget, level) and
+    // TruncateMipmapLevels removes every level at or above a cut, while MGPResourceDesc
+    // carries only the base extent and the level count. A level the applier had ACCEPTED at
+    // one verb (the client's dirty flag already clear, D-D5 step 1) and that a later per-level
+    // definition redefined AROUND was dropped by the whole-resource arm with nobody owing its
+    // texels - so every respecify states its scope, and "whole resource" is said, never
+    // defaulted. The emitter builds wire's MGPRespecifiedLevel from the pair, packed exactly
+    // as the drain packs a sub-data record's Target (MGPipePackSubDataTarget), so the key it
+    // drops is the key that level's emission made.
+    enum class MGPipeTextureRespecifyScope : Uint32 {
+        // The whole store is redefined or restated: a format, sample-count or
+        // fixed-sample-locations change, an immutable allocation completing
+        // (SetImmutableLevels), a texture view's creation. Every pending upload goes.
+        WholeResource = 0,
+        // ONE (uploadTarget, level) was (re)allocated: glTexImage*D, glCompressedTexImage*D,
+        // glCopyTexImage*D, one level of a glTexStorage* loop, one level of a generated-mipmap
+        // grow. That level's pending upload goes; every other level's stays. `uploadTarget` and
+        // `level` name it.
+        OneLevel = 1,
+        // The chain was cut: every level of `uploadTarget` at or above `level` is gone and the
+        // levels below it are untouched (glGenerateMipmap fitting the chain, a base-level
+        // redefinition discarding its tail, glTexStorage* fitting the chain to its level
+        // count). `level` is the first level removed; a cut at 0 is the whole resource.
+        LevelsFrom = 2,
+    };
+    void MGPipeEmitTextureResourceRespecify(MG_State::GLState::ITextureObject& texture,
+                                            MGPipeTextureRespecifyScope scope, Uint32 uploadTarget, Uint32 level);
+    void MGPipeEmitTextureParams(MG_State::GLState::ITextureObject& texture);
+    // The DRAIN LIST's append, on a level's FIRST dirty mark, keyed on the STORAGE OWNER from
+    // day one (D-D4: a view and its owner already share one dirty state, so an upload through
+    // either lands on the same key). The record itself is emitted at the validate point by
+    // MGPipeTextureEmitter::DrainTextureSubData; this is only what puts the level on the list,
+    // and walking every live texture per verb is the cost it exists to avoid.
+    void MGPipeNoteTextureLevelDirty(MG_State::GLState::ITextureObject& storageOwner, Uint32 uploadTarget,
+                                     Uint32 level);
+    void MGPipeEmitRenderbufferResourceCreate(MG_State::GLState::RenderbufferObject& renderbuffer);
+    void MGPipeEmitRenderbufferResourceRespecify(MG_State::GLState::RenderbufferObject& renderbuffer);
+
+    // ---- D-A4's two sticky bind-mask producers (P4a final review M-A) ----
+    //
+    // kMGPipeBindSampler is "any texture the sampler-view resolution names in an emitted
+    // MGPBoundView" and kMGPipeBindShaderImage "any texture named in an emitted MGPImageView"
+    // - both the SAMPLER package's emitters (SamplerEmit.h, ImageEmit.h), which the texture
+    // emitter's header includes and which therefore cannot include it back - and, earliest of
+    // all, glBindImageTexture's state setter (TextureState.h, MG_State), which may include no
+    // emit header at all. So the note goes through this door, exactly as the birth hooks do.
+    // Nothing produced either bit before the fix round: ImageBindableHint was always 0, the
+    // metadata respecify (ID-18 M4) had no live trigger, and the re-mint the hint exists to
+    // prevent was neither prevented nor counted.
+    //
+    // UNCONDITIONAL IN A PUSH BUILD, like the mints: the mask is CLIENT state the framebuffer
+    // emitter ORs into whether or not the texture family is on, and the emission a mask move
+    // causes (the metadata respecify) is gated inside the emitter on the family's own pair.
+    void MGPipeNoteTextureBoundAs(MGPipeHandle texture, Uint32 bindBit);
+    // glBindImageTexture. The hint PREVENTS the texture re-mint (a server-side readback and
+    // re-upload of every defined level, P9 W2) - a texture the server knows may be image-bound is
+    // allocated image-bindable up front - so it
+    // has to reach the applier before the texture's first sync, i.e. at the bind itself, not at
+    // the validate point's image walk (which notes it as well, D-A4's letter).
+    void MGPipeNoteTextureImageBound(MG_State::GLState::ITextureObject& texture);
+
+    // ---- sampler CSOs and sampler views: MG_Impl/Pipe/SamplerEmit.h, package C ----
+    //
+    // Entry points MGPipeSamplerEmitter must provide, returning void:
+    //   EmitSamplerCso(SamplerObject&)     - D-F1's content-addressed mint-or-share at
+    //                                        capacity 256, hashed field-wise over a canonical
+    //                                        zero-initialized copy, behind the version-first
+    //                                        skip. The HANDLE RULE FOR THIS KIND IS THE
+    //                                        EMITTER'S, not this file's: two identical
+    //                                        samplers share one CSO, so there is deliberately
+    //                                        no per-object mint above, and it is the emitter
+    //                                        that decides which lifetime id (if any) owns the
+    //                                        slot the death helper will resolve.
+    //   EmitSamplerView(ITextureObject&)   - D-F2's ONE view per texture object, minted off
+    //                                        the texture's own lifetime id and re-issued on
+    //                                        the SAME handle when the restrictions move.
+    void MGPipeEmitSamplerCsoCreate(MG_State::GLState::SamplerObject& sampler);
+    void MGPipeEmitSamplerViewCreate(MG_State::GLState::ITextureObject& texture);
+
+    // ---- programs: MG_Impl/Pipe/ProgramEmit.h, package C ----
+    //
+    // Entry point MGPipeProgramEmitter must provide, returning void:
+    //   EmitShaderCso(ProgramObject&)
+    //
+    // Re-issued on the SAME handle whenever the link version moves, exactly as
+    // create_vertex_elements is (Gen moves only on slot reuse). D-H4 keeps the TRACKER out of
+    // it - bit 6's shutter reads GetCurrentProgram() and deliberately not GetProgramForDraw(),
+    // because the tracker must not force a compile to answer "did the shader move" - so the
+    // ordinary emission is the validate point's, from the join the verb was going to make
+    // anyway. This hook exists for the paths that are NOT a draw: a link that completes off
+    // the draw path still owns its own publication.
+    void MGPipeEmitShaderCsoCreate(MG_State::GLState::ProgramObject& program);
+} // namespace MobileGL::MG_Pipe
+#define MGP_NOTE_MUTATION(Field)                                                                                       \
+    ::MobileGL::MG_Pipe::MGPipeNoteFrontendMutation(::MobileGL::MG_Pipe::MGPipeInputField::Field)
+#define MGP_NOTE_AGGREGATE(Aggregate)                                                                                  \
+    ::MobileGL::MG_Pipe::MGPipeNoteAggregate(::MobileGL::MG_Pipe::MGPipeAggregate::Aggregate)
+#endif

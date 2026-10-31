@@ -12,6 +12,8 @@
 #include "SubgroupSupportPolicy.h"
 #include "MG_State/GLState/FramebufferState/FramebufferObject.h"
 #include "MG_State/GLState/Core.h"
+#include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Pipe/PipeApply.h>
 #include "MG_State/GLState/TextureState/TextureState.h"
 #include "MG_Util/Classifiers/TextureEnumClassifier.h"
 #include "MG_Util/Converters/MGToGL/TextureEnumConverter.h"
@@ -29,11 +31,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
         Bool IsR11G11B10FFallbackEnabled() {
             return MG_Config::Features.MagmaR11G11B10FFallback;
-        }
-
-        Bool IsReleaseCurrentRequest(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
-            (void)dpy;
-            return draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
         }
 
         Bool IsFormatIndexValid(TextureInternalFormat format) {
@@ -329,43 +326,115 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         PopulateFormatCapabilitiesImpl(physicalDevice, getFormatProperties, capabilities, cache);
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    BackendObject_DirectVulkan::~BackendObject_DirectVulkan() {
+        // Everything below reaches this session's renderer slot, whichever thread destroys it.
+        MagmaSession* const ownSession = m_magmaSession.get();
+        MagmaSession* const previousSession = BoundMagmaSession();
+        if (ownSession != nullptr) BindMagmaSessionToThisThread(ownSession);
+        // P12 review fix: A SERVER SESSION THAT ENDS WITHOUT A CLEAN TEARDOWN LEAVES NO RENDERER ON
+        // THE WINDOW. The renderer - swapchain and VkSurfaceKHR on the window - is a process global
+        // that only ReleaseEGLResources / a released surface drops, and a client that went away
+        // without eglTerminate (a crash, a kill, a dropped connection) sends neither. Under a
+        // transport this object is the server's and its destruction is the session's end (ServerLoop's
+        // apply thread, after the final drain, before the display lease ends), so the renderer goes
+        // here: nothing of the ended session keeps presenting into, or holding a surface on, the
+        // server's window once its lease is over. Monolith keeps its renderer.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && pVulkanRenderer != nullptr) {
+            BumpRendererGeneration();
+            pVulkanRenderer.reset();
+            ClearProgramResourceCaches();
+        }
+        // And the swap interval it asked for (DirectVulkan.h).
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            ForgetRequestedSwapInterval();
+        }
+        // The session's state goes with it, and no thread may keep answering with it.
+        m_magmaSession.reset();
+        if (ownSession != nullptr) {
+            BindMagmaSessionToThisThread(previousSession == ownSession ? nullptr : previousSession);
+        }
+    }
+#else
     BackendObject_DirectVulkan::~BackendObject_DirectVulkan() = default;
+#endif
 
     BackendObject_DirectVulkan::BackendObject_DirectVulkan() : m_rendererInfo{GetRendererIdentity()} {}
 
     Bool BackendObject_DirectVulkan::InitWindowSurface() {
-        if (!m_windowHandle.Handle) {
+        const EGLSurface activating = EGLRegistry().ActivatingSurface();
+        // A suspended surface activates its placeholder - never the window, which is gone.
+        const auto suspended = m_suspendedWindowSurfaces.find(activating);
+        if (suspended != m_suspendedWindowSurfaces.end()) {
+            if (UsesSurfaceTargets() && pVulkanRenderer) {
+                return ActivateSuspendedPlaceholder(activating, suspended->second);
+            }
+            return InitPbufferSurface(static_cast<EGLint>(suspended->second.Width),
+                                      static_cast<EGLint>(suspended->second.Height));
+        }
+        const WindowHandle window = EGLRegistry().CurrentWindowHandle();
+        if (!window.Handle) {
             MGLOG_E("Cannot initialize DirectVulkan window surface: native window handle is null");
             return false;
         }
 
-        auto nativeWindow = reinterpret_cast<NativeWindowType>(m_windowHandle.Handle);
+        auto nativeWindow = reinterpret_cast<NativeWindowType>(window.Handle);
 
+        VulkanRendererConfig config;
+        config.SwapInterval = GetRequestedSwapInterval();
+        if (UsesSurfaceTargets() && pVulkanRenderer) {
+            return pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(activating), nativeWindow, config);
+        }
         // Any renderer instance this assignment replaces is destroyed here;
         // fence/timer-query handles stamped with the old generation go stale.
         BumpRendererGeneration();
-        VulkanRendererConfig config;
-        config.SwapInterval = GetRequestedSwapInterval();
         pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(nativeWindow, config);
         MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitWindowSurface: VulkanRenderer creation failed");
         pVulkanRenderer->Initialize();
+        pVulkanRenderer->SetActiveSurfaceTargetKey(SurfaceTargetKey(activating));
         return true;
     }
 
     Bool BackendObject_DirectVulkan::InitPbufferSurface(EGLint width, EGLint height) {
+        const EGLSurface activating = EGLRegistry().ActivatingSurface();
         VulkanRendererConfig config;
         config.SurfaceWidth = static_cast<Uint32>(std::max<EGLint>(width, 1));
         config.SurfaceHeight = static_cast<Uint32>(std::max<EGLint>(height, 1));
+        if (UsesSurfaceTargets() && pVulkanRenderer) {
+            return pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(activating), NativeWindowType{}, config);
+        }
         // Any renderer instance this assignment replaces is destroyed here;
         // fence/timer-query handles stamped with the old generation go stale.
         BumpRendererGeneration();
         pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(NativeWindowType{}, config);
         MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitPbufferSurface: VulkanRenderer creation failed");
         pVulkanRenderer->Initialize();
+        pVulkanRenderer->SetActiveSurfaceTargetKey(SurfaceTargetKey(activating));
         return true;
     }
 
+    void BackendObject_DirectVulkan::BindSessionStateToThisThread() {
+        if (m_magmaSession == nullptr) m_magmaSession = MakeUnique<MagmaSession>();
+        BindMagmaSessionToThisThread(m_magmaSession.get());
+        MGLOG_I("DirectVulkan: session state %llu bound to this apply thread",
+                static_cast<unsigned long long>(m_magmaSession->Id()));
+    }
+
+    Bool BackendObject_DirectVulkan::LatchIfGpuFaulted() {
+        return pVulkanRenderer != nullptr && pVulkanRenderer->LatchIfGpuHung("apply");
+    }
+
     void BackendObject_DirectVulkan::Initialize() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        VkBufferManager::RegisterWireResourceOps();
+        // P7 wave 2 package C (CONTRACT-P7 §5.5). BESIDE the resource ops and for the same
+        // reason: this is the one place both Magma server roles pass through - the inproc
+        // role and the spawn/TCP session child - and ServerLoop::CreateBackend calls it at
+        // step 1 of InitServerRoleCommon, before the client session exists and therefore
+        // before any frontend object can die unheard. A per-transport install is how one of
+        // the two roles ends up without it.
+        InstallStateObjectDeathOps();
+#endif
         m_initialized = true;
     }
 
@@ -387,9 +456,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         UpdateDynamicBackendParameters();
         UpdateAdvertisedExtensions();
-        if (MG_State::pGLContext) {
-            MG_State::pGLContext->InvalidateCompileEnv();
-        }
+        MG_Pipe::MGPipeNotifyCompileEnvChanged();
         PopulateFormatCapabilities(physicalDevice.handle, vkGetPhysicalDeviceFormatProperties, m_vulkanCaps,
                                    MutableFormatCapabilities());
         PrintFormatCapabilities(GetFormatCapabilities());
@@ -405,7 +472,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool BackendObject_DirectVulkan::CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (!m_initialized) {
             MGLOG_E("DirectVulkan backend not initialized");
             return false;
@@ -416,11 +483,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
-        return RegisterEGLWindowSurface(surface, handle);
+        return EGLRegistry().RegisterWindowSurface(surface, handle);
     }
 
     Bool BackendObject_DirectVulkan::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (!m_initialized) {
             MGLOG_E("DirectVulkan backend not initialized");
             return false;
@@ -428,28 +495,71 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!BackendObject::ResizeEGLWindowSurface(surface, width, height)) {
             return false;
         }
-        if (pVulkanRenderer && m_eglSurface == surface) {
+        const auto state = EGLRegistry().Find(surface);
+        if (UsesSurfaceTargets() && pVulkanRenderer && state &&
+            state->Kind == EGLSurfaceRegistry::SurfaceKind::Pbuffer) {
+            // A pbuffer-backed window (a Wayland window presented through wl_shm) whose target is an
+            // image reader of FIXED size: a swapchain rebuild cannot follow the resize, so the target
+            // is rebuilt at the new size - as DirectGLES replaces its native pbuffer. A parked one is
+            // rebuilt when it is next activated, from the size registered above.
+            const Bool active = EGLRegistry().HasActiveSurface() && EGLRegistry().ActiveSurface() == surface;
+            pVulkanRenderer->DestroySurfaceTarget(SurfaceTargetKey(surface));
+            if (active) {
+                VulkanRendererConfig config;
+                config.SurfaceWidth = static_cast<Uint32>(state->Width);
+                config.SurfaceHeight = static_cast<Uint32>(state->Height);
+                (void)pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(surface), NativeWindowType{}, config);
+            }
+            return true;
+        }
+        if (pVulkanRenderer && EGLRegistry().ActiveSurface() == surface) {
             pVulkanRenderer->RequestSwapchainResize(width, height);
         }
         return true;
     }
 
     Bool BackendObject_DirectVulkan::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (!m_initialized) {
             MGLOG_E("DirectVulkan backend not initialized");
             return false;
         }
-        return RegisterEGLPbufferSurface(surface, width, height);
+        return EGLRegistry().RegisterPbufferSurface(surface, width, height);
     }
 
     Bool BackendObject_DirectVulkan::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        return BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
+        const auto lock = EGLRegistry().Lock();
+        const Bool ok = BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
+        if (ok && UsesSurfaceTargets() && ctx != EGL_NO_CONTEXT && draw != EGL_NO_SURFACE) {
+            m_contextBindings[ctx] = EGLSurfaceRegistry::CurrentState{
+                .Display = dpy, .DrawSurface = draw, .ReadSurface = read, .Context = ctx};
+        }
+        return ok;
+    }
+
+    void BackendObject_DirectVulkan::OnClientContextBound(Uint64 token) {
+        const auto lock = EGLRegistry().Lock();
+        if (!UsesSurfaceTargets() || token == 0) return;
+        // Each of a multi-window client's contexts draws to the surface IT was made current with
+        // (Qt renders every window on its own thread and context); the ring interleaves them with
+        // a bind_context between, and no make-current. Follow the context back to its surface.
+        const auto found = m_contextBindings.find(reinterpret_cast<EGLContext>(token));
+        if (found == m_contextBindings.end()) return;
+        const EGLSurfaceRegistry::CurrentState binding = found->second;
+        if (!EGLRegistry().IsRegistered(binding.DrawSurface)) {
+            m_contextBindings.erase(found);
+            return;
+        }
+        const auto current = EGLRegistry().CurrentOn(std::this_thread::get_id());
+        if (current && current->Context == binding.Context && current->DrawSurface == binding.DrawSurface &&
+            EGLRegistry().ActiveSurface() == binding.DrawSurface) {
+            return;
+        }
+        (void)BackendObject::MakeEGLCurrent(binding.Display, binding.DrawSurface, binding.ReadSurface, binding.Context);
     }
 
     Bool BackendObject_DirectVulkan::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (!pVulkanRenderer) {
             MGLOG_E("DirectVulkan renderer is not initialized");
             return false;
@@ -457,19 +567,63 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return BackendObject::SwapEGLBuffers(dpy, draw);
     }
 
+    Bool BackendObject_DirectVulkan::BlitDefaultFramebufferToSharedImage(const SharedImageView& image,
+                                                                         const MG_Util::Damage::Region& region) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Same lock as SwapEGLBuffers: the copy reads the current surface target's image.
+        const auto lock = EGLRegistry().Lock();
+        if (!pVulkanRenderer) {
+            MGLOG_E("DirectVulkan: shared image %llu: the renderer is not initialized",
+                    static_cast<unsigned long long>(image.Id));
+            return false;
+        }
+        return pVulkanRenderer->BlitDefaultFramebufferToSharedImage(image, region);
+#else
+        (void)image, (void)region;
+        return false;
+#endif
+    }
+
+    Bool BackendObject_DirectVulkan::PublishSharedImageAccesses() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const auto lock = EGLRegistry().Lock();
+        return pVulkanRenderer ? pVulkanRenderer->PublishSharedImageAccesses() : true;
+#else
+        return true;
+#endif
+    }
+
+    Bool BackendObject_DirectVulkan::ExportNativeFence(int* fence) {
+        *fence = -1;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const auto lock = EGLRegistry().Lock();
+        return pVulkanRenderer ? pVulkanRenderer->ExportNativeFence(fence) : true;
+#else
+        return true;
+#endif
+    }
+
+    // A swapchain image keeps its content through a present whatever region is drawn next: the
+    // damage region the client may declare is not needed here.
+    Int32 BackendObject_DirectVulkan::QueryCurrentBufferAge(Bool damageRegionFollows) {
+        (void)damageRegionFollows;
+        const auto lock = EGLRegistry().Lock();
+        return pVulkanRenderer ? pVulkanRenderer->CurrentDrawBufferAge() : 0;
+    }
+
     void BackendObject_DirectVulkan::SetEGLSwapInterval(Int interval) {
         // Same lock as SwapEGLBuffers: the renderer reads the request in Present.
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         BackendObject::SetEGLSwapInterval(interval);
     }
 
     void BackendObject_DirectVulkan::ReleaseEGLSurface(EGLSurface surface) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         BackendObject::ReleaseEGLSurface(surface);
     }
 
     void BackendObject_DirectVulkan::ReleaseEGLResources() {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         // Outstanding fence/timer-query handles now refer to a dead renderer;
         // treat them as signaled/available with zero results from here on.
         BumpRendererGeneration();
@@ -477,11 +631,119 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The reflection cache is file-scope, not renderer-owned; without this the
         // deleted programs' reflection strings survive full context teardown.
         ClearProgramResourceCaches();
+        m_suspendedWindowSurfaces.clear();
         BackendObject::ReleaseEGLResources();
     }
 
+    Bool BackendObject_DirectVulkan::ActivateSuspendedPlaceholder(EGLSurface surface,
+                                                                  const SuspendedWindowSurface& extent) {
+        // A pbuffer target at the window's extent: every default-framebuffer path (render passes,
+        // read-back, the shared-image blit, the acquire and the present) keeps a live swapchain to
+        // work on, and the extent it publishes is the one the client already has.
+        VulkanRendererConfig config;
+        config.SurfaceWidth = std::max<Uint32>(extent.Width, 1);
+        config.SurfaceHeight = std::max<Uint32>(extent.Height, 1);
+        return pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(surface), NativeWindowType{}, config);
+    }
+
+    Bool BackendObject_DirectVulkan::SuspendServerWindow(void* window) {
+        const auto lock = EGLRegistry().Lock();
+        // The monolith's one renderer IS its window; only surface targets can be swapped under it.
+        if (window == nullptr || !UsesSurfaceTargets()) return false;
+        Vector<EGLSurface> onWindow;
+        for (const EGLSurface client : EGLRegistry().WindowSurfacesOn(window)) {
+            if (m_suspendedWindowSurfaces.find(client) != m_suspendedWindowSurfaces.end()) continue;
+            onWindow.push_back(client);
+        }
+        for (const EGLSurface client : onWindow) {
+            const auto state = EGLRegistry().Find(client);
+            SuspendedWindowSurface extent;
+            extent.Width = static_cast<Uint32>(std::max<EGLint>(state->Width, 1));
+            extent.Height = static_cast<Uint32>(std::max<EGLint>(state->Height, 1));
+            if (pVulkanRenderer) {
+                const Uint64 key = SurfaceTargetKey(client);
+                const VkExtent2D built = pVulkanRenderer->SurfaceTargetExtent(key);
+                if (built.width != 0 && built.height != 0) {
+                    extent.Width = built.width;
+                    extent.Height = built.height;
+                }
+                const Bool active = pVulkanRenderer->IsActiveSurfaceTarget(key);
+                // Flushes, waits the device idle, purges the render passes on the target and drops its
+                // swapchain and VkSurfaceKHR - nothing references the window after this.
+                pVulkanRenderer->DestroySurfaceTarget(key);
+                m_suspendedWindowSurfaces[client] = extent;
+                // A placeholder that cannot be built is a suspend that failed: the window is already let
+                // go of, and the caller ends the session by name instead (its EGL resources go).
+                if (active && !ActivateSuspendedPlaceholder(client, extent)) return false;
+            } else {
+                m_suspendedWindowSurfaces[client] = extent;
+            }
+        }
+        MGLOG_I("DirectVulkan: %zu window surface(s) on server window %p now draw into placeholder pbuffer targets; "
+                "the renderer, the device and every object stay",
+                onWindow.size(), window);
+        return true;
+    }
+
+    Bool BackendObject_DirectVulkan::ResumeServerWindow(void* window, Uint32 width, Uint32 height) {
+        const auto lock = EGLRegistry().Lock();
+        if (window == nullptr || !UsesSurfaceTargets()) return false;
+        UnorderedMap<EGLSurface, SuspendedWindowSurface> suspended;
+        suspended.swap(m_suspendedWindowSurfaces);
+        for (const auto& [client, extent] : suspended) {
+            (void)extent;
+            if (!EGLRegistry().SetWindowSurfaceExtent(client, width, height, window))
+                continue; // released while suspended
+            if (!pVulkanRenderer) continue;
+            const Uint64 key = SurfaceTargetKey(client);
+            const Bool active = pVulkanRenderer->IsActiveSurfaceTarget(key);
+            pVulkanRenderer->DestroySurfaceTarget(key); // the placeholder
+            // A parked surface is built on the new window when it is next activated (InitWindowSurface).
+            if (!active) continue;
+            // The creation's own path: a new VkSurfaceKHR and swapchain with the surface's current
+            // pre-transform, a new target serial (render passes rebuilt), and the extent published.
+            VulkanRendererConfig config;
+            config.SurfaceWidth = std::max<Uint32>(width, 1);
+            config.SurfaceHeight = std::max<Uint32>(height, 1);
+            config.SwapInterval = GetRequestedSwapInterval();
+            if (!pVulkanRenderer->ActivateSurfaceTarget(key, reinterpret_cast<NativeWindowType>(window), config)) {
+                return false;
+            }
+        }
+        MGLOG_I("DirectVulkan: %zu suspended window surface(s) rebuilt on server window %p (%ux%u)", suspended.size(),
+                window, width, height);
+        return true;
+    }
+
+    Bool BackendObject_DirectVulkan::ServerWindowResized(void* window, Uint32 width, Uint32 height) {
+        const auto lock = EGLRegistry().Lock();
+        if (window == nullptr || !UsesSurfaceTargets()) return false;
+        Bool followed = false;
+        for (const EGLSurface client : EGLRegistry().WindowSurfacesOn(window)) {
+            if (m_suspendedWindowSurfaces.find(client) != m_suspendedWindowSurfaces.end()) continue;
+            (void)EGLRegistry().SetWindowSurfaceExtent(client, width, height);
+            // Magma's extent is its swapchain's, published when it is built: the active target follows
+            // the window now (or at the half-recorded frame's present); a parked one at its next present.
+            if (pVulkanRenderer && pVulkanRenderer->IsActiveSurfaceTarget(SurfaceTargetKey(client))) {
+                followed = pVulkanRenderer->FollowActiveWindowResize() || followed;
+            }
+        }
+        return followed;
+    }
+
+    Bool BackendObject_DirectVulkan::UsesSurfaceTargets() const {
+        return MG_Config::Transport != MG_Config::TransportMode::Monolith;
+    }
+
+    void BackendObject_DirectVulkan::OnEGLSurfaceForgotten(EGLSurface surface) {
+        m_suspendedWindowSurfaces.erase(surface);
+        if (UsesSurfaceTargets() && pVulkanRenderer) pVulkanRenderer->DestroySurfaceTarget(SurfaceTargetKey(surface));
+    }
+
     void BackendObject_DirectVulkan::OnEGLSurfaceReleased(EGLSurface surface) {
-        (void)surface;
+        // The renderer outlives its surfaces here: only this surface's target goes (in
+        // OnEGLSurfaceForgotten, which follows), and every fence stays valid.
+        if (UsesSurfaceTargets() && pVulkanRenderer) return;
         // Outstanding fence/timer-query handles now refer to a dead renderer;
         // treat them as signaled/available with zero results from here on.
         BumpRendererGeneration();
@@ -520,19 +782,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
                                                   Bool anisotropicFilteringSupported,
-                                                  Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool cubeMapArraySupported) {
+                                                  Bool nonZeroIndirectBaseInstanceSupported, Bool cubeMapArraySupported,
+                                                  const AdvertisedFeatureSupport& features) {
         Vector<GLExtension> extensions = {
             // The version tokens have to reach the version the backend actually claims:
             // TargetGLVersion is {4,6,0}, and a list that stopped at OpenGL40 told an
             // application feature-detecting off these tokens the opposite of what
             // GL_MAJOR_VERSION / GL_MINOR_VERSION told it.
-            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, V_OpenGL41, V_OpenGL42, V_OpenGL43,
-            V_OpenGL44, V_OpenGL45, V_OpenGL46,
-            E_GL_ARB_draw_buffers_blend,
-            E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
-            E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_ARB_draw_indirect,
-            E_GL_ARB_multi_draw_indirect,
+            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, V_OpenGL41, V_OpenGL42, V_OpenGL43, V_OpenGL44,
+            V_OpenGL45, V_OpenGL46, E_GL_ARB_draw_buffers_blend,
+            // The GLSL 1.00/1.10-era ARB trio plus NPOT textures: all core since GL 2.0 and
+            // trivially true for every context this backend claims (4.6). KWin 6's
+            // EglContext::checkSupported() gates desktop-GL compositing on exactly these four
+            // strings, so withholding them fails its renderer bring-up. Same block as DirectGLES.
+            E_GL_ARB_shader_objects, E_GL_ARB_vertex_shader, E_GL_ARB_fragment_shader,
+            E_GL_ARB_texture_non_power_of_two, E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object,
+            E_GL_ARB_shader_image_load_store, E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query,
+            E_GL_ARB_framebuffer_object, E_GL_ARB_draw_indirect, E_GL_ARB_multi_draw_indirect,
             E_GL_ARB_indirect_parameters, E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
             E_GL_ARB_texture_storage, E_GL_ARB_texture_storage_multisample, E_GL_ARB_texture_multisample,
             E_GL_ARB_clear_texture, E_GL_ARB_direct_state_access, E_GL_ARB_shader_draw_parameters,
@@ -612,7 +878,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             E_GL_ARB_texture_rg,
             // GL_DEPTH_COMPONENT32F and GL_DEPTH32F_STENCIL8.
             E_GL_ARB_depth_buffer_float,
-            // The floating-point colour formats. Unlike the rest of this block this string DOES
+            // The floating-point color formats. Unlike the rest of this block this string DOES
             // gate CTS cases - KHR-GL4*.internalformat.texture2d.*{16f,32f} is keyed on it with no
             // core-version fallback, so eight cases per version list were NotSupported on formats
             // the backend has always had.
@@ -621,10 +887,40 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // glDepthRangeArrayv / glDepthRangeIndexed / glGetFloati_v / glGetDoublei_v, over the
             // 16 viewports GL_MAX_VIEWPORTS reports.
             E_GL_ARB_viewport_array,
+            // Core in the 4.x versions this backend already claims, and named so a context of an
+            // older requested version reaches the same, already-implemented surface (the conformance
+            // suite gates its GL 3.x runs of these on the string alone):
+            //  - transform feedback objects, pause/resume and glDrawTransformFeedback (4.0);
+            E_GL_ARB_transform_feedback2,
+            //  - multiple capture buffers per stream, gl_SkipComponents / gl_NextBuffer, the
+            //    indexed queries and glDrawTransformFeedbackStream (4.0);
+            E_GL_ARB_transform_feedback3,
+            //  - GL_RGB10_A2UI (3.3), GL_RGB9_E5 (3.0) and the integer color formats (3.0);
+            E_GL_ARB_texture_rgb10_a2ui, E_GL_EXT_texture_shared_exponent, E_GL_EXT_texture_integer,
+            //  - the eleven pipeline-statistics query targets (4.6). Accepted by glBeginQuery and
+            //    answered with GL_QUERY_COUNTER_BITS = 0, the spec's own "this counter is not
+            //    instrumented" signal (see IsPipelineStatisticsQueryTarget in GL_Query.cpp);
+            E_GL_ARB_pipeline_statistics_query,
+            //  - mix() over integer and boolean vectors in GLSL below 4.50. The frontend compiles it
+            //    to OpSelect, which SPIR-V consumes directly.
+            E_GL_EXT_shader_integer_mix,
+            // The origin and depth mode select the Y negation and the [-1, 1] -> [0, 1] depth
+            // remap of the position fixup every program already gets, so no device feature is
+            // involved (ApplyClipControlToTransformFlags).
+            E_GL_ARB_clip_control,
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
             E_GL_ARB_get_program_binary};
+        // Follows the tessellationShader device feature; GL_Query also reads the string to open
+        // the two tessellation pipeline-statistics targets.
+        if (features.TessellationShader) {
+            extensions.push_back(E_GL_ARB_tessellation_shader);
+        }
+        // Follows the shaderCullDistance device feature, the same gate GL_MAX_CULL_DISTANCES uses.
+        if (features.CullDistance) {
+            extensions.push_back(E_GL_ARB_cull_distance);
+        }
         // Vulkan's drawIndirectFirstInstance feature is optional. Direct base-instance calls work
         // without it, but ARB_base_instance also promises non-zero firstInstance in GPU indirect
         // commands; the renderer supplies true only when that word is legal and gl_InstanceID can
@@ -632,7 +928,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (nonZeroIndirectBaseInstanceSupported) {
             extensions.push_back(E_GL_ARB_base_instance);
         }
-        if (shaderSubgroupSupported && !MG_Config::Features.MagmaDisableSubgroup) {
+        if (shaderSubgroupSupported) {
             extensions.push_back(E_GL_KHR_shader_subgroup);
         }
         // GL_KHR_parallel_shader_compile is MobileGL's own capability, not the Vulkan
@@ -645,7 +941,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // recorded trace can never cover: Iris and Sodium change their SUBMISSION SCHEDULE
         // the moment they see it - they enqueue whole pipeline batches and poll
         // GL_COMPLETION_STATUS_KHR instead of compiling one program at a time - so
-        // MOBILEGL_ASYNC_SHADER_COMPILE=0 has to withdraw the application-visible behaviour
+        // MOBILEGL_ASYNC_SHADER_COMPILE=0 has to withdraw the application-visible behavior
         // change as well as the threading, or the kill switch would only be half a switch.
         if (MG_Util::Async::AsyncShaderCompileEnabled()) {
             extensions.push_back(E_GL_KHR_parallel_shader_compile);
@@ -709,7 +1005,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             funcsTable.GL.DrawElements = DrawElements;
             funcsTable.GL.DrawElementsBaseVertex = DrawElementsBaseVertex;
             funcsTable.GL.MultiDrawArrays = MultiDrawArrays;
-            funcsTable.GL.MultiDrawElements = MultiDrawElements;
             funcsTable.GL.MultiDrawElementsBaseVertex = MultiDrawElementsBaseVertex;
             funcsTable.GL.MultiDrawElementsIndirect = MultiDrawElementsIndirect;
             funcsTable.GL.MultiDrawArraysIndirect = MultiDrawArraysIndirect;
@@ -730,27 +1025,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             funcsTable.GL.ClearBufferfv = ClearBufferfv;
             funcsTable.GL.ClearBufferuiv = ClearBufferuiv;
             funcsTable.GL.ClearBufferiv = ClearBufferiv;
-            funcsTable.GL.ClearNamedFramebufferfv = ClearNamedFramebufferfv;
-            funcsTable.GL.ClearNamedFramebufferfi = ClearNamedFramebufferfi;
-            funcsTable.GL.ClearNamedFramebufferiv = ClearNamedFramebufferiv;
-            funcsTable.GL.ClearNamedFramebufferuiv = ClearNamedFramebufferuiv;
             funcsTable.GL.BlitFramebuffer = BlitFramebuffer;
-            funcsTable.GL.BlitNamedFramebuffer = BlitNamedFramebuffer;
             funcsTable.GL.CopyTexImage2D = CopyTexImage2D;
             funcsTable.GL.CopyTexSubImage2D = CopyTexSubImage2D;
             funcsTable.GL.CopyImageSubData = CopyImageSubData;
             funcsTable.GL.GenerateMipmap = GenerateMipmap;
             funcsTable.GL.ReadPixels = ReadPixels;
-            funcsTable.GL.GetTexImage = GetTexImage;
-            funcsTable.GL.GetTextureImage = GetTextureImage;
             funcsTable.GL.DispatchCompute = DispatchCompute;
             funcsTable.GL.DispatchComputeIndirect = DispatchComputeIndirect;
             funcsTable.GL.MemoryBarrier = MemoryBarrier;
             funcsTable.GL.MemoryBarrierByRegion = MemoryBarrierByRegion;
             funcsTable.GL.BindImageTexture = BindImageTexture;
             funcsTable.GL.GetIntegeri_v = GetIntegeri_v;
-            funcsTable.GL.GetInteger64i_v = GetInteger64i_v;
-            funcsTable.GL.GetProgramiv = GetProgramiv;
             funcsTable.GL.ShaderStorageBlockBinding = ShaderStorageBlockBinding;
             funcsTable.GL.FenceSync = FenceSync;
             funcsTable.GL.ClientWaitSync = ClientWaitSync;
@@ -794,9 +1080,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_vulkanCaps = capabilities;
         UpdateDynamicBackendParameters();
         UpdateAdvertisedExtensions();
-        if (MG_State::pGLContext) {
-            MG_State::pGLContext->InvalidateCompileEnv();
-        }
+        MG_Pipe::MGPipeNotifyCompileEnvChanged();
         MutableFormatCapabilities().Clear();
     }
 
@@ -807,17 +1091,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // real device timestamp support. ApplyVulkanCapabilitiesForTesting may
         // run without a renderer; no timer query is advertised then. Rebuilding
         // the whole list keeps re-runs idempotent.
-        // The opt-in emulated compute path (SubgroupSupportPolicy.h) carries the
-        // extension by itself on devices with no native subgroup support at all; a
-        // device with native subgroups always advertises - and uses - those.
+        // The emulated compute path (SubgroupSupportPolicy.h) carries the extension by
+        // itself on devices with no native subgroup support at all; a device with native
+        // subgroups advertises - and uses - those unless MOBILEGL_SUBGROUP_EMULATION forces
+        // the emulation.
         const Bool subgroupSupportAdvertised =
-            m_vulkanCaps.SupportsShaderSubgroup ||
-            ShouldEmulateSubgroups(m_vulkanCaps.SupportsShaderSubgroup);
+            ResolveVulkanSubgroupImplementation(m_vulkanCaps.SupportsShaderSubgroup) !=
+            MG_Backend::SubgroupImplementation::None;
         m_rendererInfo.RendererGLInfo.Extensions = BuildAdvertisedExtensions(
             subgroupSupportAdvertised, pVulkanRenderer && pVulkanRenderer->IsTimerQuerySupported(),
             pVulkanRenderer && pVulkanRenderer->IsSamplerAnisotropySupported(),
             pVulkanRenderer && pVulkanRenderer->IsNonZeroIndirectBaseInstanceSupported(),
-            m_vulkanCaps.SupportsImageCubeArray);
+            m_vulkanCaps.SupportsImageCubeArray,
+            AdvertisedFeatureSupport{.TessellationShader = m_vulkanCaps.SupportsTessellationShader,
+                                     .CullDistance =
+                                         m_vulkanCaps.SupportsShaderCullDistance && m_vulkanCaps.MaxCullDistances > 0});
+        // GL_EXT_fragment_shading_rate rides on VK_KHR_fragment_shading_rate's pipeline rate, and
+        // its _primitive companion on the primitive rate; both only when the renderer enabled them.
+        // _attachment is not advertised: no framebuffer carries a rate attachment to this backend.
+        if (pVulkanRenderer != nullptr && pVulkanRenderer->GetFragmentShadingRateSupport().Pipeline) {
+            m_rendererInfo.RendererGLInfo.Extensions.push_back(E_GL_EXT_fragment_shading_rate);
+            if (pVulkanRenderer->GetFragmentShadingRateSupport().Primitive) {
+                m_rendererInfo.RendererGLInfo.Extensions.push_back(E_GL_EXT_fragment_shading_rate_primitive);
+            }
+        }
     }
 
     void BackendObject_DirectVulkan::UpdateDynamicBackendParameters() {
@@ -893,6 +1190,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.MaxIntegerSamples = m_vulkanCaps.MaxIntegerSamples;
         m_dynamicParameters.MaxSamples = m_vulkanCaps.MaxSamples;
         m_dynamicParameters.MaxSampleMaskWords = m_vulkanCaps.MaxSampleMaskWords;
+        // GL_SAMPLE_POSITION. A device reporting standardSampleLocations places the samples exactly
+        // at the Vulkan specification's table (Multisampling, "Standard sample locations"), which
+        // is also what gl_SamplePosition reads back in a shader. Vulkan's sample y grows with the
+        // framebuffer row, and a framebuffer object's row 0 is GL's y = 0, so the table needs no
+        // flip to be GL's answer. Without the flag the positions are unknown and stay unset.
+        if (m_vulkanCaps.StandardSampleLocations) {
+            static constexpr Float kStandard2[] = {0.75f, 0.75f, 0.25f, 0.25f};
+            static constexpr Float kStandard4[] = {0.375f, 0.125f, 0.875f, 0.375f, 0.125f, 0.625f, 0.625f, 0.875f};
+            static constexpr Float kStandard8[] = {0.5625f, 0.3125f, 0.4375f, 0.6875f, 0.8125f, 0.5625f,
+                                                   0.3125f, 0.1875f, 0.1875f, 0.8125f, 0.0625f, 0.4375f,
+                                                   0.6875f, 0.9375f, 0.9375f, 0.0625f};
+            static constexpr Float kStandard16[] = {
+                0.5625f, 0.5625f, 0.4375f, 0.3125f, 0.3125f, 0.625f, 0.75f,  0.4375f, 0.1875f, 0.375f, 0.625f,
+                0.8125f, 0.8125f, 0.6875f, 0.6875f, 0.1875f, 0.375f, 0.875f, 0.5f,    0.0625f, 0.25f,  0.125f,
+                0.125f,  0.75f,   0.0f,    0.5f,    0.9375f, 0.25f,  0.875f, 0.9375f, 0.0625f, 0.0f};
+            const Float* const tables[] = {kStandard2, kStandard4, kStandard8, kStandard16};
+            for (Int samples = 2, row = 0; samples <= decltype(m_dynamicParameters)::kMaxSamplePositionCount &&
+                                           samples <= m_vulkanCaps.MaxSamples;
+                 samples *= 2, ++row) {
+                m_dynamicParameters.SetSamplePositions(samples, tables[row]);
+            }
+        }
         const Int maxSupportedTextureUnits = static_cast<Int>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
         // GL_MAX_TEXTURE_IMAGE_UNITS is a *per-stage* sampler limit. Adreno/Qualcomm report a huge
         // maxPerStageDescriptorSampledImages (descriptor-indexing scale), so clamping it only to our
@@ -944,10 +1263,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.MaxCombinedShaderStorageBlocks =
             clampLimit("GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS", m_vulkanCaps.MaxCombinedShaderStorageBlocks,
                        kMaxAdvertisedBufferBlocks);
-        m_dynamicParameters.MaxComputeUniformBlocks =
-            clampLimit("GL_MAX_COMPUTE_UNIFORM_BLOCKS", m_vulkanCaps.MaxComputeUniformBlocks,
-                       kMaxAdvertisedBufferBlocks);
+        m_dynamicParameters.MaxComputeUniformBlocks = clampLimit(
+            "GL_MAX_COMPUTE_UNIFORM_BLOCKS", m_vulkanCaps.MaxComputeUniformBlocks, kMaxAdvertisedBufferBlocks);
         m_dynamicParameters.MaxComputeWorkGroupInvocations = m_vulkanCaps.MaxComputeWorkGroupInvocations;
+        // The six per-axis compute limits, from the same VkPhysicalDeviceLimits fields
+        // GLFunctionsTable::GetIntegeri_v (DirectVulkan.cpp) reads live. Carried here so that
+        // MGPCaps has them once the table entry retires (plan B section 4.4.1); GL_Getter floors
+        // them. Not clamped: unlike the block counts these are not amounts an application
+        // allocates, and the frontend already raises them to the GL minimum.
+        for (SizeT axis = 0; axis < 3; ++axis) {
+            m_dynamicParameters.MaxComputeWorkGroupCount[axis] = m_vulkanCaps.MaxComputeWorkGroupCount[axis];
+            m_dynamicParameters.MaxComputeWorkGroupSize[axis] = m_vulkanCaps.MaxComputeWorkGroupSize[axis];
+        }
         m_dynamicParameters.MaxShaderStorageBufferBindings =
             clampLimit("GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS", m_vulkanCaps.MaxShaderStorageBufferBindings,
                        kMaxAdvertisedBufferBlocks);
@@ -998,6 +1325,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // device reports it, so these are the exact limits the logical device can compile and run.
         m_dynamicParameters.MaxVertexImageUniforms =
             m_vulkanCaps.SupportsVertexPipelineStoresAndAtomics ? maxPerStageImageUniforms : 0;
+        // The tessellation stages are vertex-pipeline stages too, so the same feature gates them.
+        m_dynamicParameters.MaxTessControlImageUniforms = m_dynamicParameters.MaxVertexImageUniforms;
+        m_dynamicParameters.MaxTessEvaluationImageUniforms = m_dynamicParameters.MaxVertexImageUniforms;
         m_dynamicParameters.MaxGeometryImageUniforms =
             m_vulkanCaps.SupportsVertexPipelineStoresAndAtomics && m_vulkanCaps.SupportsGeometryShader
                 ? maxPerStageImageUniforms
@@ -1138,14 +1468,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.SupportsFloat64VertexAttributes = false;
         m_dynamicParameters.MaxShaderStorageBlockSize =
             std::min(m_vulkanCaps.MaxShaderStorageBlockSize, kMaxAdvertisedShaderStorageBlockSize);
-        if (m_vulkanCaps.SupportsShaderSubgroup) {
+        const MG_Backend::SubgroupImplementation subgroupImplementation =
+            ResolveVulkanSubgroupImplementation(m_vulkanCaps.SupportsShaderSubgroup);
+        if (subgroupImplementation == MG_Backend::SubgroupImplementation::Native) {
             m_dynamicParameters.SubgroupSize = m_vulkanCaps.SubgroupSize;
             m_dynamicParameters.SubgroupSupportedStages = mapShaderStages(m_vulkanCaps.SubgroupSupportedStages);
             m_dynamicParameters.SubgroupSupportedFeatures =
                 mapSubgroupFeatures(m_vulkanCaps.SubgroupSupportedOperations);
             m_dynamicParameters.SubgroupQuadOperationsInAllStages = m_vulkanCaps.SubgroupQuadOperationsInAllStages;
-        } else if (ShouldEmulateSubgroups(m_vulkanCaps.SupportsShaderSubgroup)) {
-            // MOBILEGL_MAGMA_EMULATE_SUBGROUP on a device with no native subgroups: the
+        } else if (subgroupImplementation == MG_Backend::SubgroupImplementation::Emulated) {
+            // A device with no native subgroups (or MOBILEGL_SUBGROUP_EMULATION forcing it): the
             // advertised values describe the 32-lane virtual subgroup the compute
             // lowering implements (SubgroupSupportPolicy.h / EmulateSubgroupsPass).
             // GL requires the advertisement and the execution to agree, and on this
@@ -1154,8 +1486,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_dynamicParameters.SubgroupSupportedStages = kEmulatedSubgroupStages;
             m_dynamicParameters.SubgroupSupportedFeatures = kEmulatedSubgroupFeatures;
             m_dynamicParameters.SubgroupQuadOperationsInAllStages = false;
-            MGLOG_I("DirectVulkan: emulating 32-lane compute subgroups "
-                    "(MOBILEGL_MAGMA_EMULATE_SUBGROUP, no native subgroup support)");
+            MGLOG_I("DirectVulkan: emulating 32-lane compute subgroups (%s)",
+                    m_vulkanCaps.SupportsShaderSubgroup ? "forced by MOBILEGL_SUBGROUP_EMULATION"
+                                                        : "no native subgroup support");
         } else {
             m_dynamicParameters.SubgroupSize = 0;
             m_dynamicParameters.SubgroupSupportedStages = 0;
@@ -1185,13 +1518,39 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case 0x1010u: // Imagination
             m_dynamicParameters.GpuVendor = GpuVendorKind::ImgTec;
             break;
-        case 0x10005u: // Mesa software (lavapipe)
+        case 0x10005u: // software (lavapipe)
         case 0x1AE0u:  // Google (SwiftShader)
             m_dynamicParameters.GpuVendor = GpuVendorKind::Software;
             break;
         default:
             m_dynamicParameters.GpuVendor = GpuVendorKind::Unknown;
             break;
+        }
+
+        // GL_EXT_fragment_shading_rate: what the renderer enabled of VK_KHR_fragment_shading_rate.
+        // The attachment rate stays off (see UpdateAdvertisedExtensions), and with it every limit
+        // that only describes the attachment.
+        {
+            const FragmentShadingRateSupport fsr = pVulkanRenderer != nullptr
+                                                       ? pVulkanRenderer->GetFragmentShadingRateSupport()
+                                                       : FragmentShadingRateSupport{};
+            m_dynamicParameters.SupportsFragmentShadingRate = fsr.Pipeline;
+            m_dynamicParameters.SupportsPrimitiveFragmentShadingRate = fsr.Pipeline && fsr.Primitive;
+            m_dynamicParameters.SupportsAttachmentFragmentShadingRate = false;
+            m_dynamicParameters.FragmentShadingRateNonTrivialCombiners = fsr.NonTrivialCombiners;
+            m_dynamicParameters.FragmentShadingRateWithShaderDepthStencilWrites = fsr.WithShaderDepthStencilWrites;
+            m_dynamicParameters.FragmentShadingRateWithSampleMask = fsr.WithSampleMask;
+            m_dynamicParameters.FragmentShadingRatePrimitiveWithMultiViewport = fsr.PrimitiveWithMultipleViewports;
+            m_dynamicParameters.FragmentShadingRateAttachmentWithDefaultFramebuffer = false;
+            for (SizeT i = 0; i < std::size(m_dynamicParameters.FragmentShadingRateMasks); ++i) {
+                m_dynamicParameters.FragmentShadingRateMasks[i] = fsr.Pipeline ? fsr.RateMasks[i] : 0;
+            }
+            m_dynamicParameters.MinFragmentShadingRateAttachmentTexelWidth = 0;
+            m_dynamicParameters.MinFragmentShadingRateAttachmentTexelHeight = 0;
+            m_dynamicParameters.MaxFragmentShadingRateAttachmentTexelWidth = 0;
+            m_dynamicParameters.MaxFragmentShadingRateAttachmentTexelHeight = 0;
+            m_dynamicParameters.MaxFragmentShadingRateAttachmentTexelAspectRatio = 0;
+            m_dynamicParameters.MaxFragmentShadingRateAttachmentLayers = 0;
         }
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

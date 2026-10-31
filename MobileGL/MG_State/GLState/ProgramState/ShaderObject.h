@@ -110,13 +110,13 @@ namespace MobileGL {
             // so the verdict is recorded directly - COMPILE_STATUS false with this log - and both
             // queries answer from it without touching the compile pipeline.
             void RecordSpecializationFailure(String&& infoLog);
-            // Gives up this object's claim on its compile node, cancelling the node only if
+            // Gives up this object's claim on its compile node, canceling the node only if
             // this object was its LAST claimant. Called at the points where the object's
             // compiled state stops being observable through THIS name: a real source change,
             // and the release of an orphaned shader name.
             //
             // Named for what it does rather than for what it used to do: before stage 6 a
-            // node had exactly one shader object, so giving up the claim and cancelling the
+            // node had exactly one shader object, so giving up the claim and canceling the
             // compile were the same act and this was CancelCompile(). They are not the same
             // act any more - see ShaderCompileTask::AddAdopter for the count discipline and
             // its single-threadedness argument. Never waits, in either case.
@@ -171,12 +171,12 @@ namespace MobileGL {
             // Tri-state, and deliberately NOT joining: an in-flight compile of the current
             // source counts as memoized (a second glCompileShader must not enqueue a
             // duplicate job), but asking that question must never block.
-            // A node that settled as Cancelled (the job body threw, or the enqueue failed)
+            // A node that settled as Canceled (the job body threw, or the enqueue failed)
             // carries no result, so it must NOT satisfy the memo: otherwise a second
             // glCompileShader on the same source enqueues nothing and the eventual join
             // reports GL_FALSE forever. The synchronous path retries in exactly this case.
             Bool HasMemoizedCompile() const {
-                return m_compiled != nullptr && m_compiled->source == m_source && !m_compiled->IsCancelled();
+                return m_compiled != nullptr && m_compiled->source == m_source && !m_compiled->IsCanceled();
             }
 
             // MUST NOT JOIN - this is what GL_COMPLETION_STATUS_KHR will read when the
@@ -219,7 +219,7 @@ namespace MobileGL {
             void JoinPendingCompile() const;
 
             // The artifacts of a compile that ran to completion. A node that was abandoned
-            // (cancelled at teardown, or whose body threw) never publishes: JoinPendingCompile
+            // (canceled at teardown, or whose body threw) never publishes: JoinPendingCompile
             // drops it, so anything reachable here is either Complete or absent, and "absent"
             // reads as the never-compiled defaults - COMPILE_STATUS false, empty info log,
             // which is exactly what GL requires before the first glCompileShader.

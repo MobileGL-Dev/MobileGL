@@ -6,11 +6,32 @@ on:
       - dev
       - Feat/Backend-Direct-GLES
       - Feat/Backend-Direct-Vulkan
+      # TEMPORARY, remove before merging the MGPipe work into dev: the disaggregation
+      # branch runs the full lane on every push so a phase's landing is not gated on
+      # someone remembering to dispatch the workflow by hand.
+      - feat/disaggregated
+      - codex/fix-github-ci
+      - cleanup
+    # A docs-only push builds nothing this workflow tests (231 emulator legs per run). The Test
+    # workflow keeps running for docs: it hosts the doc citation lint.
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
+
+env:
+  # Software-rendered CI submissions may exceed the interactive GPU hang budget.
+  MOBILEGL_GPU_HANG_BUDGET_MS: "0"
+
+# ONE LIVE RUN PER BRANCH, as in test.yml: a superseded push is canceled rather than left queued
+# behind its successor; a manual dispatch gets a group of its own; dev queues rather than cancels.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/dev' }}
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       actions: write
       contents: read
@@ -21,6 +42,7 @@ jobs:
       CCACHE_MAXSIZE: 4G
       CCACHE_NOHASHDIR: "true"
       MOBILEGL_CMAKE_COMPILER_LAUNCHER: ccache
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
@@ -38,6 +60,9 @@ jobs:
           distribution: zulu
           java-version: '17'
 
+      - name: Android replay lifecycle regression
+        run: python3 tools/trace_replay/test_android_lifecycle.py
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -52,22 +77,42 @@ jobs:
             ${{ runner.os }}-apk-${{ github.job }}-ccache-
 
       - name: Install ccache
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ccache
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y ccache
           ccache --version
 
       - name: Setup Android SDK
+        id: netsetup84
+        continue-on-error: true
+        timeout-minutes: 15
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: false
+          packages: platform-tools
+          cmdline-tools-version: 13114758
+
+      - name: Setup Android SDK (retry)
+        timeout-minutes: 15
+        if: ${{ steps.netsetup84.outcome == 'failure' }}
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: false
+          packages: platform-tools
+          cmdline-tools-version: 13114758
 
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses >/dev/null
 
       - name: Install Android NDK
+        timeout-minutes: 30
         run: |
-          sdkmanager "ndk;27.3.13750724"
+          for attempt in 1 2 3; do
+            sdkmanager "ndk;27.3.13750724" && break
+            [ "$attempt" = 3 ] && exit 1
+            echo "sdkmanager attempt $attempt failed; retrying"; sleep 20
+          done
           echo "ndk.dir=$ANDROID_HOME/ndk/27.3.13750724" >> android-plugin/local.properties
 
       - name: Update glslang external sources
@@ -75,7 +120,12 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Build plugin APK
-        run: gradle --no-daemon -p android-plugin :app:assemblePluginRelease -Pmobilegl.apkSuffix="${GITHUB_SHA}" -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
+        run: >-
+          gradle --no-daemon -p android-plugin :app:assemblePluginRelease
+          -Pmobilegl.apkSuffix="${GITHUB_SHA}" -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO
+          -Pmobilegl.buildDisaggregated="${MOBILEGL_CI_DISAGGREGATED}"
+          -Pmobilegl.buildDisaggregatedInproc="${MOBILEGL_CI_DISAGGREGATED}"
+          --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
@@ -117,7 +167,13 @@ jobs:
             66fdc867e552192d553d59095ea2e3cef4829de65c356f1fd826027b1905972e
 
       - name: Build retrace APK
-        run: gradle --no-daemon -p android-plugin :app:assembleTraceRelease -Pmobilegl.apkSuffix="${GITHUB_SHA}" -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
+        run: >-
+          gradle --no-daemon -p android-plugin :app:assembleTraceRelease
+          -Pmobilegl.apkSuffix="${GITHUB_SHA}" -Pmobilegl.abis=all
+          -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO
+          -Pmobilegl.buildDisaggregated="${MOBILEGL_CI_DISAGGREGATED}"
+          -Pmobilegl.buildDisaggregatedInproc="${MOBILEGL_CI_DISAGGREGATED}"
+          --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
@@ -127,22 +183,18 @@ jobs:
         if: always()
         run: ccache --show-stats
 
-      # Rewrite one rolling entry per job on the default branch. The upload stays
-      # cumulative - it carries every object restored at the top of this run plus
-      # the few TUs that actually changed - but Actions cache keys are immutable,
-      # so the superseded blob has to be released before the same key can be
-      # re-uploaded. Running after the build means a failed build leaves the
-      # existing entry untouched. The other trigger branches restore this entry
-      # rather than each writing a ~4 GB one of their own.
+      # Rewrite one rolling entry per job and branch. The upload stays cumulative - it
+      # carries every object restored at the top of this run plus the few TUs that
+      # changed - but Actions cache keys are immutable, so this branch's superseded
+      # blob is released first; --ref keeps the delete off other branches' entries.
+      # Running after the build means a failed build leaves the entry untouched.
       - name: Release superseded ccache entry
-        if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
           CACHE_KEY: ${{ runner.os }}-apk-${{ github.job }}-ccache-v1
-        run: gh cache delete "${CACHE_KEY}" || true
+        run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
 
       - name: Save ccache
-        if: github.ref_name == github.event.repository.default_branch
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
@@ -197,8 +249,9 @@ jobs:
 
   trace-cases:
     name: trace case matrix
-    runs-on: ubuntu-latest
-    needs: build
+    runs-on: ubuntu-26.04
+    env:
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
     outputs:
       android: ${{ steps.trace-cases.outputs.android }}
       names: ${{ steps.trace-cases.outputs.names }}
@@ -209,12 +262,17 @@ jobs:
       - name: Load trace cases
         id: trace-cases
         run: |
-          echo "android=$(python3 tools/trace_replay/trace_cases.py --ci --format github-apk-matrix)" >> "$GITHUB_OUTPUT"
+          python3 tools/trace_replay/trace_cases.py --self-test-transport-matrices
+          matrix_format=github-apk-matrix
+          if [ "${MOBILEGL_CI_DISAGGREGATED}" = "ON" ]; then
+            matrix_format=github-apk-transport-matrix
+          fi
+          echo "android=$(python3 tools/trace_replay/trace_cases.py --ci --format "${matrix_format}")" >> "$GITHUB_OUTPUT"
           echo "names=$(python3 tools/trace_replay/trace_cases.py --ci --format names)" >> "$GITHUB_OUTPUT"
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: trace-cases
     strategy:
       fail-fast: false
@@ -279,7 +337,7 @@ jobs:
 
   android-avd:
     name: android avd image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       AVD_NAME: mobilegl-ci
       ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
@@ -290,9 +348,23 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup Android SDK
+        id: netsetup336
+        continue-on-error: true
+        timeout-minutes: 15
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: false
+          packages: platform-tools
+          cmdline-tools-version: 13114758
+
+      - name: Setup Android SDK (retry)
+        timeout-minutes: 15
+        if: ${{ steps.netsetup336.outcome == 'failure' }}
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: false
+          packages: platform-tools
+          cmdline-tools-version: 13114758
 
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses >/dev/null
@@ -307,7 +379,7 @@ jobs:
             ${{ env.ANDROID_SDK_ROOT }}/platform-tools
             ${{ env.ANDROID_SDK_ROOT }}/platforms/android-35
             ${{ env.ANDROID_SDK_ROOT }}/system-images/android-35/google_apis/x86_64
-          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v2-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
+          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v4-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
 
       - name: Create AVD
         if: steps.android-avd-cache.outputs.cache-hit != 'true'
@@ -319,27 +391,59 @@ jobs:
             --profile pixel_6 \
             --avd-name "${AVD_NAME}"
 
+      - name: Enable KVM
+        if: steps.android-avd-cache.outputs.cache-hit != 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Boot the new AVD once so the cached AVD is past its first-boot setup (measured 37 s first
+      # boot, 26 s for the next cold boot). A quick-boot snapshot was tried instead: it doubled the
+      # cache restore and tripled "device offline" retries, so retrace jobs cold-boot. If the
+      # pre-boot fails, the AVD is created afresh so the cache never holds a half-booted one.
+      - name: Pre-boot AVD
+        if: steps.android-avd-cache.outputs.cache-hit != 'true'
+        run: |
+          log="${RUNNER_TEMP}/avd-preboot.log"
+          pid="${RUNNER_TEMP}/avd-preboot.pid"
+          if ! sh android-plugin/run-avd-ci.sh preboot --avd-name "${AVD_NAME}" --gpu software \
+              --emulator-log "${log}" --pid-file "${pid}" --boot-timeout 300; then
+            echo "::warning::the AVD pre-boot failed; caching a never-booted AVD instead"
+            tail -50 "${log}" || true
+            sh android-plugin/run-avd-ci.sh stop --avd-name "${AVD_NAME}" --emulator-log "${log}" --pid-file "${pid}"
+            timeout 60 tail --pid="$(cat "${pid}")" -f /dev/null || true
+            sh android-plugin/run-avd-ci.sh create --api-level 35 --target google_apis --arch x86_64 \
+              --profile pixel_6 --avd-name "${AVD_NAME}"
+          fi
+          du -sh "${ANDROID_AVD_HOME}"
+
   retrace:
-    name: retrace (${{ matrix.backend.name }}, ${{ matrix.case.name }})
-    runs-on: ubuntu-latest
+    name: retrace (${{ matrix.backend.name }} / ${{ matrix.transport || 'monolith' }}, ${{ matrix.case.name }})
+    runs-on: ubuntu-26.04
     needs:
       - build
       - android-avd
       - trace-cases
       - trace-fixtures
-    if: ${{ always() && needs.build.result == 'success' && needs.android-avd.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.android-avd.result == 'success' && needs.trace-cases.result == 'success' }}
     timeout-minutes: 75
     env:
+      MOBILEGL_CI_TRANSPORT: ${{ matrix.transport || 'monolith' }}
+      MOBILEGL_CI_LANE: ${{ matrix.lane || 'monolith-control' }}
       AVD_NAME: mobilegl-ci
       ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
       ANDROID_HOME: ${{ github.workspace }}/.android/sdk
       ANDROID_SDK_ROOT: ${{ github.workspace }}/.android/sdk
     strategy:
       fail-fast: false
-      max-parallel: 4
+      # The account runs at most 20 jobs at once, shared with Test. These ~230 emulator jobs are
+      # the longer of the two runs, so they may take the whole pool: what is minimized is when the
+      # later of APK and Test finishes, not Test alone.
+      max-parallel: 20
       matrix: ${{ fromJSON(needs.trace-cases.outputs.android) }}
     steps:
-      - name: Set Swap Space
+      - name: Set swap space
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 8
@@ -364,14 +468,6 @@ jobs:
           echo "EMULATOR_LOG=${RUNNER_TEMP}/mobilegl-emulator.log" >> "$GITHUB_ENV"
           echo "EMULATOR_PID_FILE=${RUNNER_TEMP}/mobilegl-emulator.pid" >> "$GITHUB_ENV"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          accept-android-sdk-licenses: false
-
-      - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses >/dev/null
-
       - name: Restore Android AVD cache
         id: android-avd-cache
         uses: actions/cache/restore@v5
@@ -382,7 +478,39 @@ jobs:
             ${{ env.ANDROID_SDK_ROOT }}/platform-tools
             ${{ env.ANDROID_SDK_ROOT }}/platforms/android-35
             ${{ env.ANDROID_SDK_ROOT }}/system-images/android-35/google_apis/x86_64
-          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v2-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
+          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v4-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
+
+      # The cache holds everything a retrace job runs (emulator, adb, image, AVD); the SDK manager
+      # is only needed to create the AVD when the cache missed.
+      - name: Use the cached SDK tools
+        if: steps.android-avd-cache.outputs.cache-hit == 'true'
+        run: |
+          echo "${ANDROID_SDK_ROOT}/platform-tools" >> "$GITHUB_PATH"
+          echo "${ANDROID_SDK_ROOT}/emulator" >> "$GITHUB_PATH"
+
+      - name: Setup Android SDK
+        id: netsetup415
+        if: steps.android-avd-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 15
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: false
+          packages: platform-tools
+          cmdline-tools-version: 13114758
+
+      - name: Setup Android SDK (retry)
+        timeout-minutes: 15
+        if: ${{ steps.netsetup415.outcome == 'failure' }}
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: false
+          packages: platform-tools
+          cmdline-tools-version: 13114758
+
+      - name: Accept Android SDK licenses
+        if: steps.android-avd-cache.outputs.cache-hit != 'true'
+        run: yes | sdkmanager --licenses >/dev/null
 
       - name: Download retrace APK
         uses: actions/download-artifact@v8
@@ -406,7 +534,7 @@ jobs:
             --profile pixel_6 \
             --avd-name "${AVD_NAME}"
 
-      - name: Launch Emulator
+      - name: Launch emulator
         run: |
           sh android-plugin/run-avd-ci.sh start \
             --avd-name "${AVD_NAME}" \
@@ -420,13 +548,37 @@ jobs:
           MOBILEGL_ESPRYT_USE_ANGLE: ${{ matrix.backend.name == 'DirectGLES' && '1' || '0' }}
           MOBILEGL_TRACE_ANGLE_VARIANT: ${{ matrix.case.name == 'minecraft-1.21.4-fabric-iris-bliss-in-world' && '90a62123d794' || 'ec889e6ea831' }}
           MOBILEGL_MAGMA_R11G11B10F_FALLBACK: ${{ matrix.backend.name == 'DirectVulkan' && '1' || '0' }}
-          MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: ${{ matrix.backend.name == 'DirectVulkan' && matrix.case.name == 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' && '1' || '0' }}
-          MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS: ${{ matrix.backend.name == 'DirectVulkan' && matrix.case.name == 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' && '1' || '0' }}
-          MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: ${{ matrix.backend.name == 'DirectVulkan' && matrix.case.name == 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' && '1' || '0' }}
+          MOBILEGL_ITRP_FIX: ${{ matrix.case.name == 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' && 'ForceOn' || 'Auto' }}
         run: |
           apk_file="android-retrace-apks/MobileGL-plugin-trace-release-${GITHUB_SHA}.apk"
           test -f "${apk_file}"
           extra_retrace_args=()
+          if [ "${MOBILEGL_CI_TRANSPORT}" = "inproc" ]; then
+            extra_retrace_args+=(
+              --env "MOBILEGL_TRANSPORT=inproc;MOBILEGL_IPC_ROLE_SPLIT_STATE=1;MOBILEGL_IPC_STRICT_ERRORS=1;MOBILEGL_IPC_RUN_AHEAD=1;MOBILEGL_GPU_HANG_BUDGET_MS=${MOBILEGL_GPU_HANG_BUDGET_MS}"
+              --require-inproc
+            )
+          elif [ "${MOBILEGL_CI_TRANSPORT}" = "spawn" ]; then
+            # THE SAME CLIENT KNOBS AS inproc, so the two acceptance lanes differ in exactly one
+            # thing: which PROCESS the server role runs in. They are scrubbed out of the CHILD's
+            # environment by the launcher and read by the client, which is where they belong.
+            #
+            # MOBILEGL_IPC_SERVER_PATH IS DELIBERATELY ABSENT. nativeLibraryDir carries an
+            # install-time hash, so nothing off the device can spell it; TraceReplayActivity
+            # resolves it from getApplicationInfo() when the env asks for spawn, and an explicit
+            # value would override that. --use-pbuffer is NOT optional here: a spawned
+            # server cannot be handed the client's window, because an ANativeWindow* is a pointer
+            # into the CLIENT's process and SetWindowHandle is refused on the way across with
+            # Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"} (Rule H, permanent;
+            # a windowed client uses MOBILEGL_IPC_SURFACE=server instead).
+            extra_retrace_args+=(
+              --env "MOBILEGL_TRANSPORT=spawn;MOBILEGL_IPC_ROLE_SPLIT_STATE=1;MOBILEGL_IPC_STRICT_ERRORS=1;MOBILEGL_IPC_RUN_AHEAD=1;MOBILEGL_GPU_HANG_BUDGET_MS=${MOBILEGL_GPU_HANG_BUDGET_MS}"
+              --use-pbuffer
+              --require-spawn
+            )
+          else
+            extra_retrace_args+=(--env "MOBILEGL_TRANSPORT=monolith;MOBILEGL_GPU_HANG_BUDGET_MS=${MOBILEGL_GPU_HANG_BUDGET_MS}")
+          fi
           # Bliss needs the newer signed ANGLE variant plus sampler mipmap
           # min-filter downgrading on ANGLE llvmpipe.
           if [ "${{ matrix.backend.name }}" = "DirectGLES" ] && [ "${{ matrix.case.name }}" = "minecraft-1.21.4-fabric-iris-bliss-in-world" ]; then
@@ -508,6 +660,12 @@ jobs:
           safe_case="$(printf '%s' '${{ matrix.case.name }}' | sed 's/[^A-Za-z0-9._-]/_/g')"
           result_dir="android-retrace-result/${safe_case}-${{ matrix.backend.name }}"
           mkdir -p "${result_dir}"
+          python3 - "${result_dir}/lane.json" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          Path(sys.argv[1]).write_text(json.dumps({"lane": os.environ["MOBILEGL_CI_LANE"],
+              "transport": os.environ["MOBILEGL_CI_TRANSPORT"]}, indent=2))
+          PY
           if [ -s "${{ matrix.case.golden }}" ]; then
             cp "${{ matrix.case.golden }}" "${result_dir}/${safe_case}-${{ matrix.backend.name }}-golden.png"
           fi
@@ -532,7 +690,7 @@ jobs:
           free -h > android-retrace-result/diagnostics/host-memory.txt 2>&1 || true
           sudo dmesg -T 2>/dev/null | tail -300 > android-retrace-result/diagnostics/host-dmesg.txt || true
 
-      - name: Stop Emulator
+      - name: Stop emulator
         if: always()
         run: |
           sh android-plugin/run-avd-ci.sh stop \
@@ -541,18 +699,37 @@ jobs:
             --pid-file "${EMULATOR_PID_FILE}"
 
       - name: Upload Android retrace result
+        id: upload-retrace-result
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: MobileGL-android-retrace-result-${{ env.date_today }}-${{ github.sha }}-${{ matrix.backend.name }}-${{ matrix.case.name }}
+          name: MobileGL-android-retrace-result-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ env.date_today }}-${{ github.sha }}-${{ matrix.backend.name }}-${{ matrix.case.name }}
           path: android-retrace-result/**
           if-no-files-found: warn
 
+      # The artifact service sometimes times out (ETIMEDOUT on CreateArtifact, one job in 231 on
+      # 2026-10-18), which turned a passing case red; one delayed retry absorbs that.
+      - name: Wait before retrying the upload
+        if: always() && steps.upload-retrace-result.outcome == 'failure'
+        run: sleep 30
+
+      - name: Upload Android retrace result (retry)
+        if: always() && steps.upload-retrace-result.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: MobileGL-android-retrace-result-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ env.date_today }}-${{ github.sha }}-${{ matrix.backend.name }}-${{ matrix.case.name }}
+          path: android-retrace-result/**
+          if-no-files-found: warn
+          overwrite: true
+
   retrace-summary:
     name: retrace summary
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: retrace
-    if: always()
+    if: ${{ !cancelled() }}
+    env:
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
@@ -567,31 +744,79 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Download Android retrace results
+      - name: Download Android monolith control results
         uses: actions/download-artifact@v8
         with:
-          pattern: MobileGL-android-retrace-result-*
-          path: retrace-artifacts
+          pattern: MobileGL-android-retrace-result-monolith-control-monolith-*
+          path: retrace-artifacts/monolith-control
 
-      - name: Render retrace summary
+      - name: Download Android inproc acceptance results
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: MobileGL-android-retrace-result-inproc-acceptance-inproc-*
+          path: retrace-artifacts/inproc-acceptance
+
+      - name: Download Android spawn acceptance results
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: MobileGL-android-retrace-result-spawn-acceptance-spawn-*
+          path: retrace-artifacts/spawn-acceptance
+
+      - name: Render monolith control summary
         run: |
           node tools/trace_replay/render_retrace_summary.mjs \
-            --input retrace-artifacts \
-            --output-dir android-retrace-summary \
-            --title "MobileGL Android retrace overview" \
-            --group-label "Android Emulator" \
-            --html mobilegl-android-retrace-overview.html
+            --input retrace-artifacts/monolith-control \
+            --output-dir android-retrace-summary/monolith-control \
+            --title "MobileGL Android monolith control" \
+            --group-label "Android Emulator / monolith control" \
+            --html mobilegl-android-monolith-control.html
 
-      - name: Upload Android retrace summary
+      - name: Render inproc acceptance summary
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        run: |
+          node tools/trace_replay/render_retrace_summary.mjs \
+            --input retrace-artifacts/inproc-acceptance \
+            --output-dir android-retrace-summary/inproc-acceptance \
+            --title "MobileGL Android inproc acceptance" \
+            --group-label "Android Emulator / inproc acceptance" \
+            --html mobilegl-android-inproc-acceptance.html
+
+      - name: Render spawn acceptance summary
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        run: |
+          node tools/trace_replay/render_retrace_summary.mjs             --input retrace-artifacts/spawn-acceptance             --output-dir android-retrace-summary/spawn-acceptance             --title "MobileGL Android spawn acceptance"             --group-label "Android Emulator / spawn acceptance"             --html mobilegl-android-spawn-acceptance.html
+
+      - name: Upload Android monolith control summary
         uses: actions/upload-artifact@v7
         with:
-          path: android-retrace-summary/mobilegl-android-retrace-overview.html
+          name: MobileGL-android-monolith-control-summary-${{ github.sha }}
+          path: android-retrace-summary/monolith-control/mobilegl-android-monolith-control.html
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload Android inproc acceptance summary
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        uses: actions/upload-artifact@v7
+        with:
+          name: MobileGL-android-inproc-acceptance-summary-${{ github.sha }}
+          path: android-retrace-summary/inproc-acceptance/mobilegl-android-inproc-acceptance.html
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload Android spawn acceptance summary
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        uses: actions/upload-artifact@v7
+        with:
+          name: MobileGL-android-spawn-acceptance-summary-${{ github.sha }}
+          path: android-retrace-summary/spawn-acceptance/mobilegl-android-spawn-acceptance.html
           archive: false
           if-no-files-found: error
 
   remove-artifact-clutter:
     name: remove artifact clutter
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: retrace-summary
     if: always()
     permissions:
@@ -601,15 +826,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Fail before deletion if either paginated inventory cannot be read.
+          # 50 rows per page: the jobs endpoint answers HTTP 502 for 90+ rows on a re-run attempt of a run this size.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=50" \
+            --jq '.jobs[] | select(.name | startswith("retrace (")) | select(.conclusion == "failure" or .conclusion == "canceled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name' \
+            > "${RUNNER_TEMP}/cleanup-jobs.txt"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name | startswith("MobileGL-trace-fixture-") or startswith("MobileGL-android-retrace-result-") or startswith("trace-fixture-") or startswith("retrace-result-")) | [.id, .name] | @tsv' \
+            > "${RUNNER_TEMP}/cleanup-artifacts.txt"
           declare -A failed_cases=()
           while IFS= read -r job_name; do
             case_name="${job_name#retrace (*, }"
             case_name="${case_name%)}"
             failed_cases["${case_name}"]=1
-          done < <(
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
-              --jq '.jobs[] | select(.name | startswith("retrace (")) | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name'
-          )
+          done < "${RUNNER_TEMP}/cleanup-jobs.txt"
 
           if ((${#failed_cases[@]})); then
             echo "Retaining fixtures and results for failed retrace case(s):"
@@ -652,9 +882,6 @@ jobs:
             echo "Deleting ${artifact_name} (${artifact_id})"
             gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
             ((deleted += 1))
-          done < <(
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-              --jq '.artifacts[] | select(.name | startswith("MobileGL-trace-fixture-") or startswith("MobileGL-android-retrace-result-") or startswith("trace-fixture-") or startswith("retrace-result-")) | [.id, .name] | @tsv'
-          )
+          done < "${RUNNER_TEMP}/cleanup-artifacts.txt"
 
           echo "Deleted ${deleted} intermediate Android artifact(s); retained ${retained} failed-retrace fixture(s)."

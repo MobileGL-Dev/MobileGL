@@ -68,8 +68,7 @@ namespace {
         ForEachInstruction(spirv, [&](spv::Op opcode, const Uint32* words, Uint32 wordCount) {
             if (opcode != spv::Op::OpCapability || wordCount < 2u) return;
             const auto capability = static_cast<spv::Capability>(words[1]);
-            if (capability >= spv::Capability::GroupNonUniform &&
-                capability <= spv::Capability::GroupNonUniformQuad) {
+            if (capability >= spv::Capability::GroupNonUniform && capability <= spv::Capability::GroupNonUniformQuad) {
                 ++count;
             }
         });
@@ -97,10 +96,10 @@ namespace {
 
     bool Validates(const Vector<Uint32>& spirv) {
         spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
-        tools.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t& position,
-                                    const char* message) {
-            ADD_FAILURE() << "spirv-val at word " << position.index << ": " << message;
-        });
+        tools.SetMessageConsumer(
+            [](spv_message_level_t, const char*, const spv_position_t& position, const char* message) {
+                ADD_FAILURE() << "spirv-val at word " << position.index << ": " << message;
+            });
         return tools.Validate(spirv);
     }
 
@@ -207,6 +206,24 @@ TEST(EmulateSubgroupsPass, LowersEveryCategoryToSharedMemory) {
     // The exchanges go through workgroup-shared scratch behind control barriers.
     EXPECT_TRUE(HasWorkgroupVariable(output));
     EXPECT_GT(CountOpcode(output, spv::Op::OpControlBarrier), CountOpcode(input, spv::Op::OpControlBarrier));
+}
+
+// The stale-shared-load repair: every scratch read becomes an OpAtomicLoad of a uint word
+// (floats, ints and vectors cross by bitcast), and the module still validates.
+TEST(EmulateSubgroupsPass, ReadsScratchThroughAtomicLoadsWhenAsked) {
+    const Vector<Uint32> input = CompileStage(GL_COMPUTE_SHADER, kEveryCategorySource);
+    ASSERT_FALSE(input.empty());
+
+    Vector<Uint32> plain;
+    ASSERT_TRUE(ShaderCompiler::EmulateSubgroupsForVulkan(input, plain, 16384u, true, false));
+    EXPECT_EQ(CountOpcode(plain, spv::Op::OpAtomicLoad), 0u);
+
+    Vector<Uint32> atomic;
+    ASSERT_TRUE(ShaderCompiler::EmulateSubgroupsForVulkan(input, atomic, 16384u, true, true));
+    ASSERT_TRUE(Validates(atomic));
+    EXPECT_EQ(CountGroupNonUniform(atomic), 0u);
+    EXPECT_GT(CountOpcode(atomic, spv::Op::OpAtomicLoad), 0u);
+    EXPECT_GT(CountOpcode(atomic, spv::Op::OpBitcast), CountOpcode(plain, spv::Op::OpBitcast));
 }
 
 TEST(EmulateSubgroupsPass, IsIdempotent) {

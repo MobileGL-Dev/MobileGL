@@ -1,0 +1,448 @@
+// MobileGL - MobileGL/MG_Pipe/PipeFields.def
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// Field lists for the G4 shadow comparator (plan B section 10.3-2). One macro per payload
+// in MGPipeTypes.h, listing the fields that carry MEANING - padding is deliberately absent,
+// because MOBILEGL_PIPE_VERIFY has to have ZERO false positives and a padding byte is
+// exactly what makes a memcmp of RenderStateParameters false-DIFFER
+// (DirectGLES.cpp documents that behavior where it does the same comparison itself).
+//
+// Hand maintained alongside MGPipeTypes.h, MGPipeValueTypes.h, MGPipeHostSpan.h and
+// MG_Backend/BackendFunctions.h. Adding a member to one of these structs without adding it here
+// would make the comparator blind to it, so gen_pipe.py asserts - in both modes, hence in
+// pipe-gates - that every list below names exactly the direct data members of its struct
+// (P1 brief D8; a member named Pad<n> is padding and is not listed).
+//
+// clang-format off
+
+#define MGP_FIELDS_MGPBlobRef(F) \
+    F(Offset) F(Size) F(Seg)
+
+#define MGP_FIELDS_MGPRange(F) \
+    F(Offset) F(Size)
+
+#define MGP_FIELDS_MGPBox(F) \
+    F(X) F(Y) F(Z) F(W) F(H) F(D)
+
+#define MGP_FIELDS_MGPReplySlot(F) \
+    F(Id)
+
+#define MGP_FIELDS_MGPStateChunk(F) \
+    F(Offset) F(Length)
+
+#define MGP_FIELDS_MGPHandleOnly(F) \
+    F(Handle) F(Kind)
+
+#define MGP_FIELDS_MGPCaps(F) \
+    F(Dynamic) F(CallMask) F(FormatCapabilities) F(RendererInfo)
+
+// The three respecify-scope fields are listed like any other member: they occupy what used to be
+// Pad0's high byte and Pad1, and the generator's cover check only excludes members actually
+// NAMED Pad*, so leaving them out would fail --check rather than pass it. They are also real
+// G4 comparands - a verify build that let the scope differ silently would be blind to the one
+// thing that decides whether a respecify drops one pending upload or all of them.
+#define MGP_FIELDS_MGPResourceDesc(F) \
+    F(Resource) F(Target) F(StorageKind) F(BindMask) F(InternalFormat) F(Width) F(Height) F(Depth) \
+    F(ArrayLayers) F(Levels) F(Samples) F(FixedSampleLocations) F(Immutable) F(Usage) F(StorageFlags) \
+    F(HasDefinedContent) F(ImageBindableHint) F(HasRespecifiedLevel) F(GlNameForDiag) \
+    F(RespecifiedUploadTarget) F(RespecifiedLevel) F(ViewOf) F(BufferForTexBuffer) \
+    F(BufOffset) F(BufSize)
+
+#define MGP_FIELDS_MGPFenceWait(F) \
+    F(Fence) F(TimeoutNs) F(Flags)
+
+#define MGP_FIELDS_MGPQueryDesc(F) \
+    F(Query) F(Kind) F(Stream)
+
+#define MGP_FIELDS_MGPQueryResultRequest(F) \
+    F(Query) F(Wait)
+
+#define MGP_FIELDS_MGPTimestampRequest(F) \
+    F(Reserved)
+
+#define MGP_FIELDS_MGPRenderStateDesc(F) \
+    F(Cso) F(BaseCso) F(ChunkMask) F(Blob)
+
+#define MGP_FIELDS_MGPBindRenderState(F) \
+    F(Cso) F(Version) F(PipelineVersion)
+
+#define MGP_FIELDS_MGPDynamicState(F) \
+    F(ChunkMask) F(Version) F(Blob)
+
+#define MGP_FIELDS_MGPVertexElements(F) \
+    F(Cso) F(AttributeCount) F(BindingPointCount) F(Blob)
+
+#define MGP_FIELDS_MGPSamplerDesc(F) \
+    F(Cso) F(Parameters)
+
+#define MGP_FIELDS_MGPSamplerView(F) \
+    F(Cso) F(Texture) F(InternalFormat) F(Target) F(MinLevel) F(NumLevels) F(MinLayer) F(NumLayers) \
+    F(Samples) F(FixedSampleLocations)
+
+// P4a, D-E1: BuiltinSampler and SamplerResync. Pad0 stays unlisted - gen_pipe.py's
+// PADDING_MEMBER_RE (^Pad\d*$) excludes it, and a member that stops being called Pad<n> MUST
+// gain a row here or pipe-gates goes red.
+#define MGP_FIELDS_MGPTextureParams(F) \
+    F(Res) F(BuiltinSampler) F(BaseLevel) F(MaxLevel) F(Swizzle) F(DepthStencilMode) F(ForceResync) \
+    F(SamplerResync) F(MinLod) F(MaxLod) F(LodBias)
+
+#define MGP_FIELDS_MGPProgramDesc(F) \
+    F(Cso) F(StageMask) F(GlobalUboSize) F(ReservedNumSamplesOffset) F(SpirvStatus) F(NativeFloat64) \
+    F(PointSizeDemoted) F(EnableSpirvValidation) F(LinkStatus) F(Spirv) F(Reflection)
+
+// P4a, ID-12 / esprytobj DV-5: Pad0 became Uint16 TextureTarget. Same trip wire as
+// MGPFramebufferState's Target below - PADDING_MEMBER_RE only excludes a member still NAMED
+// Pad<n>, so the rename without this row is a pipe-gates failure, and the row without the
+// rename is one too. A meaning-carrying byte cannot enter this record silently.
+#define MGP_FIELDS_MGPSurface(F) \
+    F(Res) F(InternalFormat) F(Kind) F(Layered) F(Level) F(Layer) F(UploadTarget) F(TextureTarget)
+
+// P4a, D-C2: Pad0 became Uint8 Target, and gen_pipe.py's PADDING_MEMBER_RE only excludes a
+// member still NAMED Pad<n> - so the rename without this row is a pipe-gates failure, which
+// is exactly the trip wire that makes the byte impossible to add silently.
+#define MGP_FIELDS_MGPFramebufferState(F) \
+    F(Fbo) F(Color) F(Depth) F(Stencil) F(ReadSurface) F(DrawBuffers) F(Width) F(Height) F(Layers) \
+    F(Samples) F(FixedSampleLocations) F(IsDefault) F(Complete) F(Target) F(ContentHash)
+
+#define MGP_FIELDS_MGPVertexBuffer(F) \
+    F(Res) F(Offset) F(Stride) F(Divisor) F(BindingIndex)
+
+#define MGP_FIELDS_MGPVertexBuffers(F) \
+    F(Start) F(Count) F(BaseInstance) F(ContentHash)
+
+#define MGP_FIELDS_MGPIndexBuffer(F) \
+    F(Res) F(Offset) F(IndexSize)
+
+#define MGP_FIELDS_MGPIndirectBuffers(F) \
+    F(DrawIndirect) F(Parameter)
+
+#define MGP_FIELDS_MGPBoundView(F) \
+    F(View) F(Texture) F(Unit)
+
+#define MGP_FIELDS_MGPSamplerViews(F) \
+    F(Start) F(Count) F(ContentHash)
+
+#define MGP_FIELDS_MGPSamplerStates(F) \
+    F(Start) F(Count) F(ContentHash)
+
+#define MGP_FIELDS_MGPImageView(F) \
+    F(Res) F(Unit) F(InternalFormat) F(Layer) F(Level) F(Layered) F(Access)
+
+#define MGP_FIELDS_MGPShaderImages(F) \
+    F(Start) F(Count) F(ContentHash)
+
+#define MGP_FIELDS_MGPBufferRange(F) \
+    F(Res) F(Offset) F(Size)
+
+#define MGP_FIELDS_MGPShaderBuffers(F) \
+    F(Class) F(Start) F(Count) F(WritableMask) F(HostSpanCount) F(ContentHash)
+
+#define MGP_FIELDS_MGPStreamOutputTargets(F) \
+    F(Count) F(Generation) F(ContentHash)
+
+// P5e (docs/archive/contracts/CONTRACT-P5E.md §1): set_program_bindings and its two tail element types. The
+// third tail's element embeds an MGHostSpan, which has a list of its own below, so the
+// comparator sees the NAME SPAN's four members rather than memcmp'ing a struct with a pointer
+// and a pad word in it - the exact false-difference MGPSamplerDesc's blob used to produce.
+#define MGP_FIELDS_MGPProgramBindings(F) \
+    F(Cso) F(Signature) F(BlockBindingCount) F(SamplerUnitCount) F(StorageOverrideCount)
+
+#define MGP_FIELDS_MGPProgramSamplerUnit(F) \
+    F(Location) F(Unit)
+
+#define MGP_FIELDS_MGPProgramStorageOverride(F) \
+    F(Name) F(Binding)
+
+#define MGP_FIELDS_MGPGlobalConstants(F) \
+    F(ShaderCso) F(Version) F(Range) F(Blob)
+
+#define MGP_FIELDS_MGPAttribValue(F) \
+    F(Location) F(ValueClass) F(FloatView) F(IntView) F(UintView)
+
+#define MGP_FIELDS_MGPVertexAttribDefaults(F) \
+    F(Mask) F(Count)
+
+#define MGP_FIELDS_MGPPixelPackState(F) \
+    F(Pack)
+
+#define MGP_FIELDS_MGPPatchState(F) \
+    F(Vertices) F(Outer) F(Inner)
+
+// P2 ratcheted ResidualValueBlock from six rows to one and P13 W3c deleted it; what stays is
+// the retired op 46's payload, which the record catalog still has to lay out.
+
+#define MGP_FIELDS_MGPResidualValueState(F) \
+    F(Version) F(Blob)
+
+#define MGP_FIELDS_MGPSubRegion(F) \
+    F(X) F(Y) F(Z) F(W) F(H) F(D) F(SrcOffset) F(SrcRowStride) F(SrcSliceStride)
+
+// 40c5443f's four appended words, in declaration order. LevelWidth/Height/Depth carry the FULL
+// staged mip extent - "mutable GL images may define a lone mip or a noncanonical mip size", so
+// the dirty box below is what CHANGED, not what exists - which is what
+// MGPWireOp::ResourceSubData's "ResourceSubData.LevelExtent" arm holds the box inside
+// (PipeWireCodec.cpp) and what StagedTextureStore derives the server row/slice strides from.
+//
+// LevelPad IS PADDING BY ROLE AND NOT BY NAME, and that is the whole reason it has a row here:
+// the cover check excuses only the members NAMED Pad<n>, so this one left out is a pipe-gates
+// failure. The row costs no false positive, because every producer builds the record as
+// `MGPSubData{}` (so the word is a deterministic zero, not an uninitialized byte) and the
+// payload rides the wire as one POD memcpy - MGP_ASSERT_POD(MGPSubData, 88) is the whole
+// record, with no untransferred tail - so both sides of a comparison read the same zero.
+#define MGP_FIELDS_MGPSubData(F) \
+    F(Res) F(Target) F(Level) F(SourceIsVerbatimLevelShadow) F(HasLiveHostWrites) F(UnionBox) \
+    F(RegionCount) F(Blob) F(LevelWidth) F(LevelHeight) F(LevelDepth) F(LevelPad)
+
+#define MGP_FIELDS_MGPSubDataComplete(F) \
+    F(Res) F(Target) F(FirstLevel) F(LevelCount) F(PullSerial)
+
+#define MGP_FIELDS_MGPFlushRange(F) \
+    F(Res) F(Offset) F(Size) F(AccessFlags)
+
+#define MGP_FIELDS_MGPReadback(F) \
+    F(Res) F(Offset) F(Size)
+
+// P5b (CONTRACT-P5B.md i1): the two GL names are the barrier-pulled lookup keys the sink
+// rebuilds the CopyImageEndpoints from; listed like any member, so a verify build sees them.
+#define MGP_FIELDS_MGPCopyRegion(F) \
+    F(Src) F(Dst) F(SrcBox) F(DstX) F(DstY) F(DstZ) F(SrcTarget) F(DstTarget) F(SrcLevel) F(DstLevel) \
+    F(SrcGlName) F(DstGlName)
+
+#define MGP_FIELDS_MGPBlit(F) \
+    F(ReadFbo) F(DrawFbo) F(SrcX0) F(SrcY0) F(SrcX1) F(SrcY1) F(DstX0) F(DstY0) F(DstX1) F(DstY1) \
+    F(Mask) F(Filter)
+
+#define MGP_FIELDS_MGPClear(F) \
+    F(Fbo) F(Kind) F(DrawBufferIndex) F(BufferMask) F(ValueClass) F(ColorValue) F(DepthValue) \
+    F(StencilValue)
+
+#define MGP_FIELDS_MGPMipPlan(F) \
+    F(Res) F(Target) F(BaseLevel) F(LevelCount)
+
+#define MGP_FIELDS_MGPReadbackInfo(F) \
+    F(Res) F(Box) F(Format) F(Type) F(Target) F(Level) F(DstOffset) F(DstSize)
+
+// P9 (CONTRACT-P9.md §1): the pack-buffer readback. Src is one field, as MGPSubData's box is.
+#define MGP_FIELDS_MGPReadbackToBuffer(F) \
+    F(Src) F(Dst) F(DstBase) F(RowStride) F(ImageStride) F(SwapGroup)
+
+#define MGP_FIELDS_MGPDrawInfo(F) \
+    F(Mode) F(IndexSize) F(Flags) F(InstanceCount) F(StartInstance) F(RestartIndex) F(DrawIdOffset) \
+    F(IndexResource) F(MinIndex) F(MaxIndex) F(XfbCpuCapturedVertices) F(NumDraws)
+
+#define MGP_FIELDS_MGPDrawRange(F) \
+    F(Start) F(Count) F(IndexBias)
+
+#define MGP_FIELDS_MGPDrawIndirect(F) \
+    F(Buffer) F(ParameterBuffer) F(Offset) F(ParameterOffset) F(Stride) F(DrawCount)
+
+#define MGP_FIELDS_MGPGridInfo(F) \
+    F(GridX) F(GridY) F(GridZ) F(BlockX) F(BlockY) F(BlockZ) F(IndirectBuffer) F(IndirectOffset) \
+    F(IsIndirect)
+
+#define MGP_FIELDS_MGPMemoryBarrier(F) \
+    F(Bits) F(ByRegion)
+
+#define MGP_FIELDS_MGPStreamOutputBegin(F) \
+    F(PrimitiveMode) F(CaptureProgram) F(LifetimeId) F(Targets)
+
+#define MGP_FIELDS_MGPXfbAccounting(F) \
+    F(CapturedVertices) F(PrimitivesWritten) F(PrimitiveMode)
+
+#define MGP_FIELDS_MGPStreamOutputControl(F) \
+    F(Reserved)
+
+#define MGP_FIELDS_MGPFlush(F) \
+    F(Flags)
+
+#define MGP_FIELDS_MGPPresent(F) \
+    F(FrameSerial) F(DamageCount) F(Damage)
+
+#define MGP_FIELDS_MGPSwapInterval(F) \
+    F(Interval)
+
+#define MGP_FIELDS_MGPSurfaceInfo(F) \
+    F(Width) F(Height) F(InternalFormat) F(Samples) F(Layers) F(IsDefault)
+
+// ---- P5b's five appended rows (docs/archive/contracts/CONTRACT-P5B.md). Pad-named members excluded, as
+// everywhere; MGPStorageBlockBinding's Name is an MGPBlobRef and recurses into that list.
+
+#define MGP_FIELDS_MGPImageBind(F) \
+    F(Res) F(Unit) F(GlName) F(Level) F(Layer) F(Access) F(Format) F(Layered)
+
+#define MGP_FIELDS_MGPPatchParameter(F) \
+    F(Pname) F(Value)
+
+#define MGP_FIELDS_MGPStreamOutputBind(F) \
+    F(GlName) F(LifetimeId)
+
+#define MGP_FIELDS_MGPStorageBlockBinding(F) \
+    F(ShaderCso) F(GlName) F(Binding) F(Name)
+
+#define MGP_FIELDS_MGPCopyFromFramebuffer(F) \
+    F(Dst) F(Target) F(Level) F(InternalFormat) F(X) F(Y) F(Width) F(Height) F(XOffset) F(YOffset) \
+    F(SubImage)
+
+// ---- P5c's two appended rows (docs/archive/contracts/CONTRACT-P5C.md §5). object_death's payload IS
+// MGPHandleOnly, whose list already exists above; applier_reset's is one field.
+
+#define MGP_FIELDS_MGPApplierReset(F) \
+    F(ContextSerial)
+
+// P14 S1: bind_context's POD, one row for its one member.
+#define MGP_FIELDS_MGPBindContext(F) \
+    F(ClientContextToken)
+
+// shared_image's POD.
+#define MGP_FIELDS_MGPSharedImageOp(F) \
+    F(Op) F(Format) F(Width) F(Height) F(ImageId) F(Texture) F(DamageCount) F(Damage)
+
+// P5c rv (CONTRACT-P5C.md §5.3): set_context_values' POD, one row per member. The 15-entry
+// array is one field, exactly as MGPFramebufferState's Color[8] is one.
+#define MGP_FIELDS_MGPContextValues(F) \
+    F(ActiveTextureUnit) F(MaxTouchedTextureUnit) F(TouchedBufferBindingPointCount) \
+    F(IsTransformFeedbackActive) F(IsTransformFeedbackPaused) \
+    F(TransformFeedbackGeneration) F(BoundTransformFeedbackLifetimeId) \
+    F(TransformFeedbackCapturedVertices)
+
+// ---- the value structs and the host span (P1 brief D8). Not call payloads themselves, but
+// members of ones (ResidualValueBlock, MGPPixelPackState, MGPCaps) and of PipeInputs, so the
+// comparator has to see INTO them: with these lists the memcmp fallback of MGPipeFieldEqual is
+// gone (a struct without a list is a compile error), and gen_pipe.py asserts every list names
+// every direct data member of its struct - Pad-named members are padding and excluded - so a
+// member added to RenderStateParameters without a row here fails pipe-gates.
+
+#define MGP_FIELDS_RenderStateParameters(F) \
+    F(Viewports) F(LineWidth) F(PointSize) F(PatchVertices) F(PatchDefaultOuterLevel) \
+    F(PatchDefaultInnerLevel) F(PolygonOffsetFactor) F(PolygonOffsetUnits) F(PolygonOffsetClamp) \
+    F(ClipOrigin) F(ClipDepthMode) F(BlendStates) F(LogicOp) F(DepthTestEnabled) F(DepthFunc) \
+    F(DepthMask) F(ColorMasks) F(FramebufferSrgbEnabled) F(DepthClampEnabled) \
+    F(TextureCubeMapSeamlessEnabled) F(ClearColor) F(ClearDepth) F(ClearStencil) F(BlendColor) \
+    F(DepthRanges) F(SampleCoverageValue) F(SampleCoverageInvert) F(ShadingRate) \
+    F(ShadingRateCombinerOp0) F(ShadingRateCombinerOp1) F(SampleMaskValue) \
+    F(MinSampleShadingValue) F(StencilStates) F(CullFaceEnabled) F(CullFaceModeSetting) \
+    F(FrontFaceModeSetting) F(ProvokingVertexModeSetting) F(LineSmoothHint) F(PolygonSmoothHint) \
+    F(TextureCompressionHint) F(FragmentShaderDerivativeHint) F(PointFadeThresholdSize) \
+    F(PointSpriteCoordOrigin) F(ClampReadColor) F(PolygonModeFront) F(PolygonModeBack) \
+    F(PrimitiveRestartIndex) F(ColorLogicOpEnabled) F(DebugOutputEnabled) \
+    F(DebugOutputSynchronousEnabled) F(DitherEnabled) F(LineSmoothEnabled) F(MultisampleEnabled) \
+    F(PolygonOffsetFillEnabled) F(PolygonOffsetLineEnabled) F(PolygonOffsetPointEnabled) \
+    F(PolygonSmoothEnabled) F(PrimitiveRestartEnabled) F(PrimitiveRestartFixedIndexEnabled) \
+    F(RasterizerDiscardEnabled) F(SampleAlphaToCoverageEnabled) F(SampleAlphaToOneEnabled) \
+    F(SampleCoverageEnabled) F(SampleMaskEnabled) F(SampleShadingEnabled) F(StencilTestEnabled) \
+    F(ProgramPointSizeEnabled) F(ScissorTestEnabledMask) F(ScissorBoxes) F(ScissorBoxWrittenMask) \
+    F(ClipDistanceEnabledMask)
+
+#define MGP_FIELDS_PixelStoreParameters(F) \
+    F(SwapBytes) F(LSBFirst) F(RowLength) F(ImageHeight) F(SkipPixels) F(SkipRows) F(SkipImages) \
+    F(Alignment)
+
+// P4a, D-F1: THE PADDING TRAP. SamplerParameters is sizeof == 100 with THREE BYTES OF
+// TRAILING PADDING (96 bytes of members plus the 1-byte borderColorForm) and had no field
+// table and no MGP_VERIFY_PAYLOAD_LIST row at all, so MGPSamplerDesc's blob was compared as
+// BYTES and MOBILEGL_PIPE_VERIFY could false-differ on uninitialized padding - a coin flip
+// rather than a gate. With this list the comparator sees the sixteen members and the three
+// bytes can never enter the answer. The client-side CSO cache hashes and memcmp-confirms over
+// a ZERO-INITIALIZED canonical copy for the same reason, which is the other half of D-F1.
+#define MGP_FIELDS_SamplerParameters(F) \
+    F(wrapS) F(wrapT) F(wrapR) F(minFilter) F(magFilter) F(mipmapMode) F(minLod) F(maxLod) \
+    F(lodBias) F(maxAnisotropy) F(compareFunc) F(compareMode) F(borderColor) F(borderColorI) \
+    F(borderColorUI) F(borderColorForm)
+
+#define MGP_FIELDS_PerBufferBlendState(F) \
+    F(Enabled) F(SrcFactorRGB) F(DstFactorRGB) F(SrcFactorAlpha) F(DstFactorAlpha) F(ColorEquation) \
+    F(AlphaEquation)
+
+#define MGP_FIELDS_StencilFaceState(F) \
+    F(Func) F(Ref) F(ValueMask) F(WriteMask) F(FailOp) F(PassDepthFailOp) F(PassDepthPassOp)
+
+#define MGP_FIELDS_DynamicBackendParameters(F) \
+    F(UniformBufferOffsetAlignment) F(ShaderStorageBufferOffsetAlignment) F(MaxTextureMaxAnisotropy) \
+    F(AliasedLineWidthRangeMin) F(AliasedLineWidthRangeMax) F(SmoothLineWidthRangeMin) \
+    F(SmoothLineWidthRangeMax) F(SmoothLineWidthGranularity) F(PointSizeRangeMin) \
+    F(PointSizeRangeMax) F(PointSizeGranularity) F(Max3DTextureSize) F(MaxArrayTextureLayers) \
+    F(MaxCubeMapTextureSize) F(MaxFramebufferWidth) F(MaxFramebufferHeight) F(MaxFramebufferLayers) \
+    F(MaxRenderbufferSize) F(MaxTextureSize) F(MaxColorTextureSamples) F(MaxDepthTextureSamples) \
+    F(MaxFramebufferSamples) F(MaxIntegerSamples) F(MaxSamples) F(MaxSampleMaskWords) \
+    F(MaxPatchVertices) F(MaxTessGenLevel) F(MinProgramTextureGatherOffset) \
+    F(MaxProgramTextureGatherOffset) F(MaxTextureImageUnits) F(MaxVertexTextureImageUnits) \
+    F(MaxComputeTextureImageUnits) F(MaxCombinedTextureImageUnits) F(MaxVertexAttribs) \
+    F(MaxComputeShaderStorageBlocks) F(MaxCombinedShaderStorageBlocks) \
+    F(MaxVertexShaderStorageBlocks) F(MaxTessControlShaderStorageBlocks) \
+    F(MaxTessEvaluationShaderStorageBlocks) F(MaxGeometryShaderStorageBlocks) \
+    F(MaxFragmentShaderStorageBlocks) F(MaxComputeUniformBlocks) F(MaxComputeWorkGroupInvocations) \
+    F(MaxComputeWorkGroupCount) F(MaxComputeWorkGroupSize) F(MaxShaderStorageBufferBindings) \
+    F(MaxTextureBufferSize) F(TextureBufferOffsetAlignment) F(MaxUniformBufferBindings) \
+    F(MaxUniformBlockSize) F(MaxImageUnits) F(MaxCombinedImageUniforms) F(MaxVertexImageUniforms) \
+    F(MaxTessControlImageUniforms) F(MaxTessEvaluationImageUniforms) \
+    F(MaxGeometryImageUniforms) F(MaxFragmentImageUniforms) F(MaxComputeImageUniforms) \
+    F(MaxDrawBuffers) F(MaxColorAttachments) F(MaxClipDistances) F(MaxCullDistances) \
+    F(MaxCombinedClipAndCullDistances) F(MaxViewports) F(LayerProvokingVertex) \
+    F(ViewportIndexProvokingVertex) F(MaxViewportWidth) F(MaxViewportHeight) \
+    F(ViewportBoundsRangeMin) F(ViewportBoundsRangeMax) F(ViewportSubpixelBits) \
+    F(MinFragmentInterpolationOffset) F(MaxFragmentInterpolationOffset) \
+    F(FragmentInterpolationOffsetBits) F(SupportsWideLines) \
+    F(SupportsDistinctDepthStencilAttachments) F(PerLayerFramebufferAttachmentTargets) \
+    F(SupportsShaderFloat64) F(SupportsFloat64VertexAttributes) F(SupportsTessellationPointSize) \
+    F(SupportsGeometryPointSize) F(MaxShaderStorageBlockSize) F(SubgroupSize) \
+    F(SubgroupSupportedStages) F(SubgroupSupportedFeatures) F(SamplePositions) \
+    F(SamplePositionCountMask) F(SubgroupQuadOperationsInAllStages) \
+    F(GpuVendor) F(SupportsFragmentShadingRate) F(SupportsPrimitiveFragmentShadingRate) \
+    F(SupportsAttachmentFragmentShadingRate) F(FragmentShadingRateNonTrivialCombiners) \
+    F(FragmentShadingRateWithShaderDepthStencilWrites) F(FragmentShadingRateWithSampleMask) \
+    F(FragmentShadingRatePrimitiveWithMultiViewport) \
+    F(FragmentShadingRateAttachmentWithDefaultFramebuffer) F(FragmentShadingRateMasks) \
+    F(MinFragmentShadingRateAttachmentTexelWidth) F(MinFragmentShadingRateAttachmentTexelHeight) \
+    F(MaxFragmentShadingRateAttachmentTexelWidth) F(MaxFragmentShadingRateAttachmentTexelHeight) \
+    F(MaxFragmentShadingRateAttachmentTexelAspectRatio) F(MaxFragmentShadingRateAttachmentLayers)
+
+#define MGP_FIELDS_MGHostSpan(F) \
+    F(Ptr) F(Seg) F(Size) F(Offset)
+
+// P3a's two vertex wire views (MGPipeValueTypes.h). They are not call payloads either: they
+// are the ELEMENTS of create_vertex_elements' blob, and the comparator has to see into them
+// for the same reason it sees into the value structs - a blob compared with memcmp would
+// false-differ on MGPVertexAttribWire::Pad0. Divisor is deliberately not in the attribute
+// list (it travels in MGPVertexBuffer) and the two Legacy* query answers are deliberately not
+// on the wire at all; both absences are argued in MGPipeValueTypes.h and both are enforced
+// here by gen_pipe.py's "every list names exactly its struct's direct members" rule.
+
+#define MGP_FIELDS_MGPVertexAttribWire(F) \
+    F(Offset) F(Stride) F(Type) F(Size) F(Enabled) F(Normalized) F(IsInteger) F(IsLong) F(IsBgra) \
+    F(BindingIndex)
+
+#define MGP_FIELDS_MGPVertexBindingPointWire(F) \
+    F(Offset) F(Stride) F(Divisor)
+
+// Every payload above, in the order the comparator is generated. Keep in sync with the
+// macros; gen_pipe.py reads THIS list to know what to emit.
+#define MGP_VERIFY_PAYLOAD_LIST(P) \
+    P(MGPBlobRef) P(MGPRange) P(MGPBox) P(MGPReplySlot) P(MGPStateChunk) P(MGPHandleOnly) P(MGPCaps) \
+    P(MGPResourceDesc) P(MGPFenceWait) P(MGPQueryDesc) P(MGPQueryResultRequest) P(MGPTimestampRequest) P(MGPRenderStateDesc) \
+    P(MGPBindRenderState) P(MGPDynamicState) P(MGPVertexElements) P(MGPSamplerDesc) P(MGPSamplerView) \
+    P(MGPTextureParams) P(MGPProgramDesc) P(MGPSurface) P(MGPFramebufferState) P(MGPVertexBuffer) \
+    P(MGPVertexBuffers) P(MGPIndexBuffer) P(MGPIndirectBuffers) P(MGPBoundView) P(MGPSamplerViews) \
+    P(MGPSamplerStates) P(MGPImageView) P(MGPShaderImages) P(MGPBufferRange) P(MGPShaderBuffers) \
+    P(MGPStreamOutputTargets) P(MGPGlobalConstants) P(MGPAttribValue) P(MGPVertexAttribDefaults) \
+    P(MGPPixelPackState) P(MGPPatchState) P(MGPResidualValueState) \
+    P(MGPSubRegion) P(MGPSubData) P(MGPSubDataComplete) P(MGPFlushRange) P(MGPReadback) \
+    P(MGPCopyRegion) P(MGPBlit) P(MGPClear) P(MGPMipPlan) P(MGPReadbackInfo) P(MGPReadbackToBuffer) \
+    P(MGPDrawInfo) \
+    P(MGPDrawRange) P(MGPDrawIndirect) P(MGPGridInfo) P(MGPMemoryBarrier) P(MGPStreamOutputBegin) \
+    P(MGPXfbAccounting) P(MGPStreamOutputControl) P(MGPFlush) P(MGPPresent) P(MGPSwapInterval) \
+    P(MGPSurfaceInfo) \
+    P(MGPImageBind) P(MGPPatchParameter) P(MGPStreamOutputBind) P(MGPStorageBlockBinding) \
+    P(MGPCopyFromFramebuffer) \
+    P(MGPApplierReset) P(MGPBindContext) P(MGPSharedImageOp) P(MGPContextValues) \
+    P(MGPProgramBindings) P(MGPProgramSamplerUnit) P(MGPProgramStorageOverride) \
+    P(RenderStateParameters) P(PixelStoreParameters) P(SamplerParameters) P(PerBufferBlendState) \
+    P(StencilFaceState) \
+    P(DynamicBackendParameters) P(MGHostSpan) \
+    P(MGPVertexAttribWire) P(MGPVertexBindingPointWire)
+
+// clang-format on

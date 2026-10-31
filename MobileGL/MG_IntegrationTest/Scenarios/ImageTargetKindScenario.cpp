@@ -32,7 +32,7 @@
 //     frontend could plausibly mishandle it. Mirroring it means a green scenario cannot be green
 //     for a reason the conformance case excludes;
 //   * glBindImageTexture with layered = GL_TRUE, which is what glBindImageTextures is specified
-//     to pass, and which is where a target kind whose layeredness a backend does not recognise
+//     to pass, and which is where a target kind whose layeredness a backend does not recognize
 //     goes wrong.
 //
 // MULTISAMPLE is the one kind that is not merely an emulation problem, and the conformance case
@@ -81,20 +81,19 @@ namespace MGITest {
         };
 
         constexpr TargetKind kKind1D{"1D", GL_TEXTURE_1D, "uimage1D", "0", false, false};
-        constexpr TargetKind kKind1DArray{"1DArray", GL_TEXTURE_1D_ARRAY, "uimage1DArray", "ivec2(0, 0)", false,
-                                          false};
+        constexpr TargetKind kKind1DArray{"1DArray", GL_TEXTURE_1D_ARRAY, "uimage1DArray", "ivec2(0, 0)", false, false};
         constexpr TargetKind kKind2D{"2D", GL_TEXTURE_2D, "uimage2D", "ivec2(0, 0)", false, false};
         constexpr TargetKind kKind2DArray{"2DArray", GL_TEXTURE_2D_ARRAY, "uimage2DArray", "ivec3(0, 0, 0)", false,
                                           false};
         constexpr TargetKind kKind3D{"3D", GL_TEXTURE_3D, "uimage3D", "ivec3(0, 0, 0)", false, false};
         constexpr TargetKind kKindBuffer{"Buffer", GL_TEXTURE_BUFFER, "uimageBuffer", "0", false, true};
         constexpr TargetKind kKindCube{"Cube", GL_TEXTURE_CUBE_MAP, "uimageCube", "ivec3(0, 0, 0)", false, false};
-        constexpr TargetKind kKindCubeArray{"CubeArray", GL_TEXTURE_CUBE_MAP_ARRAY, "uimageCubeArray",
-                                            "ivec3(0, 0, 0)", false, false};
+        constexpr TargetKind kKindCubeArray{
+            "CubeArray", GL_TEXTURE_CUBE_MAP_ARRAY, "uimageCubeArray", "ivec3(0, 0, 0)", false, false};
         constexpr TargetKind kKindRect{"Rect", GL_TEXTURE_RECTANGLE, "uimage2DRect", "ivec2(0, 0)", false, false};
         constexpr TargetKind kKind2DMS{"2DMS", GL_TEXTURE_2D_MULTISAMPLE, "uimage2DMS", "ivec2(0, 0)", true, false};
-        constexpr TargetKind kKind2DMSArray{"2DMSArray", GL_TEXTURE_2D_MULTISAMPLE_ARRAY, "uimage2DMSArray",
-                                            "ivec3(0, 0, 0)", true, false};
+        constexpr TargetKind kKind2DMSArray{
+            "2DMSArray", GL_TEXTURE_2D_MULTISAMPLE_ARRAY, "uimage2DMSArray", "ivec3(0, 0, 0)", true, false};
 
         // A multisample image load/store takes the sample index as an extra argument; no other
         // kind does. Keeping that in one place stops the two spellings drifting apart.
@@ -103,8 +102,8 @@ namespace MGITest {
         }
 
         std::string StoreStatement(const TargetKind& kind, const std::string& name, const char* value) {
-            return "imageStore(" + name + ", " + kind.coord + (kind.multisample ? ", 0, uvec4(" : ", uvec4(") +
-                   value + ", 0, 0, 0));";
+            return "imageStore(" + name + ", " + kind.coord + (kind.multisample ? ", 0, uvec4(" : ", uvec4(") + value +
+                   ", 0, 0, 0));";
         }
 
         const char* kComputePrologue = "#version 440 core\n"
@@ -128,8 +127,8 @@ namespace MGITest {
         // backend which gets the store right and the load wrong (or the reverse) is not able to
         // cancel its own defect out.
         std::string SingleStoreSource(const TargetKind& kind) {
-            return std::string(kComputePrologue) + "layout (location = 0, r32ui) writeonly uniform " +
-                   kind.imageType + " i0;\n\nvoid main()\n{\n    " + StoreStatement(kind, "i0", "13u") + "\n}\n";
+            return std::string(kComputePrologue) + "layout (location = 0, r32ui) writeonly uniform " + kind.imageType +
+                   " i0;\n\nvoid main()\n{\n    " + StoreStatement(kind, "i0", "13u") + "\n}\n";
         }
 
         // The third direction, and the one neither of the two above can stand in for: an
@@ -146,9 +145,9 @@ namespace MGITest {
         // Returns the value the texel held BEFORE the add, so one dispatch checks the atomic's
         // return value and the load case that follows checks its memory effect.
         std::string SingleAtomicSource(const TargetKind& kind) {
-            return std::string(kComputePrologue) + "layout (location = 0, r32ui) coherent uniform " +
-                   kind.imageType + " i0;\n" + kResultBlock + "void main()\n{\n    ssb.sum = imageAtomicAdd(i0, " +
-                   kind.coord + (kind.multisample ? ", 0, " : ", ") + std::to_string(kAtomicAddend) + "u);\n}\n";
+            return std::string(kComputePrologue) + "layout (location = 0, r32ui) coherent uniform " + kind.imageType +
+                   " i0;\n" + kResultBlock + "void main()\n{\n    ssb.sum = imageAtomicAdd(i0, " + kind.coord +
+                   (kind.multisample ? ", 0, " : ", ") + std::to_string(kAtomicAddend) + "u);\n}\n";
         }
 
         class ImageTargetKindScenario : public ScenarioTest {
@@ -156,9 +155,12 @@ namespace MGITest {
             void TearDown() override {
                 if (!Ready()) return;
                 glUseProgram(0);
-                for (GLuint p : m_programs) glDeleteProgram(p);
-                for (GLuint t : m_textures) glDeleteTextures(1, &t);
-                for (GLuint b : m_buffers) glDeleteBuffers(1, &b);
+                for (GLuint p : m_programs)
+                    glDeleteProgram(p);
+                for (GLuint t : m_textures)
+                    glDeleteTextures(1, &t);
+                for (GLuint b : m_buffers)
+                    glDeleteBuffers(1, &b);
                 m_programs.clear();
                 m_textures.clear();
                 m_buffers.clear();
@@ -171,8 +173,7 @@ namespace MGITest {
                     glBindImageTexture(static_cast<GLuint>(unit), 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32UI);
                 }
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             bool ImagesAreUsable() const {
@@ -180,8 +181,7 @@ namespace MGITest {
                 glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
                 GLint maxComputeImageUniforms = 0;
                 glGetIntegerv(GL_MAX_COMPUTE_IMAGE_UNIFORMS, &maxComputeImageUniforms);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxImageUnits >= 1 && maxComputeImageUniforms >= 1;
             }
 
@@ -189,8 +189,7 @@ namespace MGITest {
             bool MultisampleImagesAreUsable() const {
                 GLint maxImageSamples = 0;
                 glGetIntegerv(GL_MAX_IMAGE_SAMPLES, &maxImageSamples);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxImageSamples > 0;
             }
 
@@ -307,8 +306,8 @@ namespace MGITest {
                 case GL_TEXTURE_2D_ARRAY:
                 case GL_TEXTURE_3D:
                 case GL_TEXTURE_CUBE_MAP_ARRAY:
-                    glTexSubImage3D(kind.target, 0, 0, 0, 0, kExtent, kExtent, kExtent, GL_RED_INTEGER,
-                                    GL_UNSIGNED_INT, texels.data());
+                    glTexSubImage3D(kind.target, 0, 0, 0, 0, kExtent, kExtent, kExtent, GL_RED_INTEGER, GL_UNSIGNED_INT,
+                                    texels.data());
                     break;
                 default:
                     break;
@@ -437,7 +436,7 @@ namespace MGITest {
             // clamped, and not an error - so every one of the four rows has to read the same texel
             // out of a target that has no layers, including the two rows that name layer 1 on a
             // texture whose only layer is 0. DirectGLES used to normalize `layered` and forward
-            // `layer` verbatim; Adreno honours the bogus layer by leaving the image unit reading
+            // `layer` verbatim; Adreno honors the bogus layer by leaving the image unit reading
             // zero, which is exactly the two rows KHR-GL42.bind_image_texture.single_layer failed.
             //
             // The bindings are checked back as well, because the fix depends on WHERE the
@@ -521,26 +520,26 @@ namespace MGITest {
     // Exactly what the conformance case does with each of its eleven uniforms, but alone, so a
     // failure names the kind.
 
-#define MGL_DEFINE_LOAD_CASE(CaseName, Kind)                                                                    \
-    TEST_F(ImageTargetKindScenario, Loads##CaseName) {                                                          \
-        if (!Ready()) return;                                                                                   \
-        if (!ImagesAreUsable()) GTEST_SKIP() << "no compute image uniforms";                                    \
-        if ((Kind).multisample && !MultisampleImagesAreUsable()) {                                              \
-            GTEST_SKIP() << "GL_MAX_IMAGE_SAMPLES is 0, so the conformance case substitutes a plain 2D image "   \
-                            "here and never asks for a multisample one";                                        \
-        }                                                                                                       \
-        RunLoadCase(Kind);                                                                                      \
+#define MGL_DEFINE_LOAD_CASE(CaseName, Kind)                                                                           \
+    TEST_F(ImageTargetKindScenario, Loads##CaseName) {                                                                 \
+        if (!Ready()) return;                                                                                          \
+        if (!ImagesAreUsable()) GTEST_SKIP() << "no compute image uniforms";                                           \
+        if ((Kind).multisample && !MultisampleImagesAreUsable()) {                                                     \
+            GTEST_SKIP() << "GL_MAX_IMAGE_SAMPLES is 0, so the conformance case substitutes a plain 2D image "         \
+                            "here and never asks for a multisample one";                                               \
+        }                                                                                                              \
+        RunLoadCase(Kind);                                                                                             \
     }
 
-#define MGL_DEFINE_STORE_CASE(CaseName, Kind)                                                                   \
-    TEST_F(ImageTargetKindScenario, Stores##CaseName) {                                                         \
-        if (!Ready()) return;                                                                                   \
-        if (!ImagesAreUsable()) GTEST_SKIP() << "no compute image uniforms";                                    \
-        if ((Kind).multisample && !MultisampleImagesAreUsable()) {                                              \
-            GTEST_SKIP() << "GL_MAX_IMAGE_SAMPLES is 0, so the conformance case substitutes a plain 2D image "   \
-                            "here and never asks for a multisample one";                                        \
-        }                                                                                                       \
-        RunStoreCase(Kind);                                                                                      \
+#define MGL_DEFINE_STORE_CASE(CaseName, Kind)                                                                          \
+    TEST_F(ImageTargetKindScenario, Stores##CaseName) {                                                                \
+        if (!Ready()) return;                                                                                          \
+        if (!ImagesAreUsable()) GTEST_SKIP() << "no compute image uniforms";                                           \
+        if ((Kind).multisample && !MultisampleImagesAreUsable()) {                                                     \
+            GTEST_SKIP() << "GL_MAX_IMAGE_SAMPLES is 0, so the conformance case substitutes a plain 2D image "         \
+                            "here and never asks for a multisample one";                                               \
+        }                                                                                                              \
+        RunStoreCase(Kind);                                                                                            \
     }
 
     MGL_DEFINE_LOAD_CASE(Texture1D, kKind1D)
@@ -581,11 +580,11 @@ namespace MGITest {
     // the driver as a scalar against an iimage2D and took the whole fragment stage - and its six
     // other images - with it.
 
-#define MGL_DEFINE_ATOMIC_CASE(CaseName, Kind)                                                                  \
-    TEST_F(ImageTargetKindScenario, AtomicallyAddsTo##CaseName) {                                               \
-        if (!Ready()) return;                                                                                   \
-        if (!ImagesAreUsable()) GTEST_SKIP() << "no compute image uniforms";                                    \
-        RunAtomicCase(Kind);                                                                                    \
+#define MGL_DEFINE_ATOMIC_CASE(CaseName, Kind)                                                                         \
+    TEST_F(ImageTargetKindScenario, AtomicallyAddsTo##CaseName) {                                                      \
+        if (!Ready()) return;                                                                                          \
+        if (!ImagesAreUsable()) GTEST_SKIP() << "no compute image uniforms";                                           \
+        RunAtomicCase(Kind);                                                                                           \
     }
 
     MGL_DEFINE_ATOMIC_CASE(Texture1D, kKind1D)
@@ -597,18 +596,18 @@ namespace MGITest {
     //
     // KHR-GL42.bind_image_texture.single_layer's sweep, on the kinds whose backend target has
     // neither layers nor faces. Two of its four rows name layer 1 on a single-layer texture,
-    // which the spec says is to be ignored outright rather than honoured or rejected - and
+    // which the spec says is to be ignored outright rather than honored or rejected - and
     // which DirectGLES used to forward to the ES driver as written.
 
-#define MGL_DEFINE_LAYER_SWEEP_CASE(CaseName, Kind)                                                             \
-    TEST_F(ImageTargetKindScenario, IgnoresLayerFor##CaseName) {                                                \
-        if (!Ready()) return;                                                                                   \
-        if (!ImagesAreUsable()) GTEST_SKIP() << "no compute image uniforms";                                    \
-        if ((Kind).multisample && !MultisampleImagesAreUsable()) {                                              \
-            GTEST_SKIP() << "GL_MAX_IMAGE_SAMPLES is 0, so the conformance case substitutes a plain 2D image "  \
-                            "here and never asks for a multisample one";                                        \
-        }                                                                                                       \
-        RunNonLayerableLayerSweepCase(Kind);                                                                    \
+#define MGL_DEFINE_LAYER_SWEEP_CASE(CaseName, Kind)                                                                    \
+    TEST_F(ImageTargetKindScenario, IgnoresLayerFor##CaseName) {                                                       \
+        if (!Ready()) return;                                                                                          \
+        if (!ImagesAreUsable()) GTEST_SKIP() << "no compute image uniforms";                                           \
+        if ((Kind).multisample && !MultisampleImagesAreUsable()) {                                                     \
+            GTEST_SKIP() << "GL_MAX_IMAGE_SAMPLES is 0, so the conformance case substitutes a plain 2D image "         \
+                            "here and never asks for a multisample one";                                               \
+        }                                                                                                              \
+        RunNonLayerableLayerSweepCase(Kind);                                                                           \
     }
 
     MGL_DEFINE_LAYER_SWEEP_CASE(Texture2D, kKind2D)
@@ -643,7 +642,7 @@ namespace MGITest {
         // at index five and drop it on exactly the devices most likely to get it wrong. A test
         // that quietly stops covering its own subject is worse than one that fails.
         const bool multisample = MultisampleImagesAreUsable();
-        std::vector<TargetKind> kinds{kKind1DArray, kKindBuffer, kKind2D,   kKind1D,      kKind2DArray,
+        std::vector<TargetKind> kinds{kKind1DArray, kKindBuffer, kKind2D,   kKind1D,       kKind2DArray,
                                       kKind3D,      kKindCube,   kKindRect, kKindCubeArray};
         if (multisample) {
             kinds.push_back(kKind2DMS);
@@ -654,11 +653,9 @@ namespace MGITest {
         glGetIntegerv(GL_MAX_COMPUTE_IMAGE_UNIFORMS, &maxComputeImageUniforms);
         GLint maxImageUnits = 0;
         glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
-        while (glGetError() != GL_NO_ERROR) {
-        }
-        const std::size_t count =
-            std::min<std::size_t>(kinds.size(), static_cast<std::size_t>(std::max(0, std::min(maxComputeImageUniforms,
-                                                                                              maxImageUnits))));
+        while (glGetError() != GL_NO_ERROR) {}
+        const std::size_t count = std::min<std::size_t>(
+            kinds.size(), static_cast<std::size_t>(std::max(0, std::min(maxComputeImageUniforms, maxImageUnits))));
         if (count == 0) GTEST_SKIP() << "no image units";
         // Named, not silently dropped: `expected` is computed over whatever survives, so a
         // truncated run is self-consistently green and would otherwise never say what it stopped

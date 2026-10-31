@@ -9,6 +9,7 @@
 #pragma once
 #include <Includes.h>
 #include "../BackendObject.h"
+#include "MagmaSession.h"
 #include <MG_Util/BackendLoaders/Vulkan/Loader.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -17,15 +18,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // initialization; the physical device must remain valid for the duration of the call.
     void PopulateFormatCapabilities(VkPhysicalDevice physicalDevice,
                                     PFN_vkGetPhysicalDeviceFormatProperties getFormatProperties,
-                                    const MG_External::VulkanCapabilities& capabilities,
-                                    FormatCapabilityCache& cache);
+                                    const MG_External::VulkanCapabilities& capabilities, FormatCapabilityCache& cache);
 
-    class BackendObject_DirectVulkan : public BackendObject {
+    class BackendObject_DirectVulkan : public BackendObject, public ServerHooks {
     public:
         BackendObject_DirectVulkan();
         ~BackendObject_DirectVulkan() override;
 
+        ServerHooks* AsServer() override { return this; }
+
         void Initialize() override;
+        void BindSessionStateToThisThread() override;
+        // The GPU hang watch's verdict on this session's device (VulkanRenderer::LatchIfGpuHung).
+        Bool LatchIfGpuFaulted() override;
+        void OnClientContextBound(Uint64 token) override;
         Bool InitWindowSurface() override;
         Bool InitCapabilities() override;
         Bool InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) override;
@@ -35,8 +41,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) override;
         Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) override;
         void SetEGLSwapInterval(Int interval) override;
+        Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image,
+                                                 const MG_Util::Damage::Region& region) override;
+        // The active surface target's swapchain image ages (VulkanRenderer::CurrentDrawBufferAge).
+        Int32 QueryCurrentBufferAge(Bool damageRegionFollows) override;
+        // A glFlush that ends a shared-image producer's frame (VulkanRenderer::PublishSharedImageAccesses).
+        Bool PublishSharedImageAccesses() override;
+        // An EGL native fence of the session's work (VulkanRenderer::ExportNativeFence).
+        Bool ExportNativeFence(int* fence) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
+        // The server window going and coming back: the window surface's target (VkSurfaceKHR,
+        // swapchain) is destroyed and a pbuffer target of the same extent stands in for it, and back.
+        Bool SuspendServerWindow(void* window) override;
+        Bool ResumeServerWindow(void* window, Uint32 width, Uint32 height) override;
+        Bool ServerWindowResized(void* window, Uint32 width, Uint32 height) override;
 
         const RendererInfo& GetRendererInfo() const override;
         String GetBackendAPIVersionString() const override;
@@ -48,6 +67,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     private:
         Bool InitPbufferSurface(EGLint width, EGLint height) override;
         void OnEGLSurfaceReleased(EGLSurface surface) override;
+        void OnEGLSurfaceForgotten(EGLSurface surface) override;
+        // A served session keeps one renderer across all its client's surfaces and switches the
+        // renderer's surface target instead (VulkanRenderer::ActivateSurfaceTarget).
+        Bool UsesSurfaceTargets() const;
+        static Uint64 SurfaceTargetKey(EGLSurface surface) { return reinterpret_cast<Uint64>(surface); }
         void UpdateAdvertisedExtensions();
         void UpdateDynamicBackendParameters();
 
@@ -55,6 +79,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DynamicBackendParameters m_dynamicParameters;
         MG_External::VulkanCapabilities m_vulkanCaps;
         RendererInfo m_rendererInfo;
+        // A served session's own copy of Magma's per-process state (MagmaSession.h), bound to its
+        // apply thread. Null in the monolith and every other single-session shape.
+        UniquePtr<MagmaSession> m_magmaSession;
+        // The binding each client context was last made current with, for OnClientContextBound.
+        UnorderedMap<EGLContext, EGLSurfaceRegistry::CurrentState> m_contextBindings;
+        // Window surfaces whose window is gone (SuspendServerWindow), with the extent their
+        // placeholder pbuffer target is built at - the window's, so the default framebuffer the
+        // client knows keeps its size.
+        struct SuspendedWindowSurface {
+            Uint32 Width = 1;
+            Uint32 Height = 1;
+        };
+        UnorderedMap<EGLSurface, SuspendedWindowSurface> m_suspendedWindowSurfaces;
+        // The placeholder pbuffer target of a suspended surface, made active. False: it could not be built.
+        Bool ActivateSuspendedPlaceholder(EGLSurface surface, const SuspendedWindowSurface& extent);
     };
 
     // Single-source-of-truth helpers shared with the driver POST
@@ -71,13 +110,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     const RendererInfo& GetRendererIdentity();
 
     // The full OpenGL extension list Magma advertises (glGetString(GL_EXTENSIONS)) for
-    // a device with the given raw capabilities. The MOBILEGL_MAGMA_DISABLE_SUBGROUP and
-    // MOBILEGL_DISABLE_TIMERQUERY escape hatches are applied inside, so callers pass
-    // the detected device support (passing an already-gated value is harmless).
+    // a device with the given raw capabilities. The MOBILEGL_DISABLE_TIMERQUERY escape hatch
+    // is applied inside, so callers pass the detected device support (passing an
+    // already-gated value is harmless). `shaderSubgroupSupported` is whether
+    // GL_KHR_shader_subgroup is offered at all, natively or emulated.
     Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
                                                   Bool anisotropicFilteringSupported,
-                                                  Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool cubeMapArraySupported);
+                                                  Bool nonZeroIndirectBaseInstanceSupported, Bool cubeMapArraySupported,
+                                                  const AdvertisedFeatureSupport& features = {});
 
     // Format: <GPU Name>, Vulkan <Vulkan Version>, Driver <Driver Version> — the exact
     // string an initialized backend returns from GetBackendAPIVersionString (and that

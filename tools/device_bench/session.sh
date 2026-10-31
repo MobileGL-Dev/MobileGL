@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# MobileGL - tools/device_bench/session.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # Launch the game into the benchmark world and leave it running (for profiling
 # or ad-hoc probing). Handles the flaky-launch failure mode seen on Odin Lite:
 # the JVM occasionally dies with "exited due to signal 34" right after
@@ -7,6 +15,7 @@
 #
 # Usage: session.sh --device devices/odinlite.env [--backend magma|espryt|mobileglues]
 #                   [--settle 150] [--retries 3] [--no-pin]
+#                   [--allow-unverified-profile]
 # Exits 0 with the game in-world (after settle seconds), 1 otherwise.
 # NOTE: leaves the game running AND the frequency pins active (that is the
 # point of a session). When done: am force-stop the game and unpin via
@@ -15,6 +24,9 @@
 # cleanup unpins).
 
 set -u -o pipefail
+# Remembered BEFORE the cd, so a --device path written relative to the caller's directory still
+# resolves instead of being reported as an unverified profile (see bench.sh).
+INVOKED_FROM=$PWD
 cd "$(dirname "$0")"
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 
@@ -24,7 +36,7 @@ RENDERER_ESPRYT=5e273ee2-baca-4c81-8e48-b63feefb9ba8
 RENDERER_MAGMA=2be0dc10-1eef-4ce2-b512-b266dd33fd9e
 RENDERER_MOBILEGLUES=com.fcl.plugin.mobileglues
 
-DEVICE_ENV="" BACKEND="" SETTLE=150 RETRIES=3 DO_PIN=1
+DEVICE_ENV="" BACKEND="" SETTLE=150 RETRIES=3 DO_PIN=1 ALLOW_UNVERIFIED_PROFILE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --device) DEVICE_ENV=$2; shift 2 ;;
@@ -32,12 +44,57 @@ while [ $# -gt 0 ]; do
     --settle) SETTLE=$2; shift 2 ;;
     --retries) RETRIES=$2; shift 2 ;;
     --no-pin) DO_PIN=0; shift ;;
+    --allow-unverified-profile) ALLOW_UNVERIFIED_PROFILE=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 [ -n "$DEVICE_ENV" ] || { echo "need --device" >&2; exit 2; }
+case "$DEVICE_ENV" in
+  /*) ;;
+  *) [ -r "$DEVICE_ENV" ] || [ ! -r "$INVOKED_FROM/$DEVICE_ENV" ] || DEVICE_ENV="$INVOKED_FROM/$DEVICE_ENV" ;;
+esac
+[ -r "$DEVICE_ENV" ] || {
+  echo "cannot read the device profile: $DEVICE_ENV" >&2
+  echo "(tried it relative to $(pwd) and to $INVOKED_FROM)" >&2
+  exit 2
+}
+# The profile, and ONLY the profile, gets to say whether it has been verified: reset before the
+# source, so an exported PROFILE_VERIFIED=1 cannot answer for a profile that says nothing.
+PROFILE_VERIFIED=0
 # shellcheck disable=SC1090
 . "$DEVICE_ENV"
+
+# A device profile that has not been read off its device yet is refused here rather than acted
+# on. The failure it prevents is silent and expensive: the pin path below is MediaTek-specific
+# (/proc/ppm, /proc/gpufreq), `su -c 'echo ... > /proc/...'` fails without a non-zero exit, and a
+# run against a profile whose nodes do not exist reports numbers it believes were taken under a
+# frequency pin. The pin-integrity fields sampled at window end are the only clue, and they are
+# read after the run rather than before it.
+#
+# PROFILE_VERIFIED=1 means: somebody read the cpufreq policies, the GPU OPP and the thermal zone
+# TYPE off THIS device, ran one pinned window, and checked big_cur/little_cur/gpu_cur_khz in the
+# result JSON against the pins. Nothing else earns it.
+require_verified_profile() {
+  # The default is UNVERIFIED. A profile that simply omits the key is a profile nobody has
+  # confirmed against its device, and defaulting it to "verified" would hand exactly the
+  # fail-open behavior this guard exists to prevent to the most likely way a new profile is
+  # written - by copying an existing one and editing the serial. The variable is reset to 0
+  # immediately before the profile is sourced, so this test reads the FILE and not the shell.
+  if [ "${PROFILE_VERIFIED:-0}" = "1" ]; then return 0; fi
+  if [ "$ALLOW_UNVERIFIED_PROFILE" = "1" ]; then
+    echo "[warn] $DEVICE_ENV does not carry PROFILE_VERIFIED=1 and --allow-unverified-profile was passed:" >&2
+    echo "[warn] the frequency pins and the thermal gate in it are UNCONFIRMED, so any number this" >&2
+    echo "[warn] run produces is not comparable with a pinned one." >&2
+    return 0
+  fi
+  echo "$DEVICE_ENV does not carry PROFILE_VERIFIED=1 (it says 0, or says nothing at all): its" >&2
+  echo "sysfs nodes and OPPs have not been read off the device, so pinning would fail silently" >&2
+  echo "and the run would look pinned but not be." >&2
+  echo "Fill in the TODO_VERIFY_ON_DEVICE fields, confirm one pinned window, set PROFILE_VERIFIED=1 -" >&2
+  echo "or pass --allow-unverified-profile to measure anyway and label the result unpinned." >&2
+  exit 2
+}
+require_verified_profile
 ADB="adb -s $DEVICE_SERIAL"
 log() { echo "[session] $*" >&2; }
 

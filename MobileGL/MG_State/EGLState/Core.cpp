@@ -8,6 +8,14 @@
 
 #include "Core.h"
 #include <EGL/eglext.h>
+#include <MG_Util/X11/DisplayGuard.h>
+
+#include <cerrno>
+#include <climits>
+#if !defined(_WIN32)
+#include <poll.h>
+#include <unistd.h>
+#endif
 
 namespace MobileGL {
     namespace MG_State {
@@ -33,7 +41,9 @@ namespace MobileGL {
                 EGLint QueryDefaultX11VisualId() {
 #if defined(__linux__) && !defined(__ANDROID__)
                     const char* displayName = std::getenv("DISPLAY");
-                    if (!displayName) {
+                    // Never the display this process serves: an X server drawing with MobileGL
+                    // (Xwayland's glamor) would wait on its own socket (MG_Util/X11/DisplayGuard.h).
+                    if (!displayName || !MG_Util::X11::MayDialX11Display(displayName)) {
                         return 0;
                     }
 
@@ -152,6 +162,19 @@ namespace MobileGL {
 
                 displayObject.Configs.push_back(CreateDefaultConfig(display, 1, 0));
                 displayObject.Configs.push_back(CreateDefaultConfig(display, 2, 8));
+#if !defined(ANDROID) && !defined(__ANDROID__)
+                // The X visual only means something on an X display: the default display (which is
+                // DISPLAY's) or an explicit X11 one. Asking the X server on any other platform
+                // costs a connection a Wayland/GBM/surfaceless client never needed - and an X
+                // server that is itself creating this display (a rootless X server's GL
+                // acceleration) would be waiting on its own connection.
+                constexpr EGLenum kPlatformX11 = 0x31D5;
+                if (platform == EGL_NONE || platform == kPlatformX11) {
+                    const EGLint visualId = QueryDefaultX11VisualId();
+                    for (const auto config : displayObject.Configs)
+                        m_configs[config].NativeVisualId = visualId;
+                }
+#endif
 
                 m_displays[display] = displayObject;
                 m_displayLookup[key] = display;
@@ -174,7 +197,7 @@ namespace MobileGL {
                     .RenderableType = EGL_OPENGL_BIT | EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT,
                     .MinSwapInterval = 0,
                     .MaxSwapInterval = 4,
-                    .NativeVisualId = QueryDefaultX11VisualId(),
+                    .NativeVisualId = 0, // the display's X visual, set by GetOrCreateDisplay
                 };
 #if defined(ANDROID) || defined(__ANDROID__)
                 cfg.NativeVisualId = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
@@ -208,6 +231,55 @@ namespace MobileGL {
                 return it == m_surfaces.end() ? nullptr : &it->second;
             }
 
+            namespace {
+                void CloseNativeFd(int fd) {
+#if !defined(_WIN32)
+                    if (fd >= 0) ::close(fd);
+#else
+                    (void)fd;
+#endif
+                }
+
+                // Waits up to `timeoutMs` (negative: for ever) for a sync_file to signal; an absent
+                // descriptor has. False on timeout.
+                Bool WaitNativeFd(int fd, int timeoutMs) {
+#if !defined(_WIN32)
+                    if (fd < 0) return true;
+                    pollfd entry{fd, POLLIN, 0};
+                    for (;;) {
+                        const int ready = ::poll(&entry, 1, timeoutMs);
+                        if (ready > 0) return true;
+                        if (ready == 0) return false;
+                        if (errno != EINTR && errno != EAGAIN) return true; // not a fence that can block
+                    }
+#else
+                    (void)fd, (void)timeoutMs;
+                    return true;
+#endif
+                }
+
+                int DupNativeFd(int fd) {
+#if !defined(_WIN32)
+                    return fd >= 0 ? ::dup(fd) : -1;
+#else
+                    (void)fd;
+                    return -1;
+#endif
+                }
+
+                // EGLTimeKHR nanoseconds as a poll timeout, rounded up; EGL_FOREVER waits for ever.
+                int NativeWaitTimeoutMs(EGLTime timeout) {
+                    if (timeout == EGL_FOREVER) return -1;
+                    const EGLTime ms = timeout / 1000000u + (timeout % 1000000u != 0 ? 1u : 0u);
+                    return ms > static_cast<EGLTime>(INT_MAX) ? INT_MAX : static_cast<int>(ms);
+                }
+
+                // A server wait on a native fence is a wait of the calling thread: nothing it issues
+                // later reaches the server before the fence signals. Bounded, so a fence that never
+                // signals costs a stall rather than the application.
+                constexpr int kNativeServerWaitMs = 2000;
+            } // namespace
+
             const EGLContext::SyncObject* EGLContext::TryGetSync(EGLSyncHandle sync) const {
                 auto it = m_syncs.find(sync);
                 return it == m_syncs.end() ? nullptr : &it->second;
@@ -233,9 +305,44 @@ namespace MobileGL {
                         m_contextOwners.erase(ownerIt);
                     }
                 }
+                // P14 S3: the thread's GL state goes back to what it was before this EGL
+                // context was made current on it.
+                //
+                // A THREAD THAT HAD NONE (one that never had GL state before its first bind) GOES
+                // TO THE PROCESS DEFAULT, never keeps the released context's. Keeping it made the
+                // thread's TLS the last owner of a context destroyed after the release, so the
+                // context's objects ended in the thread-exit destructor of that TLS: outside every
+                // entry point and its lock, writing their records into the middle of another
+                // thread's - torn records, a reply read from the wrong slot, a lost session.
+#if MOBILEGL_BUILD_DISAGGREGATED
+                {
+                    const auto released = context != nullptr ? m_contexts.find(context) : m_contexts.end();
+                    tThreadReleasedLostContext = !currentIt->second.RestoreThreadGLState &&
+                                                 released != m_contexts.end() && released->second.GLStateObject &&
+                                                 released->second.GLStateObject->IsFromEndedWireSession();
+                }
+#endif
+                pGLContext = currentIt->second.RestoreThreadGLState ? Move(currentIt->second.RestoreThreadGLState)
+                                                                    : ProcessDefaultGLContext();
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // A fallback built against a server session that has since ended (a device loss,
+                // recovered) is lost with it: the thread falls back to today's default.
+                if (pGLContext->IsFromEndedWireSession()) pGLContext = ProcessDefaultGLContext();
+#endif
                 m_threadCurrents.erase(currentIt);
                 DestroyPendingSurfaceIfUnused(drawSurface);
                 DestroyPendingSurfaceIfUnused(readSurface);
+                // A context destroyed while it was current is destroyed now that nothing has it
+                // current; the caller finishes it (TakeReapedContexts).
+                if (context != nullptr && m_contextOwners.find(context) == m_contextOwners.end()) {
+                    const auto contextIt = m_contexts.find(context);
+                    if (contextIt != m_contexts.end() && contextIt->second.DestroyPending) {
+                        m_reapedContexts.push_back(ReapedContext{context, contextIt->second.ClientContextToken,
+                                                                 contextIt->second.ShareGroupToken,
+                                                                 Move(contextIt->second.GLStateObject)});
+                        m_contexts.erase(contextIt);
+                    }
+                }
             }
 
             Bool EGLContext::IsSurfaceCurrentUnlocked(EGLSurfaceHandle surface) const {
@@ -284,6 +391,7 @@ namespace MobileGL {
 
                 for (auto syncIt = m_syncs.begin(); syncIt != m_syncs.end();) {
                     if (syncIt->second.Display == display) {
+                        CloseNativeFd(syncIt->second.NativeFd);
                         syncIt = m_syncs.erase(syncIt);
                     } else {
                         ++syncIt;
@@ -292,6 +400,14 @@ namespace MobileGL {
 
                 for (auto imageIt = m_images.begin(); imageIt != m_images.end();) {
                     if (imageIt->second.Display == display) {
+                        // Only a reference the current session holds is owed a release there.
+#if MOBILEGL_BUILD_DISAGGREGATED
+                        const Bool currentSession = imageIt->second.Shared.WireEpoch == CurrentWireEpoch();
+#else
+                        constexpr Bool currentSession = true;
+#endif
+                        if (imageIt->second.Shared.Id != 0 && currentSession)
+                            m_orphanedSharedImages.push_back(imageIt->second.Shared.Id);
                         imageIt = m_images.erase(imageIt);
                     } else {
                         ++imageIt;
@@ -305,6 +421,12 @@ namespace MobileGL {
                             if (ownerIt != m_contextOwners.end() && ownerIt->second == threadIt->first) {
                                 m_contextOwners.erase(ownerIt);
                             }
+                        }
+                        // Only the CALLING thread's TLS is reachable from here - another
+                        // thread's current is dropped from the table, and its own next EGL
+                        // call re-establishes the binding.
+                        if (threadIt->first == CurrentThreadKey() && threadIt->second.RestoreThreadGLState) {
+                            pGLContext = Move(threadIt->second.RestoreThreadGLState);
                         }
                         threadIt = m_threadCurrents.erase(threadIt);
                     } else {
@@ -332,6 +454,16 @@ namespace MobileGL {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 const auto* displayObject = TryGetDisplay(display);
                 return displayObject && displayObject->Initialized;
+            }
+
+            Bool EGLContext::GetDisplayNative(EGLDisplayHandle display, Uint64* nativeDisplayKey,
+                                              EGLenum* platform) const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto* displayObject = TryGetDisplay(display);
+                if (!displayObject) return false;
+                *nativeDisplayKey = displayObject->NativeDisplayKey;
+                *platform = displayObject->Platform;
+                return true;
             }
 
             Bool EGLContext::InitializeDisplay(EGLDisplayHandle display, EGLint* major, EGLint* minor) {
@@ -613,8 +745,8 @@ namespace MobileGL {
             }
 
             EGLContext::EGLContextHandle EGLContext::CreateContext(EGLDisplayHandle display, EGLConfigHandle config,
-                                                                   EGLContextHandle shareCtx,
-                                                                   const EGLint* attribList) {
+                                                                   EGLContextHandle shareCtx, const EGLint* attribList,
+                                                                   Bool deferGLState) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 const auto* displayObject = TryGetDisplay(display);
                 if (!displayObject) {
@@ -625,13 +757,41 @@ namespace MobileGL {
                     SetError(EGL_NOT_INITIALIZED);
                     return nullptr;
                 }
-                if (!ValidateConfigOnDisplay(display, config)) {
+                // EGL_KHR_no_config_context: EGL_NO_CONFIG_KHR is a context with no config, which
+                // every surface is compatible with. eglinfo's ES probe relies on it: it chooses with
+                // EGL_OPENGL_ES_BIT (ES 1.x), which no config here claims, and passes the NULL on.
+                if (config != EGL_NO_CONFIG_KHR && !ValidateConfigOnDisplay(display, config)) {
                     SetError(EGL_BAD_CONFIG);
                     return nullptr;
                 }
                 if (shareCtx != nullptr && !ValidateContextOnDisplay(display, shareCtx)) {
                     SetError(EGL_BAD_CONTEXT);
                     return nullptr;
+                }
+
+                // RESET NOTIFICATION (EGL_EXT_create_context_robustness, EGL 1.5): validated before
+                // anything of the context is built, since building its GL state already makes
+                // objects. Both names of the attribute are taken - the extension's (what Chrome,
+                // KWin and Qt pass) and EGL 1.5's (what ANGLE's GL-on-EGL backend passes for its
+                // own native context) - with the two values they share. Contexts that share
+                // objects must agree on it (EGL_BAD_MATCH otherwise).
+                EGLint resetStrategy = EGL_NO_RESET_NOTIFICATION;
+                for (const EGLint name : {EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT,
+                                          EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY}) {
+                    if (auto value = ParseAttribValue(attribList, name); value) {
+                        if (*value != EGL_NO_RESET_NOTIFICATION && *value != EGL_LOSE_CONTEXT_ON_RESET) {
+                            SetError(EGL_BAD_ATTRIBUTE);
+                            return nullptr;
+                        }
+                        resetStrategy = *value;
+                    }
+                }
+                if (shareCtx != nullptr) {
+                    const auto* shared = TryGetContext(shareCtx);
+                    if (shared != nullptr && shared->ResetNotificationStrategy != resetStrategy) {
+                        SetError(EGL_BAD_MATCH);
+                        return nullptr;
+                    }
                 }
 
                 ContextObject contextObject = {
@@ -643,6 +803,35 @@ namespace MobileGL {
                     .MajorVersion = 1,
                     .MinorVersion = 0,
                 };
+                contextObject.ResetNotificationStrategy = resetStrategy;
+
+                // P14 S1: the wire identity, minted where the context is born. A context that
+                // shares with an existing one joins ITS share group; EGL_NO_CONTEXT starts a new
+                // one. Both tokens are 0-free by construction (the counters start at 1), because
+                // 0 is the wire's "no context" on both planes.
+                contextObject.ClientContextToken = m_nextClientContextToken++;
+                SharedPtr<GLState::ShareGroupState> shareGroup;
+                if (shareCtx != nullptr) {
+                    const auto* shared = TryGetContext(shareCtx);
+                    if (shared != nullptr && shared->GLStateObject) {
+                        shareGroup = shared->GLStateObject->GetShareGroup();
+                        contextObject.ShareGroupToken = shared->ShareGroupToken;
+                    } else {
+                        contextObject.ShareGroupToken = m_nextShareGroupToken++;
+                    }
+                } else {
+                    contextObject.ShareGroupToken = m_nextShareGroupToken++;
+                }
+                if (!shareGroup) {
+                    shareGroup = MakeShared<GLState::ShareGroupState>(contextObject.ShareGroupToken);
+                }
+                // P14 S3: the context's own GL state, sharing the objects (and the name spaces)
+                // of the group above, with bindings, errors and the current program of its own.
+                if (deferGLState) {
+                    contextObject.PendingShareGroup = Move(shareGroup);
+                } else {
+                    contextObject.GLStateObject = MakeShared<GLState::GLContext>(shareGroup);
+                }
 
                 if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_CLIENT_VERSION); value) {
                     contextObject.ClientVersion = *value;
@@ -666,7 +855,7 @@ namespace MobileGL {
                         contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_DEBUG_BIT;
                     }
                     if (*value & EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR) {
-                        contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT;
+                        contextObject.RobustAccessRequested = true;
                     }
                 }
                 if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE);
@@ -678,10 +867,17 @@ namespace MobileGL {
                     contextObject.EGLContextFlags |= EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR;
                     contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_DEBUG_BIT;
                 }
-                if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_OPENGL_ROBUST_ACCESS);
-                    value && *value == EGL_TRUE) {
-                    contextObject.EGLContextFlags |= EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR;
-                    contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT;
+                // ROBUST BUFFER ACCESS is recorded as asked for and reported only where it is
+                // provided (GL_CONTEXT_ROBUST_ACCESS, GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT; the GL
+                // layer decides). The request is not refused where it is not: compositors and
+                // browsers ask for robust access and reset notification in the same attempt, and
+                // refusing the first would cost them the second, which is the one that matters to
+                // a split client - its contexts are lost exactly when the server session is.
+                for (const EGLint name : {EGL_CONTEXT_OPENGL_ROBUST_ACCESS, EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT}) {
+                    if (auto value = ParseAttribValue(attribList, name); value && *value == EGL_TRUE) {
+                        contextObject.EGLContextFlags |= EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR;
+                        contextObject.RobustAccessRequested = true;
+                    }
                 }
 
                 const auto context = EncodeHandle<EGLContextHandle>(m_nextContextHandle++);
@@ -689,10 +885,23 @@ namespace MobileGL {
                 return context;
             }
 
-            Bool EGLContext::DestroyContext(EGLDisplayHandle display, EGLContextHandle context) {
+            Bool EGLContext::BuildContextGLState(EGLContextHandle context) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto contextIt = m_contexts.find(context);
+                if (contextIt == m_contexts.end()) return false;
+                ContextObject& object = contextIt->second;
+                if (!object.GLStateObject) {
+                    object.GLStateObject = MakeShared<GLState::GLContext>(Move(object.PendingShareGroup));
+                    object.PendingShareGroup = nullptr;
+                }
+                return true;
+            }
+
+            Bool EGLContext::DestroyContext(EGLDisplayHandle display, EGLContextHandle context, Bool* deferred) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (deferred != nullptr) *deferred = false;
                 auto contextIt = m_contexts.find(context);
-                if (contextIt == m_contexts.end()) {
+                if (contextIt == m_contexts.end() || contextIt->second.DestroyPending) {
                     SetError(EGL_BAD_CONTEXT);
                     return false;
                 }
@@ -701,13 +910,21 @@ namespace MobileGL {
                     return false;
                 }
 
-                auto ownerIt = m_contextOwners.find(context);
-                if (ownerIt != m_contextOwners.end()) {
-                    SetError(EGL_BAD_ACCESS);
-                    return false;
+                if (m_contextOwners.find(context) != m_contextOwners.end()) {
+                    // EGL 1.5 3.7.2: current to a thread, so destroyed once it no longer is.
+                    contextIt->second.DestroyPending = true;
+                    if (deferred != nullptr) *deferred = true;
+                    return true;
                 }
                 m_contexts.erase(contextIt);
                 return true;
+            }
+
+            Vector<EGLContext::ReapedContext> EGLContext::TakeReapedContexts() {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                Vector<ReapedContext> reaped;
+                reaped.swap(m_reapedContexts);
+                return reaped;
             }
 
             Bool EGLContext::QueryContext(EGLDisplayHandle display, EGLContextHandle context, EGLint attribute,
@@ -718,7 +935,7 @@ namespace MobileGL {
                     return false;
                 }
                 const auto* contextObject = TryGetContext(context);
-                if (!contextObject) {
+                if (!contextObject || contextObject->DestroyPending) {
                     const_cast<EGLContext*>(this)->SetError(EGL_BAD_CONTEXT);
                     return false;
                 }
@@ -744,6 +961,11 @@ namespace MobileGL {
                     *value = contextObject->EGLContextFlags;
                     return true;
                 case EGL_CONFIG_ID: {
+                    // EGL_KHR_no_config_context: a context created without a config reports 0.
+                    if (contextObject->Config == EGL_NO_CONFIG_KHR) {
+                        *value = 0;
+                        return true;
+                    }
                     const auto* cfg = TryGetConfig(contextObject->Config);
                     if (!cfg) {
                         const_cast<EGLContext*>(this)->SetError(EGL_BAD_CONFIG);
@@ -760,13 +982,46 @@ namespace MobileGL {
 
             Bool EGLContext::ValidateContext(EGLContextHandle context) const {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
-                return m_contexts.find(context) != m_contexts.end();
+                const auto* ctx = TryGetContext(context);
+                return ctx != nullptr && !ctx->DestroyPending;
             }
 
+            // A context whose destroy is pending is no context for any new use of its handle.
             Bool EGLContext::ValidateContextOnDisplay(EGLDisplayHandle display, EGLContextHandle context) const {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 const auto* ctx = TryGetContext(context);
-                return ctx && ctx->Display == display;
+                return ctx && !ctx->DestroyPending && ctx->Display == display;
+            }
+
+            // P14 S1. 0 for an unknown handle or a thread with no current context: 0 is the
+            // wire's "no context" on both planes, so an answer that cannot be given is given as
+            // the value that means "nothing is bound" rather than as a handle-shaped guess.
+            Uint64 EGLContext::GetContextClientToken(EGLContextHandle context) const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto* ctx = TryGetContext(context);
+                return ctx != nullptr ? ctx->ClientContextToken : 0;
+            }
+
+            Uint64 EGLContext::GetContextShareGroupToken(EGLContextHandle context) const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto* ctx = TryGetContext(context);
+                return ctx != nullptr ? ctx->ShareGroupToken : 0;
+            }
+
+            SharedPtr<GLState::GLContext> EGLContext::GetContextGLState(EGLContextHandle context) const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto* ctx = TryGetContext(context);
+                return ctx != nullptr ? ctx->GLStateObject : nullptr;
+            }
+
+            Uint64 EGLContext::CurrentContextClientToken() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto currentIt = m_threadCurrents.find(CurrentThreadKey());
+                if (currentIt == m_threadCurrents.end()) {
+                    return 0;
+                }
+                const auto* ctx = TryGetContext(currentIt->second.Context);
+                return ctx != nullptr ? ctx->ClientContextToken : 0;
             }
 
             Bool EGLContext::IsCurrentContextOpenGLCoreProfile() const {
@@ -780,8 +1035,8 @@ namespace MobileGL {
                     (ctx->OpenGLProfileMask & EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT)) {
                     return false;
                 }
-                return (ctx->OpenGLProfileMask & EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT) ||
-                       ctx->MajorVersion > 3 || (ctx->MajorVersion == 3 && ctx->MinorVersion >= 1);
+                return (ctx->OpenGLProfileMask & EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT) || ctx->MajorVersion > 3 ||
+                       (ctx->MajorVersion == 3 && ctx->MinorVersion >= 1);
             }
 
             Bool EGLContext::IsCurrentContextOpenGLCompatibilityProfile() const {
@@ -806,6 +1061,36 @@ namespace MobileGL {
                 }
                 const auto* ctx = TryGetContext(currentIt->second.Context);
                 return ctx ? ctx->OpenGLContextFlags : 0;
+            }
+
+            EGLint EGLContext::GetCurrentContextResetNotificationStrategy() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto currentIt = m_threadCurrents.find(CurrentThreadKey());
+                if (currentIt == m_threadCurrents.end()) {
+                    return EGL_NO_RESET_NOTIFICATION;
+                }
+                const auto* ctx = TryGetContext(currentIt->second.Context);
+                return ctx ? ctx->ResetNotificationStrategy : EGL_NO_RESET_NOTIFICATION;
+            }
+
+            EGLenum EGLContext::GetCurrentContextClientAPI() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto currentIt = m_threadCurrents.find(CurrentThreadKey());
+                if (currentIt == m_threadCurrents.end()) {
+                    return EGL_OPENGL_API;
+                }
+                const auto* ctx = TryGetContext(currentIt->second.Context);
+                return ctx ? ctx->ClientAPI : EGL_OPENGL_API;
+            }
+
+            Bool EGLContext::IsCurrentContextRobustAccessRequested() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto currentIt = m_threadCurrents.find(CurrentThreadKey());
+                if (currentIt == m_threadCurrents.end()) {
+                    return false;
+                }
+                const auto* ctx = TryGetContext(currentIt->second.Context);
+                return ctx && ctx->RobustAccessRequested;
             }
 
             EGLContext::EGLSurfaceHandle EGLContext::CreateWindowSurface(EGLDisplayHandle display,
@@ -1039,8 +1324,8 @@ namespace MobileGL {
                 return true;
             }
 
-            Bool EGLContext::ResizeSurface(EGLDisplayHandle display, EGLSurfaceHandle surface,
-                                           EGLint width, EGLint height) {
+            Bool EGLContext::ResizeSurface(EGLDisplayHandle display, EGLSurfaceHandle surface, EGLint width,
+                                           EGLint height) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 auto surfaceIt = m_surfaces.find(surface);
                 if (surfaceIt == m_surfaces.end()) {
@@ -1055,6 +1340,53 @@ namespace MobileGL {
                 surfaceIt->second.Height = std::max<EGLint>(height, 1);
                 return true;
             }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P12 (on-screen server window). See Core.h. Split builds only (G1).
+            EGLContext::EGLSurfaceHandle EGLContext::CreateServerOwnedWindowSurface(EGLDisplayHandle display,
+                                                                                    EGLConfigHandle config,
+                                                                                    const void* nativeWindow,
+                                                                                    EGLint width, EGLint height,
+                                                                                    Bool platformWindow) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (!IsDisplayInitialized(display)) {
+                    SetError(EGL_NOT_INITIALIZED);
+                    return EGL_NO_SURFACE;
+                }
+                if (!ValidateConfigOnDisplay(display, config)) {
+                    SetError(EGL_BAD_CONFIG);
+                    return EGL_NO_SURFACE;
+                }
+                if (width < 0 || height < 0) {
+                    SetError(EGL_BAD_ATTRIBUTE);
+                    return EGL_NO_SURFACE;
+                }
+                // No EGL_BAD_NATIVE_WINDOW for a null window: the window is the server's.
+                const auto surface = EncodeHandle<EGLSurfaceHandle>(m_nextSurfaceHandle++);
+                m_surfaces[surface] = SurfaceObject{
+                    .Display = display,
+                    .Config = config,
+                    .Type = platformWindow ? SurfaceType::PlatformWindow : SurfaceType::Window,
+                    .NativeHandleKey = ToNativeKey(nativeWindow),
+                    .ClientBuffer = nullptr,
+                    .BufferType = EGL_NONE,
+                    .Width = width,
+                    .Height = height,
+                };
+                return surface;
+            }
+
+            Bool EGLContext::SetSurfaceExtent(EGLSurfaceHandle surface, EGLint width, EGLint height) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto surfaceIt = m_surfaces.find(surface);
+                if (surfaceIt == m_surfaces.end() || width < 0 || height < 0) {
+                    return false;
+                }
+                surfaceIt->second.Width = width;
+                surfaceIt->second.Height = height;
+                return true;
+            }
+#endif
 
             Bool EGLContext::QuerySurface(EGLDisplayHandle display, EGLSurfaceHandle surface, EGLint attribute,
                                           EGLint* value) const {
@@ -1124,6 +1456,12 @@ namespace MobileGL {
                 return surf && surf->Display == display;
             }
 
+            EGLint EGLContext::GetSwapInterval(EGLDisplayHandle display) const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto* displayObject = TryGetDisplay(display);
+                return displayObject ? displayObject->SwapInterval : 1;
+            }
+
             Bool EGLContext::SwapInterval(EGLDisplayHandle display, EGLint interval) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 auto* displayObject = TryGetDisplay(display);
@@ -1191,7 +1529,9 @@ namespace MobileGL {
                         SetError(EGL_BAD_CONTEXT);
                         return false;
                     }
-                    if (draw == EGL_NO_SURFACE || read == EGL_NO_SURFACE) {
+                    // EGL_KHR_surfaceless_context: with BOTH surfaces absent the context is bound
+                    // surfacelessly (no default framebuffer). One without the other is still a mismatch.
+                    if ((draw == EGL_NO_SURFACE) != (read == EGL_NO_SURFACE)) {
                         SetError(EGL_BAD_MATCH);
                         return false;
                     }
@@ -1219,6 +1559,15 @@ namespace MobileGL {
                     }
                 }
 
+                // P14 S3: whatever this thread's GL state was before the first EGL context was
+                // bound to it is what a later release goes back to.
+                SharedPtr<GLState::GLContext> restoreThreadGLState;
+                if (const auto currentIt = m_threadCurrents.find(threadKey); currentIt != m_threadCurrents.end()) {
+                    restoreThreadGLState = currentIt->second.RestoreThreadGLState;
+                } else {
+                    restoreThreadGLState = pGLContext;
+                }
+
                 ReleaseThreadUnlocked(threadKey);
 
                 m_threadCurrents[threadKey] = ThreadCurrentState{
@@ -1226,9 +1575,18 @@ namespace MobileGL {
                     .DrawSurface = draw,
                     .ReadSurface = read,
                     .Context = context,
+                    .RestoreThreadGLState = Move(restoreThreadGLState),
                 };
                 if (context != nullptr) {
                     m_contextOwners[context] = threadKey;
+                    // P14 S3: this thread's GL calls land in this context's GLContext from here
+                    // on, and not before the switch above has been committed.
+                    if (const auto* contextObject = TryGetContext(context); contextObject != nullptr) {
+                        pGLContext = contextObject->GLStateObject;
+                    }
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    tThreadReleasedLostContext = false;
+#endif
                 }
                 return true;
             }
@@ -1282,8 +1640,7 @@ namespace MobileGL {
                     return false;
                 }
 
-                return surfaceObject->Type == SurfaceType::Window ||
-                       surfaceObject->Type == SurfaceType::PlatformWindow;
+                return surfaceObject->Type == SurfaceType::Window || surfaceObject->Type == SurfaceType::PlatformWindow;
             }
 
             EGLContext::EGLSyncHandle EGLContext::CreateSync(EGLDisplayHandle display, EGLenum type,
@@ -1291,6 +1648,19 @@ namespace MobileGL {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 if (!IsDisplayInitialized(display)) {
                     SetError(EGL_NOT_INITIALIZED);
+                    return EGL_NO_SYNC;
+                }
+                if (type == EGL_SYNC_NATIVE_FENCE_ANDROID) {
+                    // An application's descriptor to wait on. A fence command (no descriptor) needs
+                    // the backend, which EGLImpl asks before it gets here (CreateNativeFenceSync).
+                    const auto fd = ParseAttribValue(attribList, EGL_SYNC_NATIVE_FENCE_FD_ANDROID);
+#if !defined(_WIN32)
+                    if (fd && *fd != EGL_NO_NATIVE_FENCE_FD_ANDROID) {
+                        return CreateNativeFenceSync(display, static_cast<int>(*fd),
+                                                     EGL_SYNC_NATIVE_FENCE_SIGNALED_ANDROID);
+                    }
+#endif
+                    SetError(EGL_BAD_ATTRIBUTE);
                     return EGL_NO_SYNC;
                 }
                 if (type != EGL_SYNC_FENCE) {
@@ -1324,27 +1694,80 @@ namespace MobileGL {
                     SetError(EGL_BAD_MATCH);
                     return false;
                 }
+                CloseNativeFd(syncIt->second.NativeFd);
                 m_syncs.erase(syncIt);
                 return true;
             }
 
-            EGLint EGLContext::ClientWaitSync(EGLDisplayHandle display, EGLSyncHandle sync, EGLint flags,
-                                              EGLTime timeout) {
+            EGLContext::EGLSyncHandle EGLContext::CreateNativeFenceSync(EGLDisplayHandle display, int fd,
+                                                                        EGLenum condition) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
-                (void)flags;
-                (void)timeout;
+#if defined(_WIN32)
+                (void)display, (void)fd, (void)condition;
+                SetError(EGL_BAD_ATTRIBUTE);
+                return EGL_NO_SYNC;
+#else
+                if (!IsDisplayInitialized(display)) {
+                    CloseNativeFd(fd);
+                    SetError(EGL_NOT_INITIALIZED);
+                    return EGL_NO_SYNC;
+                }
+                SyncObject sync = {
+                    .Display = display,
+                    .Type = EGL_SYNC_NATIVE_FENCE_ANDROID,
+                    .Condition = condition,
+                    .Status = EGL_UNSIGNALED,
+                    .NativeFd = fd,
+                };
+                const auto syncHandle = EncodeHandle<EGLSyncHandle>(m_nextSyncHandle++);
+                m_syncs[syncHandle] = sync;
+                return syncHandle;
+#endif
+            }
 
+            EGLint EGLContext::DupNativeFenceFD(EGLDisplayHandle display, EGLSyncHandle sync) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 const auto* syncObject = TryGetSync(sync);
                 if (!syncObject) {
                     SetError(EGL_BAD_PARAMETER);
-                    return EGL_FALSE;
+                    return EGL_NO_NATIVE_FENCE_FD_ANDROID;
                 }
                 if (syncObject->Display != display) {
                     SetError(EGL_BAD_MATCH);
-                    return EGL_FALSE;
+                    return EGL_NO_NATIVE_FENCE_FD_ANDROID;
                 }
+                const int fd =
+                    syncObject->Type == EGL_SYNC_NATIVE_FENCE_ANDROID ? DupNativeFd(syncObject->NativeFd) : -1;
+                if (fd < 0) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return EGL_NO_NATIVE_FENCE_FD_ANDROID;
+                }
+                return fd;
+            }
 
-                return EGL_CONDITION_SATISFIED;
+            EGLint EGLContext::ClientWaitSync(EGLDisplayHandle display, EGLSyncHandle sync, EGLint flags,
+                                              EGLTime timeout) {
+                (void)flags;
+                int fd = -1;
+                {
+                    const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                    const auto* syncObject = TryGetSync(sync);
+                    if (!syncObject) {
+                        SetError(EGL_BAD_PARAMETER);
+                        return EGL_FALSE;
+                    }
+                    if (syncObject->Display != display) {
+                        SetError(EGL_BAD_MATCH);
+                        return EGL_FALSE;
+                    }
+                    if (syncObject->Type != EGL_SYNC_NATIVE_FENCE_ANDROID) return EGL_CONDITION_SATISFIED;
+                    // A copy, waited on outside the lock: other threads keep using EGL meanwhile,
+                    // and one may destroy the sync while this waits.
+                    fd = DupNativeFd(syncObject->NativeFd);
+                }
+                const Bool signaled = WaitNativeFd(fd, NativeWaitTimeoutMs(timeout));
+                CloseNativeFd(fd);
+                return signaled ? EGL_CONDITION_SATISFIED : EGL_TIMEOUT_EXPIRED;
             }
 
             Bool EGLContext::GetSyncAttrib(EGLDisplayHandle display, EGLSyncHandle sync, EGLint attribute,
@@ -1369,6 +1792,10 @@ namespace MobileGL {
                     *value = static_cast<EGLAttrib>(syncObject->Type);
                     return true;
                 case EGL_SYNC_STATUS:
+                    if (syncObject->Type == EGL_SYNC_NATIVE_FENCE_ANDROID) {
+                        *value = WaitNativeFd(syncObject->NativeFd, 0) ? EGL_SIGNALED : EGL_UNSIGNALED;
+                        return true;
+                    }
                     *value = static_cast<EGLAttrib>(syncObject->Status);
                     return true;
                 case EGL_SYNC_CONDITION:
@@ -1381,17 +1808,24 @@ namespace MobileGL {
             }
 
             Bool EGLContext::WaitSync(EGLDisplayHandle display, EGLSyncHandle sync, EGLint flags) const {
-                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 (void)flags;
-                const auto* syncObject = TryGetSync(sync);
-                if (!syncObject) {
-                    const_cast<EGLContext*>(this)->SetError(EGL_BAD_PARAMETER);
-                    return false;
+                int fd = -1;
+                {
+                    const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                    const auto* syncObject = TryGetSync(sync);
+                    if (!syncObject) {
+                        const_cast<EGLContext*>(this)->SetError(EGL_BAD_PARAMETER);
+                        return false;
+                    }
+                    if (syncObject->Display != display) {
+                        const_cast<EGLContext*>(this)->SetError(EGL_BAD_MATCH);
+                        return false;
+                    }
+                    if (syncObject->Type != EGL_SYNC_NATIVE_FENCE_ANDROID) return true;
+                    fd = DupNativeFd(syncObject->NativeFd);
                 }
-                if (syncObject->Display != display) {
-                    const_cast<EGLContext*>(this)->SetError(EGL_BAD_MATCH);
-                    return false;
-                }
+                (void)WaitNativeFd(fd, kNativeServerWaitMs);
+                CloseNativeFd(fd);
                 return true;
             }
 
@@ -1419,8 +1853,10 @@ namespace MobileGL {
                 return image;
             }
 
-            Bool EGLContext::DestroyImage(EGLDisplayHandle display, EGLImageHandle image) {
+            Bool EGLContext::DestroyImage(EGLDisplayHandle display, EGLImageHandle image,
+                                          Uint64* releasedSharedImageId) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (releasedSharedImageId != nullptr) *releasedSharedImageId = 0;
                 auto imageIt = m_images.find(image);
                 if (imageIt == m_images.end()) {
                     SetError(EGL_BAD_PARAMETER);
@@ -1430,7 +1866,282 @@ namespace MobileGL {
                     SetError(EGL_BAD_MATCH);
                     return false;
                 }
+                if (releasedSharedImageId != nullptr) *releasedSharedImageId = imageIt->second.Shared.Id;
                 m_images.erase(imageIt);
+                return true;
+            }
+
+            Bool EGLContext::IsDmaBufFourccSupported(Uint32 fourcc) {
+                // The four orders a shared image can be allocated under (SharedImageApi.h), and the
+                // two YUV ones that are sampled only.
+                return fourcc == kDrmFourccAbgr8888 || fourcc == kDrmFourccXbgr8888 || fourcc == kDrmFourccArgb8888 ||
+                       fourcc == kDrmFourccXrgb8888 || IsDmaBufFourccYuv(fourcc);
+            }
+
+            Bool EGLContext::IsDmaBufFourccYuv(Uint32 fourcc) {
+                return fourcc == kDrmFourccNv12 || fourcc == kDrmFourccP010;
+            }
+
+            Bool EGLContext::PrepareDmaBufImport(EGLDisplayHandle display, EGLContextHandle context,
+                                                 EGLClientBuffer buffer, const EGLAttrib* attribList,
+                                                 DmaBufImportAttribs* out) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (!ValidateDisplay(display)) {
+                    SetError(EGL_BAD_DISPLAY);
+                    return false;
+                }
+                if (!IsDisplayInitialized(display)) {
+                    SetError(EGL_NOT_INITIALIZED);
+                    return false;
+                }
+                // EGL_EXT_image_dma_buf_import: the context must be EGL_NO_CONTEXT and the buffer
+                // NULL - everything is in the attribute list.
+                if (context != nullptr || buffer != nullptr) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return false;
+                }
+
+                DmaBufImportAttribs attribs;
+                Bool hasWidth = false, hasHeight = false, hasFourcc = false;
+                // Per plane: fd, offset, pitch, modifier lo, modifier hi.
+                Bool has[2][5] = {};
+                Uint64 modifierLo[2] = {0, 0}, modifierHi[2] = {0, 0};
+                Bool laterPlane = false;
+                for (SizeT i = 0; attribList != nullptr && attribList[i] != EGL_NONE; i += 2) {
+                    const EGLAttrib value = attribList[i + 1];
+                    switch (attribList[i]) {
+                    case EGL_WIDTH:
+                        attribs.Width = static_cast<EGLint>(value);
+                        hasWidth = true;
+                        break;
+                    case EGL_HEIGHT:
+                        attribs.Height = static_cast<EGLint>(value);
+                        hasHeight = true;
+                        break;
+                    case EGL_LINUX_DRM_FOURCC_EXT:
+                        attribs.Fourcc = static_cast<Uint32>(value);
+                        hasFourcc = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE0_FD_EXT:
+                        attribs.Fd = static_cast<int>(value);
+                        has[0][0] = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE0_OFFSET_EXT:
+                        attribs.Offset = static_cast<EGLint>(value);
+                        has[0][1] = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE0_PITCH_EXT:
+                        attribs.Pitch = static_cast<EGLint>(value);
+                        has[0][2] = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT:
+                        modifierLo[0] = static_cast<Uint32>(value);
+                        has[0][3] = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT:
+                        modifierHi[0] = static_cast<Uint32>(value);
+                        has[0][4] = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE1_FD_EXT:
+                        attribs.Plane1Fd = static_cast<int>(value);
+                        has[1][0] = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE1_OFFSET_EXT:
+                        attribs.Plane1Offset = static_cast<EGLint>(value);
+                        has[1][1] = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE1_PITCH_EXT:
+                        attribs.Plane1Pitch = static_cast<EGLint>(value);
+                        has[1][2] = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT:
+                        modifierLo[1] = static_cast<Uint32>(value);
+                        has[1][3] = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT:
+                        modifierHi[1] = static_cast<Uint32>(value);
+                        has[1][4] = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE2_FD_EXT:
+                    case EGL_DMA_BUF_PLANE2_OFFSET_EXT:
+                    case EGL_DMA_BUF_PLANE2_PITCH_EXT:
+                    case EGL_DMA_BUF_PLANE2_MODIFIER_LO_EXT:
+                    case EGL_DMA_BUF_PLANE2_MODIFIER_HI_EXT:
+                    case EGL_DMA_BUF_PLANE3_FD_EXT:
+                    case EGL_DMA_BUF_PLANE3_OFFSET_EXT:
+                    case EGL_DMA_BUF_PLANE3_PITCH_EXT:
+                    case EGL_DMA_BUF_PLANE3_MODIFIER_LO_EXT:
+                    case EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT:
+                        laterPlane = true;
+                        break;
+                    // The YUV hints: kept for a YUV import, which is converted with them; meaningless
+                    // for an RGB one and ignored there. EGL_KHR_image_base's own attribute likewise.
+                    case EGL_YUV_COLOR_SPACE_HINT_EXT:
+                        attribs.ColorSpace = static_cast<Uint32>(value);
+                        break;
+                    case EGL_SAMPLE_RANGE_HINT_EXT:
+                        attribs.Range = static_cast<Uint32>(value);
+                        break;
+                    case EGL_YUV_CHROMA_HORIZONTAL_SITING_HINT_EXT:
+                        attribs.SitingX = static_cast<Uint32>(value);
+                        break;
+                    case EGL_YUV_CHROMA_VERTICAL_SITING_HINT_EXT:
+                        attribs.SitingY = static_cast<Uint32>(value);
+                        break;
+                    case EGL_IMAGE_PRESERVED_KHR:
+                        break;
+                    default:
+                        SetError(EGL_BAD_PARAMETER);
+                        return false;
+                    }
+                }
+                if (!hasWidth || !hasHeight || !hasFourcc || !has[0][0] || !has[0][1] || !has[0][2] ||
+                    has[0][3] != has[0][4]) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return false;
+                }
+                if (!IsDmaBufFourccSupported(attribs.Fourcc)) {
+                    SetError(EGL_BAD_MATCH);
+                    return false;
+                }
+                const Bool yuv = IsDmaBufFourccYuv(attribs.Fourcc);
+                attribs.PlaneCount = yuv ? 2u : 1u;
+                const Bool anyPlane1 = has[1][0] || has[1][1] || has[1][2] || has[1][3] || has[1][4];
+                // Planes the format does not have are an attribute error; planes it has but the
+                // list leaves out (or half a modifier) a parameter error.
+                if (laterPlane || (!yuv && anyPlane1)) {
+                    SetError(EGL_BAD_ATTRIBUTE);
+                    return false;
+                }
+                if (yuv &&
+                    (!has[1][0] || !has[1][1] || !has[1][2] || has[1][3] != has[1][4] || has[1][3] != has[0][3])) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return false;
+                }
+                if (attribs.Width <= 0 || attribs.Height <= 0 || attribs.Fd < 0 || (yuv && attribs.Plane1Fd < 0)) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return false;
+                }
+                if (attribs.Offset < 0 || attribs.Pitch <= 0 ||
+                    (yuv && (attribs.Plane1Offset < 0 || attribs.Plane1Pitch <= 0))) {
+                    SetError(EGL_BAD_ACCESS);
+                    return false;
+                }
+                // Every plane names the one modifier of the buffer.
+                if (yuv && has[0][3] && (modifierLo[0] != modifierLo[1] || modifierHi[0] != modifierHi[1])) {
+                    SetError(EGL_BAD_MATCH);
+                    return false;
+                }
+                // An RGBA image is identified by its descriptor, never read through the layout a
+                // modifier describes, so any modifier is taken; a YUV one may be a buffer the server
+                // copies (a foreign one), which it reads as linear rows - the server decides.
+                attribs.HasModifier = has[0][3];
+                attribs.Modifier = (modifierHi[0] << 32) | modifierLo[0];
+                if (out != nullptr) *out = attribs;
+                return true;
+            }
+
+            EGLContext::EGLImageHandle EGLContext::CreateSharedImage(EGLDisplayHandle display,
+                                                                     const SharedImageInfo& info) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (!IsDisplayInitialized(display)) {
+                    SetError(EGL_NOT_INITIALIZED);
+                    return EGL_NO_IMAGE;
+                }
+                if (info.Id == 0) {
+                    SetError(EGL_BAD_MATCH);
+                    return EGL_NO_IMAGE;
+                }
+                const auto image = EncodeHandle<EGLImageHandle>(m_nextImageHandle++);
+                m_images[image] = ImageObject{
+                    .Display = display,
+                    .Context = nullptr,
+                    .Target = EGL_LINUX_DMA_BUF_EXT,
+                    .Buffer = nullptr,
+                    .Shared = info,
+                };
+                return image;
+            }
+
+            Bool EGLContext::GetSharedImage(EGLImageHandle image, SharedImageInfo* out) const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto* imageObject = TryGetImage(image);
+                if (imageObject == nullptr || imageObject->Shared.Id == 0) return false;
+                if (out != nullptr) *out = imageObject->Shared;
+                return true;
+            }
+
+            Vector<Uint64> EGLContext::TakeOrphanedSharedImages() {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                Vector<Uint64> orphaned;
+                orphaned.swap(m_orphanedSharedImages);
+                return orphaned;
+            }
+
+            Bool EGLContext::QueryDmaBufFormats(EGLDisplayHandle display, Bool available, Bool yuvAvailable,
+                                                EGLint maxFormats, EGLint* formats, EGLint* numFormats) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (!ValidateDisplay(display)) {
+                    SetError(EGL_BAD_DISPLAY);
+                    return false;
+                }
+                if (!IsDisplayInitialized(display)) {
+                    SetError(EGL_NOT_INITIALIZED);
+                    return false;
+                }
+                if (maxFormats < 0 || numFormats == nullptr || (maxFormats > 0 && formats == nullptr)) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return false;
+                }
+                static constexpr Uint32 kFormats[] = {kDrmFourccAbgr8888, kDrmFourccXbgr8888, kDrmFourccArgb8888,
+                                                      kDrmFourccXrgb8888, kDrmFourccNv12,     kDrmFourccP010};
+                constexpr EGLint kRgbCount = 4;
+                const EGLint total =
+                    !available ? 0 : (yuvAvailable ? static_cast<EGLint>(std::size(kFormats)) : kRgbCount);
+                if (maxFormats == 0) {
+                    *numFormats = total;
+                    return true;
+                }
+                const EGLint count = std::min(maxFormats, total);
+                for (EGLint i = 0; i < count; ++i)
+                    formats[i] = static_cast<EGLint>(kFormats[i]);
+                *numFormats = count;
+                return true;
+            }
+
+            Bool EGLContext::QueryDmaBufModifiers(EGLDisplayHandle display, Bool available, Bool yuvAvailable,
+                                                  EGLint format, EGLint maxModifiers, Uint64* modifiers,
+                                                  EGLBoolean* externalOnly, EGLint* numModifiers) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (!ValidateDisplay(display)) {
+                    SetError(EGL_BAD_DISPLAY);
+                    return false;
+                }
+                if (!IsDisplayInitialized(display)) {
+                    SetError(EGL_NOT_INITIALIZED);
+                    return false;
+                }
+                const Bool yuv = IsDmaBufFourccYuv(static_cast<Uint32>(format));
+                if (!available || !IsDmaBufFourccSupported(static_cast<Uint32>(format)) || (yuv && !yuvAvailable) ||
+                    maxModifiers < 0 || numModifiers == nullptr || (maxModifiers > 0 && modifiers == nullptr)) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return false;
+                }
+                if (!yuv) {
+                    // No explicit modifiers: an image's layout is its allocator's, which is what an
+                    // import without modifier attributes (the implicit modifier) means.
+                    *numModifiers = 0;
+                    return true;
+                }
+                // A YUV buffer is taken as linear rows when it is not one of the server's own (which
+                // are identified, whatever modifier is named), and only ever sampled: external only.
+                if (maxModifiers == 0) {
+                    *numModifiers = 1;
+                    return true;
+                }
+                modifiers[0] = 0; // DRM_FORMAT_MOD_LINEAR
+                if (externalOnly != nullptr) externalOnly[0] = EGL_TRUE;
+                *numModifiers = 1;
                 return true;
             }
         } // namespace EGLState

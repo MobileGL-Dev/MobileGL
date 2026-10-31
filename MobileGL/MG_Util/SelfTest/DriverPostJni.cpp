@@ -76,8 +76,8 @@ namespace {
 
     Uint64 BuildFormatCapabilityMask(FormatCapabilityFlags capabilities) {
         Uint64 mask = 0;
-        for (SizeT capabilityIndex = 0;
-             capabilityIndex < MobileGL::MG_Backend::kReportedFormatCapabilities.size(); ++capabilityIndex) {
+        for (SizeT capabilityIndex = 0; capabilityIndex < MobileGL::MG_Backend::kReportedFormatCapabilities.size();
+             ++capabilityIndex) {
             if (MobileGL::MG_Backend::HasFormatCapability(
                     capabilities, MobileGL::MG_Backend::kReportedFormatCapabilities[capabilityIndex])) {
                 mask |= 1ull << capabilityIndex;
@@ -88,18 +88,16 @@ namespace {
 
     void AppendFormatCapabilitiesJson(StringStream& out, const FormatCapabilityCache& cache) {
         out << ",\"formatCapabilities\":{\"capabilities\":[";
-        for (SizeT capabilityIndex = 0;
-             capabilityIndex < MobileGL::MG_Backend::kReportedFormatCapabilities.size(); ++capabilityIndex) {
+        for (SizeT capabilityIndex = 0; capabilityIndex < MobileGL::MG_Backend::kReportedFormatCapabilities.size();
+             ++capabilityIndex) {
             if (capabilityIndex != 0) {
                 out << ',';
             }
-            AppendJsonString(
-                out, MobileGL::MG_Backend::GetFormatCapabilityName(
-                         MobileGL::MG_Backend::kReportedFormatCapabilities[capabilityIndex]));
+            AppendJsonString(out, MobileGL::MG_Backend::GetFormatCapabilityName(
+                                      MobileGL::MG_Backend::kReportedFormatCapabilities[capabilityIndex]));
         }
         out << "],\"targets\":[";
-        for (SizeT targetIndex = 0; targetIndex < MobileGL::MG_Backend::kFormatCapabilityTargetCount;
-             ++targetIndex) {
+        for (SizeT targetIndex = 0; targetIndex < MobileGL::MG_Backend::kFormatCapabilityTargetCount; ++targetIndex) {
             if (targetIndex != 0) {
                 out << ',';
             }
@@ -112,9 +110,8 @@ namespace {
                     out << ',';
                 }
                 out << '[';
-                AppendJsonString(
-                    out, MobileGL::MG_Util::ConvertTextureInternalFormatToString(
-                             static_cast<MobileGL::TextureInternalFormat>(formatIndex)));
+                AppendJsonString(out, MobileGL::MG_Util::ConvertTextureInternalFormatToString(
+                                          static_cast<MobileGL::TextureInternalFormat>(formatIndex)));
                 out << ',' << BuildFormatCapabilityMask(cache.FullCaps[targetIndex][formatIndex]);
                 out << ',' << BuildFormatCapabilityMask(cache.CaveatCaps[targetIndex][formatIndex]) << ']';
             }
@@ -157,9 +154,8 @@ namespace {
             out << "{\"name\":";
             AppendJsonString(out, bug.name);
             out << ",\"verdict\":";
-            AppendJsonString(out, bug.verdict == MobileGL::MG_Util::SelfTest::DriverBugVerdict::Fixed
-                                      ? "FIXED"
-                                      : "UNFIXABLE");
+            AppendJsonString(out, bug.verdict == MobileGL::MG_Util::SelfTest::DriverBugVerdict::Fixed ? "FIXED"
+                                                                                                      : "UNFIXABLE");
             out << ",\"detail\":";
             AppendJsonString(out, bug.detail);
             out << '}';
@@ -184,9 +180,11 @@ extern "C" JNIEXPORT jstring JNICALL Java_top_mobilegl_plugin_PostActivity_nativ
         AppendBackendReportJson(out, vulkanReport);
         out << '}';
         json = out.str();
-    } catch (const std::exception& exception) {
+    }
+    catch (const std::exception& exception) {
         json = "{\"error\":\"" + EscapeJsonString(exception.what()) + "\"}";
-    } catch (...) {
+    }
+    catch (...) {
         json = "{\"error\":\"driver POST failed with an unknown native exception\"}";
     }
     return env->NewStringUTF(json.c_str());

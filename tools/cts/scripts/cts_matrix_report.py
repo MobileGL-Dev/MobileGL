@@ -1,4 +1,12 @@
 #!/usr/bin/env python
+# MobileGL - tools/cts/scripts/cts_matrix_report.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """Build a GL 3.0--3.3 CTS conformance matrix from dEQP QPA logs.
 
 The report deliberately scores against the unique cases in each supplied
@@ -130,7 +138,7 @@ def _sidecar(paths: Sequence[str], name: str) -> set[str]:
 def build_version_report(
     version: str, caselist: str, result_paths: Sequence[str]
 ) -> dict:
-    """Build the serialisable report for one GL mustpass version."""
+    """Build the serializable report for one GL mustpass version."""
 
     expected_cases, expected_duplicates = read_caselist(caselist)
     expected = set(expected_cases)

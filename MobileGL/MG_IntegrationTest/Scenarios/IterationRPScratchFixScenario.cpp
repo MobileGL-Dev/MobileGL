@@ -273,8 +273,7 @@ void main() {
         // average is built from; without FixIterationRPSubgroupScratchPass an 8-lane
         // device writes prefixSumCache[32..63] out of bounds and this comparison fails.
         EXPECT_EQ(block.total, kExpectedTotal)
-            << "workgroup reduction produced " << block.total << " with gl_NumSubgroups="
-            << block.numSubgroups;
+            << "workgroup reduction produced " << block.total << " with gl_NumSubgroups=" << block.numSubgroups;
     }
 
     // The pack's second instance of the same bug, and the one that kept the CI
@@ -296,7 +295,6 @@ void main() {
         // Without the patch an 8-lane device writes prefixSumCache[64..127] out of
         // bounds and this comparison fails.
         EXPECT_EQ(block.total, kWideExpectedTotal)
-            << "workgroup reduction produced " << block.total << " with gl_NumSubgroups="
-            << block.numSubgroups;
+            << "workgroup reduction produced " << block.total << " with gl_NumSubgroups=" << block.numSubgroups;
     }
 } // namespace MGITest

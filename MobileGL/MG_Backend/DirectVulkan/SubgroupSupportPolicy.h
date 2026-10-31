@@ -10,6 +10,7 @@
 
 #include <Config.h>
 #include <Includes.h>
+#include <MG_Backend/SubgroupImplementation.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     // The single decision point for how DirectVulkan implements GL_KHR_shader_subgroup,
@@ -22,42 +23,35 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     //   - FixIterationRPSubgroupScratchPass patches the one known pack bug: iterationRP's
     //     prefixSumCache[32], under-declared for sub-16-lane devices (8-lane lavapipe);
     //   - FixIterationRPBarrierPass repairs Program 203's race between two reductions
-    //     reusing that scratch, when explicitly enabled;
+    //     reusing that scratch (both iterationRP repairs: MOBILEGL_ITRP_FIX);
     //   - DeriveNumSubgroupsPass replaces the one builtin drivers get wrong
     //     (gl_NumSubgroups) with the value the rest of the topology implies.
-    // The 32-lane shared-memory emulation (EmulateSubgroupsPass) is a LAST RESORT for
-    // devices with no subgroup support at all, and only when the user opts in with
-    // MOBILEGL_MAGMA_EMULATE_SUBGROUP=1; it never replaces available native operations.
+    // The 32-lane shared-memory emulation (EmulateSubgroupsPass) is what a device with no
+    // subgroup support at all gets (MG_Backend::ResolveSubgroupImplementation; forced with
+    // MOBILEGL_SUBGROUP_EMULATION); it never replaces available native operations by default.
 
-    inline constexpr Uint32 kEmulatedSubgroupSize = 32u;
-    inline constexpr Uint32 kEmulatedSubgroupStages = GL_COMPUTE_SHADER_BIT;
-    inline constexpr Uint32 kEmulatedSubgroupFeatures =
-        GL_SUBGROUP_FEATURE_BASIC_BIT_KHR | GL_SUBGROUP_FEATURE_VOTE_BIT_KHR |
-        GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR | GL_SUBGROUP_FEATURE_BALLOT_BIT_KHR |
-        GL_SUBGROUP_FEATURE_SHUFFLE_BIT_KHR | GL_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT_KHR |
-        GL_SUBGROUP_FEATURE_CLUSTERED_BIT_KHR | GL_SUBGROUP_FEATURE_QUAD_BIT_KHR;
+    using MG_Backend::kEmulatedSubgroupFeatures;
+    using MG_Backend::kEmulatedSubgroupSize;
+    using MG_Backend::kEmulatedSubgroupStages;
+
+    inline MG_Backend::SubgroupImplementation ResolveVulkanSubgroupImplementation(const Bool nativeSubgroupSupported) {
+        return MG_Backend::ResolveSubgroupImplementation(nativeSubgroupSupported);
+    }
 
     inline Bool ShouldEmulateSubgroups(const Bool nativeSubgroupSupported) {
-        return MG_Config::Features.MagmaEmulateSubgroup && !nativeSubgroupSupported &&
-               !MG_Config::Features.MagmaDisableSubgroup;
+        return ResolveVulkanSubgroupImplementation(nativeSubgroupSupported) ==
+               MG_Backend::SubgroupImplementation::Emulated;
     }
 
-    inline Bool ShouldFixIterationRPSubgroupScratch() {
-        // Auto is ON: the patch is fingerprint-gated to iterationRP's reduction and
-        // grows one under-declared array; every other module passes through untouched.
-        return MG_Config::Features.MagmaFixIterationRPSubgroupScratch !=
-               MG_Config::QuirkOverride::ForceOff;
+    // Native subgroup operations in use - the device has them and they are not overridden.
+    // gl_NumSubgroups is derived on this path unconditionally (DeriveNumSubgroupsPass): GL
+    // requires gl_SubgroupID < gl_NumSubgroups, Adreno's builtin reports 1 while the same
+    // dispatch emits IDs 0..7, and the derived ceil() value is the one Vulkan guarantees
+    // whenever the pipeline can request REQUIRE_FULL_SUBGROUPS.
+    inline Bool UsesNativeSubgroups(const Bool nativeSubgroupSupported) {
+        return ResolveVulkanSubgroupImplementation(nativeSubgroupSupported) ==
+               MG_Backend::SubgroupImplementation::Native;
     }
 
-    inline Bool ShouldFixIterationRPBarrier() {
-        return MG_Config::Features.MagmaIterationRPFixBarrier;
-    }
-
-    inline Bool ShouldDeriveNumSubgroups() {
-        // Auto is ON: gl_NumSubgroups must agree with the gl_SubgroupID range for the GL
-        // contract to hold, and the derived ceil() value is the one the renderer can pin
-        // with REQUIRE_FULL_SUBGROUPS - the driver builtin is the value with no
-        // cross-driver guarantee (Adreno returns 1 for an 8-subgroup dispatch).
-        return MG_Config::Features.MagmaDeriveNumSubgroups != MG_Config::QuirkOverride::ForceOff;
-    }
+    using MG_Backend::ShouldApplyIterationRPFixes;
 } // namespace MobileGL::MG_Backend::DirectVulkan

@@ -1,0 +1,239 @@
+diff --git a/MobileGL/MG_Impl/EGLImpl/EGLImpl.cpp b/MobileGL/MG_Impl/EGLImpl/EGLImpl.cpp
+index 45375ee4..4ab2cf50 100644
+--- a/MobileGL/MG_Impl/EGLImpl/EGLImpl.cpp
++++ b/MobileGL/MG_Impl/EGLImpl/EGLImpl.cpp
+@@ -57,6 +57,7 @@
+ #include <time.h>
+ #endif
+ 
++void P15CountFrame();
+ namespace MobileGL::MG_Impl::EGLImpl {
+     namespace {
+         // MOBILEGL_FPS_LOG=1 (on Android also the property debug.mobilegl.fps_log=1): one INFO line
+@@ -77,6 +78,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
+         }
+ 
+         void NoteSwapForFrameRateLog() {
++            ::P15CountFrame();
+             if (!FrameRateLogEnabled()) return;
+             using Clock = std::chrono::steady_clock;
+             static Clock::time_point windowStart = Clock::now();
+diff --git a/MobileGL/MG_Impl/GLImpl/Exporting/Definitions.cpp b/MobileGL/MG_Impl/GLImpl/Exporting/Definitions.cpp
+index cc00326f..dfb56a3b 100644
+--- a/MobileGL/MG_Impl/GLImpl/Exporting/Definitions.cpp
++++ b/MobileGL/MG_Impl/GLImpl/Exporting/Definitions.cpp
+@@ -23,6 +23,7 @@
+ #include "../Debug/GL_Debug.h"
+ #include <MG_State/GLState/Core.h>
+ #include <MG_Impl/EGLImpl/EGLImpl.h>
++#include "P15Count.inl"
+ 
+ #define DECLARE_GL_FUNCTION_STUB_HEAD(type, name, ...) MOBILEGL_GL_API type gl##name(__VA_ARGS__) {
+ 
+@@ -53,12 +54,14 @@
+     }
+ #else
+ #define DECLARE_GL_FUNCTION_END(type, name, ...)                                                                       \
++    { static const int mglP15 = ::p15count::Reg(#name); ::p15count::Hit(mglP15); } \
+     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);                                                           \
+     const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;                                                    \
+     return MobileGL::MG_Impl::GLImpl::name(__VA_ARGS__);                                                               \
+     }
+ 
+ #define DECLARE_GL_FUNCTION_END_NO_RETURN(type, name, ...)                                                             \
++    { static const int mglP15 = ::p15count::Reg(#name); ::p15count::Hit(mglP15); } \
+     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);                                                           \
+     const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;                                                    \
+     MobileGL::MG_Impl::GLImpl::name(__VA_ARGS__);                                                                      \
+diff --git a/MobileGL/MG_Impl/GLImpl/Exporting/P15Count.inl b/MobileGL/MG_Impl/GLImpl/Exporting/P15Count.inl
+new file mode 100644
+index 00000000..1cb26c9a
+--- /dev/null
++++ b/MobileGL/MG_Impl/GLImpl/Exporting/P15Count.inl
+@@ -0,0 +1,186 @@
++// P15 MEASUREMENT ONLY (apply to a scratch tree, never merge into product code): per-draw (VAO, program) pair statistics and the GL entries
++// called between draws, to size the draw-packet cache. Armed by debug.mobilegl.p15count=1 or
++// MOBILEGL_P15_COUNT=1. One log line per 600 presented frames.
++#include <cstring>
++#include <cstdio>
++#include <cstdlib>
++#include <unordered_map>
++#include <vector>
++#include <algorithm>
++#if defined(__ANDROID__)
++#include <sys/system_properties.h>
++#endif
++namespace p15count {
++    using MobileGL::Uint64; using MobileGL::Uint32; using MobileGL::SizeT;
++    // categories: 0 free (draw, BindVertexArray, float uniform, UseProgram), 1 int uniform / block binding,
++    // 2 texture/sampler/image bind, 3 buffer bind/data/vertex setup, 4 texture data/params,
++    // 5 render state, 6 framebuffer/clear/blit, 7 other
++    constexpr int kCats = 8;
++    struct Fn { const char* name; int cat; bool draw; bool strictFree; };
++    inline std::vector<Fn>& Fns() { static std::vector<Fn> v; return v; }
++    inline bool On() {
++        static const bool on = [] {
++            const char* e = std::getenv("MOBILEGL_P15_COUNT");
++            if (e && e[0] == '1') return true;
++#if defined(__ANDROID__)
++            char p[PROP_VALUE_MAX] = {};
++            if (__system_property_get("debug.mobilegl.p15count", p) > 0 && p[0] == '1') return true;
++#endif
++            return false;
++        }();
++        return on;
++    }
++    inline bool Pre(const char* n, const char* p) { return std::strncmp(n, p, std::strlen(p)) == 0; }
++    inline bool IsFloatUniform(const char* n) {
++        if (Pre(n, "Program")) n += 7;
++        if (!Pre(n, "Uniform")) return false;
++        n += 7;
++        if (Pre(n, "BlockBinding")) return false;
++        const SizeT l = std::strlen(n);
++        if (l == 0) return false;
++        // ...f / ...fv
++        return n[l - 1] == 'f' || (l >= 2 && n[l - 2] == 'f' && n[l - 1] == 'v');
++    }
++    inline int Classify(const char* n, bool* draw, bool* strictFree) {
++        *draw = (Pre(n, "Draw") || Pre(n, "MultiDraw")) && !Pre(n, "DrawBuffer");
++        const bool fu = IsFloatUniform(n);
++        *strictFree = *draw || std::strcmp(n, "BindVertexArray") == 0 || fu;
++        if (*strictFree || std::strcmp(n, "UseProgram") == 0) return 0;
++        if (Pre(n, "Uniform") || Pre(n, "ProgramUniform")) return 1;
++        static const char* tex[] = {"BindTexture", "ActiveTexture", "BindSampler", "BindTextureUnit", "BindImageTexture"};
++        for (auto* t : tex) if (Pre(n, t)) return 2;
++        static const char* buf[] = {"BindBuffer", "BufferSubData", "BufferData", "NamedBuffer", "MapBuffer", "MapNamedBuffer",
++                                    "UnmapBuffer", "UnmapNamedBuffer", "FlushMapped", "VertexAttrib", "EnableVertexAttrib",
++                                    "DisableVertexAttrib", "BindVertexBuffer", "VertexBindingDivisor", "VertexArray",
++                                    "EnableVertexArrayAttrib", "DisableVertexArrayAttrib", "CopyBufferSubData", "ClearBuffer"};
++        for (auto* t : buf) if (Pre(n, t)) return 3;
++        static const char* td[] = {"TexImage", "TexSubImage", "TexParameter", "TextureParameter", "TexStorage", "TextureStorage",
++                                   "TextureSubImage", "GenerateMipmap", "GenerateTextureMipmap", "CopyTex", "CompressedTex", "PixelStore"};
++        for (auto* t : td) if (Pre(n, t)) return 4;
++        static const char* rs[] = {"Enable", "Disable", "Blend", "Depth", "ColorMask", "CullFace", "FrontFace", "Polygon", "Scissor",
++                                   "Viewport", "Stencil", "LineWidth", "PointSize", "SampleCoverage", "LogicOp", "ClipControl",
++                                   "PrimitiveRestart", "ProvokingVertex", "PatchParameter", "MinSampleShading", "SampleMask"};
++        for (auto* t : rs) if (Pre(n, t)) return 5;
++        static const char* fb[] = {"BindFramebuffer", "Framebuffer", "NamedFramebuffer", "DrawBuffer", "ReadBuffer", "Clear", "Blit",
++                                   "ReadPixels", "BindRenderbuffer", "Renderbuffer", "InvalidateFramebuffer", "InvalidateSubFramebuffer"};
++        for (auto* t : fb) if (Pre(n, t)) return 6;
++        return 7;
++    }
++    struct PairState { Uint64 lastFrame = ~0ull; Uint64 epoch[kCats] = {}; Uint64 strictEpoch = 0; Uint64 lastDraw = 0; };
++    struct St {
++        Uint64 frame = 0, frames = 0, draws = 0, calls = 0;
++        Uint64 epoch[kCats] = {};      // epoch[k] bumps on any call with category > k (k = allowed max category)
++        Uint64 strictEpoch = 0;        // bumps on anything outside {draw, BindVertexArray, float uniform}
++        Uint64 gapMask = 0;            // categories since the previous draw
++        bool gapStrictDirty = false;
++        std::vector<Uint32> gapFns; std::vector<Uint64> gapStamp; Uint64 gapGen = 1;
++        std::vector<Uint64> fnGapDraws;  // draws whose gap included fn
++        std::vector<Uint64> fnCalls;
++        std::unordered_map<Uint64, PairState> pairs; // key: vao lifetime * 2^24 ^ program lifetime
++        std::unordered_map<Uint64, Uint64> pairsThisFrame;
++        Uint64 prevPair = ~0ull;
++        Uint64 sameAsPrev = 0, seenThisFrame = 0, seenPrevFrame = 0, newEver = 0, distinctFrameSum = 0;
++        Uint64 hit[kCats] = {}, strictHit = 0, prevDrawClean[kCats] = {}, prevDrawStrictClean = 0;
++        Uint64 maskHist[256] = {};
++        Uint64 vaoZero = 0, progZero = 0;
++    };
++    inline St& S() { static St s; return s; }
++    inline int Reg(const char* name) {
++        bool d, sf; const int c = Classify(name, &d, &sf);
++        Fns().push_back({name, c, d, sf});
++        auto& s = S(); s.gapStamp.push_back(0); s.fnGapDraws.push_back(0); s.fnCalls.push_back(0);
++        return static_cast<int>(Fns().size() - 1);
++    }
++    inline void Hit(int idx) {
++        if (!On()) return;
++        auto& s = S(); const Fn& f = Fns()[idx];
++        ++s.calls; ++s.fnCalls[idx];
++        if (!f.draw) {
++            for (int k = 0; k < f.cat; ++k) ++s.epoch[k];
++            if (!f.strictFree) { ++s.strictEpoch; s.gapStrictDirty = true; }
++            s.gapMask |= 1ull << f.cat;
++            if (f.cat != 0 && s.gapStamp[idx] != s.gapGen) { s.gapStamp[idx] = s.gapGen; s.gapFns.push_back(idx); }
++            return;
++        }
++        // a draw: read the bound VAO and program before it runs
++        auto* ctx = MobileGL::MG_State::pGLContext.get();
++        if (!ctx) return;
++        const auto& vao = ctx->GetBoundVertexArray();
++        const auto& prog = ctx->GetCurrentProgram();
++        const Uint64 v = vao ? vao->GetLifetimeId() : 0, p = prog ? prog->GetLifetimeId() : 0;
++        if (!v) ++s.vaoZero;
++        if (!p) ++s.progZero;
++        const Uint64 key = (v << 24) ^ p;
++        ++s.draws;
++        if (key == s.prevPair) ++s.sameAsPrev;
++        s.prevPair = key;
++        auto [fit, fnew] = s.pairsThisFrame.emplace(key, 1);
++        if (!fnew) { ++s.seenThisFrame; ++fit->second; }
++        auto [it, isNew] = s.pairs.try_emplace(key);
++        PairState& ps = it->second;
++        if (isNew) ++s.newEver;
++        else {
++            if (ps.lastFrame + 1 == s.frame || ps.lastFrame == s.frame) ++s.seenPrevFrame;
++            for (int k = 0; k < kCats; ++k) if (ps.epoch[k] == s.epoch[k]) ++s.hit[k];
++            if (ps.strictEpoch == s.strictEpoch) ++s.strictHit;
++        }
++        for (int k = 0; k < kCats; ++k) ps.epoch[k] = s.epoch[k];
++        ps.strictEpoch = s.strictEpoch; ps.lastFrame = s.frame;
++        // gap since previous draw
++        int maxCat = 0; for (int k = 0; k < kCats; ++k) if (s.gapMask >> k & 1) maxCat = k;
++        for (int k = 0; k < kCats; ++k) if (maxCat <= k) ++s.prevDrawClean[k];
++        if (!s.gapStrictDirty) ++s.prevDrawStrictClean;
++        ++s.maskHist[s.gapMask & 255];
++        for (Uint32 i : s.gapFns) ++s.fnGapDraws[i];
++        s.gapFns.clear(); ++s.gapGen; s.gapMask = 0; s.gapStrictDirty = false;
++    }
++    inline void Frame() {
++        if (!On()) return;
++        auto& s = S();
++        s.distinctFrameSum += s.pairsThisFrame.size();
++        s.pairsThisFrame.clear();
++        ++s.frame; ++s.frames;
++        static const Uint64 kWin = [] { const char* w = std::getenv("MOBILEGL_P15_COUNT_WINDOW"); return w ? std::strtoull(w, nullptr, 10) : 600ull; }();
++        if (s.frames < kWin) return;
++        const double F = double(s.frames), D = s.draws ? double(s.draws) : 1.0;
++        MGLOG_I("P15CNT frames=%.0f draws/frame=%.1f glcalls/frame=%.1f distinctPairs/frame=%.1f pairsEver=%zu newPairs/frame=%.2f "
++                "sameAsPrev=%.1f%% seenThisFrame=%.1f%% seenPrevOrThisFrame=%.1f%% vao0=%.1f%% prog0=%.1f%%",
++                F, D / F, double(s.calls) / F, double(s.distinctFrameSum) / F, s.pairs.size(), double(s.newEver) / F,
++                100.0 * s.sameAsPrev / D, 100.0 * s.seenThisFrame / D, 100.0 * s.seenPrevFrame / D, 100.0 * s.vaoZero / D,
++                100.0 * s.progZero / D);
++        MGLOG_I("P15CNT strict(draw+BindVAO+floatUniform): pairEpochHit=%.1f%% prevDrawGapClean=%.1f%%", 100.0 * s.strictHit / D,
++                100.0 * s.prevDrawStrictClean / D);
++        for (int k = 0; k < kCats; ++k)
++            MGLOG_I("P15CNT allow<=cat%d: pairEpochHit=%.1f%% prevDrawGapClean=%.1f%%", k, 100.0 * s.hit[k] / D,
++                    100.0 * s.prevDrawClean[k] / D);
++        // top gap masks
++        std::vector<std::pair<Uint64, int>> mh;
++        for (int m = 0; m < 256; ++m) if (s.maskHist[m]) mh.push_back({s.maskHist[m], m});
++        std::sort(mh.rbegin(), mh.rend());
++        char line[1200]; int o = 0;
++        for (SizeT i = 0; i < mh.size() && i < 14 && o < 1100; ++i) o += std::snprintf(line + o, sizeof line - o, " %02x:%.1f%%", mh[i].second, 100.0 * mh[i].first / D);
++        MGLOG_I("P15CNT gapMasks(bit=cat):%s", line);
++        std::vector<std::pair<Uint64, int>> fg;
++        for (SizeT i = 0; i < s.fnGapDraws.size(); ++i) if (s.fnGapDraws[i]) fg.push_back({s.fnGapDraws[i], int(i)});
++        std::sort(fg.rbegin(), fg.rend());
++        o = 0;
++        for (SizeT i = 0; i < fg.size() && i < 24 && o < 1100; ++i)
++            o += std::snprintf(line + o, sizeof line - o, " %s(c%d):%.1f%%", Fns()[fg[i].second].name, Fns()[fg[i].second].cat, 100.0 * fg[i].first / D);
++        MGLOG_I("P15CNT gapFns(%% of draws):%s", line);
++        std::vector<std::pair<Uint64, int>> fc;
++        for (SizeT i = 0; i < s.fnCalls.size(); ++i) if (s.fnCalls[i]) fc.push_back({s.fnCalls[i], int(i)});
++        std::sort(fc.rbegin(), fc.rend());
++        o = 0;
++        for (SizeT i = 0; i < fc.size() && i < 30 && o < 1100; ++i)
++            o += std::snprintf(line + o, sizeof line - o, " %s:%.1f", Fns()[fc[i].second].name, double(fc[i].first) / F);
++        MGLOG_I("P15CNT calls/frame:%s", line);
++        // reset window counters (keep pair table and epochs)
++        s.frames = s.draws = s.calls = 0; s.sameAsPrev = s.seenThisFrame = s.seenPrevFrame = s.newEver = s.distinctFrameSum = 0;
++        s.strictHit = s.prevDrawStrictClean = s.vaoZero = s.progZero = 0;
++        for (int k = 0; k < kCats; ++k) s.hit[k] = s.prevDrawClean[k] = 0;
++        for (auto& m : s.maskHist) m = 0;
++        for (auto& x : s.fnGapDraws) x = 0;
++        for (auto& x : s.fnCalls) x = 0;
++    }
++}
++extern "C++" void P15CountFrame() { p15count::Frame(); }

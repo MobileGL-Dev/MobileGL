@@ -1,0 +1,664 @@
+// MobileGL - MobileGL/MG_Impl/Pipe/VertexInputEmit.h
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+#pragma once
+#include <Includes.h>
+#include <Config.h>
+
+// Client side of the vertex-input family: the bound VAO's format as create/bind_vertex_elements,
+// its buffers as set_vertex_buffers (with an explicit baseInstance) and its element binding as
+// set_index_buffer, emitted at the validate point in that order. The vertex-elements CSO is
+// addressed by VAO identity, not content (ARCHITECTURE.md §2.3): one handle per VAO lifetime id,
+// with create_vertex_elements re-issued on it when the configuration moves, because Espryt's
+// twin owns a driver VAO that two VAOs cannot share. The wire conversion is one pure function
+// per view, and the emitter builds into members tests can read back without a copy.
+#include <MG_Impl/Pipe/ResourceTracker.h>
+#include <MG_Impl/Pipe/SetHashSuppressor.h>
+#include <MG_Impl/Pipe/SlotAllocator.h>
+#include <MG_Impl/Pipe/Tracker.h>
+#include <MG_Pipe/MGPipe.h>
+#include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeRoute.h>
+#include <MG_State/GLState/Core.h>
+#include <MG_Util/Metrics/PipeStats.h>
+
+#include <xxhash.h>
+
+#include <cstring>
+
+namespace MobileGL::MG_Pipe {
+
+    // ---------------------------------------------------------------------------------
+    // D-G2: the wire conversion, one pure function per view
+    // ---------------------------------------------------------------------------------
+
+    // The wire form carries every VertexAttribute field except Divisor (sent once, per binding
+    // point, in MGPVertexBuffer::Divisor), LegacyStride/LegacyPointer (query answers, client-only)
+    // and Buffer (identity travels in set_vertex_buffers, so this record stays stable while the
+    // buffers change). Stride is the resolved distance: a 0 here comes only from the binding
+    // model and means every vertex reads the same element, so it must not become the element
+    // size. IsLong is separate from Type == Float64: VertexAttribFormat(GL_DOUBLE) converts to
+    // float, VertexAttribLFormat keeps 64 bits, and the backend's fp64 narrowing and Adreno
+    // disabled-attribute workaround tell the two apart.
+    inline MGPVertexAttribWire MGPipeBuildVertexAttribWire(const MG_State::GLState::VertexAttribute& attrib,
+                                                           Uint32 bindingIndex) {
+        // ASSERT RATHER THAN ASSUME, in both directions, because the three narrowing casts
+        // below cross a package boundary: VertexArrayObject is another package's file and its
+        // 32-slot bound is its invariant, not this one's, so a BindingIndex of 256 would wrap
+        // to 0 and silently point every attribute at binding 0, and a negative Stride (the
+        // frontend field is a signed int) would arrive as a ~4 GiB unsigned distance.
+        MOBILEGL_ASSERT(bindingIndex < 256u, "MGPVertexAttribWire::BindingIndex is a Uint8 and cannot carry %u",
+                        static_cast<Uint>(bindingIndex));
+        MOBILEGL_ASSERT(attrib.Size >= 0 && attrib.Size <= 255,
+                        "MGPVertexAttribWire::Size is a Uint8 and cannot carry %d", attrib.Size);
+        MGPVertexAttribWire wire{};
+        wire.Offset = static_cast<Uint64>(attrib.Offset);
+        wire.Stride = static_cast<Int32>(attrib.Stride);
+        wire.Type = static_cast<Uint32>(attrib.Type);
+        wire.Size = static_cast<Uint8>(attrib.Size);
+        wire.Enabled = attrib.Enabled ? 1 : 0;
+        wire.Normalized = attrib.Normalized ? 1 : 0;
+        wire.IsInteger = attrib.IsInteger ? 1 : 0;
+        wire.IsLong = attrib.IsLong ? 1 : 0;
+        wire.IsBgra = attrib.IsBgra ? 1 : 0;
+        wire.BindingIndex = static_cast<Uint8>(bindingIndex);
+        return wire;
+    }
+
+    // The ARB_vertex_attrib_binding view. Its initial Stride is 16, not 0 (GL 4.6 core table
+    // 23.4), which is why the wire form keeps it signed and copies it verbatim.
+    inline MGPVertexBindingPointWire MGPipeBuildVertexBindingPointWire(
+        const MG_State::GLState::VertexBufferBindingPoint& point) {
+        MGPVertexBindingPointWire wire{};
+        wire.Offset = static_cast<Uint64>(point.Offset);
+        wire.Stride = static_cast<Int32>(point.Stride);
+        wire.Divisor = static_cast<Uint32>(point.Divisor);
+        return wire;
+    }
+
+    // ---------------------------------------------------------------------------------
+    // D-H2.3: the content hash, WITH BaseInstance in it
+    // ---------------------------------------------------------------------------------
+    //
+    // A HARD REQUIREMENT, not a nicety. set_vertex_buffers is suppressed on an unchanged
+    // hash (SetHashSuppressor.h's SetVertexBuffers slot), so a baseInstance that moved while
+    // the buffer set did not would be suppressed and the server would keep the previous
+    // fetch shift - exactly the bug the backend's baseInstanceDirty flag exists to prevent.
+    inline Uint64 MGPipeVertexBufferSetContentHash(const MGPVertexBuffer* entries, Uint32 start, Uint32 count,
+                                                   Uint32 baseInstance) {
+        Uint64 hash = XXH64(entries, static_cast<SizeT>(count) * sizeof(MGPVertexBuffer), 0);
+        hash = MGPipeMixShutter(hash, start);
+        hash = MGPipeMixShutter(hash, count);
+        hash = MGPipeMixShutter(hash, baseInstance);
+        return hash;
+    }
+
+    // ---------------------------------------------------------------------------------
+    // The emitter
+    // ---------------------------------------------------------------------------------
+
+    class MGPipeVertexInputEmitter {
+    public:
+        using GLContext = MG_State::GLState::GLContext;
+        using VertexArrayObject = MG_State::GLState::VertexArrayObject;
+        static constexpr SizeT kAttribs = static_cast<SizeT>(VertexArrayObject::MAX_VERTEX_ATTRIBS);
+        static constexpr SizeT kBindings = static_cast<SizeT>(VertexArrayObject::MAX_VERTEX_ATTRIB_BINDINGS);
+        static_assert(kAttribs <= kMGPipeMaxVertexAttribs && kBindings <= kMGPipeMaxVertexAttribs,
+                      "both declared counts are bounded by kMGPipeMaxVertexAttribs");
+
+        // create/bind_vertex_elements. D-G3's three arms, verbatim:
+        //
+        //   no VAO bound                     -> bind the null handle (legal, and it means
+        //                                       exactly "no VAO bound")
+        //   the bound VAO CHANGED            -> (re)create if its configuration moved since
+        //                                       this handle last published one, then bind
+        //   the same VAO, configuration MOVED-> create on the SAME handle, and do NOT rebind
+        //
+        // The latch is PER HANDLE, in a slot-indexed table, so ping-ponging between two VAOs
+        // re-binds but never re-creates either. A Uint32 configuration version does not wrap
+        // in any realistic run and is compared directly; the tracker's widened counter is
+        // for the Uint16s and is not needed here.
+        Uint64 EmitVertexElements(GLContext& ctx) {
+            const auto& vao = ctx.GetBoundVertexArray();
+            if (!vao) {
+                if (!MGPipeHandleIsNull(m_boundHandle)) {
+                    MGPipeRouteBindVertexElements(HandleOnly(kMGPipeNullHandle));
+                    ++m_binds;
+                    m_boundHandle = kMGPipeNullHandle;
+                    m_boundLifetimeId = 0;
+                }
+                return 0;
+            }
+
+            const Uint64 lifetimeId = vao->GetLifetimeId();
+            // P15: keyed on the elements version, which a buffer-only glBindVertexBuffer does not
+            // move (FCL MC 1.21.5 does one per chunk draw), so such a draw skips the blob build
+            // and compare below entirely. The dedup's kill switch also restores the old key.
+            const Bool dedup = MG_Config::Features.PipeVertexElementsDedup != MG_Config::QuirkOverride::ForceOff;
+            const Uint32 configVersion = dedup ? vao->GetElementsVersion() : vao->GetConfigVersion();
+            // The VAO's handle is the allocator's for the object's whole life (only an allocator
+            // reset forgets it), so it is resolved once per VAO rather than per draw (VaoMemo).
+            VaoMemo& memo = MemoFor(*vao);
+            if (MGPipeHandleIsNull(memo.ElementsHandle))
+                memo.ElementsHandle = MGPipeSlots().Acquire(MGPipeKind::VertexElementsCso, lifetimeId);
+            const MGPipeHandle handle = memo.ElementsHandle;
+            const SizeT slot = handle.Slot;
+            if (slot >= m_latch.size()) m_latch.resize(slot + 1);
+            Latch& latch = m_latch[slot];
+
+            Uint64 bytes = 0;
+            const Bool configMoved =
+                !latch.Published || latch.ConfigVersion != configVersion || latch.Gen != handle.Gen;
+            if (configMoved) {
+                BuildBlob(*vao);
+                // P15: the version moves on every glBindVertexBuffer, but the record only names
+                // formats and offsets. An identical record for the same handle and generation is
+                // already the server's: re-creating it moved its content serial for nothing, which
+                // sent the backend through a whole attribute walk per draw (FCL MC 1.21.5: one per
+                // chunk draw). Kill switch MOBILEGL_PIPE_VERTEX_ELEMENTS_DEDUP=0.
+                const Bool unchanged = dedup && latch.Published && latch.Gen == handle.Gen &&
+                                       latch.PublishedBlob.size() == kBlobBytes &&
+                                       std::memcmp(latch.PublishedBlob.data(), m_blob.data(), kBlobBytes) == 0;
+                if (unchanged) {
+                    latch.ConfigVersion = configVersion;
+                    ++m_createsDeduped;
+                } else {
+                    bytes += EmitCreate(handle, latch, configVersion);
+                    // The applier drops the record's kept bindings at the same create.
+                    memo.StoredBuffersValid = false;
+                    memo.StoredIndexValid = false;
+                }
+            }
+            if (lifetimeId != m_boundLifetimeId || m_boundHandle != handle) {
+                MGPipeRouteBindVertexElements(HandleOnly(handle));
+                ++m_binds;
+                bytes += sizeof(MGPHandleOnly);
+                m_boundHandle = handle;
+                m_boundLifetimeId = lifetimeId;
+                // P14: the bind re-applies whatever the record keeps (PipeApply.h,
+                // MGPipeVertexElementsRecord). The mirror below says what that is; where it does
+                // not know, the next set goes out whatever it hashes to.
+                auto& suppressor = MGPipeSetHashSuppressorInstance();
+                if (memo.StoredBuffersValid)
+                    suppressor.Latch(MGPipeSuppressorSlot::SetVertexBuffers, memo.StoredBuffersHash);
+                else
+                    suppressor.Invalidate(MGPipeSuppressorSlot::SetVertexBuffers);
+                m_serverIndexKnown = memo.StoredIndexValid;
+                m_serverIndexRes = memo.StoredIndexRes;
+            }
+            return bytes;
+        }
+
+        // set_vertex_buffers. Espryt consumes RESOLVED attributes, so the set is one entry
+        // per attribute slot with BindingIndex == the attribute index; Start is 0 and Count
+        // is the highest ENABLED attribute plus one, which is the 32-slot prefix walk the
+        // dirty bit is specified over.
+        //
+        // Validate has no draw range yet, so a client-memory array initially names
+        // the null handle. Under a transport, OwnedDrawInputs snapshots the actual
+        // fetches at draw emission and calls this again with ownedClientBuffers.
+        // Monolith keeps its existing backend-side client-array upload.
+        Uint64 EmitVertexBuffers(GLContext& ctx, Uint32 baseInstance,
+                                 const Array<MGPipeHandle, kMGPipeMaxVertexAttribs>* ownedClientBuffers = nullptr) {
+            const auto& vao = ctx.GetBoundVertexArray();
+            Uint32 count = 0;
+            // The resolved set is a function of the VAO's configuration alone (buffers, strides,
+            // divisors and enables all move its version; its buffers' handles live as long as the
+            // VAO holds the buffers), so it is walked once per configuration rather than per draw -
+            // a Minecraft frame binds hundreds of chunk VAOs. Not for client-memory arrays, whose
+            // entries the draw itself supplies.
+            VaoMemo* memo = vao && ownedClientBuffers == nullptr ? &MemoFor(*vao) : nullptr;
+            Bool memoHit = false;
+            if (memo != nullptr && memo->BuffersValid && memo->ConfigVersion == vao->GetConfigVersion()) {
+                memoHit = true;
+                count = memo->BufferCount;
+                for (SizeT i = 0; i < count; ++i) {
+                    m_entries[i] = memo->Buffers[i];
+                    MGPipeResourceTrackerInstance().NoteBoundAs(m_entries[i].Res, BufferTarget::Vertex);
+                }
+            } else if (vao) {
+                Bool memoizable = memo != nullptr;
+                for (SizeT i = 0; i < kAttribs; ++i) {
+                    if (vao->GetAttribute(static_cast<Uint>(i)).Enabled) count = static_cast<Uint32>(i) + 1;
+                }
+                // P15: interleaved attributes share one buffer (FCL MC 1.21.5: every chunk draw
+                // re-points ~4 attributes at the next chunk's buffer), so the previous attribute's
+                // answer is reused for the same object - one lookup and one sticky-bit note per
+                // buffer instead of per attribute. Scoped to this loop: same object, same handle.
+                const MG_State::GLState::BufferObject* lastBuffer = nullptr;
+                MGPipeHandle lastHandle = kMGPipeNullHandle;
+                for (SizeT i = 0; i < count; ++i) {
+                    const auto& attrib = vao->GetAttribute(static_cast<Uint>(i));
+                    MGPVertexBuffer& entry = m_entries[i];
+                    entry = MGPVertexBuffer{};
+                    const Bool sameBuffer = attrib.Buffer && attrib.Buffer.get() == lastBuffer;
+                    if (sameBuffer) {
+                        entry.Res = lastHandle;
+                    } else {
+                        entry.Res = attrib.Buffer ? MGPipeSlots().AcquireHinted(MGPipeKind::Buffer,
+                                                                                attrib.Buffer->GetLifetimeId(),
+                                                                                attrib.Buffer->PipeHandleHint())
+                                                  : kMGPipeNullHandle;
+                        if (attrib.Buffer) {
+                            lastBuffer = attrib.Buffer.get();
+                            lastHandle = entry.Res;
+                        }
+                    }
+                    if (ownedClientBuffers != nullptr && attrib.Enabled && !attrib.Buffer) {
+                        entry.Res = (*ownedClientBuffers)[i];
+                    }
+                    // D-A3's sticky mask, ORed HERE rather than only sampled at a storage op.
+                    // This is the bit that survives the DSA idiom: a buffer defined through
+                    // glNamedBuffer* may never be bound at any resource emission, but a draw
+                    // that fetches from it resolves it right here, on the GL thread, at every
+                    // draw. Sticky, so one draw is enough for the rest of its life.
+                    if (!sameBuffer) MGPipeResourceTrackerInstance().NoteBoundAs(entry.Res, BufferTarget::Vertex);
+                    // The attribute's own byte offset lives in MGPVertexAttribWire::Offset,
+                    // so the entry's is the BINDING's, which the frontend already folded in.
+                    entry.Offset = 0;
+                    // Signed on the frontend, unsigned on the wire, and a negative one would
+                    // arrive as a ~4 GiB fetch distance rather than as an error.
+                    MOBILEGL_ASSERT(attrib.Stride >= 0, "a resolved vertex stride is never negative (%d)",
+                                    attrib.Stride);
+                    entry.Stride = static_cast<Uint32>(attrib.Stride);
+                    entry.Divisor = static_cast<Uint32>(attrib.Divisor);
+                    entry.BindingIndex = static_cast<Uint32>(i);
+                    if (attrib.Enabled && !attrib.Buffer) memoizable = false;
+                }
+                if (memo != nullptr) {
+                    memo->HashValid = false;
+                    memo->BuffersValid = memoizable && count <= kVaoMemoBuffers;
+                    memo->ConfigVersion = vao->GetConfigVersion();
+                    memo->BufferCount = count;
+                    for (SizeT i = 0; i < count && i < kVaoMemoBuffers; ++i)
+                        memo->Buffers[i] = m_entries[i];
+                }
+            }
+
+            // The set's hash is a function of the entries and the base instance, so a memoised set
+            // keeps the one it was hashed with for as long as the base instance is the same.
+            Uint64 hash = 0;
+            if (memoHit && memo->HashValid && memo->HashBaseInstance == baseInstance) {
+                hash = memo->Hash;
+            } else {
+                hash = MGPipeVertexBufferSetContentHash(m_entries.data(), 0, count, baseInstance);
+                if (memo != nullptr && memo->BuffersValid) {
+                    memo->Hash = hash;
+                    memo->HashBaseInstance = baseInstance;
+                    memo->HashValid = true;
+                }
+            }
+            if (!MGPipeSetHashSuppressorInstance().ShouldEmit(MGPipeSuppressorSlot::SetVertexBuffers, hash)) {
+                return 0;
+            }
+            m_lastBuffers = MGPVertexBuffers{};
+            m_lastBuffers.Start = 0;
+            m_lastBuffers.Count = count;
+            // THE DRAW'S RAW value. The client never pre-shifts an offset and never learns
+            // whether the server emulated the shift or let GL_EXT_base_instance do it -
+            // emulation is server-owned.
+            m_lastBuffers.BaseInstance = baseInstance;
+            m_lastBuffers.ContentHash = hash;
+            MGPipeRouteSetVertexBuffers(m_lastBuffers, m_entries.data());
+            ++m_bufferSets;
+            // The bound array now keeps this set (the applier's rule, mirrored): a draw-time
+            // client-array set is the array's too, but it names private buffers, so the mirror
+            // forgets rather than remembers it.
+            if (vao && vao->GetLifetimeId() == m_boundLifetimeId) {
+                VaoMemo& bound = MemoFor(*vao);
+                bound.StoredBuffersValid = ownedClientBuffers == nullptr && count <= kMGPipeVaoStoredVertexBuffers;
+                bound.StoredBuffersHash = hash;
+            }
+            return sizeof(MGPVertexBuffers) + static_cast<Uint64>(count) * sizeof(MGPVertexBuffer);
+        }
+
+        // set_index_buffer. An INDEPENDENT call, not a subset of the vertex-elements
+        // configuration version (D5) - the index slot is explicitly outside the VAO's
+        // m_configVersion, and the shutter for it is bit 10's, narrowed in Tracker.h.
+        //
+        // Offset and IndexSize are 0 here and the draw verb overrides them: at the validate
+        // point there is no draw to read them from, and the applier stores what it is given.
+        Uint64 EmitIndexBuffer(GLContext& ctx) {
+            const auto& vao = ctx.GetBoundVertexArray();
+            m_lastIndex = MGPIndexBuffer{};
+            if (vao) {
+                if (const auto& bound = vao->GetIndexBufferBindingSlot().GetBoundObject()) {
+                    // Per VAO, keyed on the element buffer's own lifetime id (VaoMemo).
+                    VaoMemo& memo = MemoFor(*vao);
+                    if (memo.IndexLifetimeId != bound->GetLifetimeId() || MGPipeHandleIsNull(memo.IndexHandle)) {
+                        memo.IndexLifetimeId = bound->GetLifetimeId();
+                        memo.IndexHandle = MGPipeSlots().Acquire(MGPipeKind::Buffer, memo.IndexLifetimeId);
+                    }
+                    m_lastIndex.Res = memo.IndexHandle;
+                    // The INDEX|ELEMENT_ARRAY bind bits. ELEMENT_ARRAY's D-B7 reader
+                    // (kCapNeedsHostIndexBytes) is RESERVED (P8-F) and was never built.
+                    // Noted at every draw for RefreshBindMask's reason: an EBO defined through
+                    // DSA and unbound before its last respecify would otherwise never publish
+                    // it, and getting that bit wrong is invisible in monolith.
+                    MGPipeResourceTrackerInstance().NoteBoundAs(m_lastIndex.Res, BufferTarget::Index);
+                }
+            }
+            // P14: the server already holds this binding - re-applied by the bind from the
+            // array's kept one, or sent last time - so there is nothing to send.
+            if (m_serverIndexKnown && m_serverIndexRes == m_lastIndex.Res) return 0;
+            MGPipeRouteSetIndexBuffer(m_lastIndex);
+            ++m_indexSets;
+            m_serverIndexKnown = true;
+            m_serverIndexRes = m_lastIndex.Res;
+            if (vao && vao->GetLifetimeId() == m_boundLifetimeId) {
+                VaoMemo& bound = MemoFor(*vao);
+                bound.StoredIndexValid = true;
+                bound.StoredIndexRes = m_lastIndex.Res;
+            }
+            return sizeof(MGPIndexBuffer);
+        }
+
+        // P14: two per-draw questions of the verb port (VerbPort.cpp's ReadDrawBindings), answered
+        // from the per-VAO memo when it knows: whether no enabled attribute is a client array (a
+        // memoised buffer set is exactly that, for the configuration version it was built at), and
+        // the handle of an element buffer it already resolved. False / null mean "ask the frontend".
+        Bool KnownWithoutClientArrays(const VertexArrayObject& vao) {
+            const VaoMemo& memo = MemoFor(vao);
+            return memo.BuffersValid && memo.ConfigVersion == vao.GetConfigVersion();
+        }
+        MGPipeHandle KnownIndexHandle(const VertexArrayObject& vao, Uint64 indexLifetimeId) {
+            const VaoMemo& memo = MemoFor(vao);
+            return memo.IndexLifetimeId == indexLifetimeId ? memo.IndexHandle : kMGPipeNullHandle;
+        }
+
+        // A set_index_buffer this emitter did not send (OwnedDrawInputs' private element
+        // buffer): the server's binding and the bound array's kept one are no longer known.
+        void NoteIndexBufferRoutedElsewhere(GLContext& ctx) {
+            m_serverIndexKnown = false;
+            const auto& vao = ctx.GetBoundVertexArray();
+            if (vao && vao->GetLifetimeId() == m_boundLifetimeId) MemoFor(*vao).StoredIndexValid = false;
+        }
+
+        // ---- what a unit case reads. None of it costs a copy: the emitter builds INTO
+        // these and hands the applier the same pointers. ----
+        const Array<MGPVertexAttribWire, kMGPipeMaxVertexAttribs>& LastAttributes() const { return m_attributes; }
+        const Array<MGPVertexBindingPointWire, kMGPipeMaxVertexAttribs>& LastBindingPoints() const {
+            return m_bindingPoints;
+        }
+        const MGPVertexElements& LastElements() const { return m_lastElements; }
+        const MGPVertexBuffers& LastVertexBuffers() const { return m_lastBuffers; }
+        const Array<MGPVertexBuffer, kMGPipeMaxVertexAttribs>& LastEntries() const { return m_entries; }
+        const MGPIndexBuffer& LastIndexBuffer() const { return m_lastIndex; }
+        MGPipeHandle BoundHandle() const { return m_boundHandle; }
+        Uint64 CreateCount() const { return m_creates; }
+        Uint64 DedupedCreateCount() const { return m_createsDeduped; }
+        Uint64 BindCount() const { return m_binds; }
+        Uint64 VertexBufferSetCount() const { return m_bufferSets; }
+        Uint64 IndexBufferSetCount() const { return m_indexSets; }
+
+        // Whether the applier holds a vertex-elements record for exactly `handle`. The death
+        // path (MGPipeEmitVertexElementsDestroyAndFree) must ask this instead of inferring it
+        // from the slot: a backend that keys its twins on handles (DirectGLES'
+        // BackendSlotTable) can mint a VertexElementsCso slot with no record behind it, and
+        // delete_vertex_elements on such a handle is refused, which the applier asserts on.
+        // This half of the latch survives Reset(), because MGPipeApplierReset keeps records.
+        Bool RecordIsPublished(MGPipeHandle handle) const {
+            if (MGPipeHandleIsNull(handle)) return false;
+            const SizeT slot = handle.Slot;
+            if (slot >= m_latch.size()) return false;
+            const Latch& latch = m_latch[slot];
+            return latch.RecordLive && latch.RecordGen == handle.Gen;
+        }
+
+        // The record named by `handle` is gone from the applier. Also drops the bound-handle
+        // memo when it named it, so the client's idea of BoundVertexElements and the applier's
+        // (which MGPipeApplyDeleteVertexElements just cleared for the same handle) stay in
+        // step rather than diverging until the next bind happens to correct it.
+        void NoteRecordDestroyed(MGPipeHandle handle) {
+            if (MGPipeHandleIsNull(handle)) return;
+            const SizeT slot = handle.Slot;
+            if (slot < m_latch.size() && m_latch[slot].RecordGen == handle.Gen) {
+                m_latch[slot] = Latch{};
+            }
+            if (m_boundHandle == handle) {
+                m_boundHandle = kMGPipeNullHandle;
+                m_boundLifetimeId = 0;
+            }
+        }
+
+        // A fresh context is a fresh server: the applier's records are gone, so every latch
+        // this emitter holds describes objects the server no longer has. Called from the
+        // validate point's FreshlyPrimed arm beside MGPipeApplierReset and the suppressor's
+        // InvalidateAll, for the same reason they are.
+        //
+        // The PER-CONTEXT half only - see RecordIsPublished above for why RecordLive/RecordGen
+        // survive. Re-creating a configuration the applier already holds is a bounded
+        // over-fire (MGPipeApplyCreateVertexElements starts the record over); forgetting that
+        // it holds one at all would leak the record and its slot at the object's death.
+        void Reset() {
+            for (Latch& latch : m_latch) {
+                latch.Published = false;
+                latch.Gen = 0;
+                latch.ConfigVersion = 0;
+            }
+            m_boundHandle = kMGPipeNullHandle;
+            m_boundLifetimeId = 0;
+            m_serverIndexKnown = false;
+        }
+
+        void ResetCounters() { m_creates = m_createsDeduped = m_binds = m_bufferSets = m_indexSets = 0; }
+
+    private:
+        // P14: what EmitVertexElements / EmitVertexBuffers / EmitIndexBuffer resolve from a VAO,
+        // one entry per live VAO keyed on its lifetime id (monotonic, never reused), erased at the
+        // VAO's death and re-initialized after an allocator reset. A direct-mapped table was tried
+        // first and lost most entries to collisions: a Minecraft frame draws ~1,500 chunk arrays
+        // whose ids spread well past any fixed table. The handles and entries it keeps change no
+        // record; the kept-binding mirror below does decide what is sent, and is only ever
+        // believed when the server provably holds the same.
+        static constexpr SizeT kVaoMemoBuffers = 8;
+        struct VaoMemo {
+            Uint64 LifetimeId = 0;
+            Uint64 SlotEpoch = 0;
+            MGPipeHandle ElementsHandle = kMGPipeNullHandle;
+            Uint64 IndexLifetimeId = 0;
+            MGPipeHandle IndexHandle = kMGPipeNullHandle;
+            Bool BuffersValid = false;
+            Uint32 ConfigVersion = 0;
+            Uint32 BufferCount = 0;
+            Bool HashValid = false;
+            Uint32 HashBaseInstance = 0;
+            Uint64 Hash = 0;
+            Array<MGPVertexBuffer, kVaoMemoBuffers> Buffers{};
+            // The mirror of what the applier's record for this array keeps (PipeApply.h's
+            // MGPipeVertexElementsRecord): valid only while the server provably keeps exactly
+            // this. A memo entry taken over by another array starts invalid, which only costs a
+            // re-send.
+            Bool StoredBuffersValid = false;
+            Uint64 StoredBuffersHash = 0;
+            Bool StoredIndexValid = false;
+            MGPipeHandle StoredIndexRes = kMGPipeNullHandle;
+        };
+        // What the server's index binding is, when known (P14).
+        Bool m_serverIndexKnown = false;
+        MGPipeHandle m_serverIndexRes = kMGPipeNullHandle;
+        // The returned reference stays valid until the next MemoFor of a DIFFERENT array (an
+        // insert may grow the table) or ForgetVao.
+        VaoMemo& MemoFor(const VertexArrayObject& vao) {
+            const Uint64 lifetimeId = vao.GetLifetimeId();
+            const Uint64 epoch = MGPipeSlots().ResetEpoch();
+            // The three emitters of one validate ask for the same array: the last answer's index,
+            // believed only while that entry still holds this id (a grow or an erase moves entries).
+            if (m_lastMemoIndex < m_vaoMemo.size() && m_vaoMemo[m_lastMemoIndex].LifetimeId == lifetimeId &&
+                m_vaoMemo[m_lastMemoIndex].SlotEpoch == epoch)
+                return m_vaoMemo[m_lastMemoIndex];
+            if (m_vaoMemo.empty() || (m_vaoMemoUsed + 1) * 2 > m_vaoMemo.size()) GrowVaoMemo();
+            const SizeT mask = m_vaoMemo.size() - 1;
+            SizeT i = VaoMemoHome(lifetimeId, mask);
+            while (m_vaoMemo[i].LifetimeId != 0 && m_vaoMemo[i].LifetimeId != lifetimeId)
+                i = (i + 1) & mask;
+            VaoMemo& memo = m_vaoMemo[i];
+            m_lastMemoIndex = i;
+            if (memo.LifetimeId == 0) ++m_vaoMemoUsed;
+            if (memo.LifetimeId != lifetimeId || memo.SlotEpoch != epoch) {
+                memo = VaoMemo{};
+                memo.LifetimeId = lifetimeId;
+                memo.SlotEpoch = epoch;
+            }
+            return memo;
+        }
+        static SizeT VaoMemoHome(Uint64 lifetimeId, SizeT mask) {
+            return static_cast<SizeT>((lifetimeId * 0x9E3779B97F4A7C15ull) >> 32) & mask;
+        }
+        void GrowVaoMemo() {
+            Vector<VaoMemo> old;
+            old.swap(m_vaoMemo);
+            m_vaoMemo.resize(old.empty() ? 1024 : old.size() * 2);
+            m_vaoMemoUsed = 0;
+            const SizeT mask = m_vaoMemo.size() - 1;
+            for (const VaoMemo& entry : old) {
+                if (entry.LifetimeId == 0) continue;
+                SizeT i = VaoMemoHome(entry.LifetimeId, mask);
+                while (m_vaoMemo[i].LifetimeId != 0)
+                    i = (i + 1) & mask;
+                m_vaoMemo[i] = entry;
+                ++m_vaoMemoUsed;
+            }
+        }
+        Vector<VaoMemo> m_vaoMemo;
+        SizeT m_vaoMemoUsed = 0;
+        SizeT m_lastMemoIndex = ~SizeT{0};
+
+    public:
+        // The VAO died (MGPipeEmitVertexElementsDestroyAndFree): its entry goes, by backward-shift
+        // deletion so every other entry stays reachable from its home.
+        void ForgetVao(Uint64 lifetimeId) {
+            if (m_vaoMemo.empty() || lifetimeId == 0) return;
+            const SizeT mask = m_vaoMemo.size() - 1;
+            SizeT i = VaoMemoHome(lifetimeId, mask);
+            while (m_vaoMemo[i].LifetimeId != lifetimeId) {
+                if (m_vaoMemo[i].LifetimeId == 0) return;
+                i = (i + 1) & mask;
+            }
+            SizeT hole = i;
+            for (SizeT j = (hole + 1) & mask; m_vaoMemo[j].LifetimeId != 0; j = (j + 1) & mask) {
+                const SizeT home = VaoMemoHome(m_vaoMemo[j].LifetimeId, mask);
+                // Move j into the hole when its home is not strictly inside (hole, j].
+                const Bool between = hole <= j ? (home > hole && home <= j) : (home > hole || home <= j);
+                if (!between) {
+                    m_vaoMemo[hole] = m_vaoMemo[j];
+                    hole = j;
+                }
+            }
+            m_vaoMemo[hole] = VaoMemo{};
+            --m_vaoMemoUsed;
+        }
+
+    private:
+        struct Latch {
+            // The PER-CONTEXT half: "has this emitter told THIS server about this handle's
+            // configuration". Cleared by Reset() at every make-current.
+            Bool Published = false;
+            Uint32 Gen = 0;
+            Uint32 ConfigVersion = 0;
+            // The RECORD half: "does the applier hold a create_vertex_elements record at this
+            // slot, for this generation". Lives as long as the record does - see
+            // RecordIsPublished.
+            Bool RecordLive = false;
+            Uint32 RecordGen = 0;
+            // P15: the blob this handle last published, so a configuration version that moved
+            // without moving the record (a glBindVertexBuffer that only changed the buffer,
+            // whose identity rides set_vertex_buffers) re-publishes nothing. A full copy, not a
+            // hash: the compare decides what the server holds.
+            Vector<Uint8> PublishedBlob;
+        };
+
+        static MGPHandleOnly HandleOnly(MGPipeHandle handle) {
+            MGPHandleOnly only{};
+            only.Handle = handle;
+            only.Kind = static_cast<Uint32>(MGPipeKind::VertexElementsCso);
+            return only;
+        }
+
+        static constexpr SizeT kAttribBytes = kAttribs * sizeof(MGPVertexAttribWire);
+        static constexpr SizeT kBindingBytes = kBindings * sizeof(MGPVertexBindingPointWire);
+        static constexpr SizeT kBlobBytes = kAttribBytes + kBindingBytes;
+
+        // The record's blob for this configuration, into m_attributes / m_bindingPoints / m_blob.
+        // ALL 32 OF EACH, deliberately. The record DECLARES both counts and the applier refuses
+        // one whose counts do not describe its own blob, so a self-describing record is the cheap
+        // shape - and G6 is stated over all 32 slots, which a truncated set could not answer.
+        void BuildBlob(const VertexArrayObject& vao) {
+            for (SizeT i = 0; i < kAttribs; ++i) {
+                m_attributes[i] = MGPipeBuildVertexAttribWire(vao.GetAttribute(static_cast<Uint>(i)),
+                                                              vao.GetAttributeBindingIndex(static_cast<Uint>(i)));
+                // Client addresses never cross the transport. Draw emission snapshots
+                // their referenced elements into owned buffers with a zero byte origin.
+                if (!vao.GetAttribute(static_cast<Uint>(i)).Buffer) m_attributes[i].Offset = 0;
+            }
+            for (SizeT i = 0; i < kBindings; ++i) {
+                m_bindingPoints[i] = MGPipeBuildVertexBindingPointWire(vao.GetBindingPoint(static_cast<Uint>(i)));
+                if (!vao.GetBindingPoint(static_cast<Uint>(i)).Buffer) m_bindingPoints[i].Offset = 0;
+            }
+            // Attributes first, then binding points, both ascending and contiguous.
+            std::memcpy(m_blob.data(), m_attributes.data(), kAttribBytes);
+            std::memcpy(m_blob.data() + kAttribBytes, m_bindingPoints.data(), kBindingBytes);
+        }
+
+        // create_vertex_elements for the blob BuildBlob just made. It rides only a configuration
+        // change whose record differs from the one this handle published, never per draw.
+        Uint64 EmitCreate(MGPipeHandle handle, Latch& latch, Uint32 configVersion) {
+            m_lastElements = MGPVertexElements{};
+            m_lastElements.Cso = handle;
+            m_lastElements.AttributeCount = static_cast<Uint32>(kAttribs);
+            m_lastElements.BindingPointCount = static_cast<Uint32>(kBindings);
+            m_lastElements.Blob.Seg = kMGHostSpanSegNone;
+            m_lastElements.Blob.Offset = 0;
+            m_lastElements.Blob.Size = kAttribBytes + kBindingBytes;
+            MGPipeRouteCreateVertexElements(m_lastElements, m_blob.data());
+            ++m_creates;
+            latch.Published = true;
+            latch.Gen = handle.Gen;
+            latch.ConfigVersion = configVersion;
+            // THE ONE PRODUCER of the record half: a create that reached the applier is the
+            // only thing that makes delete_vertex_elements a legal call for this handle.
+            latch.RecordLive = true;
+            latch.RecordGen = handle.Gen;
+            latch.PublishedBlob.assign(m_blob.begin(), m_blob.begin() + kBlobBytes);
+            return sizeof(MGPVertexElements) + kAttribBytes + kBindingBytes;
+        }
+
+        Array<MGPVertexAttribWire, kMGPipeMaxVertexAttribs> m_attributes{};
+        Array<MGPVertexBindingPointWire, kMGPipeMaxVertexAttribs> m_bindingPoints{};
+        Array<Uint8, kMGPipeMaxVertexAttribs * (sizeof(MGPVertexAttribWire) + sizeof(MGPVertexBindingPointWire))>
+            m_blob{};
+        Array<MGPVertexBuffer, kMGPipeMaxVertexAttribs> m_entries{};
+
+        MGPVertexElements m_lastElements{};
+        MGPVertexBuffers m_lastBuffers{};
+        MGPIndexBuffer m_lastIndex{};
+
+        Vector<Latch> m_latch;
+        MGPipeHandle m_boundHandle = kMGPipeNullHandle;
+        Uint64 m_boundLifetimeId = 0;
+
+        Uint64 m_creates = 0;
+        Uint64 m_createsDeduped = 0;
+        Uint64 m_binds = 0;
+        Uint64 m_bufferSets = 0;
+        Uint64 m_indexSets = 0;
+    };
+
+    // The monolith's one vertex-input emitter, beside the tracker, the CSO cache, the
+    // set-hash suppressor and the resource tracker.
+    inline MGPipeVertexInputEmitter& MGPipeVertexInputEmitterInstance() {
+        // NEVER DESTROYED, for MGPipeSlots()' reason (MG_Impl/Pipe/SlotAllocator.cpp), and
+        // this one is not hypothetical: C-1 put this emitter DIRECTLY on ~VertexArrayObject's
+        // path - MGPipeEmitVertexElementsDestroyAndFree asks RecordIsPublished(handle) and
+        // then NoteRecordDestroyed(handle), which read and WRITE m_latch. A destroyed
+        // emitter answers out of a freed Vector and the write grows it, i.e. an operator
+        // new + memcpy + operator delete on an already-freed block.
+        static MGPipeVertexInputEmitter* emitter = new MGPipeVertexInputEmitter();
+        return *emitter;
+    }
+} // namespace MobileGL::MG_Pipe

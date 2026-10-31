@@ -11,7 +11,7 @@
 // Desktop GLSL has allowed "uniform int i = 1;" since 1.20, and the initializer is not a
 // suggestion: it is the value the uniform reads until the application calls glUniform*, and
 // the value it goes back to after every relink. Nothing in the API reports it, so a driver
-// that drops it is indistinguishable from one that honours it until a shader that never sets
+// that drops it is indistinguishable from one that honors it until a shader that never sets
 // the uniform produces the wrong pixels.
 //
 // MobileGL parses with Vulkan-relaxed rules, which sweep default-block uniforms into one

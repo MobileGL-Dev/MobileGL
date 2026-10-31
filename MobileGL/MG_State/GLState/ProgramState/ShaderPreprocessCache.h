@@ -155,7 +155,7 @@ namespace MobileGL::MG_State::GLState {
         // reading it. Shared ownership of the payload is what closes that hole; the mutex
         // only protects the containers below.
         mutable std::mutex m_mutex;
-        EntryList m_entries;                                 // front = oldest (FIFO victim)
+        EntryList m_entries; // front = oldest (FIFO victim)
         UnorderedMap<Key, EntryList::iterator, KeyHasher> m_index;
         SizeT m_storedSourceBytes = 0;
     };

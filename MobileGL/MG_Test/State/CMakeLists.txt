@@ -1,3 +1,11 @@
+# MobileGL - MobileGL/MG_Test/State/CMakeLists.txt
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 cmake_minimum_required(VERSION 3.14)
 
 add_executable(
@@ -12,7 +20,7 @@ target_include_directories(DebugTest PRIVATE
 
 target_link_libraries(
         DebugTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -34,7 +42,7 @@ target_include_directories(ObjectLifetimeIdTest PRIVATE
 
 target_link_libraries(
         ObjectLifetimeIdTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -44,6 +52,31 @@ endif()
 
 include(GoogleTest)
 gtest_discover_tests(ObjectLifetimeIdTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+add_executable(
+        TransformFeedbackLifetimeIdTest
+        TransformFeedbackLifetimeIdTest.cpp
+)
+
+target_include_directories(TransformFeedbackLifetimeIdTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+        ${MGL_ROOT}/3rdparty/xxHash
+        ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+        ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+)
+
+target_link_libraries(
+        TransformFeedbackLifetimeIdTest PRIVATE
+        MobileGLTestMain
+        ${LINK_LIBRARIES}
+)
+
+if (MSVC)
+        target_compile_options(TransformFeedbackLifetimeIdTest PRIVATE /Zc:preprocessor)
+endif()
+
+gtest_discover_tests(TransformFeedbackLifetimeIdTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 
 add_executable(
         RenderStateTest
@@ -60,7 +93,7 @@ target_include_directories(RenderStateTest PRIVATE
 
 target_link_libraries(
         RenderStateTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -85,7 +118,7 @@ target_include_directories(NegativeApiErrorsTest PRIVATE
 
 target_link_libraries(
         NegativeApiErrorsTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -110,7 +143,7 @@ target_include_directories(MipmapFootprintTest PRIVATE
 
 target_link_libraries(
         MipmapFootprintTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -119,3 +152,22 @@ if (MSVC)
 endif()
 
 gtest_discover_tests(MipmapFootprintTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+add_executable(
+        ContextStateOwnershipTest
+        ContextStateOwnershipTest.cpp
+)
+
+target_include_directories(ContextStateOwnershipTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        ContextStateOwnershipTest PRIVATE
+        MobileGLTestMain
+        ${LINK_LIBRARIES}
+)
+
+include(GoogleTest)
+gtest_discover_tests(ContextStateOwnershipTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

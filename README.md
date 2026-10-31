@@ -14,7 +14,9 @@ MobileGL is a *free* and *open-source* project that implements a desktop **OpenG
 
 > [!NOTE]
 >
-> **Status:** In development. Parts of the codebase are incomplete. Current short-term target: **OpenGL 4.2 (Core Profile)**.
+> **Status:** In development. Both backends expose **OpenGL 4.6 (Core Profile)**; a small number of 4.6 features are still incomplete.
+
+For end-user setup (building, installing, configuring and troubleshooting on Android, Linux and Windows), see the [user guide](userguide/README.md) in `userguide/`.
 
 ## Project positioning
 
@@ -31,9 +33,11 @@ This project is intended as an implementation/translation layer.
 The repository is organized into following top-level modules:
 
 1. **MG_State** — state tracking and management logic for Graphics APIs.
-2. **MG_Impl** — front-end implementations of Graphics APIs that interact with `MG_State` and `MG_Backend`.
+2. **MG_Impl** — front-end implementations of Graphics APIs that interact with `MG_State` and `MG_Backend`: OpenGL, plus the window-system APIs EGL, GLX, WGL, CGL and NSOpenGL.
 3. **MG_Backend** — per-backend translation layer that maps front-end Graphics APIs' semantics and state into concrete backend API calls (e.g. OpenGL ES, Vulkan).
-4. **MG_Util** and other utility modules.
+4. **MG_Pipe** and **MG_Remote** — the command stream between front-end and backend, and the client/server transport that lets the backend run in a separate process (see `docs/Disaggregated`).
+5. **MG_Gbm** — a GBM backend whose buffers are images shared with the MobileGL server, so Wayland clients and compositors can exchange them as dma-bufs (RGBA, and NV12/P010 YUV where the server's platform allocates them). YUV dma-bufs - the server's own or a video decoder's - import through `EGL_EXT_image_dma_buf_import` and are sampled through `GL_OES_EGL_image_external(_essl3)`: the backend converts the image into the texture's RGBA level at its first use in each frame (zero-copy for a server image; a foreign buffer, which the platform cannot import, is first copied into one by the CPU).
+6. **MG_Util** and other utility modules.
 
 ## Third-party components
 
@@ -48,12 +52,15 @@ Refer to each component's repository for exact license texts. Any bundled third-
 
 ## Compatibility & target
 
-* **Short-term target:** `OpenGL 4.2 (Core Profile)`.
+* **Target:** `OpenGL 4.6 (Core Profile)`, which both backends already report; the remaining work is closing the last 4.6 gaps and conformance.
+* **Backends:**
+  * `Direct (Vulkan)`
+  * `Direct (OpenGL ES)`
+* **Platforms:** Android, Linux (EGL/GLX, Wayland, usable as a glvnd vendor), Windows (WGL) and macOS (CGL/NSOpenGL).
 * **Current development focus:**
   * Performance improvement
-  * `MG_State` and `MG_Impl` for `OpenGL 4.2 (Core Profile)`
-  * `Direct (Vulkan)` backend
-  * `Direct (OpenGL ES)` backend
+  * OpenGL 4.6 completeness and conformance
+  * Disaggregated mode: the backend in a separate server process serving several clients, e.g. a full Linux desktop on Android with zero-copy window buffers
 
 ## Build Instructions
 
@@ -138,7 +145,8 @@ Also make sure the JVM arguments include:
 |------------------------------| ----------------------------------------------------- | ------- |
 | `MOBILEGL_BUILD_TEST`        | Build MobileGL tests (requires Clang)                 | ON      |
 | `MOBILEGL_BUILD_BENCHMARK`   | Build MobileGL benchmarks (requires Clang)            | ON      |
-| `MOBILEGL_FORCE_RELEASE_OPT` | Enable O3 and LTO in Debug build                      | ON      |
+| `MOBILEGL_ENABLE_LTO`        | ThinLTO (or the compiler's IPO) plus `-O3` and the release optimization flags. The Gradle (Android) build turns it on by default; pass `-Pmobilegl.enableLto=OFF` to disable it | OFF     |
+| `MOBILEGL_FORCE_RELEASE_OPT` | Also apply the `MOBILEGL_ENABLE_LTO` flags in Debug builds. Has no effect unless `MOBILEGL_ENABLE_LTO=ON` | ON      |
 | `MOBILEGL_ENABLE_TRACY`      | Enable Tracy profiler for performance analysis        | OFF     |
 
    **Notes:**
@@ -158,15 +166,20 @@ MobileGL supports runtime configuration via environment variables.
 | `MOBILEGL_BACKEND_TYPE` | Select active backend implementation at startup. | `DirectGLES`, `DirectVulkan`         | `DirectGLES`   |
 | `MOBILEGL_DISABLE_TIMERQUERY` | Disable GPU timer-query exposure and use. | `0`, `1` | `0` |
 | `MOBILEGL_ESPRYT_USE_ANGLE` | Load ANGLE EGL/GLES libraries. | `0`, `1` | `0` |
-| `MOBILEGL_MAGMA_DISABLE_SUBGROUP` | Disable Vulkan shader subgroup support. | `0`, `1` | `0` |
+| `MOBILEGL_SUBGROUP_EMULATION` | `GL_KHR_shader_subgroup` emulation (32-lane, compute stage). `Auto` emulates only where the driver has no subgroup operations; `ForceOn` emulates even over native support; `ForceOff` never emulates (native support is still used). | `Auto`, `ForceOn`, `ForceOff` | `Auto` |
+| `MOBILEGL_ITRP_FIX` | The iterationRP shaderpack repairs (scratch-array size, missing workgroup barrier); fingerprint-gated, other shaders are untouched. | `Auto`, `ForceOn`, `ForceOff` | `Auto` |
 | `MOBILEGL_ADVERTISE_FP64` | Advertise `GL_ARB_gpu_shader_fp64`. GLSL `double`/`dvec`/`dmat` compile and run either way - they are narrowed to 32 bits - so this only changes whether an application is told it has 64-bit precision, which it does not. | `0`, `1` | `0` |
 | `MOBILEGL_MAGMA_R11G11B10F_FALLBACK` | Use Magma's R11G11B10F format fallback. | `0`, `1` | `0` |
-| `MOBILEGL_MAGMA_FRAMESINFLIGHT` | Set Magma frames in flight. | Integer `1`–`64` | `3` |
+| `MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV` | Hand a shader module that fails SPIR-V validation to the driver anyway. By default Magma declines such a program (no shader module is created, its draws and dispatches are refused and logged by name), because a driver that accepts invalid SPIR-V can fault the GPU into device loss. Diagnostic use only. | `0`, `1` | `0` |
+| `MOBILEGL_FRAMES_IN_FLIGHT` | How many frames may be queued ahead of the GPU (Magma: its frame contexts; Espryt: how far presents may run ahead). The old name `MOBILEGL_MAGMA_FRAMESINFLIGHT` still works but is deprecated. | Integer `1`–`64` | `3` |
 | `MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER` | Draws and dispatches Magma records into one command buffer before it submits the buffer mid-frame and continues on a fresh one. `0` never splits. | Integer `0`–`16777216` | `16384` |
 | `MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES` | Frames a frame slot's descriptor pools must stay under a quarter full before Magma frees the slot's cached descriptor sets and grown pools. `0` never trims. | Integer `0`–`1048576` | `120` |
+| `MOBILEGL_MAGMA_EXTRA_SWAPCHAIN_IMAGES` | Swapchain images Magma asks for beyond the surface's minimum, capped at its maximum. More images delay the reuse of the window buffer the display has just released, so fewer frames wait for its release; each costs a full-size color buffer and a depth/stencil buffer. | Integer `0`–`16` | `0` |
 | `MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER` | Avoid sampler mipmap minification filters. | `0`, `1` | `0` |
 | `MOBILEGL_COHERENT_AS_FLUSH` | Treat persistent `GL_MAP_FLUSH_EXPLICIT_BIT` maps as coherent (app-compat for engines like Flywheel that never flush them). | `0`, `1` | `0` |
 | `MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION` | Always emulate depth/stencil `glReadPixels`/`glGetTexImage` by shader sampling on Espryt, instead of using the driver's own depth/stencil readback where it has one. | `0`, `1` | `0` |
+| `MOBILEGL_YUV_DRIVER_CONVERSION` | Espryt: convert YUV images with the driver's external-sampler conversion (its own color space) instead of `GL_EXT_YUV_target` with the import's `EGL_YUV_COLOR_SPACE_HINT_EXT` / `EGL_SAMPLE_RANGE_HINT_EXT`. | `0`, `1` | `0` |
+| `MOBILEGL_SERVER_FRAME_STATS` | Log one `P65ServerFrame` timing line per presented frame on the server (apply vs. wall time, socket read rate). On Android also `debug.mobilegl.server_frame_stats`. | `0`, `1` | `0` |
 | `VK_ICD_FILENAMES`      | Select the Vulkan ICD used by the Vulkan loader. | Path to an ICD JSON file             | Loader default |
 
 ## License

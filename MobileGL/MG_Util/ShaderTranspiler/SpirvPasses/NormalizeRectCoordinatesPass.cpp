@@ -27,8 +27,8 @@ namespace MobileGL {
         namespace ShaderTranspiler {
             namespace {
                 using spvtools::opt::Instruction;
-                using spvtools::opt::IRContext;
                 using spvtools::opt::InstructionBuilder;
+                using spvtools::opt::IRContext;
 
                 // Image operations whose coordinate operand (in-operand 1) is a plain
                 // normalized coordinate and nothing else. The Dref *sample* forms are absent:
@@ -80,7 +80,7 @@ namespace MobileGL {
                 // The bare image an OpImageQuerySizeLod needs. An operation on a sampled image
                 // has to unwrap it first; one already holding a bare image is used as is.
                 uint32_t GetQueryableImage(IRContext* context, InstructionBuilder& builder, uint32_t imageOperandId,
-                                         uint32_t imageTypeId) {
+                                           uint32_t imageTypeId) {
                     auto* defUseMgr = context->get_def_use_mgr();
                     Instruction* object = defUseMgr->GetDef(imageOperandId);
                     if (object == nullptr) return 0;
@@ -136,9 +136,9 @@ namespace MobileGL {
                             }
 
                             const uint32_t coordinateId = instruction.GetSingleWordInOperand(1);
-                            InstructionBuilder builder(
-                                irContext, &instruction,
-                                IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
+                            InstructionBuilder builder(irContext, &instruction,
+                                                       IRContext::kAnalysisDefUse |
+                                                           IRContext::kAnalysisInstrToBlockMapping);
                             const uint32_t queryableImageId =
                                 GetQueryableImage(irContext, builder, imageOperandId, imageType->result_id());
                             if (queryableImageId == 0) {
@@ -151,8 +151,8 @@ namespace MobileGL {
                                                                     queryableImageId, lodZeroId);
                             Instruction* sizeFloat =
                                 builder.AddUnaryOp(float2TypeId, spv::Op::OpConvertSToF, size->result_id());
-                            Instruction* normalized = builder.AddBinaryOp(
-                                float2TypeId, spv::Op::OpFDiv, coordinateId, sizeFloat->result_id());
+                            Instruction* normalized = builder.AddBinaryOp(float2TypeId, spv::Op::OpFDiv, coordinateId,
+                                                                          sizeFloat->result_id());
                             instruction.SetInOperand(1, {normalized->result_id()});
                             irContext->UpdateDefUse(&instruction);
                             rewroteCoordinate = true;

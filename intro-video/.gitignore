@@ -1,0 +1,11 @@
+# renders, audio and downloaded fonts are generated, not sources
+out/
+out_*/
+fonts/
+__pycache__/
+*.mp4
+*.wav
+*.png
+*.jpg
+*.srt
+*.json

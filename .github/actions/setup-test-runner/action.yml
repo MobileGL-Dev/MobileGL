@@ -1,0 +1,57 @@
+name: Configure Test runner
+description: Select the installed compiler and graphics stack without modifying the host
+inputs:
+  gpu:
+    description: Require the native GPU stack when running on 8845
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        NEED_GPU: ${{ inputs.gpu }}
+      run: |
+        if [ "$RUNNER_ENVIRONMENT" = "self-hosted" ] && [ "$NEED_GPU" = true ]; then
+          for tool in clang clang++ cmake ninja ccache; do command -v "$tool"; done
+          test -r /usr/share/vulkan/icd.d/dzn_icd.json
+          test -e /dev/dxg
+          {
+            echo 'MOBILEGL_CI_NATIVE_GPU=1'
+            echo 'MOBILEGL_CI_CC=clang'
+            echo 'MOBILEGL_CI_CXX=clang++'
+            echo 'MOBILEGL_CI_LLD=ld.lld'
+            echo 'MOBILEGL_CI_SOFTWARE_RENDERING=OFF'
+            echo 'VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/dzn_icd.json'
+            echo 'VK_DRIVER_FILES=/usr/share/vulkan/icd.d/dzn_icd.json'
+            echo 'EGL_PLATFORM=surfaceless'
+            echo 'LIBGL_ALWAYS_SOFTWARE=0'
+            echo 'GALLIUM_DRIVER=d3d12'
+            echo 'MESA_LOADER_DRIVER_OVERRIDE=d3d12'
+          } >> "$GITHUB_ENV"
+        else
+          {
+            echo 'MOBILEGL_CI_NATIVE_GPU=0'
+            echo 'MOBILEGL_CI_CC=clang-20'
+            echo 'MOBILEGL_CI_CXX=clang++-20'
+            echo 'MOBILEGL_CI_LLD=ld.lld-20'
+            echo 'MOBILEGL_CI_SOFTWARE_RENDERING=ON'
+            echo 'VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json'
+            echo 'VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json'
+          } >> "$GITHUB_ENV"
+          # A stalled mirror must fail a request and retry it, not hold the install step until
+          # its timeout.
+          if [ -d /etc/apt/apt.conf.d ] && command -v sudo > /dev/null; then
+            printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' |
+              sudo tee /etc/apt/apt.conf.d/80-mobilegl-ci-network > /dev/null
+          fi
+          # Cores go through zstd: a unit run's intentional aborts (death tests) left hundreds
+          # of raw cores in /tmp and filled the disk. The handler keeps honoring each
+          # process's RLIMIT_CORE (%c), so only steps that raise it with ulimit -c get cores;
+          # read one with 'zstd -d core.<exe>.<pid>.zst' first.
+          if [ ! -f /.dockerenv ] && command -v sudo > /dev/null && command -v zstd > /dev/null; then
+            printf '#!/bin/sh\n[ "$3" = 0 ] && exec cat > /dev/null\nexec %s -q -1 -o "/tmp/core.$1.$2.zst"\n' \
+              "$(command -v zstd)" | sudo tee /usr/local/bin/mobilegl-core-handler > /dev/null
+            sudo chmod 755 /usr/local/bin/mobilegl-core-handler
+            sudo sysctl -q -w kernel.core_pattern='|/usr/local/bin/mobilegl-core-handler %e %p %c'
+          fi
+        fi

@@ -11,58 +11,154 @@
 #include <Config.h>
 
 #include <atomic>
+#include <mutex>
+#include <MG_Pipe/PipeMutation.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+// MG_State reaching into MG_Remote/Client is the layering ARCHITECTURE.md §16 names - the CLIENT
+// role IS MG_State plus MG_Impl - and the edge exists only in a build that has the transport at all.
+#include <MG_Remote/Client/GpuWritePending.h>
+#endif
+// The client role's persistent-map tracker (P13 W5: the record arm's, so beside this file).
+#include <MG_State/GLState/BufferState/PersistentMapTracker.h>
+#include <MG_Util/Debug/Log.h>
+
+#include <cstdlib>
+#include <MG_Util/Metrics/PipeStats.h>
 
 namespace MobileGL::MG_State::GLState {
     namespace {
-        const BufferBackendOps* g_bufferBackendOps = nullptr;
         // Starts at 1 so a zero-initialized cache slot can never carry a live buffer's id.
         std::atomic<Uint64> g_nextBufferLifetimeId{1};
+
+        // P5c (hd, CONTRACT-P5C §3.8 / §6 layer 1): the frontend BufferObject's legacy
+        // accessors are a layer-1 surface. With an active transport, the pre-handle buffer
+        // arm that reads them (Managers.cpp's RespecifyStorageNow / UploadRangeNow /
+        // IsBufferDrawClean / the old EnsureBufferResource body) stays compiled but may not
+        // run: the apply thread calling one is Fatal{RoleViolation, "buffer-legacy-arm"} -
+        // the same shape as Fatal{PipeLegacyMemosDisabled} - so a cleared subsystem bit 7 no
+        // longer leaves the arm silently readable. Client-thread callers (the GL thread's
+        // own state) are unaffected.
+        // The refusal's BODY, split out from its two probes (P5d round 3, package D). A caller
+        // that has already asked "am I the server role" for its own reasons -
+        // SyncPersistentMappedRange does, one line later - calls this and pays for
+        // ServerLoop::OnApplyThread() once instead of twice. It is a Fatal, so it never
+        // returns; the probes live in RefuseLegacyBufferArmFromApplyThread below.
+        [[noreturn]] void FatalLegacyBufferArmFromApplyThread(const char* accessor) {
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} - the apply thread "
+                    "called BufferObject::%s on a frontend object. With an active transport "
+                    "the server reads the applier's resource record and its own staged shadow; "
+                    "a frontend object is client memory (rule E) and the pre-handle buffer arm "
+                    "is monolith-only",
+                    accessor);
+            std::abort();
+        }
+
+        // The accessors' own guard: two loads and two branches on the client thread, which is
+        // where MappedData/IsMapped/GetChangeSerial/HasDefinedContent are called from per draw
+        // (IsLivePersistentMap reads two of them for every live map). PushIsArmed() is a read
+        // of MG_Config::Transport and OnServerRole() is now one relaxed load of the apply
+        // thread's key (ServerLoop.h), so the monolith answer costs a load each.
+        void RefuseLegacyBufferArmFromApplyThread(const char* accessor) {
+            if (!MG_Record::PersistentMapTracker::PushIsArmed()) return;
+            if (!MG_Record::PersistentMapTracker::OnServerRole()) return;
+            FatalLegacyBufferArmFromApplyThread(accessor);
+        }
+    } // namespace
+
+    namespace {
+        // The live persistent READ maps, keyed on the never-reused lifetime id. Recursive
+        // because SyncGpuWrites runs under it and must stay free to reach map-state code.
+        std::recursive_mutex g_persistentReadMapsMutex;
+        UnorderedMap<Uint64, BufferObject*> g_livePersistentReadMaps;
+    } // namespace
+
+    void BufferObject::NotePersistentReadMapStateChanged() {
+        const Bool live = m_isMapped && (m_mappingAccess & BufferMappingAccessBit::Persistent) &&
+                          (m_mappingAccess & BufferMappingAccessBit::Read);
+        const std::lock_guard<std::recursive_mutex> lock(g_persistentReadMapsMutex);
+        if (live) {
+            g_livePersistentReadMaps[m_lifetimeId] = this;
+        } else {
+            g_livePersistentReadMaps.erase(m_lifetimeId);
+        }
+    }
+
+    void SyncPersistentReadMapsFromGpu() {
+        const std::lock_guard<std::recursive_mutex> lock(g_persistentReadMapsMutex);
+        if (g_livePersistentReadMaps.empty()) return;
+        for (const auto& [lifetimeId, buffer] : g_livePersistentReadMaps) {
+            (void)lifetimeId;
+            buffer->SyncGpuWrites();
+        }
     }
 
     Uint64 BufferObject::AllocateLifetimeId() {
         return g_nextBufferLifetimeId.fetch_add(1, std::memory_order_relaxed);
     }
 
-    void SetBufferBackendOps(const BufferBackendOps* ops) {
-        g_bufferBackendOps = ops;
-    }
-
-    const BufferBackendOps* GetBufferBackendOps() {
-        return g_bufferBackendOps;
-    }
-
     BufferObject::BufferObject(Uint externalIndex)
         : m_externalIndex(externalIndex), m_size(0), m_usage(BufferUsage::StaticDraw), m_isMapped(false),
-          m_mappingAccess(BufferMappingAccessBit::Null), m_mappedRange({0, 0}), m_ownsStagingData{} {}
+          m_mappingAccess(BufferMappingAccessBit::Null), m_mappedRange({0, 0}), m_ownsStagingData{} {
+        // P3a D-A2: a resource EXISTS before anything can name it, so resource_create is
+        // emitted from the constructor and carries no storage - the store is defined lazily
+        // by the first respecify and every backend already tolerates a resource with none.
+        // The handle itself is minted whatever the subsystem bitmask says, because
+        // set_vertex_buffers names this buffer by handle out of a different subsystem.
+        MG_Pipe::MGPipeMintResourceHandle(*this);
+        if (MG_Pipe::MGPipeResourceSubsystemEnabled()) MG_Pipe::MGPipeEmitResourceCreate(*this);
+    }
 
     BufferObject::~BufferObject() {
-        if (m_resource.Backend() && g_bufferBackendOps && g_bufferBackendOps->OnDestroy) {
-            g_bufferBackendOps->OnDestroy(m_resource.ReleaseBackend());
+        // Unconditional, not behind PushIsArmed(): the transport mode cannot change, but the
+        // tracker is a leaked singleton whose entries are raw pointers, and an entry that
+        // outlives its object is the one failure this set must not have. Forget is a no-op
+        // for a buffer that was never a member.
+        MG_Record::PersistentMapTracker::Instance().Forget(*this);
+        {
+            const std::lock_guard<std::recursive_mutex> lock(g_persistentReadMapsMutex);
+            g_livePersistentReadMaps.erase(m_lifetimeId);
         }
+        // P3a D-L: the buffer's death crosses as resource_destroy, which is the catalog
+        // call for it - no seventh NotifyStateObjectDestroyed raiser is added, because that
+        // header exists for kinds that have no such call. The emit-then-free ORDER is fixed
+        // inside the helper and is not negotiable.
+        // The answer is the helper's LATCH - "was resource_create emitted for this buffer" -
+        // not a second reading of MGPipeResourceSubsystemEnabled(): a buffer constructed
+        // while a backend's table was registered and destroyed after it was unregistered has
+        // a pipe record to drop and no legacy backend object, and one constructed the other
+        // way round has the opposite, so the create's answer is the only one that pairs.
+        (void)MG_Pipe::MGPipeEmitResourceDestroyAndFree(*this);
     }
 
     void BufferObject::NotifyRespecify() {
         ++m_changeSerial;
-        if (g_bufferBackendOps && g_bufferBackendOps->Respecify) {
-            g_bufferBackendOps->Respecify(*this);
+        MGP_NOTE_AGGREGATE(BufferChange);
+        if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
+            MG_Pipe::MGPipeEmitResourceRespecify(*this);
         }
     }
 
     void BufferObject::NotifySubData(SizeT offset, SizeT size) {
         ++m_changeSerial;
+        MGP_NOTE_AGGREGATE(BufferChange);
         if (size == 0) return;
         m_hasDefinedContent = true;
-        if (g_bufferBackendOps && g_bufferBackendOps->SubData) {
-            g_bufferBackendOps->SubData(*this, offset, size);
+        if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
+            MG_Pipe::MGPipeEmitResourceSubData(*this, offset, size);
         }
     }
 
     void BufferObject::NotifyFlushMappedRange(Range1D range, Flags<BufferMappingAccessBit> appAccess) {
         ++m_changeSerial;
+        MGP_NOTE_AGGREGATE(BufferChange);
         if (range.start >= range.end) return;
         m_hasDefinedContent = true;
-        if (g_bufferBackendOps && g_bufferBackendOps->FlushMappedRange) {
-            g_bufferBackendOps->FlushMappedRange(*this, range, appAccess);
+        if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
+            static_assert(sizeof(appAccess.GetRaw()) <= sizeof(Uint32),
+                          "MGPFlushRange::AccessFlags is a Uint32 and carries the application's "
+                          "real Flags<BufferMappingAccessBit>, unnormalized");
+            MG_Pipe::MGPipeEmitResourceFlushRange(*this, range.start, range.end - range.start,
+                                                  static_cast<Uint32>(appAccess.GetRaw()));
         }
     }
 
@@ -73,6 +169,7 @@ namespace MobileGL::MG_State::GLState {
             // undefined store to "has content" - that would cost the next orphaning
             // respecification a full-size upload of bytes the application never wrote.
             ++m_changeSerial;
+            MGP_NOTE_AGGREGATE(BufferChange);
             return;
         }
         m_hasDefinedContent = true;
@@ -80,6 +177,7 @@ namespace MobileGL::MG_State::GLState {
             // The write already landed in coherent GPU memory; the backend has no separate
             // copy to sync. Only bump the serial so cached transient slices invalidate.
             ++m_changeSerial;
+            MGP_NOTE_AGGREGATE(BufferChange);
             return;
         }
         NotifySubData(offset, size);
@@ -116,6 +214,10 @@ namespace MobileGL::MG_State::GLState {
         }
         m_size = size;
         m_resource.ResizeShadow(size);
+        // The store this buffer's membership was about no longer exists, and ResizeShadow is
+        // reserve+resize - a grow past the reserve reallocates - so a pushed block's source
+        // base has moved too. Both are the same event to the tracker: re-read the predicate.
+        NotePersistentMapStateChanged();
     }
 
     void BufferObject::Respecify(SizeT size, const void* data) {
@@ -183,9 +285,8 @@ namespace MobileGL::MG_State::GLState {
         if (m_size < kLargeBufferAdoptBytes) return;
         if (m_resource.IsGpuResident()) return;
         if (m_isMapped) return;
-        if (g_bufferBackendOps == nullptr || g_bufferBackendOps->AcquirePersistentMap == nullptr) return;
-        if (void* base = g_bufferBackendOps->AcquirePersistentMap(*this)) {
-            m_resource.AdoptPersistentMap(base);
+        if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
+            if (void* base = MG_Pipe::MGPipeEmitMapPersistent(*this)) m_resource.AdoptPersistentMap(base);
         }
     }
 
@@ -206,9 +307,8 @@ namespace MobileGL::MG_State::GLState {
     void BufferObject::ReleaseMemory(Bool landStagedWrites) {
         if (!m_isMapped) return;
 
-        if (landStagedWrites &&
-            (m_mappingAccess & BufferMappingAccessBit::Write)) { // if we wrote to the buffer
-            if (!(m_mappingAccess & BufferMappingAccessBit::FlushExplicit)) { // if we didn't flush explicitly
+        if (landStagedWrites && (m_mappingAccess & BufferMappingAccessBit::Write)) { // if we wrote to the buffer
+            if (!(m_mappingAccess & BufferMappingAccessBit::FlushExplicit)) {        // if we didn't flush explicitly
                 const SizeT mappedLength = m_mappedRange.end - m_mappedRange.start;
                 if (m_resource.IsGpuResident()) {
                     // A persistent map of an adopted store wrote straight into coherent
@@ -222,7 +322,7 @@ namespace MobileGL::MG_State::GLState {
                     // skipped for a resident store; residency now also comes from a
                     // shader storage binding (EnsureGpuResidentStorage at draw time) and
                     // from large-store adoption (TryAdoptLargeStorage), both of which an
-                    // application then re-initialises through an ordinary map/write/unmap.
+                    // application then re-initializes through an ordinary map/write/unmap.
                     // Skipping the copy-back dropped every one of those writes. Land the
                     // staged bytes through the same route glBufferSubData takes into an
                     // adopted store - the backend's flush op is for stores it keeps a
@@ -247,6 +347,10 @@ namespace MobileGL::MG_State::GLState {
         m_mappedRange = {0, 0};
         m_stagingBias = 0;
         m_ownsStagingData = false;
+        // AFTER the reset, so the predicate reads the post-unmap state, and after the landing
+        // above, so the last bytes of a write map are already on the wire when the record
+        // that says "no live writer" goes out behind them.
+        NotePersistentMapStateChanged();
     }
 
     void BufferObject::FlushMemoryRange(SizeT offset, SizeT length) {
@@ -283,6 +387,30 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::SyncPersistentMappedRange() {
+        // P5c (hd): the named refusal comes FIRST - a silent return here used to let a
+        // server-side caller slip through with one MGLOG_D's worth of evidence (B3).
+        //
+        // ONE ROLE PROBE, NOT TWO (P5d round 3, package D). This used to call
+        // RefuseLegacyBufferArmFromApplyThread and then re-ask PushIsArmed()/OnServerRole()
+        // for the early-out below - the same two questions, answered twice on the same line of
+        // execution, on a function the draw path reaches per mapped buffer. The refusal's
+        // condition and the early-out's condition were already IDENTICAL, which is why the
+        // early-out's `return` was unreachable: with the push armed, the apply thread aborts
+        // in the refusal and never gets there. Folding them keeps the refusal first and drops
+        // the duplicate probe rather than the guard.
+        //
+        // Split's client pre-verb hook publishes these bytes. The retained backend sync
+        // sites must do nothing on the apply thread: re-entering this producer there would
+        // overwrite the server shadow through the monolith adapter without crossing the wire -
+        // and "do nothing" is spelled Fatal, not `return`, because a server-side caller here
+        // is a role violation and not a shape the design tolerates.
+        if (MG_Record::PersistentMapTracker::PushIsArmed()) {
+            if (MG_Record::PersistentMapTracker::OnServerRole()) {
+                FatalLegacyBufferArmFromApplyThread("SyncPersistentMappedRange");
+            }
+            MG_Record::PersistentMapTracker::Instance().PushBlocksFor(*this);
+            return;
+        }
         if (!m_isMapped) return;
         // GPU-resident: the app already wrote directly into coherent GPU memory. This is
         // the whole point of the persistent-map path - the per-draw whole-buffer re-upload
@@ -296,28 +424,227 @@ namespace MobileGL::MG_State::GLState {
         NotifySubData(m_mappedRange.start, m_mappedRange.end - m_mappedRange.start);
     }
 
-    void BufferObject::WritebackFromBackend(DataPtr data, SizeT atOffset) {
+    void BufferObject::PushMappedSpanBlock(SizeT offset, SizeT size) {
+        // NotifySubData and not MGPipeEmitResourceSubData directly: the serial bump, the
+        // defined-content promotion and the legacy-ops fallback are what the monolith span
+        // push does, and a second route to the same record is a second thing to keep in step.
+        if (size == 0) return;
+        // Assert ownership at the final producer entry too, before serial/aggregate updates.
+        if (MG_Record::PersistentMapTracker::OnServerRole()) {
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"PushMappedSpanBlock\"} - the server role (the apply "
+                    "thread) reached the CLIENT persistent-map producer for buffer lifetime %llu "
+                    "[%zu, +%zu). Under an active transport the server's staged copy is the draw's "
+                    "only base (ID-52); a push from here would replace the transported bytes with "
+                    "client memory through the monolith adapter",
+                    static_cast<unsigned long long>(m_lifetimeId), offset, size);
+            std::abort();
+        }
+        NotifySubData(offset, size);
+        if (MG_Util::PipeStats::Enabled()) {
+            // THE persistent-map-push SITE: the bytes an application wrote through a map with
+            // no API call, which a split build therefore has to ship.
+            //
+            // THESE BYTES ARE ALSO COUNTED AS stage-buffer, and that overlap is stated in the
+            // inventory rather than avoided. At tier T2 a pushed block IS an ordinary
+            // resource_subdata, so it reaches Ops_H_SubData, is queued into pendingRanges and
+            // is staged like any other write. Subtracting it at the staging site would make
+            // stage-buffer under-report what the BACKEND actually moves, which is the question
+            // that class exists to answer; the two counters are different questions about the
+            // same bytes and PipeStats.cpp:33-35 now says so.
+            MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush, static_cast<Uint64>(size));
+        }
+    }
+
+    void BufferObject::NotePersistentMapStateChanged() {
+        NotePersistentReadMapStateChanged();
+        if (!MG_Record::PersistentMapTracker::PushIsArmed()) return;
+        MG_Record::PersistentMapTracker::Instance().NoteMapStateChanged(*this);
+        // Teardown must retire membership, but only the client publishes live-host-write state.
+        if (MG_Record::PersistentMapTracker::OnServerRole()) return;
+
+        // THE LIVE-HOST-WRITES BIT (ARCHITECTURE.md 12, CONTRACT-P5.md section 3). A live
+        // WRITE map - persistent or not - mutates the shadow with no call, no serial and no
+        // epoch, which is exactly why IsBufferDrawCleanByHandle had to ask the frontend object
+        // whether it was mapped. Under a spawn there is no object on that side, so the fact
+        // has to cross; it rides MGPSubData's pad (see MGPipeTypes.h, and b1-v1.md 3.1 for
+        // why not MGPResourceDesc's).
+        //
+        // BOTH EDGES EMIT A RECORD, AND THE RISING ONE IS NOT OPTIONAL. An earlier cut let the
+        // rising edge emit nothing on the grounds that "the next content record carries the
+        // bit anyway" - and for the single idiom this feature exists to serve, a persistently
+        // mapped streaming arena behind a static VAO, there IS no next content record. The
+        // only one is the block push, the push for a vertex/uniform/SSBO map runs inside
+        // EnsureBufferResourceForHandle, and a draw-clean answer SKIPS that ensure
+        // (SyncVaoAttributeBuffersByRecord in DirectGLESBind.cpp) and then LATCHES it (vboCleanEpoch - and a coherent
+        // persistent map bumps no mutation epoch, which is its whole point). So: draw 1
+        // pushes, draw 2 probes clean, draw 3 onward never probes again, and the frame draws
+        // frame 1's bytes for ever with no diagnostic. That is IsBufferDrawCleanByHandle's
+        // regression one layer down, and the rising-edge record is what breaks the cycle: the
+        // server learns a host writer is live BEFORE the first probe, answers dirty while the
+        // map lives, and the ensure - and with it the push - runs every draw.
+        const Bool live =
+            m_isMapped && (m_mappingAccess & BufferMappingAccessBit::Write) && !m_resource.IsGpuResident();
+        if (live == m_publishedLiveHostWrites) return;
+        m_publishedLiveHostWrites = live;
+        // AN ADOPTION ENDS THE STATE WITHOUT A RECORD. The one falling edge a resident store
+        // takes is AcquireMemoryRange adopting the store under a live persistent map. From then
+        // on the application writes the store's own memory, so a block captured here would land
+        // on the far side AFTER writes made through the map since, and put back the bytes they
+        // replaced (the seed, zeros for a fresh store). The adoption itself clears the far
+        // side's bit (MGPipeApplyMapPersistent / AdoptExternal / DonateInProcess).
+        if (!live && m_resource.IsGpuResident()) return;
+
+        // ONE BLOCK, NOT THE SPAN. On the falling edge the span's bytes have already shipped
+        // on this same path (ReleaseMemory lands the staged writes and calls
+        // NotifyFlushMappedRange before this runs); on the rising edge the span has not been
+        // written yet. Either way the record exists to carry the STATE, and the bytes it
+        // carries are real, current and the cheapest honest ones there are. A zero-length
+        // record would have been the alternative and it is illegal by contract rule A.
+        if (m_size == 0) return;
+        constexpr Uint64 blockBytes = MG_Record::PersistentMapTracker::BlockBytes();
+        const SizeT length = blockBytes >= static_cast<Uint64>(m_size) ? m_size : static_cast<SizeT>(blockBytes);
+        NotifySubData(0, length);
+    }
+
+    Bool BufferObject::HasLiveHostWritesForWire() const {
+        return m_publishedLiveHostWrites;
+    }
+
+    void BufferObject::WritebackFromBackend(DataPtr data, SizeT atOffset, Uint64 producedAtSeq) {
         MOBILEGL_ASSERT(atOffset + data.size <= m_size,
                         "WritebackFromBackend out of bounds: atOffset (%zu) + data.size (%zu) > m_size (%zu)", atOffset,
                         data.size, m_size);
         Memcpy(m_resource.Bytes() + atOffset, data.data, data.size);
         ++m_changeSerial;
+        MGP_NOTE_AGGREGATE(BufferChange);
+        // THE THIRD STATE'S ONLY EXIT. In a split build SyncGpuWrites does NOT clear the
+        // flag before emitting, because between the emission and the answer the shadow is
+        // stale and the object has no way to say so; the answer landing here is what makes it
+        // current, so the answer is what clears. Gated: in monolith SyncGpuWrites has already
+        // cleared by the time the applier calls back, and a second clear here would also
+        // retire a GPU write announced by something other than a readback - a ReadPixels into
+        // a pack PBO writes back through this same function.
+        //
+        // P13 W4a: monolith's record arm refreshes an aliased store through this function too
+        // (Managers.cpp RefreshAliasedStoreFromGpu), and a whole-store landing there is exactly as
+        // current as one under split.
+        //
+        // ORDERED, NOT MERELY WHOLE. A writeback the client never asked for - the end of a
+        // transform feedback capture - is drained whenever the client next waits, which under
+        // run-ahead can be after a later dispatch has marked this same buffer written again.
+        // Those bytes are the capture's, not the dispatch's, so they may not retire the newer
+        // mark: only a writeback produced by a record after the one the mark was taken for can
+        // (the readback SyncGpuWrites emits always is). 0 is the synchronous answer - monolith
+        // and every no-session case - which has nothing to be ordered against.
+        if (atOffset == 0 && data.size >= m_size && (producedAtSeq == 0 || producedAtSeq > m_gpuWriteMarkSeq)) {
+            m_gpuWritePending = false;
+        }
     }
 
     void BufferObject::MarkGpuWritten() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MarkGpuWrittenAfter(MG_Remote::Client::GpuWriteOrderSeq());
+#else
+        MarkGpuWrittenAfter(0);
+#endif
+    }
+
+    void BufferObject::MarkGpuWrittenInChannelOrder() {
         m_hasDefinedContent = true;
         m_gpuWritePending = true;
     }
 
+    void BufferObject::MarkGpuWrittenAfter(Uint64 orderSeq) {
+        m_hasDefinedContent = true;
+        m_gpuWritePending = true;
+        // Assigned, not maxed: within a session the seq only grows, and a new session (or
+        // none, 0) restarts the numbering - a stamp kept from the old one would outrank every
+        // answer the new one can give.
+        m_gpuWriteMarkSeq = orderSeq;
+    }
+
     void BufferObject::SyncGpuWrites() {
         if (!m_gpuWritePending) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // THE THIRD STATE (CONTRACT-P5.md section 3, ARCHITECTURE.md §13.1). This function has
+        // only ever been able to say "pending" or "not pending", and clearing first is safe
+        // in monolith because the readback is synchronous INSIDE the applier: the caller sees
+        // the reconciled shadow on return. Under a transport there is a third state - the
+        // readback was emitted and the answer has not arrived - which the flag cannot express,
+        // and clearing optimistically leaves the shadow silently stale for the object's life.
+        //
+        // So: emit, then BLOCK until OnBufferWriteback lands, and let the writeback do the
+        // clearing. ARCHITECTURE.md §13.1 lists "the first CPU read of a GPU-write-pending
+        // buffer" among the UNAVOIDABLE blocking points, because monolith already glFinish()es
+        // here; under R-1's verb barrier the block is nearly free, since the client is already
+        // waiting for appliedSeq to reach the record it just emitted.
+        //
+        // NO NARROWING (MGPipeClientOnGpuWritten's rangeCount == 1 assertion stays): this
+        // phase only gives the client a conservative set, and a zero-range announcement stays
+        // illegal until P8/P9 make it mean "fully narrowed - nothing is dirty".
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (m_size != 0 && MG_Pipe::MGPipeResourceSubsystemEnabled() && m_resource.IsGpuResident()) {
+                // P11 B2: A T0 STORE IS READ WHERE IT IS. Under split a store is resident only
+                // when T0 adopted it - its pages ARE the client's AHardwareBuffer - so no bytes
+                // need to come back: the readback's round trip is "done, no bytes". The server
+                // lands every resident write it queued (GPU-ordered), waits for its GPU, answers,
+                // and only then does this read the held mapping (monolith's adopted-store readback,
+                // Managers.cpp's persistentMapped arm, by the same rule). The flag clears here
+                // because no writeback will arrive to clear it (WritebackFromBackend).
+                MG_Pipe::MGPipeEmitResourceReadback(*this);
+                m_gpuWritePending = false;
+                return;
+            }
+            if (m_size != 0 && MG_Pipe::MGPipeResourceSubsystemEnabled()) {
+                const SizeT sliceBytes = MG_Remote::Client::BufferWritebackSliceBytes();
+                if (sliceBytes != 0 && m_size > sliceBytes) {
+                    // The writeback's bytes travel INLINE in a SEG_EVENT record (P5c ev),
+                    // and one record must fit the ring (MaxRecordBytes == capacity/2) - a
+                    // whole-buffer request for a buffer larger than that aborts the server
+                    // on Fatal{EventRingOverflow}. Slice the request instead: every slice
+                    // round-trips its own barrier + drain before the next is emitted, so
+                    // the ring holds at most one slice's bytes at a time, and the in-order
+                    // channel makes the last slice's landing imply every earlier one.
+                    for (SizeT off = 0; off < m_size; off += sliceBytes) {
+                        const SizeT left = m_size - off;
+                        MG_Pipe::MGPipeEmitResourceReadbackRange(*this, off, left < sliceBytes ? left : sliceBytes);
+                    }
+                    // No single writeback covered the whole buffer, so
+                    // WritebackFromBackend's clear (above) never fired - but every slice
+                    // has landed by here, which is exactly what the flag-clearing there
+                    // says. Clearing by hand is what keeps AwaitBufferWriteback's
+                    // third-state Fatal from misfiring on a sliced readback.
+                    m_gpuWritePending = false;
+                } else {
+                    MG_Pipe::MGPipeEmitResourceReadback(*this);
+                }
+                // The wait is the barrier's wait: the reply slot id IS the record's seq, so
+                // "my answer is back" and "appliedSeq reached me" are one condition. With no
+                // session (a build-split lane running monolith, and every unit case) the
+                // emission was synchronous and the writeback has already cleared the flag.
+                MG_Remote::Client::AwaitBufferWriteback(*this);
+            }
+            // A buffer with no readback route - no size, or a backend that registered no
+            // resource ops - can never catch up, and retrying on every subsequent read would
+            // only repeat the same no-op. That is the ONE case the monolith clear covers that
+            // the writeback cannot, so it is spelled out here rather than inherited.
+            if (m_gpuWritePending && !MG_Record::BufferWritebackIsReachable(*this)) {
+                m_gpuWritePending = false;
+            }
+            return;
+        }
+#endif
         // Cleared unconditionally: without a readback op the shadow can never catch up,
         // and retrying on every subsequent read would only repeat the same no-op.
         m_gpuWritePending = false;
-        if (m_size == 0 || g_bufferBackendOps == nullptr || g_bufferBackendOps->ReadbackFromGpu == nullptr) {
-            return;
+        if (m_size != 0 && MG_Pipe::MGPipeResourceSubsystemEnabled()) {
+            // The answer comes back through the reverse channel's OnBufferWriteback, which
+            // resolves this handle to this object and writes the shadow before the server
+            // bumps its mutation epoch. In monolith the whole sequence is synchronous inside
+            // the applier, so the caller sees the reconciled shadow on return exactly as it
+            // does today.
+            MG_Pipe::MGPipeEmitResourceReadback(*this);
         }
-        g_bufferBackendOps->ReadbackFromGpu(*this);
     }
 
     void BufferObject::UploadSubData(DataPtr data, SizeT atOffset) {
@@ -362,24 +689,36 @@ namespace MobileGL::MG_State::GLState {
     // NotifyContentWrite on a resident store only bumps the serial: the backend has no
     // separate copy to sync, so no transfer op runs.
     void BufferObject::LandBytesIntoResidentStore(SizeT offset, DataPtr bytes) {
-        if (bytes.size > 0 && g_bufferBackendOps && g_bufferBackendOps->ResidentSubData) {
-            g_bufferBackendOps->ResidentSubData(*this, offset, bytes);
-            m_hasDefinedContent = true;
+        // buffer_subdata_resident stays NULLABLE and stays asymmetric: one backend
+        // deliberately does not implement it, and the frontend checks the pipe table exactly
+        // as it checks the op table it replaces, so a backend without it keeps the legacy
+        // ordered in-place host write below.
+        if (bytes.size > 0 && MG_Pipe::MGPipeResourceSubsystemEnabled() &&
+            MG_Pipe::MGPipeResourceOpsHaveSubDataResident()) {
+            MG_Pipe::MGPipeEmitBufferSubDataResident(*this, offset, bytes.data, bytes.size);
             ++m_changeSerial;
-            m_gpuWritePending = true;
+            MGP_NOTE_AGGREGATE(BufferChange);
+            MarkGpuWritten();
             return;
         }
-
+        // No resident op: the write lands in place below, after retiring the GPU writes this
+        // store is known to be waiting on - which is the same answer, and the same code, a
+        // backend with a null ResidentSubData gets today.
+        if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
+            SyncGpuWrites();
+            Memcpy(m_resource.Bytes() + offset, bytes.data, bytes.size);
+            NotifyContentWrite(offset, bytes.size);
+            return;
+        }
         SyncGpuWrites();
         Memcpy(m_resource.Bytes() + offset, bytes.data, bytes.size);
         NotifyContentWrite(offset, bytes.size);
     }
 
     void BufferObject::FillSubData(DataPtr pattern, SizeT atOffset, SizeT size) {
-        MOBILEGL_ASSERT(pattern.data != nullptr && pattern.size > 0,
-                        "FillSubData requires a non-empty pattern.");
-        MOBILEGL_ASSERT(size % pattern.size == 0,
-                        "FillSubData size (%zu) must be a multiple of pattern size (%zu).", size, pattern.size);
+        MOBILEGL_ASSERT(pattern.data != nullptr && pattern.size > 0, "FillSubData requires a non-empty pattern.");
+        MOBILEGL_ASSERT(size % pattern.size == 0, "FillSubData size (%zu) must be a multiple of pattern size (%zu).",
+                        size, pattern.size);
         MOBILEGL_ASSERT(atOffset <= m_size && size <= m_size - atOffset,
                         "FillSubData out of bounds: atOffset (%zu) + size (%zu) > m_size (%zu)", atOffset, size,
                         m_size);
@@ -394,7 +733,9 @@ namespace MobileGL::MG_State::GLState {
         // op the landing would memcpy the expansion into the mapping the loop below
         // fills in place anyway, so a whole-arena clear would allocate a whole arena
         // for nothing.
-        if (m_resource.IsGpuResident() && g_bufferBackendOps && g_bufferBackendOps->ResidentSubData) {
+        if (m_resource.IsGpuResident() &&
+            // The same question, asked of whichever table owns the family in this build.
+            MG_Pipe::MGPipeResourceSubsystemEnabled() && MG_Pipe::MGPipeResourceOpsHaveSubDataResident()) {
             Vector<Uint8> expanded(size);
             if (pattern.size == 1) {
                 Memset(expanded.data(), *static_cast<const Uint8*>(pattern.data), size);
@@ -462,6 +803,10 @@ namespace MobileGL::MG_State::GLState {
             m_mappingAccess = (read ? BufferMappingAccessBit::Read : BufferMappingAccessBit::Null) |
                               (write ? BufferMappingAccessBit::Write : BufferMappingAccessBit::Null);
             m_mappedRange = {0, m_size};
+            // glMapBuffer never takes the Persistent bit, so this buffer can never join the
+            // push set - but a WRITE map still mutates the shadow with no call, which is the
+            // half of the live-host-writes bit that is not about the push at all.
+            NotePersistentMapStateChanged();
 
             if (m_mappingAccess & BufferMappingAccessBit::Write) {
                 // glMapBuffer maps from offset 0, so no bias: the allocation's own
@@ -496,15 +841,13 @@ namespace MobileGL::MG_State::GLState {
         if (m_isMapped) {
             return false;
         }
-        if (m_size == 0 || g_bufferBackendOps == nullptr || g_bufferBackendOps->AcquirePersistentMap == nullptr) {
-            return false;
+        if (m_size != 0 && MG_Pipe::MGPipeResourceSubsystemEnabled()) {
+            void* pushedBase = MG_Pipe::MGPipeEmitMapPersistent(*this);
+            if (pushedBase == nullptr) return false;
+            m_resource.AdoptPersistentMap(pushedBase);
+            return true;
         }
-        void* base = g_bufferBackendOps->AcquirePersistentMap(*this);
-        if (base == nullptr) {
-            return false;
-        }
-        m_resource.AdoptPersistentMap(base);
-        return true;
+        return false;
     }
 
     void* BufferObject::AcquireMemoryRange(Range1D range, Flags<BufferMappingAccessBit> access) {
@@ -531,6 +874,13 @@ namespace MobileGL::MG_State::GLState {
         m_isMapped = true;
         m_mappingAccess = access;
         m_mappedRange = range;
+        // BEFORE the adoption attempt below, deliberately. Under R-6 the acquisition always
+        // declines, so the predicate this publishes is already final; if a later phase ever
+        // mints one, the adoption path notes the change itself (it does now - the call is
+        // beside AdoptPersistentMap) and the entry is withdrawn there rather than never
+        // having been made, which is the order that keeps the set conservative under both
+        // answers.
+        NotePersistentMapStateChanged();
 
         if (access & BufferMappingAccessBit::Persistent) {
             m_ownsStagingData = false;
@@ -541,11 +891,22 @@ namespace MobileGL::MG_State::GLState {
             // shadow when the backend declines (returns null). Only attempted once - the
             // storage is immutable and outlives unmap/remap.
             if (!m_resource.IsGpuResident() && (access & BufferMappingAccessBit::Write) &&
-                !(access & BufferMappingAccessBit::FlushExplicit) && g_bufferBackendOps &&
-                g_bufferBackendOps->AcquirePersistentMap) {
-                if (void* base = g_bufferBackendOps->AcquirePersistentMap(*this)) {
-                    m_resource.AdoptPersistentMap(base);
+                !(access & BufferMappingAccessBit::FlushExplicit) && MG_Pipe::MGPipeResourceSubsystemEnabled()) {
+                if (void* pushedBase = MG_Pipe::MGPipeEmitMapPersistent(*this)) {
+                    // P11 B2 made this reachable (a T0 adoption), so the tracker lets go of the
+                    // shadow range WHILE THE SHADOW IS STILL OURS: AdoptPersistentMap frees it, and
+                    // an untrack after that would mprotect pages the buffer no longer owns.
+                    MG_Record::PersistentMapTracker::Instance().Forget(*this);
+                    m_resource.AdoptPersistentMap(pushedBase);
+                    // An adoption takes the buffer OUT of the push set and out of the
+                    // live-host-writes state: the application now writes coherent GPU memory
+                    // and there is nothing to ship. Under R-6 this is unreachable; it is here
+                    // because the comment below used to claim the adoption path withdrew the
+                    // entry and nothing did, which would have left the published bit true
+                    // across an adoption until unmap (latent for P11).
+                    NotePersistentMapStateChanged();
                 }
+                return m_resource.Bytes() + range.start;
             }
             return m_resource.Bytes() + range.start;
         }
@@ -573,7 +934,18 @@ namespace MobileGL::MG_State::GLState {
     }
 
     const Uint8* BufferObject::MappedData() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RefuseLegacyBufferArmFromApplyThread("MappedData");
+#endif
         return m_resource.Bytes();
+    }
+
+    SizeT BufferObject::ShadowAllocationBytes() const {
+        // The extent of the very pointer MappedData() hands out, read by the same caller
+        // (the tracker's registration) on the same thread: the same rule-E surface, the
+        // same refusal.
+        RefuseLegacyBufferArmFromApplyThread("ShadowAllocationBytes");
+        return m_resource.ShadowAllocationBytes();
     }
 
     Bool BufferObject::IsBackendPersistentMapped() const {
@@ -593,22 +965,25 @@ namespace MobileGL::MG_State::GLState {
     }
 
     Uint64 BufferObject::GetChangeSerial() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RefuseLegacyBufferArmFromApplyThread("GetChangeSerial");
+#endif
         return m_changeSerial;
     }
 
     Bool BufferObject::HasDefinedContent() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // §3.6's surface as well as §3.8's: the descriptor's bit and the staged coverage
+        // answer on this side; the frontend flag is client memory.
+        RefuseLegacyBufferArmFromApplyThread("HasDefinedContent");
+#endif
         return m_hasDefinedContent;
     }
 
-    const SharedPtr<BackendBufferResource>& BufferObject::GetBackendResource() const {
-        return m_resource.Backend();
-    }
-
-    void BufferObject::SetBackendResource(SharedPtr<BackendBufferResource> resource) {
-        m_resource.SetBackend(std::move(resource));
-    }
-
     Bool BufferObject::IsMapped() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RefuseLegacyBufferArmFromApplyThread("IsMapped");
+#endif
         return m_isMapped;
     }
 

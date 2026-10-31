@@ -7,11 +7,18 @@
 // End of Source File Header
 
 #pragma once
+// MG_Pipe::MGPipeHandle for the P2 D12.5 memo table below. A header of constexpr constants,
+// so the pull build gains nothing from it.
+#include <MG_Pipe/MGPipeHandles.h>
+#include <MG_Pipe/PipeApply.h>
 
 #include "Config.h"
+#include "MagmaPipeArms.h"
+#include "NarrowIntegerVertexFormats.h"
 #include "VertexInputStateBuilder.h"
 #include "MG_State/GLState/VertexArrayState/VertexArrayObject.h"
 #include <Includes.h>
+#include <atomic>
 #include "../VkIncludes.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -57,53 +64,71 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Bitmask of `attributes[i].location` - the draw path needs it up to
             // three times per draw, so it is baked once at build time.
             Uint32 attributeLocationMask = 0;
+            // The locations of `attributes` whose source data is 8/16-bit integer, by width and
+            // signedness - the vertex-input half of the narrow-integer program variant decision
+            // (NarrowIntegerVertexFormats.h). A pure function of `attributes`, so `layoutHash`
+            // already covers it.
+            NarrowIntegerAttributeMasks narrowIntegerAttributes;
             // Per-binding glVertexAttribDivisor values other than 1. Vulkan's instance input
             // rate advances once per instance and nothing else, so anything else has to be
             // stated through VK_EXT_vertex_attribute_divisor. Empty when every instanced
             // binding uses divisor 1, which is what the plain input rate already means.
             Vector<VkVertexInputBindingDivisorDescriptionEXT> bindingDivisors;
             VkPipelineVertexInputDivisorStateCreateInfoEXT divisorState{
-                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO_EXT
-            };
-            VkPipelineVertexInputStateCreateInfo state{
-                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
-            };
+                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO_EXT};
+            VkPipelineVertexInputStateCreateInfo state{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+
+            // Back to a default-constructed state while keeping the vectors' storage, so a
+            // per-draw scratch rebuilds without touching the heap. Every member is reset by the
+            // default assignment; only the vectors' buffers are carried across it.
+            void ResetKeepingCapacity() {
+                const auto keep = [](auto& vector) {
+                    auto storage = Move(vector);
+                    storage.clear();
+                    return storage;
+                };
+                auto keptBindings = keep(bindings);
+                auto keptAttributes = keep(attributes);
+                auto keptBufferKeys = keep(bindingBufferKeys);
+                auto keptBaseOffsets = keep(bindingBaseOffsets);
+                auto keptLocations = keep(bindingAttributeLocations);
+                auto keptClientMemory = keep(bindingUsesClientMemory);
+                auto keptConversions = keep(bindingConversions);
+                auto keptDivisors = keep(bindingDivisors);
+                *this = BackendVertexInputState{};
+                bindings = Move(keptBindings);
+                attributes = Move(keptAttributes);
+                bindingBufferKeys = Move(keptBufferKeys);
+                bindingBaseOffsets = Move(keptBaseOffsets);
+                bindingAttributeLocations = Move(keptLocations);
+                bindingUsesClientMemory = Move(keptClientMemory);
+                bindingConversions = Move(keptConversions);
+                bindingDivisors = Move(keptDivisors);
+            }
         };
 
-        VertexInputStateFactory(const VulkanRendererConfig& config, VkPhysicalDevice physicalDevice):
-            m_config(config), m_physicalDevice(physicalDevice) {}
+        VertexInputStateFactory(const VulkanRendererConfig& config, VkPhysicalDevice physicalDevice)
+            : m_config(config), m_physicalDevice(physicalDevice) {}
         ~VertexInputStateFactory() = default;
         VertexInputStateFactory(const VertexInputStateFactory&) = delete;
 
-        // The VAO aux-memo payload GetOrCreateVertexInputState(vao) stamps: aux0 is the
-        // entry's layoutHash, aux1 packs (unsupportedAttribMask << 32) | attributeLocationMask.
-        // Readers that find the aux memo valid can use these without resolving the entry.
-        static Uint64 PackVertexInputAuxMasks(Uint32 unsupportedAttribMask, Uint32 attributeLocationMask) {
-            return (static_cast<Uint64>(unsupportedAttribMask) << 32) | attributeLocationMask;
-        }
-
-        HashType ComputeHash(const MG_State::GLState::VertexArrayObject& vao) const;
-        // Memoized ComputeHash: reuses the VAO's cached hash while its config version
-        // is unchanged. Use this on per-draw paths.
-        HashType GetOrComputeHash(const MG_State::GLState::VertexArrayObject& vao) const;
-        const BackendVertexInputState& GetOrCreateVertexInputState(
-            const MG_State::GLState::VertexArrayObject& vao, HashType hash);
-        const BackendVertexInputState& GetOrCreateVertexInputState(const MG_State::GLState::VertexArrayObject& vao);
-        // Frame boundary hook: ages the cache and evicts entries not hit for many
-        // frames. The key mixes each bound buffer's never-reused lifetime id, so
-        // buffer/VAO churn keeps minting fresh keys - and does so by construction,
-        // not by luck: a recreated buffer can no longer land back on its dead
-        // predecessor's key. Without eviction the map grows for the whole session.
-        // Entries hold no Vulkan handles (pipeline creation copies the descriptions)
-        // and the draw path's entry reference never spans a frame boundary, so
-        // eviction here needs no GPU-idle proof. Self-gated: one counter bump and
-        // compare except on sweep boundaries.
-        void OnFrameBoundary();
         static SizeT GetComponentSize(DataType type);
         // Tightly-packed byte size of one vertex element for this attribute: componentSize * size for
         // normal types, and 4 (one packed word) for the 2_10_10_10 types and GL_BGRA. Returns 0 for
         // an unknown/unsupported type.
         static SizeT GetAttributeByteSize(DataType type, Int size, Bool isBgra);
+        // A wire VAO is a layout record plus a separate per-attribute buffer window.
+        // No frontend VAO identity, address or memo participates in this layout.
+        Bool BuildWireVertexInput(const MG_Pipe::MGPipeVertexElementsRecord& elements,
+                                  const MG_Pipe::MGPipeApplierState& state, Uint32 activeMask,
+                                  BackendVertexInputState& out) const;
+        // The same layout, kept on the record (MGPipeVertexElementsRecord::BackendMemo) and rebuilt
+        // only when the record's configuration, the program's active mask, the buffer window or an
+        // active attribute's buffer offset/stride/divisor moved - everything the build reads that
+        // can change. Null where BuildWireVertexInput would return false.
+        const BackendVertexInputState* ResolveWireVertexInput(const MG_Pipe::MGPipeVertexElementsRecord& elements,
+                                                              const MG_Pipe::MGPipeApplierState& state,
+                                                              Uint32 activeMask) const;
 
     private:
         static VkFormat ToVkVertexFormat(DataType type, Int size, Bool normalized, Bool isInteger, Bool isBgra = false,
@@ -114,31 +139,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VulkanRendererConfig& m_config;
         VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
-        // Values are heap-allocated: UnorderedMap is open-addressing, so INSERT
-        // invalidates references to stored values - and so does ERASE, which shifts
-        // the rest of the probe cluster into the hole and therefore moves entries
-        // other than the erased one. The draw path (and the VAOs' state-pointer
-        // memos) hold entry pointers across both; only the unique_ptr cell moves,
-        // never the pointee.
-        UnorderedMap<HashType, UniquePtr<BackendVertexInputState>> m_cache;
-        // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
-        Uint64 m_frameBoundaryCounter = 0;
-        // Bumped whenever any cache entry is erased. VAOs memo a raw pointer to
-        // their heap-allocated entry (stable across map insert/rehash by
-        // construction); a memo is honored only while its recorded epoch
-        // matches, so an evicted entry can never be dereferenced through a
-        // stale memo.
-        //
-        // Drawn from a process-wide source, never a per-instance counter: the VAO
-        // memos outlive this factory (they live on pGLContext's VAOs, the renderer
-        // is destroyed and recreated on EGL surface release/re-create), so a fresh
-        // factory restarting at a dead factory's epoch value would honor its
-        // dangling entry pointers. The constructor takes a value strictly greater
-        // than anything a predecessor ever stamped, so a dead factory's memo can
-        // never compare equal here - the same never-reused idiom as the lifetime ids.
-        // Single-threaded like the rest of the factory (renderer-thread only).
-        static inline Uint64 s_evictionEpochSource = 0;
-        Uint64 m_evictionEpoch = ++s_evictionEpochSource;
-        static inline XXH64_state_t* m_hashState = XXH64_createState();
+        // Physical-device format capabilities never change during this factory's
+        // lifetime. The wire path rebuilds layouts without the legacy VAO memo.
+        mutable UnorderedMap<VkFormat, Bool> m_wireVertexFormatSupport;
+        static inline thread_local XXH64_state_t* m_hashState = XXH64_createState();
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

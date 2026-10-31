@@ -1,0 +1,1254 @@
+// MobileGL - MobileGL/MG_Test/Pipe/SamplerEmitTest.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// P4a's sampler family: the content-addressed sampler CSO, the identity-addressed sampler view
+// per texture object, and the set_sampler_views / bind_sampler_states unit sets.
+//
+// THIS SUITE IS A NAMED GATE (`ctest -R 'SamplerEmit\.'`), and its negative control is a
+// script that stops the conversion copying SamplerParameters::borderColorForm and expects this
+// suite to go red NAMING that field - which it must, because all three border-color
+// representations are always numerically populated and the value alone cannot say which driver
+// entry point to use.
+//
+// THE ONE CASE THAT LOOKS LIKE PARANOIA AND IS NOT: SamplerParameters is 100 bytes with THREE
+// BYTES OF TRAILING PADDING, so a cache that hashes or memcmps the object's own bytes reads
+// uninitialized memory and mints a fresh CSO per call - a 256-entry cache with a hit rate of
+// zero, and nobody notices, because the pixels are right. The case that writes garbage into
+// the padding through a byte pointer is what turns that into a red gate.
+//
+// THE SUITE IS `SamplerEmit`, not `SamplerEmitTest`: the file is XTest.cpp and the suite is X,
+// this directory's convention, and it is what the gates grep for.
+//
+// THE TARGET AND ITS ctest REGISTRATION ARE THE CONTRACT COMMIT'S; THE CONTENTS ARE NOT: the
+// applier-side cases are the wire commits' and the emitter-side cases are the client
+// package's, and neither has to come back to MG_Test/Pipe/CMakeLists.txt to add one.
+//
+// IT HAS ITS OWN main() for ResourceEmitTest's reason. Every case is a visible SKIP in a pull
+// build rather than a vanishing test, so `ctest -N` stays name-for-name identical between the
+// pull and the push trees.
+
+#include <gtest/gtest.h>
+#include <MG_Util/Debug/Log.h>
+
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <system_error>
+
+#if defined(_WIN32)
+#include <process.h>
+#define MGTEST_HAVE_FORK 0
+#else
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
+#define MGTEST_HAVE_FORK 1
+#endif
+
+#include "Includes.h"
+#include <MG_Pipe/MGPipe.h>
+#include <cstring>
+
+#include "Init.h"
+// MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h) and nowhere
+// else, so a TU that tests it without this include silently reads it as 0. That is
+// invisible in a push build (where it really is 0) and in a verify build (where
+// -DMOBILEGL_PIPE_VERIFY=1 is on the command line); MOBILEGL_BUILD_DISAGGREGATED is the
+// one arming condition that lives behind the header, so a split build is the first place
+// the refusals below stop being fatal while the expectations still say they are.
+#include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Impl/GLImpl/Program/GL_Program.h>
+#include <MG_Impl/GLImpl/Texture/GL_Texture.h>
+#include <MG_Impl/Pipe/TextureEmit.h>
+#include <MG_Impl/Pipe/SamplerEmit.h>
+#include <MG_Impl/Pipe/SetHashSuppressor.h>
+#include <MG_Impl/Pipe/SlotAllocator.h>
+#include <MG_Pipe/PipeApply.h>
+#include <MG_State/GLState/Core.h>
+
+using namespace MobileGL;
+using namespace MobileGL::MG_Pipe;
+
+namespace {
+    String g_logPath;
+
+    int ProcessId() {
+#if defined(_WIN32)
+        return _getpid();
+#else
+        return static_cast<int>(getpid());
+#endif
+    }
+
+    // `from` is a byte offset, and it exists because of the fork below: the library's log file
+    // is already open by the time a case runs, so the child's lines are APPENDED to it rather
+    // than written to a fresh file, and only what the child appended is this drive's evidence.
+    std::string ReadLog(std::streamoff from = 0) {
+        std::ifstream in(g_logPath, std::ios::binary);
+        if (from > 0) in.seekg(from, std::ios::beg);
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    }
+
+    // Where the library's log file currently ends. Reading from here after the child has
+    // aborted gives exactly the lines that drive produced.
+    std::streamoff LogEnd() {
+        std::ifstream in(g_logPath, std::ios::binary | std::ios::ate);
+        return in ? static_cast<std::streamoff>(in.tellg()) : std::streamoff{0};
+    }
+
+    // A fresh applier per case, BOTH SCOPES, and it takes both because there are two: a reset
+    // is a make-current and deliberately KEEPS the object records, so a fixture that wants a
+    // genuinely empty applier has to say the other one as well. Every case is its own process
+    // under ctest, so this is belt and braces - but running the binary by hand must give the
+    // same answers as running it under ctest.
+    struct ApplierGuard {
+        ApplierGuard() {
+            MGPipeApplierReset();
+            MGPipeApplierReleaseObjectRecords();
+        }
+        ~ApplierGuard() {
+            MGPipeApplierReset();
+            MGPipeApplierReleaseObjectRecords();
+        }
+    };
+
+#if MGTEST_HAVE_FORK
+    struct ChildResult {
+        int Status = -1;
+        std::string Log;
+    };
+
+    template <class Body>
+    ChildResult RunInChild(Body body) {
+        ChildResult result;
+        // THE LOG PATH IS NOT UNLINKED HERE, and that is what this helper had to learn when the
+        // client's cases landed in the same file as the applier's: main() calls
+        // MobileGL::Initialize(), so the library's log FILE* is already open on this path and
+        // fork() duplicates it. Removing the path would leave the child writing into a deleted
+        // inode and the parent reading an empty file - the child would still abort, and the
+        // assertion on WHAT it named could never see the line. So the log's end is remembered
+        // and only what the child appended is read back.
+        const std::streamoff before = LogEnd();
+        std::fflush(nullptr);
+        const pid_t pid = ::fork();
+        if (pid < 0) return result;
+        if (pid == 0) {
+            body();
+            ::_exit(0);
+        }
+        int status = 0;
+        if (::waitpid(pid, &status, 0) != pid) return result;
+        result.Status = status;
+        result.Log = ReadLog(before);
+        return result;
+    }
+
+    Bool DiedOfAbort(const ChildResult& r) {
+        return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT;
+    }
+    std::string DescribeStatus(const ChildResult& r) {
+        if (r.Status < 0) return "fork/waitpid failed";
+        if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));
+        if (WIFSIGNALED(r.Status)) return "signal " + std::to_string(WTERMSIG(r.Status));
+        return "status " + std::to_string(r.Status);
+    }
+#endif // MGTEST_HAVE_FORK
+
+    // Drives a call a trip wire must REFUSE, and asserts the wire NAMED what it refused. The
+    // two arms differ by design: a poison or verify build stops the process, so the drive is a
+    // forked child and the parent reads SIGABRT plus the line out of the log; a shipped push
+    // build logs and carries on from a defined state, so there the line is read back in process
+    // and the caller goes on to assert that nothing moved.
+    template <class Body>
+    void ExpectRefusedNaming(const char* needle, Body body) {
+#if MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY
+#if MGTEST_HAVE_FORK
+        const std::string tagged = std::string("Fatal{ProtocolCorruption} ") + needle;
+        const ChildResult child = RunInChild(body);
+        EXPECT_TRUE(DiedOfAbort(child)) << DescribeStatus(child) << "; log: " << child.Log;
+        EXPECT_NE(child.Log.find(tagged), std::string::npos)
+            << "the gate fired without naming what it refused; wanted \"" << tagged << "\"; log: " << child.Log;
+#else
+        (void)needle;
+        (void)body; // no fork on this platform; the verdict here is std::abort()
+#endif
+#else
+        const std::string tagged = std::string("ProtocolCorruption ") + needle;
+        const std::string before = ReadLog();
+        body();
+        EXPECT_NE(ReadLog().substr(before.size()).find(tagged), std::string::npos)
+            << "the gate refused without saying what it refused; wanted \"" << tagged << "\"";
+#endif
+    }
+} // namespace
+
+// See FramebufferEmitTest's twin for why this is a shape pin rather than a placeholder.
+TEST(SamplerEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
+    EXPECT_EQ(&MGPipeSamplerEmitterInstance(), &MGPipeSamplerEmitterInstance());
+    // One bit for the whole sampler family - the CSO, the view and all three unit sets,
+    // including set_shader_images, whose emitter lives in ImageEmit.h. An operator switching
+    // samplers off has to get the whole family's legacy arm, not two thirds of it.
+    EXPECT_TRUE(kMGPipeWiredSamplerSubsystem == 0 || kMGPipeWiredSamplerSubsystem == kMGPipeSubsystemSamplers);
+}
+
+// =========================================================================================
+// The APPLIER's half of the sampler family (the wire commits'): the CSO record, the
+// identity-addressed view record and its back-pointer, and the two unit sets. The emitter's
+// half - the content-addressed 256-entry cache, the canonical zero-initialized copy the hash
+// and the memcmp run over, the padding that cannot change the hash, borderColorForm crossing -
+// is the client package's and lands beside these.
+// =========================================================================================
+
+namespace {
+    // Every field carries a value of its own, INCLUDING borderColorForm and all three border
+    // representations: they are always numerically populated, so the value alone cannot say
+    // which driver entry point to use and the form is what does.
+    SamplerParameters SamplerValues(Float lodBias, BorderColorForm form) {
+        SamplerParameters params{};
+        params.wrapS = SamplerWrapMode::ClampToEdge;
+        params.wrapT = SamplerWrapMode::MirroredRepeat;
+        params.minFilter = SamplerFilterMode::Linear;
+        params.magFilter = SamplerFilterMode::Nearest;
+        params.mipmapMode = SamplerMipmapMode::Nearest;
+        params.lodBias = lodBias;
+        params.maxAnisotropy = 4.0f;
+        params.compareMode = SamplerCompareMode::CompareToTexture;
+        params.borderColor = {0.25f, 0.5f, 0.75f, 1.0f};
+        params.borderColorI = {-1, 2, -3, 4};
+        params.borderColorUI = {5u, 6u, 7u, 8u};
+        params.borderColorForm = form;
+        return params;
+    }
+
+    MGPSamplerDesc SamplerDesc(MGPipeHandle cso, Uint64 declaredBlobSize) {
+        MGPSamplerDesc desc{};
+        desc.Cso = cso;
+        desc.Parameters.Size = declaredBlobSize;
+        return desc;
+    }
+
+    MGPSamplerView ViewOf(MGPipeHandle cso, MGPipeHandle texture, Uint16 minLevel) {
+        MGPSamplerView view{};
+        view.Cso = cso;
+        view.Texture = texture;
+        view.InternalFormat = 0x8058u; // GL_RGBA8
+        view.Target = static_cast<Uint8>(MGPipeResourceTarget::Tex2D);
+        view.MinLevel = minLevel;
+        view.NumLevels = 4;
+        view.MinLayer = 0;
+        view.NumLayers = 1;
+        view.Samples = 1;
+        return view;
+    }
+
+    MGPHandleOnly SamplerHandle(MGPipeHandle cso) {
+        return MGPHandleOnly{cso, static_cast<Uint32>(MGPipeKind::SamplerCso), 0};
+    }
+    MGPHandleOnly ViewHandle(MGPipeHandle cso) {
+        return MGPHandleOnly{cso, static_cast<Uint32>(MGPipeKind::SamplerViewCso), 0};
+    }
+
+    MGPResourceDesc TextureDesc(MGPipeHandle res, Uint32 glName) {
+        MGPResourceDesc desc{};
+        desc.Resource = res;
+        desc.Target = static_cast<Uint8>(MGPipeResourceTarget::Tex2D);
+        desc.GlNameForDiag = glName;
+        return desc;
+    }
+} // namespace
+
+// A create starts the record over and leaves Serial at 0 - so a fresh backend twin that starts
+// its own synced serial at 0 agrees without either side publishing anything - while a re-issue
+// on a LIVE identity counts up, which is how a value change travels on a handle whose
+// generation moves only on slot reuse.
+TEST(SamplerEmit, ACreateStoresTheParametersByValueAndAReissueOnALiveIdentityCountsUp) {
+    ApplierGuard guard;
+    const MGPipeHandle cso{6, 2};
+    const SamplerParameters first = SamplerValues(0.5f, BorderColorForm::Int);
+    MGPipeApplyCreateSamplerState(SamplerDesc(cso, 0), &first);
+
+    ASSERT_GT(MGPipeApplier().SamplerCsos.size(), 6u);
+    const MGPipeSamplerCsoRecord& record = MGPipeApplier().SamplerCsos[6];
+    EXPECT_TRUE(record.Live);
+    EXPECT_EQ(record.Gen, 2u);
+    EXPECT_EQ(record.Serial, 0u) << "a create is not a mutation";
+    EXPECT_EQ(record.Params.wrapT, SamplerWrapMode::MirroredRepeat);
+    EXPECT_EQ(record.Params.magFilter, SamplerFilterMode::Nearest);
+    EXPECT_EQ(record.Params.compareMode, SamplerCompareMode::CompareToTexture);
+    EXPECT_FLOAT_EQ(record.Params.lodBias, 0.5f);
+    EXPECT_FLOAT_EQ(record.Params.borderColor.z(), 0.75f);
+    EXPECT_EQ(record.Params.borderColorI.x(), -1);
+    EXPECT_EQ(record.Params.borderColorUI.w(), 8u);
+    EXPECT_EQ(record.Params.borderColorForm, BorderColorForm::Int)
+        << "borderColorForm crosses; without it the backend cannot choose an entry point";
+
+    const SamplerParameters second = SamplerValues(1.5f, BorderColorForm::Uint);
+    MGPipeApplyCreateSamplerState(SamplerDesc(cso, sizeof(SamplerParameters)), &second);
+    EXPECT_EQ(MGPipeApplier().SamplerCsos[6].Serial, 1u);
+    EXPECT_FLOAT_EQ(MGPipeApplier().SamplerCsos[6].Params.lodBias, 1.5f);
+    EXPECT_EQ(MGPipeApplier().SamplerCsos[6].Params.borderColorForm, BorderColorForm::Uint);
+
+    // A RECYCLED SLOT STARTS OVER. Inheriting one field of the previous occupant - a serial, a
+    // filter - is precisely how a sampler at a recycled slot inherits its predecessor's state.
+    const SamplerParameters third = SamplerValues(2.5f, BorderColorForm::Float);
+    MGPipeApplyCreateSamplerState(SamplerDesc(MGPipeHandle{6, 3}, 0), &third);
+    EXPECT_EQ(MGPipeApplier().SamplerCsos[6].Gen, 3u);
+    EXPECT_EQ(MGPipeApplier().SamplerCsos[6].Serial, 0u) << "a recycled slot kept its predecessor's serial";
+    EXPECT_FLOAT_EQ(MGPipeApplier().SamplerCsos[6].Params.lodBias, 2.5f);
+}
+
+// The one Blob rule, on this family's own blob: a non-zero declared length must be exactly one
+// SamplerParameters, a zero means "this record does not declare its blob" - which is what a
+// monolith emission is - and either way the bytes read are bounded by the TYPE.
+TEST(SamplerEmit, ARecordThatDoesNotDescribeItsOwnParametersIsRefusedNamingTheLength) {
+    ApplierGuard guard;
+    const SamplerParameters values = SamplerValues(0.0f, BorderColorForm::Float);
+
+    const MGPSamplerDesc lying = SamplerDesc(MGPipeHandle{4, 1}, sizeof(SamplerParameters) + 1);
+    ExpectRefusedNaming("create_sampler_state {slot=4, gen=1}: the declared blob length is not one "
+                        "SamplerParameters",
+                        [&lying, &values]() { MGPipeApplyCreateSamplerState(lying, &values); });
+    EXPECT_TRUE(MGPipeApplier().SamplerCsos.empty());
+
+    const MGPSamplerDesc undeclared = SamplerDesc(MGPipeHandle{4, 1}, 0);
+    ExpectRefusedNaming("create_sampler_state {slot=4, gen=1}: the record declares no parameters and "
+                        "carries none",
+                        [&undeclared]() { MGPipeApplyCreateSamplerState(undeclared, nullptr); });
+    EXPECT_TRUE(MGPipeApplier().SamplerCsos.empty());
+
+    // And the slot bound, which is the one number in the family that reaches an allocator.
+    const MGPSamplerDesc pastTheBound = SamplerDesc(MGPipeHandle{kMGPipeMaxSamplerCsoSlots, 1}, 0);
+    ExpectRefusedNaming("create_sampler_state {slot=65536, gen=1}: the slot is outside the record table's "
+                        "bound",
+                        [&pastTheBound, &values]() { MGPipeApplyCreateSamplerState(pastTheBound, &values); });
+    EXPECT_TRUE(MGPipeApplier().SamplerCsos.empty()) << "the table was grown by a corrupt slot";
+}
+
+// A death notice on a record the applier does not have is the ONE refusal a legal sequence
+// produces - the teardown order - so it stays a defined no-op, and it is COUNTED because
+// MOBILEGL_ASSERT compiles out at INFO and every build that matters is one.
+TEST(SamplerEmit, ADeleteDropsTheRecordAndAStaleNoticeIsCountedRatherThanSilentlyDropped) {
+    ApplierGuard guard;
+    const MGPipeHandle cso{3, 7};
+    const SamplerParameters values = SamplerValues(0.0f, BorderColorForm::Float);
+    MGPipeApplyCreateSamplerState(SamplerDesc(cso, 0), &values);
+    ASSERT_TRUE(MGPipeApplier().SamplerCsos[3].Live);
+
+    MGPipeApplyDeleteSamplerState(SamplerHandle(cso));
+    EXPECT_FALSE(MGPipeApplier().SamplerCsos[3].Live);
+    EXPECT_EQ(MGPipeApplier().SamplerCsos[3].Gen, 7u) << "a destroy keeps the generation";
+    EXPECT_EQ(MGPipeApplier().SamplerCsos[3].Params.wrapT, SamplerWrapMode::Repeat)
+        << "a stale read of a deleted slot must find nothing, not the state that used to be there";
+    EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 0u);
+
+    // The second notice - the one a teardown produces - is refused and counted.
+    MGPipeApplyDeleteSamplerState(SamplerHandle(cso));
+    EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 1u);
+    MGPipeApplyDeleteSamplerState(SamplerHandle(MGPipeHandle{3, 8}));
+    EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 2u);
+}
+
+// A sampler view is IDENTITY-addressed one per texture object, minted off that object's
+// lifetime id, so a restriction change is a re-issue on the same handle rather than a new one.
+// The texture's own back-pointer is written here and cleared by the delete, and both are silent
+// lookups: the texture bit and the sampler bit are independent, so a view arriving without its
+// texture is an ordering fact and not a refusal.
+TEST(SamplerEmit, AViewIsReissuedOnTheSameHandleAndKeepsItsTexturesBackPointerInStep) {
+    ApplierGuard guard;
+    const MGPipeHandle texture{5, 1};
+    const MGPipeHandle view{9, 2};
+    MGPipeApplyResourceCreate(TextureDesc(texture, 42));
+
+    MGPipeApplyCreateSamplerView(ViewOf(view, texture, 0));
+    ASSERT_GT(MGPipeApplier().SamplerViewCsos.size(), 9u);
+    EXPECT_TRUE(MGPipeApplier().SamplerViewCsos[9].Live);
+    EXPECT_EQ(MGPipeApplier().SamplerViewCsos[9].Serial, 0u);
+    EXPECT_EQ(MGPipeApplier().SamplerViewCsos[9].View.InternalFormat, 0x8058u);
+    EXPECT_EQ(MGPipeApplier().SamplerViewCsos[9].View.NumLevels, 4u);
+    EXPECT_EQ(MGPipeApplier().TextureResources[5].ViewCso, view)
+        << "the texture's back-pointer to its one view was not written";
+
+    // A restriction change: same handle, serial up, nothing started over.
+    MGPipeApplyCreateSamplerView(ViewOf(view, texture, 2));
+    EXPECT_EQ(MGPipeApplier().SamplerViewCsos[9].Serial, 1u);
+    EXPECT_EQ(MGPipeApplier().SamplerViewCsos[9].View.MinLevel, 2u);
+
+    // A view whose texture this applier has not been told about is stored anyway - refusing it
+    // would make one legal A/B arm drop every view - and it counts no refusal.
+    MGPipeApplyCreateSamplerView(ViewOf(MGPipeHandle{10, 1}, MGPipeHandle{77, 1}, 0));
+    EXPECT_TRUE(MGPipeApplier().SamplerViewCsos[10].Live);
+    EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 0u);
+
+    MGPipeApplyDeleteSamplerView(ViewHandle(view));
+    EXPECT_FALSE(MGPipeApplier().SamplerViewCsos[9].Live);
+    EXPECT_EQ(MGPipeApplier().SamplerViewCsos[9].Gen, 2u);
+    EXPECT_EQ(MGPipeApplier().TextureResources[5].ViewCso, kMGPipeNullHandle)
+        << "the texture kept a back-pointer to a view that is gone";
+    MGPipeApplyDeleteSamplerView(ViewHandle(view));
+    EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 1u);
+}
+
+// THE WINDOW IS THE BOUND AND ENTRIES OUTSIDE IT ARE NOT CLEARED: a set that names four units
+// has said nothing about the other 188, and clearing them would unbind textures the client
+// never mentioned. Deleting the entry loop, the window gate or either serial bump leaves this
+// red.
+TEST(SamplerEmit, TheTwoUnitSetsLandInTheirWindowAndLeaveEverythingOutsideItAlone) {
+    ApplierGuard guard;
+
+    MGPBoundView views[2] = {};
+    views[0].View = MGPipeHandle{1, 1};
+    views[0].Texture = MGPipeHandle{2, 1};
+    views[0].Unit = 4;
+    views[1].View = kMGPipeNullHandle; // a unit the program does not resolve is legal
+    views[1].Texture = MGPipeHandle{3, 1};
+    views[1].Unit = 5;
+    MGPSamplerViews viewHeader{};
+    viewHeader.Start = 4;
+    viewHeader.Count = 2;
+    viewHeader.ContentHash = 0xABCDu;
+
+    const Uint64 viewSerial = MGPipeApplier().SamplerViewsSerial;
+    MGPipeApplySetSamplerViews(viewHeader, views);
+    EXPECT_EQ(MGPipeApplier().SamplerViewStart, 4u);
+    EXPECT_EQ(MGPipeApplier().SamplerViewCount, 2u);
+    EXPECT_EQ(MGPipeApplier().BoundSamplerViews[4].View, (MGPipeHandle{1, 1}));
+    EXPECT_EQ(MGPipeApplier().BoundSamplerViews[5].Texture, (MGPipeHandle{3, 1}));
+    EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundSamplerViews[5].View));
+    EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundSamplerViews[3].View)) << "the set wrote below its window";
+    EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundSamplerViews[6].View)) << "the set wrote above its window";
+    EXPECT_GT(MGPipeApplier().SamplerViewsSerial, viewSerial);
+
+    MGPipeHandle states[2] = {MGPipeHandle{8, 1}, kMGPipeNullHandle};
+    MGPSamplerStates stateHeader{};
+    stateHeader.Start = 4;
+    stateHeader.Count = 2;
+    const Uint64 stateSerial = MGPipeApplier().SamplerStatesSerial;
+    MGPipeApplyBindSamplerStates(stateHeader, states);
+    EXPECT_EQ(MGPipeApplier().BoundSamplerStates[4], (MGPipeHandle{8, 1}));
+    EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundSamplerStates[5]))
+        << "a unit with no sampler object carries a null CSO and the texture's built-in one applies";
+    EXPECT_EQ(MGPipeApplier().SamplerStateCount, 2u);
+    EXPECT_GT(MGPipeApplier().SamplerStatesSerial, stateSerial);
+    EXPECT_EQ(MGPipeApplier().SamplerViewsSerial, viewSerial + 1)
+        << "one set moved the other set's serial; the three are independent";
+
+    // A NARROWER SET DOES NOT CLEAR WHAT IT DOES NOT NAME - "the last set as received".
+    MGPSamplerViews narrow{};
+    narrow.Start = 4;
+    narrow.Count = 1;
+    MGPipeApplySetSamplerViews(narrow, views);
+    EXPECT_EQ(MGPipeApplier().SamplerViewCount, 1u);
+    EXPECT_EQ(MGPipeApplier().BoundSamplerViews[5].Texture, (MGPipeHandle{3, 1}))
+        << "the entry outside the new window was cleared";
+}
+
+// The window gate itself, at the bound and one past it, plus the null-tail arm. A header that
+// describes more than its destination can hold is the same class of fault as a blob outside
+// its segment, and the destination here is the merged 192-unit space.
+TEST(SamplerEmit, AUnitWindowPastTheMergedUnitSpaceIsRefusedRatherThanTruncated) {
+    ApplierGuard guard;
+    MGPBoundView entry{};
+    entry.Texture = MGPipeHandle{2, 1};
+
+    // The positive control: a window ending EXACTLY at the bound is fine.
+    MGPSamplerViews exact{};
+    exact.Start = kMGPipeMaxTextureUnits - 1;
+    exact.Count = 1;
+    MGPipeApplySetSamplerViews(exact, &entry);
+    ASSERT_EQ(MGPipeApplier().SamplerViewCount, 1u);
+    const Uint64 serialBefore = MGPipeApplier().SamplerViewsSerial;
+
+    MGPSamplerViews past{};
+    past.Start = kMGPipeMaxTextureUnits - 1;
+    past.Count = 2;
+    past.ContentHash = 7;
+    ExpectRefusedNaming("set_sampler_views {start=191, count=2, hash=7}: the window runs past the merged "
+                        "texture-unit space",
+                        [&past, &entry]() { MGPipeApplySetSamplerViews(past, &entry); });
+
+    MGPSamplerStates statesPast{};
+    statesPast.Start = 0;
+    statesPast.Count = kMGPipeMaxTextureUnits + 1;
+    ExpectRefusedNaming("bind_sampler_states {start=0, count=193, hash=0}: the window runs past the merged "
+                        "texture-unit space",
+                        [&statesPast]() {
+                            MGPipeHandle one = kMGPipeNullHandle;
+                            MGPipeApplyBindSamplerStates(statesPast, &one);
+                        });
+
+    MGPSamplerViews noTail{};
+    noTail.Start = 0;
+    noTail.Count = 3;
+    ExpectRefusedNaming("set_sampler_views {start=0, count=3, hash=0}: a non-empty set carries no entries",
+                        [&noTail]() { MGPipeApplySetSamplerViews(noTail, nullptr); });
+
+    EXPECT_EQ(MGPipeApplier().SamplerViewsSerial, serialBefore) << "a refused set moved the serial";
+    EXPECT_EQ(MGPipeApplier().SamplerViewStart, kMGPipeMaxTextureUnits - 1);
+}
+
+// D-J4 for this family: the CSO and the view are OBJECT records and survive a make-current;
+// the two unit sets are WORKING state and do not, and their serials advance rather than
+// restarting.
+TEST(SamplerEmit, AMakeCurrentTakesTheUnitSetsAndLeavesTheCsoAndViewRecordsStanding) {
+    ApplierGuard guard;
+    const SamplerParameters values = SamplerValues(3.0f, BorderColorForm::Float);
+    MGPipeApplyCreateSamplerState(SamplerDesc(MGPipeHandle{2, 1}, 0), &values);
+    MGPipeApplyCreateSamplerView(ViewOf(MGPipeHandle{3, 1}, MGPipeHandle{4, 1}, 1));
+    MGPBoundView entry{};
+    entry.Texture = MGPipeHandle{4, 1};
+    MGPSamplerViews header{};
+    header.Count = 1;
+    MGPipeApplySetSamplerViews(header, &entry);
+    const Uint64 viewsSerial = MGPipeApplier().SamplerViewsSerial;
+    const Uint64 statesSerial = MGPipeApplier().SamplerStatesSerial;
+
+    MGPipeApplierReset();
+
+    EXPECT_TRUE(MGPipeApplier().SamplerCsos[2].Live) << "a make-current dropped a share-group CSO record";
+    EXPECT_FLOAT_EQ(MGPipeApplier().SamplerCsos[2].Params.lodBias, 3.0f);
+    EXPECT_TRUE(MGPipeApplier().SamplerViewCsos[3].Live);
+    EXPECT_EQ(MGPipeApplier().SamplerViewCount, 0u) << "the unit set is per context and must be cleared";
+    EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundSamplerViews[0].Texture));
+    EXPECT_GT(MGPipeApplier().SamplerViewsSerial, viewsSerial);
+    EXPECT_GT(MGPipeApplier().SamplerStatesSerial, statesSerial);
+}
+
+namespace {
+    using GLContext = MG_State::GLState::GLContext;
+    using MG_State::GLState::ITextureObject;
+    using MG_State::GLState::SamplerObject;
+
+    // AN RAII SCOPE RATHER THAN A gtest FIXTURE, for VertexInputEmitTest's reason: both gates
+    // grep `ctest -R 'SamplerEmit\.'`, a TEST_F files its cases under the FIXTURE's name, and
+    // gtest refuses to mix TEST and TEST_F under one suite name.
+    //
+    // UNLIKE VertexInputEmitTest's, this scope does NOT replace pGLContext: half these cases
+    // need a really linked program, so the process is initialized once in main() and the cases
+    // share that context, each using GL names of its own. What the scope does is put the
+    // emitter, its counters and the suppressor back to a known state.
+    struct EmitterScope {
+        EmitterScope() { Clear(); }
+        ~EmitterScope() { Clear(); }
+        EmitterScope(const EmitterScope&) = delete;
+        EmitterScope& operator=(const EmitterScope&) = delete;
+
+        static void Clear() {
+            MGPipeSamplerEmitterInstance().Reset();
+            MGPipeSamplerEmitterInstance().ResetCounters();
+            MGPipeSamplerCsoCacheInstance().ForgetSession();
+            MGPipeSamplerCsoCacheInstance().ResetCounters();
+            MGPipeSetHashSuppressorInstance().InvalidateAll();
+        }
+    };
+
+    GLContext& Ctx() {
+        return *MG_State::pGLContext;
+    }
+    MGPipeSamplerEmitter& Emitter() {
+        return MGPipeSamplerEmitterInstance();
+    }
+    MGPipeSamplerCsoCache& Cache() {
+        return MGPipeSamplerCsoCacheInstance();
+    }
+
+    // Every field of SamplerParameters set to a value that is not its default, so a conversion
+    // that dropped one is caught by the field's own EXPECT rather than by a count.
+    SamplerParameters DistinctParameters() {
+        SamplerParameters params{};
+        params.wrapS = SamplerWrapMode::ClampToBorder;
+        params.wrapT = SamplerWrapMode::MirroredRepeat;
+        params.wrapR = SamplerWrapMode::MirrorClampToEdge;
+        params.minFilter = SamplerFilterMode::Linear;
+        params.magFilter = SamplerFilterMode::Nearest;
+        params.mipmapMode = SamplerMipmapMode::Nearest;
+        params.minLod = -3.5f;
+        params.maxLod = 7.25f;
+        params.lodBias = 1.5f;
+        params.maxAnisotropy = 2.0f;
+        params.compareFunc = SamplerCompareFunc::Greater;
+        params.compareMode = SamplerCompareMode::CompareToTexture;
+        params.borderColor = {0.25f, 0.5f, 0.75f, 1.0f};
+        params.borderColorI = {-1, 2, -3, 4};
+        params.borderColorUI = {5u, 6u, 7u, 8u};
+        params.borderColorForm = BorderColorForm::Int;
+        return params;
+    }
+
+    // A 2D texture with a single level and a mipmap mode of None, so it is mipmap-complete for
+    // its filter and therefore actually reaches the emitted set. A texture that samples as
+    // incomplete is dropped to a null view on purpose, which is the resolution DirectGLES
+    // performs by leaving the native target unbound.
+    const SharedPtr<ITextureObject>& MakeCompleteTexture(GLuint& name, Int width) {
+        namespace GL = MobileGL::MG_Impl::GLImpl;
+        GL::GenTextures(1, &name);
+        GL::BindTexture(GL_TEXTURE_2D, name);
+        GL::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, width, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        GL::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        GL::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        return Ctx().GetTextureObject(name);
+    }
+
+    void BindTextureToUnit(Uint32 unit, const SharedPtr<ITextureObject>& texture) {
+        Ctx().GetTextureUnitObject(static_cast<Int>(unit)).GetBindingSlot(TextureTarget::Texture2D).Bind(texture);
+        Ctx().NoteTextureUnitTouched(static_cast<Int>(unit));
+    }
+
+    // ============================ D-F1: the CSO cache ============================
+
+    // G6 for this family: every one of SamplerParameters' sixteen members survives the
+    // canonical copy the cache hashes and confirms over. Each member is its own EXPECT naming
+    // that member, which is what G7's scripted control needs - it stops the conversion copying
+    // borderColorForm and expects this case to go red NAMING it.
+    TEST(SamplerEmit, EverySamplerParameterFieldSurvivesTheBlobConversion) {
+        EmitterScope scope;
+        const SamplerParameters source = DistinctParameters();
+        SamplerParameters canon;
+        MGPipeCanonicaliseSamplerParameters(source, canon);
+
+        EXPECT_EQ(canon.wrapS, source.wrapS);
+        EXPECT_EQ(canon.wrapT, source.wrapT);
+        EXPECT_EQ(canon.wrapR, source.wrapR);
+        EXPECT_EQ(canon.minFilter, source.minFilter);
+        EXPECT_EQ(canon.magFilter, source.magFilter);
+        EXPECT_EQ(canon.mipmapMode, source.mipmapMode);
+        EXPECT_EQ(canon.minLod, source.minLod);
+        EXPECT_EQ(canon.maxLod, source.maxLod);
+        EXPECT_EQ(canon.lodBias, source.lodBias);
+        EXPECT_EQ(canon.maxAnisotropy, source.maxAnisotropy);
+        EXPECT_EQ(canon.compareFunc, source.compareFunc);
+        EXPECT_EQ(canon.compareMode, source.compareMode);
+        EXPECT_EQ(canon.borderColor, source.borderColor);
+        EXPECT_EQ(canon.borderColorI, source.borderColorI);
+        EXPECT_EQ(canon.borderColorUI, source.borderColorUI);
+        EXPECT_EQ(canon.borderColorForm, source.borderColorForm)
+            << "borderColorForm decides which of glSamplerParameterIiv / fv applies, and the "
+               "three representations are always numerically populated, so the value alone "
+               "cannot say";
+    }
+
+    // THE PADDING TRAP. SamplerParameters is 100 bytes and its members occupy 97 of them, so
+    // bytes 97..99 are padding no writer ever touches. A cache that hashed the object's own
+    // bytes would read them, miss on every probe and mint a fresh CSO per call - a 256-entry
+    // cache with a hit rate of zero that nobody notices, because the pixels are right.
+    TEST(SamplerEmit, PaddingCannotChangeTheHash) {
+        EmitterScope scope;
+        SamplerParameters clean = DistinctParameters();
+        SamplerParameters dirty = clean;
+        auto* bytes = reinterpret_cast<Uint8*>(&dirty);
+        // Written THROUGH A BYTE POINTER, past the last member and inside the object, which is
+        // the only way to make the difference this case is about.
+        for (SizeT i = 97; i < sizeof(SamplerParameters); ++i)
+            bytes[i] = static_cast<Uint8>(0xA5 + i);
+
+        SamplerParameters canonClean;
+        SamplerParameters canonDirty;
+        MGPipeCanonicaliseSamplerParameters(clean, canonClean);
+        MGPipeCanonicaliseSamplerParameters(dirty, canonDirty);
+        EXPECT_EQ(MGPipeHashSamplerParameters(canonClean), MGPipeHashSamplerParameters(canonDirty));
+        // And the CONFIRM, not only the hash: the cache reuses a handle on a memcmp over these
+        // same canonical bytes, so the padding has to be deterministically zero in both.
+        EXPECT_EQ(std::memcmp(&canonClean, &canonDirty, sizeof(SamplerParameters)), 0);
+
+        Uint64 payload = 0;
+        const MGPipeHandle first = Cache().Acquire(clean, payload);
+        const MGPipeHandle second = Cache().Acquire(dirty, payload);
+        EXPECT_EQ(first, second) << "uninitialized padding must not mint a second CSO";
+        EXPECT_EQ(Cache().GetCounters().Mints, 1u);
+        EXPECT_EQ(Cache().GetCounters().Hits, 1u);
+    }
+
+    TEST(SamplerEmit, TwoIdenticalSamplersShareOneCso) {
+        EmitterScope scope;
+        Uint64 payload = 0;
+        const SamplerParameters params = DistinctParameters();
+        const MGPipeHandle a = Cache().Acquire(params, payload);
+        const MGPipeHandle b = Cache().Acquire(params, payload);
+        EXPECT_FALSE(MGPipeHandleIsNull(a));
+        EXPECT_EQ(a, b);
+        EXPECT_EQ(Cache().Size(), 1u);
+        EXPECT_EQ(Cache().GetCounters().Mints, 1u);
+        // A SamplerObject is a pure value with no driver-side per-object binding state, so two
+        // identical samplers really can share one CSO and one server-side twin. That is what
+        // makes content addressing right for this kind and wrong for vertex elements.
+        EXPECT_GT(payload, 0u);
+    }
+
+    TEST(SamplerEmit, ABorderColorFormChangeAloneMintsANewCso) {
+        EmitterScope scope;
+        Uint64 payload = 0;
+        SamplerParameters params = DistinctParameters();
+        const MGPipeHandle asInt = Cache().Acquire(params, payload);
+        params.borderColorForm = BorderColorForm::Uint;
+        const MGPipeHandle asUint = Cache().Acquire(params, payload);
+        EXPECT_NE(asInt, asUint) << "the form is the only thing that says which driver entry "
+                                    "point applies; the three color values did not move";
+        EXPECT_EQ(Cache().GetCounters().Mints, 2u);
+    }
+
+    // The memcmp confirm exists because a bare 64-bit equality would alias two DIFFERENT
+    // sampler states onto one CSO - silent wrong filtering with no gate that can see it.
+    //
+    // A GENUINE XXH64 COLLISION CANNOT BE MANUFACTURED, so this case drives the branch through
+    // the cache's forced-hash test seam instead. Without it the case could not go red for its
+    // own name: two states that differ by one float ULP have different hashes, the confirm is
+    // never consulted, and the memcmp branch, the Collisions counter and the probe's
+    // continuation past a rejected entry were all completely uncovered.
+    TEST(SamplerEmit, AHashCollisionDoesNotAliasTwoSamplerStates) {
+        EmitterScope scope;
+        Uint64 payload = 0;
+        SamplerParameters first = DistinctParameters();
+        SamplerParameters second = DistinctParameters();
+        second.maxLod = second.maxLod + 0.0009765625f; // one representable step, nothing else moves
+        ASSERT_NE(std::memcmp(&first, &second, sizeof(SamplerParameters)), 0);
+
+        // ONE hash for two different values, which is exactly what a collision is.
+        constexpr Uint64 kForcedHash = 0x0123456789ABCDEFull;
+        const MGPipeHandle a = Cache().AcquireWithForcedHashForTest(first, kForcedHash, payload);
+        const MGPipeHandle b = Cache().AcquireWithForcedHashForTest(second, kForcedHash, payload);
+        EXPECT_NE(a, b) << "reusing the handle would filter one state with the other's parameters";
+        EXPECT_EQ(Cache().GetCounters().Collisions, 1u) << "and the rejection is counted, not silent";
+        EXPECT_EQ(Cache().GetCounters().Mints, 2u);
+        EXPECT_EQ(Cache().Size(), 2u);
+
+        // AND THE PROBE KEEPS GOING PAST THE REJECTED ENTRY rather than stopping at the first
+        // hash match: the first value is still resident behind the colliding one, so asking for
+        // it again is a HIT and not a third mint. Stopping at the first match would mint a
+        // duplicate CSO for a value the cache already holds.
+        const MGPipeHandle again = Cache().AcquireWithForcedHashForTest(first, kForcedHash, payload);
+        EXPECT_EQ(again, a);
+        EXPECT_EQ(Cache().GetCounters().Mints, 2u);
+        EXPECT_EQ(Cache().GetCounters().Hits, 1u);
+
+        // The ordinary path, for completeness: two states that differ in ONE field never share
+        // a handle and never reach the confirm at all.
+        Cache().ForgetSession();
+        Cache().ResetCounters();
+        const MGPipeHandle plainFirst = Cache().Acquire(first, payload);
+        const MGPipeHandle plainSecond = Cache().Acquire(second, payload);
+        EXPECT_NE(plainFirst, plainSecond);
+        EXPECT_EQ(Cache().GetCounters().Collisions, 0u);
+    }
+
+    // ============================ P14: one cache, many share groups ============================
+
+    // The calling thread's {session, context} for the applier's key resolver - the shape the
+    // server's own resolver (SessionRuntime.cpp) fills in from the session's bound context.
+    thread_local Uint64 t_groupSession = 0;
+    thread_local Uint64 t_groupContext = 0;
+
+    Bool TwoGroupKeyResolver(MGPipeApplierKey* outKey) {
+        if (t_groupSession == 0) return false;
+        outKey->SessionKey = t_groupSession;
+        outKey->ContextToken = t_groupContext;
+        return true;
+    }
+
+    // Two contexts of one session in two share groups (or one, with `shared`), made current in
+    // turn on BOTH halves a served client keeps in step: the frontend's pGLContext and the
+    // server's bound context (GLStreamScope rebinds the session before a GL entry point writes).
+    struct ShareGroupPair {
+        static constexpr Uint64 kSession = 0x5A3E5C50C0000000ull;
+        explicit ShareGroupPair(Bool shared) {
+            m_previous = MG_State::pGLContext;
+            for (Uint64 i = 0; i < 2; ++i) {
+                const Uint64 group = shared ? 0x51 : 0x51 + i;
+                m_contexts[i] = MakeShared<GLContext>(MakeShared<MG_State::GLState::ShareGroupState>(group));
+                MGPipeApplierRegisterContext(kSession, i + 1, group);
+            }
+            MGPipeSetApplierKeyResolver(&TwoGroupKeyResolver);
+        }
+        ~ShareGroupPair() {
+            t_groupSession = 0;
+            t_groupContext = 0;
+            MGPipeSetApplierKeyResolver(nullptr);
+            MGPipeApplierReleaseSession(kSession);
+            MG_State::pGLContext = m_previous;
+        }
+        ShareGroupPair(const ShareGroupPair&) = delete;
+        ShareGroupPair& operator=(const ShareGroupPair&) = delete;
+
+        void MakeCurrent(Uint32 index) {
+            MG_State::pGLContext = m_contexts[index];
+            t_groupSession = kSession;
+            t_groupContext = index + 1;
+        }
+
+        SharedPtr<GLContext> m_previous;
+        SharedPtr<GLContext> m_contexts[2];
+    };
+
+    // The record the applier the calling thread is bound to holds for `cso`, or null.
+    const MGPipeSamplerCsoRecord* BoundGroupSamplerRecord(MGPipeHandle cso) {
+        const auto& table = MGPipeApplier().SamplerCsos;
+        if (MGPipeHandleIsNull(cso) || cso.Slot >= table.size()) return nullptr;
+        const MGPipeSamplerCsoRecord& record = table[cso.Slot];
+        return record.Live && record.Gen == cso.Gen ? &record : nullptr;
+    }
+
+    // THE CACHE IS PROCESS-WIDE AND THE RECORD IS PER SHARE GROUP. A value minted while one
+    // non-shared context was current is a cache hit for the next one, and before the fix that hit
+    // handed back a handle the second group's applier had never been sent: the texture naming it
+    // sampled with default parameters on Magma and with none at all on Espryt. Red without the
+    // re-issue in AcquireCanonical: the second group has no record and GroupPublishes stays 0.
+    TEST(SamplerEmit, AValueMintedInOneShareGroupIsPublishedIntoTheNextGroupThatAcquiresIt) {
+        EmitterScope scope;
+        ShareGroupPair groups(/*shared=*/false);
+        Cache().ResetCounters();
+        const SamplerParameters params = DistinctParameters();
+        Uint64 payload = 0;
+
+        groups.MakeCurrent(0);
+        const MGPipeHandle first = Cache().Acquire(params, payload);
+        ASSERT_NE(BoundGroupSamplerRecord(first), nullptr) << "the minting group was not sent the create";
+
+        groups.MakeCurrent(1);
+        const MGPipeHandle second = Cache().Acquire(params, payload);
+        EXPECT_EQ(second, first) << "one value is still one CSO across groups";
+        const MGPipeSamplerCsoRecord* record = BoundGroupSamplerRecord(second);
+        ASSERT_NE(record, nullptr) << "the second share group names a sampler CSO its applier never received";
+        EXPECT_EQ(record->Params.magFilter, params.magFilter);
+        EXPECT_EQ(record->Params.borderColorForm, params.borderColorForm);
+        EXPECT_EQ(Cache().GetCounters().Mints, 1u);
+        EXPECT_EQ(Cache().GetCounters().GroupPublishes, 1u);
+
+        // Once per group, not once per acquire: a second hit in either group sends nothing.
+        const MGPipeHandle again = Cache().Acquire(params, payload);
+        groups.MakeCurrent(0);
+        const MGPipeHandle back = Cache().Acquire(params, payload);
+        EXPECT_EQ(Cache().GetCounters().GroupPublishes, 1u);
+        EXPECT_NE(BoundGroupSamplerRecord(back), nullptr);
+
+        for (const MGPipeHandle held : {first, second, again, back})
+            Cache().Release(held);
+        EXPECT_EQ(Cache().GetCounters().UnknownReleases + Cache().GetCounters().UnderflowedReleases, 0u);
+    }
+
+    // The control: contexts that SHARE a group share the record too, so a hit from the second
+    // re-issues nothing.
+    TEST(SamplerEmit, ASharingContextReusesTheRecordItsGroupAlreadyHolds) {
+        EmitterScope scope;
+        ShareGroupPair groups(/*shared=*/true);
+        Cache().ResetCounters();
+        const SamplerParameters params = DistinctParameters();
+        Uint64 payload = 0;
+
+        groups.MakeCurrent(0);
+        const MGPipeHandle first = Cache().Acquire(params, payload);
+        groups.MakeCurrent(1);
+        const MGPipeHandle second = Cache().Acquire(params, payload);
+        EXPECT_EQ(second, first);
+        EXPECT_NE(BoundGroupSamplerRecord(second), nullptr);
+        EXPECT_EQ(Cache().GetCounters().GroupPublishes, 0u);
+        Cache().Release(first);
+        Cache().Release(second);
+    }
+
+    // AN EVICTION ENDS THE VALUE IN EVERY SHARE GROUP IT WAS PUBLISHED TO. The cache frees the
+    // handle, which is one identity for the whole session, whichever context is bound when the LRU
+    // runs. Red while the delete reached the bound group only: the other group kept a record at a
+    // slot the cache hands out again.
+    TEST(SamplerEmit, AnEvictionDropsTheValueFromEveryShareGroupItWasPublishedTo) {
+        EmitterScope scope;
+        ShareGroupPair groups(/*shared=*/false);
+        Uint64 payload = 0;
+        const SamplerParameters params = DistinctParameters();
+
+        groups.MakeCurrent(0);
+        const MGPipeHandle victim = Cache().Acquire(params, payload);
+        groups.MakeCurrent(1);
+        ASSERT_EQ(Cache().Acquire(params, payload), victim);
+        ASSERT_NE(BoundGroupSamplerRecord(victim), nullptr) << "the second group was not sent the create";
+        Cache().Release(victim);
+        Cache().Release(victim);
+
+        // The first group fills the cache with values nothing keeps naming: the victim is the
+        // least recently used entry, and the LRU takes it while the FIRST group is bound.
+        groups.MakeCurrent(0);
+        SamplerParameters filler = DistinctParameters();
+        for (SizeT i = 0; i < kMGPipeSamplerCsoCacheCapacity; ++i) {
+            filler.minLod = static_cast<float>(i) + 0.5f;
+            Cache().Release(Cache().Acquire(filler, payload));
+        }
+        ASSERT_FALSE(Cache().RecordIsPublished(victim)) << "the LRU did not take the victim";
+        EXPECT_EQ(BoundGroupSamplerRecord(victim), nullptr) << "the bound group still holds the evicted value";
+        groups.MakeCurrent(1);
+        EXPECT_EQ(BoundGroupSamplerRecord(victim), nullptr)
+            << "the other share group still holds a sampler CSO the cache has freed";
+        EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 0u);
+    }
+
+    // ============================ D-F2: the sampler view ============================
+
+    TEST(SamplerEmit, AnUnchangedTextureReIssuesNothing) {
+        EmitterScope scope;
+        GLuint name = 0;
+        const SharedPtr<ITextureObject> texture = MakeCompleteTexture(name, 4);
+        ASSERT_TRUE(texture);
+        Uint64 payload = 0;
+        const MGPipeHandle handle = MGPipeSlots().Acquire(MGPipeKind::Texture, texture->GetLifetimeId());
+        const MGPipeHandle view = Emitter().AcquireSamplerView(*texture, handle, payload);
+        ASSERT_FALSE(MGPipeHandleIsNull(view));
+        EXPECT_EQ(Emitter().ViewCreateCount(), 1u);
+        // THE VERSION-FIRST SKIP: nothing moved, so nothing is hashed, copied or emitted.
+        EXPECT_EQ(Emitter().AcquireSamplerView(*texture, handle, payload), view);
+        EXPECT_EQ(Emitter().ViewCreateCount(), 1u);
+    }
+
+    TEST(SamplerEmit, AViewIsReIssuedOnTheSameHandleWhenItsRestrictionsMove) {
+        EmitterScope scope;
+        namespace GL = MobileGL::MG_Impl::GLImpl;
+        GLuint name = 0;
+        const SharedPtr<ITextureObject> texture = MakeCompleteTexture(name, 4);
+        ASSERT_TRUE(texture);
+        Uint64 payload = 0;
+        const MGPipeHandle handle = MGPipeSlots().Acquire(MGPipeKind::Texture, texture->GetLifetimeId());
+        const MGPipeHandle view = Emitter().AcquireSamplerView(*texture, handle, payload);
+        ASSERT_FALSE(MGPipeHandleIsNull(view));
+        ASSERT_EQ(Emitter().ViewCreateCount(), 1u);
+        const Uint64 shapeBefore = texture->GetShapeVersion();
+
+        GL::BindTexture(GL_TEXTURE_2D, name);
+        GL::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        ASSERT_NE(texture->GetShapeVersion(), shapeBefore) << "the storage really has to move";
+
+        // THE SAME HANDLE, a second record. Gen increments only on slot reuse and never on a
+        // respecify, so re-issuing on the same handle is legal and is what keeps a server's
+        // twin table from minting a second identity for one texture.
+        const MGPipeHandle reissued = Emitter().AcquireSamplerView(*texture, handle, payload);
+        EXPECT_EQ(reissued, view);
+        EXPECT_EQ(Emitter().ViewCreateCount(), 2u);
+        EXPECT_EQ(Emitter().LastCreatedView().Cso, view);
+        EXPECT_EQ(Emitter().LastCreatedView().Texture, handle);
+        EXPECT_EQ(Emitter().LastCreatedView().Target, static_cast<Uint8>(TextureTarget::Texture2D));
+        EXPECT_EQ(Emitter().LastCreatedView().InternalFormat, static_cast<Uint32>(texture->GetFormat()));
+        // An ordinary texture carries no view restriction, and zero is that statement rather
+        // than a second spelling of it: glTextureView always writes NumLevels >= 1.
+        EXPECT_EQ(Emitter().LastCreatedView().NumLevels, 0u);
+        EXPECT_EQ(Emitter().LastCreatedView().NumLayers, 0u);
+    }
+
+    // ============================ D-G: the two unit sets ============================
+
+    Uint MakeSamplerProgram() {
+        namespace GL = MobileGL::MG_Impl::GLImpl;
+        static const char* kVs = "#version 330 core\nvoid main(){ gl_Position = vec4(0.0); }\n";
+        static const char* kFs = "#version 330 core\n"
+                                 "uniform sampler2D sampled;\n"
+                                 "out vec4 color;\n"
+                                 "void main(){ color = texture(sampled, vec2(0.0)); }\n";
+        const Uint program = GL::CreateProgram();
+        const Uint vs = GL::CreateShader(GL_VERTEX_SHADER);
+        GL::ShaderSource(vs, 1, &kVs, nullptr);
+        GL::CompileShader(vs);
+        GL::AttachShader(program, vs);
+        const Uint fs = GL::CreateShader(GL_FRAGMENT_SHADER);
+        GL::ShaderSource(fs, 1, &kFs, nullptr);
+        GL::CompileShader(fs);
+        GL::AttachShader(program, fs);
+        GL::LinkProgram(program);
+        return program;
+    }
+
+    // ARCHITECTURE's third merge rule: the client emits the PROGRAM-RESOLVED set. A unit the
+    // shader does not sample carries no view, whatever is bound to it - which is exactly the
+    // one-view-per-slot resolved form, and exactly what DirectGLES arrives at by
+    // asking the program which of a unit's aliased bindings is the sampled one.
+    TEST(SamplerEmit, OnlyTheProgramResolvedUnitsAreEmitted) {
+        EmitterScope scope;
+        namespace GL = MobileGL::MG_Impl::GLImpl;
+        const Uint program = MakeSamplerProgram();
+        GLint linked = 0;
+        GL::GetProgramiv(program, GL_LINK_STATUS, &linked);
+        ASSERT_EQ(linked, GL_TRUE);
+        GL::UseProgram(program);
+        const GLint location = GL::GetUniformLocation(program, "sampled");
+        ASSERT_GE(location, 0);
+        GL::Uniform1i(location, 3);
+
+        GLuint sampledName = 0;
+        GLuint unsampledName = 0;
+        const SharedPtr<ITextureObject> sampled = MakeCompleteTexture(sampledName, 4);
+        const SharedPtr<ITextureObject> unsampled = MakeCompleteTexture(unsampledName, 4);
+        BindTextureToUnit(3, sampled);
+        BindTextureToUnit(5, unsampled);
+
+        ASSERT_GT(Emitter().EmitSamplerViews(Ctx()), 0u);
+        ASSERT_EQ(Emitter().ViewSetCount(), 1u);
+        ASSERT_GE(Emitter().LastSamplerViews().Count, 6u);
+        EXPECT_EQ(Emitter().LastSamplerViews().Start, 0u);
+
+        const MGPBoundView& resolved = Emitter().LastBoundViews()[3];
+        EXPECT_EQ(resolved.Unit, 3u);
+        EXPECT_FALSE(MGPipeHandleIsNull(resolved.Texture)) << "unit 3 is what the shader samples";
+        EXPECT_FALSE(MGPipeHandleIsNull(resolved.View));
+
+        const MGPBoundView& ignored = Emitter().LastBoundViews()[5];
+        EXPECT_EQ(ignored.Unit, 5u);
+        EXPECT_TRUE(MGPipeHandleIsNull(ignored.Texture))
+            << "unit 5 has a texture bound but no sampler uniform resolves to it";
+        EXPECT_TRUE(MGPipeHandleIsNull(ignored.View));
+
+        GL::UseProgram(0);
+    }
+
+    TEST(SamplerEmit, AnUnchangedSetEmitsNothing) {
+        EmitterScope scope;
+        GLuint name = 0;
+        const SharedPtr<ITextureObject> texture = MakeCompleteTexture(name, 4);
+        BindTextureToUnit(1, texture);
+        Emitter().EmitSamplerViews(Ctx());
+        const Uint64 after = Emitter().ViewSetCount();
+        // The suppressor's whole job: an unchanged resolved set is not sent again. Without it
+        // this would be a several-hundred-byte variable-length record per batch, because a
+        // redundant re-bind moves the bind generation and the dirty bit with it.
+        Emitter().EmitSamplerViews(Ctx());
+        EXPECT_EQ(Emitter().ViewSetCount(), after);
+    }
+
+    TEST(SamplerEmit, ARedundantRebindOfTheSameSamplerEmitsNothing) {
+        // THE SCOPE IS LOAD-BEARING and not decoration: without it this case's counter
+        // assertions would be reading whatever the previous case's destructor happened to
+        // leave, which is a suite-order dependence of exactly the class the padding bug was.
+        EmitterScope scope;
+        const SharedPtr<MG_State::GLState::SamplerObject>& sampler = Ctx().CreateSamplerObject(4131);
+        ASSERT_TRUE(sampler);
+        Ctx().GetTextureUnitObject(2).SetSamplerObject(sampler);
+        Ctx().NoteTextureUnitTouched(2);
+
+        ASSERT_GT(Emitter().EmitSamplerStates(Ctx()), 0u);
+        ASSERT_EQ(Emitter().StateSetCount(), 1u);
+        ASSERT_GE(Emitter().LastSamplerStates().Count, 3u);
+        EXPECT_FALSE(MGPipeHandleIsNull(Emitter().LastSamplerStateHandles()[2]));
+        EXPECT_TRUE(MGPipeHandleIsNull(Emitter().LastSamplerStateHandles()[0]))
+            << "a unit with no sampler object carries the null handle, and the texture's "
+               "built-in sampler then applies exactly as today";
+
+        // 26.2's idiom: the same sampler object re-bound at every texture-unit switch. The bind
+        // generation moves, so the dirty bit fires and this emitter runs - and emits nothing.
+        Ctx().BumpTextureBindGeneration();
+        Emitter().EmitSamplerStates(Ctx());
+        EXPECT_EQ(Emitter().StateSetCount(), 1u);
+        EXPECT_EQ(Cache().GetCounters().Mints, 1u) << "and it mints no second CSO either";
+
+        Ctx().GetTextureUnitObject(2).SetSamplerObject(SharedPtr<SamplerObject>());
+    }
+
+    // ==================== ID-17: the reference count on a cache entry ====================
+
+    // A BOUND SAMPLER STATE HOLDS A REFERENCE WHILE IT IS BOUND. The set the applier holds is
+    // "the last set as received" and outlives the pass that sent it, so a handle in it must not
+    // become the LRU's victim - nothing re-emits bind_sampler_states when a CSO is evicted,
+    // because an eviction is not a state change and no dirty bit fires for it.
+    //
+    // AND THE REFERENCE DOES NOT ACCUMULATE. Every Acquire takes one, and this emitter runs
+    // once per firing of the sampler bit - which 26.2 makes happen at every texture-unit
+    // switch - so an emitter that took a reference per pass and never gave one back would pin
+    // every CSO it ever bound for the life of the process.
+    TEST(SamplerEmit, ABoundSamplerStateHoldsItsCsoUntilTheUnitMoves) {
+        EmitterScope scope;
+        const SharedPtr<SamplerObject>& sampler = Ctx().CreateSamplerObject(4137);
+        ASSERT_TRUE(sampler);
+        Ctx().GetTextureUnitObject(2).SetSamplerObject(sampler);
+        Ctx().NoteTextureUnitTouched(2);
+
+        ASSERT_GT(Emitter().EmitSamplerStates(Ctx()), 0u);
+        const MGPipeHandle bound = Emitter().LastSamplerStateHandles()[2];
+        ASSERT_FALSE(MGPipeHandleIsNull(bound));
+        EXPECT_EQ(Cache().RefCountOf(bound), 1u) << "the applier's standing set names this handle";
+
+        Ctx().BumpTextureBindGeneration();
+        Emitter().EmitSamplerStates(Ctx());
+        EXPECT_EQ(Cache().RefCountOf(bound), 1u) << "one binding is one reference, not one per pass";
+
+        // The unit stops naming it, and the reference goes with the binding rather than with
+        // the entry: the value is still worth caching, it is merely evictable again.
+        Ctx().GetTextureUnitObject(2).SetSamplerObject(SharedPtr<SamplerObject>());
+        Emitter().EmitSamplerStates(Ctx());
+        EXPECT_TRUE(MGPipeHandleIsNull(Emitter().LastSamplerStateHandles()[2]));
+        EXPECT_EQ(Cache().RefCountOf(bound), 0u);
+        EXPECT_TRUE(Cache().RecordIsPublished(bound)) << "released is not evicted";
+    }
+
+    // THE FINDING ID-17 RULES ON. MGPTextureParams::BuiltinSampler names a sampler CSO out of
+    // this cache, the applier deliberately does NOT resolve that handle (an unresolvable one is
+    // an ordering fact, not a corrupt one), and set_texture_params is re-emitted only when a
+    // texture's parameters move - so an LRU eviction of a built-in sampler's entry would leave
+    // a published record naming a handle whose slot has been re-handed out to a different
+    // value, with nothing that refuses, counts, logs or re-emits. The capacity argument closes
+    // only the intra-pass case; the reference count is what closes this one.
+    TEST(SamplerEmit, AReferencedCsoIsNeverTheLruVictim) {
+        EmitterScope scope;
+        Uint64 payload = 0;
+        const SamplerParameters pinnedParams = DistinctParameters();
+        const MGPipeHandle pinned = Cache().Acquire(pinnedParams, payload);
+        ASSERT_FALSE(MGPipeHandleIsNull(pinned));
+        ASSERT_EQ(Cache().RefCountOf(pinned), 1u);
+
+        // A CTS sampler sweep, in miniature: twice the cache's capacity in distinct values,
+        // none of which anything keeps naming. The LRU has to run, hard.
+        SamplerParameters filler = DistinctParameters();
+        for (SizeT i = 0; i < kMGPipeSamplerCsoCacheCapacity * 2; ++i) {
+            filler.minLod = static_cast<float>(i) + 0.5f;
+            Cache().Release(Cache().Acquire(filler, payload));
+        }
+        ASSERT_GT(Cache().GetCounters().Evictions, 0u) << "the LRU really has to have run";
+        EXPECT_EQ(Cache().GetCounters().OverCapacityMints, 0u)
+            << "there were unreferenced entries to take, so nothing had to grow";
+
+        EXPECT_TRUE(Cache().RecordIsPublished(pinned)) << "a handle a standing record names is not the LRU's to take";
+        Uint64 second = 0;
+        EXPECT_EQ(Cache().Acquire(pinnedParams, second), pinned);
+        EXPECT_EQ(second, 0u) << "and it was a hit, not a re-mint under the same value";
+
+        Cache().Release(pinned);
+        Cache().Release(pinned);
+    }
+
+    // AND WHEN EVERY ENTRY IS PINNED THE CACHE GROWS AND SAYS SO. Growing is the safe
+    // direction - a slot too many costs memory, a handle pulled out from under a live record
+    // costs correctness - and OverCapacityMints is a RECORDED NUMBER rather than a gate, so a
+    // workload that pins more than the capacity is visible instead of being wrong.
+    TEST(SamplerEmit, AFullyPinnedCacheMintsBeyondItsCapacityAndCountsIt) {
+        EmitterScope scope;
+        Uint64 payload = 0;
+        SamplerParameters params = DistinctParameters();
+        Vector<MGPipeHandle> held;
+        for (SizeT i = 0; i < kMGPipeSamplerCsoCacheCapacity; ++i) {
+            params.minLod = static_cast<float>(i) + 0.5f;
+            held.push_back(Cache().Acquire(params, payload));
+        }
+        ASSERT_EQ(Cache().Size(), kMGPipeSamplerCsoCacheCapacity);
+        ASSERT_EQ(Cache().GetCounters().Evictions, 0u);
+        ASSERT_EQ(Cache().GetCounters().OverCapacityMints, 0u);
+
+        params.minLod = -12.5f; // one more distinct value, with nothing evictable
+        const MGPipeHandle extra = Cache().Acquire(params, payload);
+        EXPECT_FALSE(MGPipeHandleIsNull(extra));
+        EXPECT_EQ(Cache().Size(), kMGPipeSamplerCsoCacheCapacity + 1);
+        EXPECT_EQ(Cache().GetCounters().Evictions, 0u) << "no pinned entry may be taken";
+        EXPECT_EQ(Cache().GetCounters().OverCapacityMints, 1u) << "and the growth is counted";
+
+        for (const MGPipeHandle& handle : held) {
+            EXPECT_TRUE(Cache().RecordIsPublished(handle));
+            Cache().Release(handle);
+        }
+        Cache().Release(extra);
+    }
+
+    // THE COUNT IS PER HANDLE, NOT PER HOLDER, and this is what makes that visible to whoever
+    // holds one. Entries are content-addressed and shared by design - package B's texture-params
+    // record and this file's own bind_sampler_states name the SAME handle when the values match,
+    // each owing exactly one Release - so a holder that releases twice takes the OTHER holder's
+    // pin and the LRU may then evict a handle a published record still names, with nothing to
+    // refuse and nothing to re-emit. The cache cannot repair that, so it counts it; an assert
+    // could not, because MOBILEGL_ASSERT compiles out at INFO, i.e. in every build that runs.
+    TEST(SamplerEmit, AReleaseThisCacheNeverHandedOutIsCountedRatherThanAbsorbed) {
+        EmitterScope scope;
+        Uint64 payload = 0;
+        const SamplerParameters params = DistinctParameters();
+        const MGPipeHandle cso = Cache().Acquire(params, payload);
+        ASSERT_FALSE(MGPipeHandleIsNull(cso));
+        ASSERT_EQ(Cache().RefCountOf(cso), 1u);
+        ASSERT_EQ(Cache().GetCounters().UnknownReleases, 0u);
+        ASSERT_EQ(Cache().GetCounters().UnderflowedReleases, 0u);
+
+        // A HANDLE THIS CACHE NEVER MINTED: a stale one from before a reset, or one of another
+        // kind passed by mistake. It falls off the end of the probe and used to leave no trace
+        // at all - Releases counts only releases that found an entry.
+        Cache().Release(MGPipeHandle{cso.Slot + 4096u, cso.Gen});
+        EXPECT_EQ(Cache().GetCounters().UnknownReleases, 1u);
+        EXPECT_EQ(Cache().RefCountOf(cso), 1u) << "and it took nobody else's pin on the way";
+
+        // A SECOND RELEASE OF A REFERENCE ONLY ONE HOLDER OWED. The count does not underflow -
+        // that half was already right - but the attempt is now named.
+        Cache().Release(cso);
+        EXPECT_EQ(Cache().RefCountOf(cso), 0u);
+        EXPECT_EQ(Cache().GetCounters().UnderflowedReleases, 0u);
+        Cache().Release(cso);
+        EXPECT_EQ(Cache().RefCountOf(cso), 0u) << "no underflow";
+        EXPECT_EQ(Cache().GetCounters().UnderflowedReleases, 1u);
+
+        // A NULL HANDLE IS NEITHER: an out-of-window unit holds one and releasing it is the
+        // ordinary no-op the reconciliation depends on.
+        const auto before = Cache().GetCounters();
+        Cache().Release(kMGPipeNullHandle);
+        EXPECT_EQ(Cache().GetCounters().UnknownReleases, before.UnknownReleases);
+        EXPECT_EQ(Cache().GetCounters().Releases, before.Releases);
+        // NOTHING WAS EVICTED WHILE REFERENCED, which is the ID-17 invariant the same round
+        // turned from a compiled-out assert into a number.
+        EXPECT_EQ(Cache().GetCounters().ReferencedEvictions, 0u);
+    }
+
+    // FINAL REVIEW M-A: THE SAMPLER-VIEW RESOLUTION IS D-A4's PRODUCER OF kMGPipeBindSampler.
+    // "Any texture the sampler-view resolution names in an emitted MGPBoundView" carries the
+    // sticky bit from then on; a texture bound to a unit no sampler uniform resolves does not.
+    // Nothing produced the bit before the fix round.
+    TEST(SamplerEmit, AResolvedSamplerViewMarksItsTextureAsSamplerBound) {
+        EmitterScope scope;
+        MGPipeTextureEmitterInstance().ForgetSession();
+        namespace GL = MobileGL::MG_Impl::GLImpl;
+        const Uint program = MakeSamplerProgram();
+        GLint linked = 0;
+        GL::GetProgramiv(program, GL_LINK_STATUS, &linked);
+        ASSERT_EQ(linked, GL_TRUE);
+        GL::UseProgram(program);
+        const GLint location = GL::GetUniformLocation(program, "sampled");
+        ASSERT_GE(location, 0);
+        GL::Uniform1i(location, 3);
+
+        GLuint sampledName = 0;
+        GLuint unsampledName = 0;
+        const SharedPtr<ITextureObject> sampled = MakeCompleteTexture(sampledName, 4);
+        const SharedPtr<ITextureObject> unsampled = MakeCompleteTexture(unsampledName, 4);
+        BindTextureToUnit(3, sampled);
+        BindTextureToUnit(5, unsampled);
+
+        ASSERT_GT(Emitter().EmitSamplerViews(Ctx()), 0u);
+        const MGPBoundView& resolved = Emitter().LastBoundViews()[3];
+        ASSERT_FALSE(MGPipeHandleIsNull(resolved.Texture));
+        EXPECT_NE(MGPipeTextureEmitterInstance().TextureBindMask(resolved.Texture) & kMGPipeBindSampler, 0)
+            << "the texture a sampler view was resolved for does not carry kMGPipeBindSampler";
+        const MGPipeHandle unsampledHandle =
+            MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, unsampled->GetLifetimeId());
+        if (!MGPipeHandleIsNull(unsampledHandle)) {
+            EXPECT_EQ(MGPipeTextureEmitterInstance().TextureBindMask(unsampledHandle) & kMGPipeBindSampler, 0)
+                << "a texture no sampler uniform resolves to was marked sampler-bound";
+        }
+        GL::UseProgram(0);
+    }
+} // namespace
+
+int main(int argc, char** argv) {
+    namespace fs = std::filesystem;
+    const fs::path path =
+        fs::temp_directory_path() / ("mobilegl-sampleremit-test-" + std::to_string(ProcessId()) + ".log");
+    std::error_code ec;
+    fs::remove(path, ec);
+    g_logPath = path.string();
+#if defined(_WIN32)
+    _putenv_s("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str());
+#else
+    setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
+#endif
+    // P6: MOBILEGL_LOG_FILE_PATH is a BASE NAME and the library writes one file per role. These
+    // cases read the log by OFFSET (a single growing file), and every marker they assert is
+    // raised by the encoder on THIS thread - the client role. So g_logPath, which is the read
+    // path from here on, becomes the client-derived name; the env keeps the base. The rule is
+    // the library's own, not a copy.
+    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(), MobileGL::MG_Util::Debug::LogRole::Client);
+    // ONE process-wide context for the whole suite, because half these cases need a really
+    // linked program and glslang lives behind this call. Each case uses GL names of its own.
+    MobileGL::Initialize();
+    ::testing::InitGoogleTest(&argc, argv);
+    const int rc = RUN_ALL_TESTS();
+    fs::remove(path, ec);
+    return rc;
+}

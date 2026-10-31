@@ -25,7 +25,8 @@ public final class TraceReplayActivity extends Activity {
 
     private TextView statusView;
     private TraceReplayRequest request;
-    private boolean started;
+    private TraceReplaySession<TraceReplayResult> replaySession;
+    private final TraceReplaySession.Listener<TraceReplayResult> replayListener = this::onReplayComplete;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override
@@ -44,7 +45,10 @@ public final class TraceReplayActivity extends Activity {
         request = TraceReplayRequest.from(
                 intent,
                 getFilesDir(),
-                getString(top.mobilegl.plugin.R.string.mobilegl_default_backend)
+                getString(top.mobilegl.plugin.R.string.mobilegl_default_backend),
+                // P6: the ONE place that knows where an exec-able file lives. See
+                // resolveSpawnServerPath.
+                getApplicationInfo().nativeLibraryDir
         );
         statusView = new TextView(this);
         statusView.setText("Waiting for render surface\n" + request.outputDir);
@@ -53,6 +57,36 @@ public final class TraceReplayActivity extends Activity {
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                 android.view.ViewGroup.LayoutParams.WRAP_CONTENT
         ));
+
+        // P0 spike A: when asked, exec the packaged server stub out of nativeLibraryDir
+        // instead of replaying anything. This mode needs no trace and no render surface.
+        String spikeLibrary = spawnSpikeLibrary(intent);
+        if (spikeLibrary != null) {
+            runSpawnSpike(spikeLibrary);
+            return;
+        }
+
+        // P11 B1 (gate tooling): run an argv as a CHILD OF THIS APP - this uid, this untrusted_app
+        // domain - and stay in front while it runs. The B1 device gate's route (b): a GL client in
+        // another app than the server, launched through the app_process helper, with its app in the
+        // foreground and the server app behind it on its foreground service.
+        String[] execArgv = intent.getStringArrayExtra(EXTRA_EXEC_ARGV);
+        if (execArgv != null) {
+            runExternalClient(execArgv, intent.getStringExtra(EXTRA_EXEC_ENV), intent.getStringExtra(EXTRA_EXEC_LOG));
+            return;
+        }
+
+        @SuppressWarnings("unchecked")
+        TraceReplaySession<TraceReplayResult> retained =
+                (TraceReplaySession<TraceReplayResult>) getLastNonConfigurationInstance();
+        replaySession = retained != null ? retained : new TraceReplaySession<>(
+                command -> new Thread(command, "MobileGLTraceReplay").start(),
+                command -> new Handler(Looper.getMainLooper()).post(command));
+        if (replaySession.hasStarted()) {
+            Log.i(TAG, "Reattaching to retained trace replay: " + request.outputDir);
+            statusView.setText("Running trace replay\n" + request.outputDir);
+        }
+        replaySession.attach(replayListener);
 
         SurfaceHolder holder = surfaceView.getHolder();
         if (request.width > 0 && request.height > 0) {
@@ -79,20 +113,43 @@ public final class TraceReplayActivity extends Activity {
         mainHandler.postDelayed(() -> startReplay(holder), 250);
     }
 
+    @Override
+    public Object onRetainNonConfigurationInstance() {
+        return replaySession;
+    }
+
+    @Override
+    protected void onDestroy() {
+        // A callback queued by an old Surface must not start after that Activity is gone.
+        mainHandler.removeCallbacksAndMessages(null);
+        if (replaySession != null) {
+            replaySession.detach(replayListener);
+        }
+        super.onDestroy();
+    }
+
     private void startReplay(SurfaceHolder holder) {
-        if (started) {
+        if (isFinishing() || isDestroyed() || replaySession.hasStarted()) {
             return;
         }
         Surface surface = holder.getSurface();
         if (surface == null || !surface.isValid()) {
             return;
         }
-        started = true;
         statusView.setText("Running trace replay\n" + request.outputDir);
-        new Thread(() -> runRequest(request, surface), "MobileGLTraceReplay").start();
+        TraceReplayRequest replayRequest = request;
+        // The worker retains the request and Surface, not the Activity. JNI also acquires
+        // its own ANativeWindow reference until the replay and native cleanup finish.
+        replaySession.start(() -> runRequest(replayRequest, surface));
     }
 
-    private void runRequest(TraceReplayRequest request, Surface surface) {
+    private void onReplayComplete(TraceReplayResult result) {
+        statusView.setText(result.toString());
+        finish();
+    }
+
+    private static TraceReplayResult runRequest(TraceReplayRequest request, Surface surface) {
+        Log.i(TAG, "Starting native trace replay: " + request.outputDir);
         TraceReplayResult result = nativeRunTraceReplay(
                 surface,
                 request.tracePath,
@@ -116,21 +173,16 @@ public final class TraceReplayActivity extends Activity {
                 request.avoidAngleLlvmpipeSamplerMipmapMinFilter,
                 request.avoidAngleLlvmpipeExplicitLodBias,
                 request.coherentAsFlush,
-                request.fixIterationRPSubgroupScratch,
-                request.deriveNumSubgroups,
-                request.iterationRPFixBarrier,
+                request.iterationRPFix,
                 request.texture2dDumps,
                 request.benchmark,
                 request.benchmarkTailFrames,
                 request.benchmarkFinish,
-                request.benchmarkResultPath
+                request.benchmarkResultPath,
+                request.envOverrides
         );
         Log.i(TAG, result.toString());
-        TraceReplayResult finalResult = result;
-        runOnUiThread(() -> {
-            statusView.setText(finalResult.toString());
-            finish();
-        });
+        return result;
     }
 
     private static native TraceReplayResult nativeRunTraceReplay(
@@ -156,15 +208,111 @@ public final class TraceReplayActivity extends Activity {
             boolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
             boolean avoidAngleLlvmpipeExplicitLodBias,
             boolean coherentAsFlush,
-            boolean fixIterationRPSubgroupScratch,
-            boolean deriveNumSubgroups,
-            boolean iterationRPFixBarrier,
+            boolean iterationRPFix,
             String texture2dDumps,
             boolean benchmark,
             int benchmarkTailFrames,
             boolean benchmarkFinish,
-            String benchmarkResultPath
+            String benchmarkResultPath,
+            String envOverrides
     );
+
+
+    // ---------------------------------------------------------------------------
+    // P0 spike A: prove an APK can ship a second native executable and exec it.
+    //
+    // The exec has to happen here, in the application's own process: an `adb shell
+    // run-as` invocation runs in a different SELinux domain, so it can succeed while
+    // the real app is denied. The child reports the domain it ended up in, and the
+    // parent reports the domain it spawned from, so the log line stands on its own.
+    // ---------------------------------------------------------------------------
+    private static final String EXTRA_SPAWN_SPIKE = "mobilegl_spike_spawn";
+    private static final String DEFAULT_SPAWN_SPIKE_LIBRARY = "libMobileGLServer.so";
+
+    private static String spawnSpikeLibrary(Intent intent) {
+        if (!intent.hasExtra(EXTRA_SPAWN_SPIKE)) {
+            return null;
+        }
+        // Accepts --ez (boolean, arrives as a null string) and --es with either a truthy
+        // marker or the library file name to exec.
+        String value = intent.getStringExtra(EXTRA_SPAWN_SPIKE);
+        if (value == null || value.isEmpty() || "1".equals(value) || "true".equals(value)) {
+            return DEFAULT_SPAWN_SPIKE_LIBRARY;
+        }
+        return value;
+    }
+
+    private void runSpawnSpike(String libraryName) {
+        // onCreate returns before installing replay surface callbacks in this mode.
+        File outputDir = new File(request.outputDir);
+        String serverPath = new File(getApplicationInfo().nativeLibraryDir, libraryName)
+                .getAbsolutePath();
+        String markerPath = new File(outputDir, "spike-spawn.txt").getAbsolutePath();
+        statusView.setText("Running spawn spike\n" + serverPath);
+        new Thread(() -> {
+            outputDir.mkdirs();
+            String message = nativeRunSpawnSpike(serverPath, markerPath);
+            Log.i(TAG, message);
+            runOnUiThread(() -> {
+                statusView.setText(message);
+                finish();
+            });
+        }, "MobileGLSpawnSpike").start();
+    }
+
+    private static native String nativeRunSpawnSpike(String serverPath, String markerPath);
+
+    // ---------------------------------------------------------------------------
+    // P11 B1 (gate tooling): an external GL client started from THIS app's process.
+    //
+    //   --esa mobilegl_exec_argv <argv...>   the child's argv (typically /system/bin/app_process /
+    //                                        top.mobilegl.plugin.ExternalClientHelper -- <program> ...)
+    //   --es  mobilegl_exec_env  "K=V;K"     added to (K=V) / removed from (bare K) its environment -
+    //                                        CLASSPATH and MOBILEGL_IPC_TOKEN travel here, not in argv
+    //   --es  mobilegl_exec_log  <file>      its stdout+stderr, then one "exit=<code>" line
+    //
+    // Runtime.exec forks the child in this app's uid and SELinux domain (no transition), which is
+    // what the route stands for. Unlike the P11 hspike launch this Activity STAYS IN FRONT until the
+    // child exits: a backgrounded app is confined to the little cores and frozen by HyperOS, which is
+    // not the topology a user runs a GL program in.
+    // ---------------------------------------------------------------------------
+    private static final String EXTRA_EXEC_ARGV = "mobilegl_exec_argv";
+    private static final String EXTRA_EXEC_ENV = "mobilegl_exec_env";
+    private static final String EXTRA_EXEC_LOG = "mobilegl_exec_log";
+
+    private void runExternalClient(String[] argv, String envOverrides, String logPath) {
+        statusView.setText("External client running\n" + String.join(" ", argv));
+        new Thread(() -> {
+            String outcome;
+            try {
+                ProcessBuilder builder = new ProcessBuilder(argv);
+                builder.redirectErrorStream(true);
+                if (logPath != null) {
+                    File log = new File(logPath);
+                    File parent = log.getParentFile();
+                    if (parent != null) parent.mkdirs();
+                    builder.redirectOutput(ProcessBuilder.Redirect.appendTo(log));
+                }
+                top.mobilegl.plugin.ServerEnvironment.apply(builder.environment(), envOverrides);
+                Log.i(TAG, "external client: exec " + java.util.Arrays.toString(argv));
+                Process child = builder.start();
+                int code = child.waitFor();
+                outcome = "exit=" + code;
+            } catch (Exception error) {
+                outcome = "exit=launch-failed " + error;
+                Log.e(TAG, "external client launch failed", error);
+            }
+            Log.i(TAG, "external client: " + outcome);
+            if (logPath != null) {
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(logPath, true)) {
+                    out.write((outcome + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                } catch (Exception ignored) {
+                }
+            }
+            final String shown = outcome;
+            runOnUiThread(() -> statusView.setText("External client finished: " + shown));
+        }, "MobileGLExternalClient").start();
+    }
 
     private static final class TraceReplayRequest {
         final String tracePath;
@@ -188,9 +336,7 @@ public final class TraceReplayActivity extends Activity {
         final boolean avoidAngleLlvmpipeSamplerMipmapMinFilter;
         final boolean avoidAngleLlvmpipeExplicitLodBias;
         final boolean coherentAsFlush;
-        final boolean fixIterationRPSubgroupScratch;
-        final boolean deriveNumSubgroups;
-        final boolean iterationRPFixBarrier;
+        final boolean iterationRPFix;
         final String texture2dDumps;
         // Benchmark (frame-timing) mode. Replays the whole trace, times every frame
         // boundary, and skips the snapshot and the SSIM comparison; "passed" then only
@@ -199,6 +345,9 @@ public final class TraceReplayActivity extends Activity {
         final int benchmarkTailFrames;
         final boolean benchmarkFinish;
         final String benchmarkResultPath;
+        // Generic environment passthrough, `K=V;K=V`. A future MOBILEGL_* knob needs no
+        // new intent extra, no new JNI parameter and no new field beside this one.
+        final String envOverrides;
 
         private TraceReplayRequest(
                 String tracePath,
@@ -222,14 +371,13 @@ public final class TraceReplayActivity extends Activity {
                 boolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
                 boolean avoidAngleLlvmpipeExplicitLodBias,
                 boolean coherentAsFlush,
-                boolean fixIterationRPSubgroupScratch,
-                boolean deriveNumSubgroups,
-                boolean iterationRPFixBarrier,
+                boolean iterationRPFix,
                     String texture2dDumps,
                 boolean benchmark,
                 int benchmarkTailFrames,
                 boolean benchmarkFinish,
-                String benchmarkResultPath
+                String benchmarkResultPath,
+                String envOverrides
         ) {
             this.tracePath = tracePath;
             this.goldenPath = goldenPath;
@@ -252,17 +400,33 @@ public final class TraceReplayActivity extends Activity {
             this.avoidAngleLlvmpipeSamplerMipmapMinFilter = avoidAngleLlvmpipeSamplerMipmapMinFilter;
             this.avoidAngleLlvmpipeExplicitLodBias = avoidAngleLlvmpipeExplicitLodBias;
             this.coherentAsFlush = coherentAsFlush;
-            this.fixIterationRPSubgroupScratch = fixIterationRPSubgroupScratch;
-            this.deriveNumSubgroups = deriveNumSubgroups;
-            this.iterationRPFixBarrier = iterationRPFixBarrier;
+            this.iterationRPFix = iterationRPFix;
             this.texture2dDumps = texture2dDumps;
             this.benchmark = benchmark;
             this.benchmarkTailFrames = benchmarkTailFrames;
             this.benchmarkFinish = benchmarkFinish;
             this.benchmarkResultPath = benchmarkResultPath;
+            this.envOverrides = envOverrides;
         }
 
-        static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend) {
+        // P6: MOBILEGL_TRANSPORT=spawn NEEDS AN ABSOLUTE PATH TO AN EXEC-ABLE FILE, and this is
+        // the one process that can spell it. The reasoning, and the K=V;K=V parsing rules it has
+        // to share with ApplyEnvOverrides, live in SpawnServerPath - a class with no android.*
+        // import, so test_android_lifecycle.py compiles and runs it with plain javac.
+        //
+        // P7: THE TWO DECISIONS BELOW USED TO BE String.contains() ON THE WHOLE JOINED LIST, and
+        // neither of them was entry-aware. The one that bit: `--env MOBILEGL_IPC_SERVER_PATH`
+        // (no '='), the documented UNSET spelling and the only way to ask for "spawn with no
+        // image" and watch LaunchServer refuse by name, did not match "MOBILEGL_IPC_SERVER_PATH="
+        // - so the resolved path was appended AFTER it and, because the last entry wins, the
+        // deliberate unset was silently undone. That is precisely the "silently replacing it
+        // would make that knob untestable" SpawnServerPath's own contract forbids.
+        static String resolveSpawnServerPath(String envOverrides, String nativeLibraryDir) {
+            return SpawnServerPath.resolve(envOverrides, nativeLibraryDir);
+        }
+
+        static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend,
+                                       String nativeLibraryDir) {
             String outputDir = readString(intent, "output_dir", new File(filesDir, "trace-replay").getAbsolutePath());
             String diffPath = readString(intent, "diff_path", "");
             String benchmarkResultPath =
@@ -289,14 +453,13 @@ public final class TraceReplayActivity extends Activity {
                     intent.getBooleanExtra("avoid_angle_llvmpipe_sampler_mipmap_min_filter", false),
                     intent.getBooleanExtra("avoid_angle_llvmpipe_explicit_lod_bias", false),
                     intent.getBooleanExtra("coherent_as_flush", false),
-                    intent.getBooleanExtra("fix_iterationrp_subgroup_scratch", false),
-                    intent.getBooleanExtra("derive_num_subgroups", false),
-                    intent.getBooleanExtra("iterationrp_fix_barrier", false),
+                    intent.getBooleanExtra("itrp_fix", false),
                     readString(intent, "texture_2d_dumps", ""),
                     intent.getBooleanExtra("benchmark", false),
                     intent.getIntExtra("benchmark_tail_frames", 200),
                     intent.getBooleanExtra("benchmark_finish", true),
-                    benchmarkResultPath
+                    benchmarkResultPath,
+                    resolveSpawnServerPath(readString(intent, "mobilegl_env", ""), nativeLibraryDir)
             );
         }
 

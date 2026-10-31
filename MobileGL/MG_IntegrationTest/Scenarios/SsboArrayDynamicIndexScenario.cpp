@@ -120,9 +120,8 @@ void main() {
                 GLuint buffer = 0;
                 glGenBuffers(1, &buffer);
                 glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
-                glBufferData(GL_SHADER_STORAGE_BUFFER,
-                             static_cast<GLsizeiptr>(contents.size() * sizeof(unsigned int)), contents.data(),
-                             GL_DYNAMIC_COPY);
+                glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(contents.size() * sizeof(unsigned int)),
+                             contents.data(), GL_DYNAMIC_COPY);
                 m_buffers.push_back(buffer);
                 return buffer;
             }
@@ -185,5 +184,52 @@ void main() {
         for (int i = 0; i <= kSlotCount; ++i) {
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(i), 0);
         }
+    }
+
+    // Four back-to-back dispatches with NO barrier between them, each writing one component of the
+    // same uvec4 (KHR-GL43.shader_storage_buffer_object.advanced-switchBuffers-cs). GL leaves them
+    // unordered, but the four components are separate memory locations and all four writes have
+    // to land; a driver that stores a vector component as a read-modify-write of the whole vector
+    // loses some unless the backend orders the dispatches (DirectGLES's PrepareForCompute does).
+    TEST_F(SsboArrayDynamicIndexScenario, BackToBackDispatchesKeepEachOthersComponents) {
+        if (!Ready() || IsSkipped()) return;
+        const GLuint program = CompileComputeProgram(R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(binding = 0, std430) buffer Input { uint cookie[4]; } g_in;
+layout(binding = 1, std430) buffer Output { uvec4 digest; };
+void main() {
+    switch (g_in.cookie[0] + g_in.cookie[1] + g_in.cookie[2] + g_in.cookie[3]) {
+    case 0x000000ffu: digest.x = 0xff000000u; break;
+    case 0x0000ff00u: digest.y = 0x00ff0000u; break;
+    case 0x00ff0000u: digest.z = 0x0000ff00u; break;
+    case 0xff000000u: digest.w = 0x000000ffu; break;
+    }
+}
+)");
+        ASSERT_NE(program, 0u) << m_buildLog;
+        GLuint inputs[4] = {};
+        for (int i = 0; i < 4; ++i) {
+            // Four cookies summing to 0xff << 8i: dispatch i selects case i.
+            const unsigned int part = 0x11u << (8 * i);
+            inputs[i] = MakeStorageBuffer({part, part, part * 2, (0xffu << (8 * i)) - part * 4});
+        }
+        const GLuint output = MakeStorageBuffer({0u, 0u, 0u, 0u});
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, output);
+        glUseProgram(program);
+        for (int i = 0; i < 4; ++i) {
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, inputs[i]);
+            glDispatchCompute(1, 1, 1);
+        }
+        glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+        glUseProgram(0);
+        EXPECT_EQ(FirstGLError(), 0u);
+        const std::vector<unsigned int> digest = ReadBuffer(output, 4);
+        EXPECT_EQ(digest[0], 0xff000000u);
+        EXPECT_EQ(digest[1], 0x00ff0000u);
+        EXPECT_EQ(digest[2], 0x0000ff00u);
+        EXPECT_EQ(digest[3], 0x000000ffu);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, 0);
+        glDeleteProgram(program);
     }
 } // namespace MGITest

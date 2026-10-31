@@ -17,7 +17,7 @@
 #include "Init.h"
 #include <Config.h>
 
-#include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/BackendFunctions.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/Query/GL_Query.h>
 #include <MG_State/GLState/Core.h>
@@ -41,7 +41,7 @@ namespace {
     // setting into later tests even if an assertion unwinds the test body
     // early (same pattern as SanityTest's ScopedGLESCapabilitiesOverride).
     struct ScopedFeaturesOverride {
-        ScopedFeaturesOverride(): m_snapshot(MG_Config::Features) {}
+        ScopedFeaturesOverride() : m_snapshot(MG_Config::Features) {}
         ~ScopedFeaturesOverride() { MG_Config::Features = m_snapshot; }
         ScopedFeaturesOverride(const ScopedFeaturesOverride&) = delete;
         ScopedFeaturesOverride& operator=(const ScopedFeaturesOverride&) = delete;
@@ -54,7 +54,7 @@ namespace {
     // it on destruction, so stub timer-query pointers cannot leak into later
     // tests.
     struct ScopedBackendFunctionsOverride {
-        ScopedBackendFunctionsOverride(): m_snapshot(MG_Backend::gBackendFunctionsTable) {}
+        ScopedBackendFunctionsOverride() : m_snapshot(MG_Backend::gBackendFunctionsTable) {}
         ~ScopedBackendFunctionsOverride() { MG_Backend::gBackendFunctionsTable = m_snapshot; }
         ScopedBackendFunctionsOverride(const ScopedBackendFunctionsOverride&) = delete;
         ScopedBackendFunctionsOverride& operator=(const ScopedBackendFunctionsOverride&) = delete;
@@ -77,21 +77,27 @@ namespace {
     Bool g_stubResultObtainable = true;
     Uint64 g_stubResultNs = 0;
 
-    Bool StubIsTimerQuerySupported() { return g_stubTimerQuerySupported; }
+    Bool StubIsTimerQuerySupported() {
+        return g_stubTimerQuerySupported;
+    }
 
     MG_Backend::BackendQueryHandle StubBeginTimeElapsedQuery() {
         ++g_stubBeginCount;
         return reinterpret_cast<MG_Backend::BackendQueryHandle>(static_cast<uintptr_t>(0x51));
     }
 
-    void StubEndTimeElapsedQuery(MG_Backend::BackendQueryHandle) { ++g_stubEndCount; }
+    void StubEndTimeElapsedQuery(MG_Backend::BackendQueryHandle) {
+        ++g_stubEndCount;
+    }
 
     MG_Backend::BackendQueryHandle StubQueryCounterTimestamp() {
         ++g_stubCounterCount;
         return reinterpret_cast<MG_Backend::BackendQueryHandle>(static_cast<uintptr_t>(0x52));
     }
 
-    Bool StubIsQueryResultAvailable(MG_Backend::BackendQueryHandle) { return g_stubResultAvailable; }
+    Bool StubIsQueryResultAvailable(MG_Backend::BackendQueryHandle) {
+        return g_stubResultAvailable;
+    }
 
     Bool StubGetQueryResult64(MG_Backend::BackendQueryHandle, Bool, Uint64* outNanoseconds) {
         if (!g_stubResultObtainable) {
@@ -101,7 +107,9 @@ namespace {
         return true;
     }
 
-    void StubDeleteBackendQuery(MG_Backend::BackendQueryHandle) { ++g_stubDeleteCount; }
+    void StubDeleteBackendQuery(MG_Backend::BackendQueryHandle) {
+        ++g_stubDeleteCount;
+    }
 
     void InstallStubBackendTimerQueries() {
         auto& backendGL = MG_Backend::gBackendFunctionsTable.GL;
@@ -139,7 +147,9 @@ namespace {
         return reinterpret_cast<MG_Backend::BackendQueryHandle>(static_cast<uintptr_t>(0x53));
     }
 
-    void StubEndXfbPrimitivesQuery(MG_Backend::BackendQueryHandle) { ++g_stubXfbEndCount; }
+    void StubEndXfbPrimitivesQuery(MG_Backend::BackendQueryHandle) {
+        ++g_stubXfbEndCount;
+    }
 
     // Stub backend occlusion queries. The host has no ES context, and BeginQuery refuses the
     // occlusion targets outright when the backend advertises no hook - so a conditional-render
@@ -203,8 +213,7 @@ protected:
         // Drain errors recorded by earlier tests so assertions here are
         // attributable to this test alone (GetError pops one queued error
         // per call).
-        while (MG_Impl::GLImpl::GetError() != GL_NO_ERROR) {
-        }
+        while (MG_Impl::GLImpl::GetError() != GL_NO_ERROR) {}
     }
 };
 
@@ -830,14 +839,18 @@ TEST_F(QueryTest, PipelineStatisticsTargetsAreAcceptedAndReportZeroCounterBits) 
     // The NINE unconditional targets. The two tessellation ones are conditional on tessellation
     // support and have their own test below.
     static constexpr GLenum kTargets[] = {
-        GL_VERTICES_SUBMITTED,          GL_PRIMITIVES_SUBMITTED,
-        GL_VERTEX_SHADER_INVOCATIONS,   GL_GEOMETRY_SHADER_INVOCATIONS,
-        GL_GEOMETRY_SHADER_PRIMITIVES_EMITTED, GL_FRAGMENT_SHADER_INVOCATIONS,
-        GL_COMPUTE_SHADER_INVOCATIONS,  GL_CLIPPING_INPUT_PRIMITIVES,
+        GL_VERTICES_SUBMITTED,
+        GL_PRIMITIVES_SUBMITTED,
+        GL_VERTEX_SHADER_INVOCATIONS,
+        GL_GEOMETRY_SHADER_INVOCATIONS,
+        GL_GEOMETRY_SHADER_PRIMITIVES_EMITTED,
+        GL_FRAGMENT_SHADER_INVOCATIONS,
+        GL_COMPUTE_SHADER_INVOCATIONS,
+        GL_CLIPPING_INPUT_PRIMITIVES,
         GL_CLIPPING_OUTPUT_PRIMITIVES,
     };
 
-    for (const GLenum target: kTargets) {
+    for (const GLenum target : kTargets) {
         GLuint id = 0;
         MG_Impl::GLImpl::GenQueries(1, &id);
         ASSERT_NE(id, 0u);
@@ -887,8 +900,7 @@ TEST_F(QueryTest, PipelineStatisticsTargetsAreAcceptedAndReportZeroCounterBits) 
 // backend starts emitting GL_ARB_tessellation_shader this test keeps passing and keeps pinning
 // the coupling, and it fails loudly if only one of the two halves moves.
 TEST_F(QueryTest, TessellationPipelineStatisticsTargetsFollowTheTessellationShaderAdvertisement) {
-    const auto* extensionsString =
-        reinterpret_cast<const char*>(MG_Impl::GLImpl::GetString(GL_EXTENSIONS));
+    const auto* extensionsString = reinterpret_cast<const char*>(MG_Impl::GLImpl::GetString(GL_EXTENSIONS));
     ASSERT_NE(extensionsString, nullptr);
     const Bool advertised = String(extensionsString).find("GL_ARB_tessellation_shader") != String::npos;
     const GLenum expectedError = advertised ? GL_NO_ERROR : GL_INVALID_ENUM;
@@ -898,7 +910,7 @@ TEST_F(QueryTest, TessellationPipelineStatisticsTargetsFollowTheTessellationShad
         GL_TESS_EVALUATION_SHADER_INVOCATIONS,
     };
 
-    for (const GLenum target: kTessTargets) {
+    for (const GLenum target : kTessTargets) {
         GLuint id = 0;
         MG_Impl::GLImpl::GenQueries(1, &id);
         ASSERT_NE(id, 0u);
@@ -935,8 +947,7 @@ TEST_F(QueryTest, TessellationPipelineStatisticsTargetsFollowTheTessellationShad
         }
 
         MG_Impl::GLImpl::DeleteQueries(1, &id);
-        while (MG_Impl::GLImpl::GetError() != GL_NO_ERROR) {
-        }
+        while (MG_Impl::GLImpl::GetError() != GL_NO_ERROR) {}
     }
 }
 
@@ -983,8 +994,7 @@ TEST_F(QueryTest, PipelineStatisticsQueryObjectRefusesASecondTargetAndTargetsAre
     MG_Impl::GLImpl::EndQuery(GL_PRIMITIVES_SUBMITTED);
     MG_Impl::GLImpl::DeleteQueries(1, &second);
     MG_Impl::GLImpl::DeleteQueries(1, &id);
-    while (MG_Impl::GLImpl::GetError() != GL_NO_ERROR) {
-    }
+    while (MG_Impl::GLImpl::GetError() != GL_NO_ERROR) {}
 }
 
 // glCreateQueries keeps its own, shorter accepted-target list on purpose: it is unchanged here,

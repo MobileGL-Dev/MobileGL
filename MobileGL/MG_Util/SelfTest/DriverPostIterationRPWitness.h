@@ -92,8 +92,7 @@ namespace MobileGL::MG_Util::SelfTest {
     // two 32-entry scalar diagnostic arrays in the GLSL source. Keep this
     // independent of the output SSBO size.
     constexpr std::uint32_t kIterationRPWitnessSharedMemoryBytes =
-        kIterationRPWitnessMaxSubgroups * sizeof(IterationRPWitnessVec2) +
-        3u * sizeof(std::uint32_t) +
+        kIterationRPWitnessMaxSubgroups * sizeof(IterationRPWitnessVec2) + 3u * sizeof(std::uint32_t) +
         2u * kIterationRPWitnessMaxSubgroups * sizeof(std::uint32_t);
 
     enum class IterationRPWitnessEligibility {
@@ -142,12 +141,11 @@ namespace MobileGL::MG_Util::SelfTest {
         std::string detail;
     };
 
-    [[nodiscard]] IterationRPWitnessEligibilityResult
-    EvaluateIterationRPWitnessEligibility(const IterationRPWitnessLimits& limits);
+    [[nodiscard]] IterationRPWitnessEligibilityResult EvaluateIterationRPWitnessEligibility(
+        const IterationRPWitnessLimits& limits);
 
     // Mirrors the source's findMSB expression for valid N in [2, 32].
     [[nodiscard]] std::uint32_t ComputeIterationRPWitnessLoopLength(std::uint32_t numSubgroups);
 
-    [[nodiscard]] IterationRPWitnessValidationResult
-    ValidateIterationRPWitness(const IterationRPWitnessOutput& output);
+    [[nodiscard]] IterationRPWitnessValidationResult ValidateIterationRPWitness(const IterationRPWitnessOutput& output);
 } // namespace MobileGL::MG_Util::SelfTest

@@ -35,7 +35,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void CollectDeferredReleases(Uint32 frameIndex);
 
         Bool Allocate(Uint32 frameIndex, VkDeviceSize size, VkDeviceSize alignment, BufferSlice& outSlice);
-        Bool Upload(Uint32 frameIndex, const void* data, VkDeviceSize size, VkDeviceSize alignment, BufferSlice& outSlice);
+        Bool Upload(Uint32 frameIndex, const void* data, VkDeviceSize size, VkDeviceSize alignment,
+                    BufferSlice& outSlice);
 
         VkDeviceSize GetWriteCursor(Uint32 frameIndex) const;
         Uint32 GetFrameCount() const;

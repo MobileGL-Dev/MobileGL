@@ -56,15 +56,13 @@ namespace MobileGL {
 
                 // The interface-block struct an Input/Output variable declares, or 0 when the
                 // variable is not one. Tessellation and geometry interfaces are arrays of the
-                // block struct, so array levels are unwrapped before the struct is recognised.
+                // block struct, so array levels are unwrapped before the struct is recognized.
                 uint32_t GetInterfaceBlockStructId(IRContext* irContext, Instruction& variable,
                                                    const std::unordered_set<uint32_t>& blockStructIds,
                                                    spv::StorageClass& outStorageClass) {
                     if (variable.opcode() != spv::Op::OpVariable) return 0;
-                    const auto storageClass =
-                        static_cast<spv::StorageClass>(variable.GetSingleWordInOperand(0));
-                    if (storageClass != spv::StorageClass::Input &&
-                        storageClass != spv::StorageClass::Output) {
+                    const auto storageClass = static_cast<spv::StorageClass>(variable.GetSingleWordInOperand(0));
+                    if (storageClass != spv::StorageClass::Input && storageClass != spv::StorageClass::Output) {
                         return 0;
                     }
 
@@ -87,8 +85,7 @@ namespace MobileGL {
                     return pointeeId;
                 }
 
-                Bool DirectionIsArmed(spv::StorageClass storageClass, Bool stripInputBlocks,
-                                      Bool stripOutputBlocks) {
+                Bool DirectionIsArmed(spv::StorageClass storageClass, Bool stripInputBlocks, Bool stripOutputBlocks) {
                     return storageClass == spv::StorageClass::Input ? stripInputBlocks : stripOutputBlocks;
                 }
             } // namespace
@@ -155,16 +152,14 @@ namespace MobileGL {
                 for (Instruction& annotation : irContext->module()->annotations()) {
                     if (annotation.opcode() == spv::Op::OpDecorate) {
                         if (!isLocationOrComponent(annotation.GetSingleWordInOperand(1))) continue;
-                        if (armedVariableIds.find(annotation.GetSingleWordInOperand(0)) ==
-                            armedVariableIds.end()) {
+                        if (armedVariableIds.find(annotation.GetSingleWordInOperand(0)) == armedVariableIds.end()) {
                             continue;
                         }
                         toKill.push_back(&annotation);
                     } else if (annotation.opcode() == spv::Op::OpMemberDecorate) {
                         // OpMemberDecorate <struct> <member> <decoration> ...
                         if (!isLocationOrComponent(annotation.GetSingleWordInOperand(2))) continue;
-                        if (armedStructIds.find(annotation.GetSingleWordInOperand(0)) ==
-                            armedStructIds.end()) {
+                        if (armedStructIds.find(annotation.GetSingleWordInOperand(0)) == armedStructIds.end()) {
                             continue;
                         }
                         toKill.push_back(&annotation);
@@ -180,8 +175,8 @@ namespace MobileGL {
 
             spvtools::Optimizer::PassToken StripIoBlockLocationsPass::CreateStripIoBlockLocationsPass(
                 Bool stripInputBlocks, Bool stripOutputBlocks, Bool* strippedAny) {
-                return spvtools::Optimizer::PassToken(spvtools::MakeUnique<StripIoBlockLocationsPass>(
-                    stripInputBlocks, stripOutputBlocks, strippedAny));
+                return spvtools::Optimizer::PassToken(
+                    spvtools::MakeUnique<StripIoBlockLocationsPass>(stripInputBlocks, stripOutputBlocks, strippedAny));
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

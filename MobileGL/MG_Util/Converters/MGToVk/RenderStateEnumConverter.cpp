@@ -200,6 +200,8 @@ namespace MobileGL {
                 return VK_BLEND_FACTOR_SRC1_ALPHA;
             case BlendFactor::OneMinusSrc1Alpha:
                 return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
+            case BlendFactor::SrcAlphaSaturate:
+                return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
             default:
                 return VK_BLEND_FACTOR_ONE;
             }

@@ -99,8 +99,7 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
         // "[0]" the enumeration appends to an array.
         Bool NamesMatch(const String& resourceName, const String& query) {
             if (resourceName == query) return true;
-            if (EndsWithZeroSubscript(resourceName) &&
-                resourceName.compare(0, resourceName.length() - 3, query) == 0) {
+            if (EndsWithZeroSubscript(resourceName) && resourceName.compare(0, resourceName.length() - 3, query) == 0) {
                 return true;
             }
             return EndsWithZeroSubscript(query) && query.compare(0, query.length() - 3, resourceName) == 0;
@@ -189,7 +188,7 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
             const bool rowMajor = type.layoutMatrix == static_cast<Int>(glslang::ElmRowMajor);
             const int strideVectorComponents = rowMajor ? type.matrixCols : type.matrixRows;
             constexpr int scalarSize = 4;
-            const int vectorAlignment = (strideVectorComponents <= 1)    ? scalarSize
+            const int vectorAlignment = (strideVectorComponents <= 1)   ? scalarSize
                                         : (strideVectorComponents == 2) ? 2 * scalarSize
                                                                         : 4 * scalarSize;
             return (vectorAlignment + 15) & ~15;
@@ -225,8 +224,7 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
         // Note the union is used even when it is empty: an array element nobody dereferenced has
         // no member bits and is genuinely referenced by nobody, which is the whole point - falling
         // back to the block's own mask there would restore the over-approximation.
-        Vector<Uint32> BuildBlockStagesFromMembers(const ProgramObject::LinkArtifacts& reflection,
-                                                    Int blockCount) {
+        Vector<Uint32> BuildBlockStagesFromMembers(const ProgramObject::LinkArtifacts& reflection, Int blockCount) {
             Vector<Uint32> stagesByBlock(static_cast<SizeT>(blockCount < 0 ? 0 : blockCount), 0u);
             const Int uniformCount = static_cast<Int>(reflection.uniformReflection.size());
             for (Int index = 0; index < uniformCount; ++index) {
@@ -313,20 +311,19 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
                 const Int blockIndex = program.BlockIndexFromGlUniformBlock(static_cast<Uint>(glIndex));
                 Resource resource;
                 resource.name = program.GetUniformBlockName(static_cast<Uint>(blockIndex));
-                resource.bufferBinding = static_cast<GLint>(program.GetUniformBlockBinding(static_cast<Uint>(blockIndex)));
+                resource.bufferBinding =
+                    static_cast<GLint>(program.GetUniformBlockBinding(static_cast<Uint>(blockIndex)));
                 resource.bufferDataSize = static_cast<GLint>(program.GetUBOSizeAt(static_cast<Uint>(blockIndex)));
                 const Int tIndex = program.TProgramBlockIndex(static_cast<Uint>(blockIndex));
                 if (tIndex >= 0 && tIndex < blockCount) {
-                    resource.stages = UniformBlockStages(reflection.blockReflection[tIndex],
-                                                      stagesFromMembers, tIndex);
+                    resource.stages = UniformBlockStages(reflection.blockReflection[tIndex], stagesFromMembers, tIndex);
                 }
                 model.uniformBlocks.push_back(Move(resource));
             }
         }
 
-        void BuildUniformsAndBufferVariables(ProgramObject& program,
-                                             const ProgramObject::LinkArtifacts& reflection, Model& model,
-                                             const Vector<BlockKind>& blockKind,
+        void BuildUniformsAndBufferVariables(ProgramObject& program, const ProgramObject::LinkArtifacts& reflection,
+                                             Model& model, const Vector<BlockKind>& blockKind,
                                              const Vector<Int>& blockInterfaceIndex) {
             // Walks the TPROGRAM uniform space, not the GL one. A buffer variable is not a GL
             // uniform (GL 4.6 core 7.3.1) and DoReflection therefore keeps it out of the GL
@@ -388,8 +385,7 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
                     // A member of a named uniform block has no location, whatever the
                     // frontend's own location table says (it hands one out to every uniform
                     // so glUniform* can address block members through the global UBO).
-                    resource.location =
-                        resource.blockIndex >= 0 ? -1 : program.GetUniformLocation(refl.name);
+                    resource.location = resource.blockIndex >= 0 ? -1 : program.GetUniformLocation(refl.name);
                 }
                 model.uniforms.push_back(Move(resource));
             }
@@ -432,7 +428,9 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
         // program that redeclares `out gl_PerVertex { vec4 gl_Position; }` still carries
         // gl_PointSize and gl_ClipDistance through the block-unwrapping reflection, and they
         // are not part of its output interface.
-        Bool IsHiddenBlockMember(const ProgramObject::TypeFacts& type) { return type.isVoid; }
+        Bool IsHiddenBlockMember(const ProgramObject::TypeFacts& type) {
+            return type.isVoid;
+        }
 
         void BuildStageIO(ProgramObject& program, const ProgramObject::LinkArtifacts& reflection, Model& model) {
             const Int inputCount = static_cast<Int>(reflection.pipeInputReflection.size());
@@ -663,12 +661,12 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
             programInterface == GL_VERTEX_SUBROUTINE || programInterface == GL_TESS_CONTROL_SUBROUTINE ||
             programInterface == GL_TESS_EVALUATION_SUBROUTINE || programInterface == GL_GEOMETRY_SUBROUTINE ||
             programInterface == GL_FRAGMENT_SUBROUTINE || programInterface == GL_COMPUTE_SUBROUTINE;
-        const Bool isSubroutineUniform =
-            programInterface == GL_VERTEX_SUBROUTINE_UNIFORM ||
-            programInterface == GL_TESS_CONTROL_SUBROUTINE_UNIFORM ||
-            programInterface == GL_TESS_EVALUATION_SUBROUTINE_UNIFORM ||
-            programInterface == GL_GEOMETRY_SUBROUTINE_UNIFORM ||
-            programInterface == GL_FRAGMENT_SUBROUTINE_UNIFORM || programInterface == GL_COMPUTE_SUBROUTINE_UNIFORM;
+        const Bool isSubroutineUniform = programInterface == GL_VERTEX_SUBROUTINE_UNIFORM ||
+                                         programInterface == GL_TESS_CONTROL_SUBROUTINE_UNIFORM ||
+                                         programInterface == GL_TESS_EVALUATION_SUBROUTINE_UNIFORM ||
+                                         programInterface == GL_GEOMETRY_SUBROUTINE_UNIFORM ||
+                                         programInterface == GL_FRAGMENT_SUBROUTINE_UNIFORM ||
+                                         programInterface == GL_COMPUTE_SUBROUTINE_UNIFORM;
 
         switch (prop) {
         case GL_NAME_LENGTH:
@@ -677,8 +675,7 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
         case GL_ARRAY_SIZE:
             return programInterface == GL_UNIFORM || programInterface == GL_PROGRAM_INPUT ||
                    programInterface == GL_PROGRAM_OUTPUT || programInterface == GL_BUFFER_VARIABLE ||
-                   programInterface == GL_TRANSFORM_FEEDBACK_VARYING ||
-                   (prop == GL_ARRAY_SIZE && isSubroutineUniform);
+                   programInterface == GL_TRANSFORM_FEEDBACK_VARYING || (prop == GL_ARRAY_SIZE && isSubroutineUniform);
         case GL_OFFSET:
             return programInterface == GL_UNIFORM || programInterface == GL_BUFFER_VARIABLE ||
                    programInterface == GL_TRANSFORM_FEEDBACK_VARYING;
@@ -697,8 +694,7 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
             // ends in an error - but INVALID_VALUE for the out-of-range index, not the
             // INVALID_OPERATION a narrower table would invent.
             return programInterface == GL_UNIFORM_BLOCK || programInterface == GL_ATOMIC_COUNTER_BUFFER ||
-                   programInterface == GL_SHADER_STORAGE_BLOCK ||
-                   programInterface == GL_TRANSFORM_FEEDBACK_BUFFER;
+                   programInterface == GL_SHADER_STORAGE_BLOCK || programInterface == GL_TRANSFORM_FEEDBACK_BUFFER;
         case GL_BUFFER_DATA_SIZE:
             return programInterface == GL_UNIFORM_BLOCK || programInterface == GL_ATOMIC_COUNTER_BUFFER ||
                    programInterface == GL_SHADER_STORAGE_BLOCK;
@@ -767,8 +763,7 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
         // The layout controls of an interleaved capture are enumerable but not addressable
         // by name (GL 4.6 §7.3.1.1).
         if (programInterface == GL_TRANSFORM_FEEDBACK_VARYING &&
-            (query == "gl_NextBuffer" ||
-             (query.size() == 18 && query.compare(0, 17, "gl_SkipComponents") == 0))) {
+            (query == "gl_NextBuffer" || (query.size() == 18 && query.compare(0, 17, "gl_SkipComponents") == 0))) {
             return GL_INVALID_INDEX;
         }
         for (SizeT i = 0; i < resources.size(); ++i) {
@@ -834,7 +829,8 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
             outValues.push_back(static_cast<GLint>(resource.activeVariables.size()));
             break;
         case GL_ACTIVE_VARIABLES:
-            for (const GLuint variable : resource.activeVariables) outValues.push_back(static_cast<GLint>(variable));
+            for (const GLuint variable : resource.activeVariables)
+                outValues.push_back(static_cast<GLint>(variable));
             break;
         case GL_REFERENCED_BY_VERTEX_SHADER:
             outValues.push_back(referencedBy(EShLangVertex));

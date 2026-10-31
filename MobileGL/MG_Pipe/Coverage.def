@@ -1,0 +1,183 @@
+// MobileGL - MobileGL/MG_Pipe/Coverage.def
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// Coverage table (ARCHITECTURE.md §3.1): which MGPipe call answers each backend read point in
+// scripts/data/backend_read_inventory.md. gen_pipe.py joins the inventory's `member` column
+// with MGP_COVERAGE_ACCESSOR_LIST and its `delta` column with MGP_COVERAGE_DELTA_LIST into
+// generated/PipeCoverage.inc; a row matching neither is UNMAPPED, and the gate requires zero.
+// Pseudo-calls: kClientResolved (the frontend answers; the server is never asked),
+// kReverseChannel (an MGPipeCallbacks entry, §8.1), kStructuralHandle (a SharedPtr<MG_State...>
+// parameter that becomes an MGPipeHandle).
+// clang-format off
+
+// X(Accessor, PipeCall)
+#define MGP_COVERAGE_ACCESSOR_LIST(X)                                    \
+    X(GetActiveTextureUnit,                     SetSamplerViews)         \
+    X(GetBlendColor,                            SetDynamicState)         \
+    X(GetBlendEquationIndexed,                  CreateRenderState)       \
+    X(GetBlendFuncIndexed,                      CreateRenderState)       \
+    /* dead: no backend reads it since D21; kept for inventory row 594 */  \
+    X(GetBoundTransformFeedbackName,            SetStreamOutputTargets)  \
+    X(GetBoundVertexArray,                      BindVertexElements)      \
+    /* Polymorphic over BufferTarget; the emitters supply the target, so the calls     */  \
+    /* split it: Vertex (and a VAO's attribute buffers) -> set_vertex_buffers,         */  \
+    /* Index -> set_index_buffer, DrawIndirect and Parameter -> set_indirect_buffers,  */  \
+    /* Uniform, ShaderStorage, AtomicCounter, TransformFeedback -> set_shader_buffers. */  \
+    /* The other seven targets (copy, pixel, Texture, DispatchIndirect, Query) have no */  \
+    /* set_* carrier; on the server, verbs carry the handles they need. The field is   */  \
+    /* one array, so it stays one row, and it has no emitted row: no call supplies all */  \
+    /* of it (FieldOwnership.def).                                                     */  \
+    X(GetBufferBindingSlot,                     SetIndirectBuffers)      \
+    X(GetBufferBindingPoint,                    SetShaderBuffers)        \
+    X(GetBufferBindingPointCount,               SetShaderBuffers)        \
+    X(GetTouchedBufferBindingPointCount,        SetShaderBuffers)        \
+    X(GetClampReadColor,                        SetDynamicState)         \
+    X(GetClearColor,                            SetDynamicState)         \
+    X(GetClearDepth,                            SetDynamicState)         \
+    X(GetClearStencil,                          SetDynamicState)         \
+    X(GetColorMaskIndexed,                      CreateRenderState)       \
+    X(GetCullFaceMode,                          CreateRenderState)       \
+    X(GetCurrentVertexAttribute,                SetVertexAttribDefaults) \
+    X(GetDepthFunc,                             CreateRenderState)       \
+    X(GetDepthMask,                             CreateRenderState)       \
+    X(GetDepthRangeIndexed,                     SetDynamicState)         \
+    X(GetFramebufferBindingSlot,                SetFramebufferState)     \
+    X(GetImageTextureBinding,                   SetShaderImages)         \
+    X(GetLineWidth,                             SetDynamicState)         \
+    X(GetLogicOp,                               CreateRenderState)       \
+    X(GetMaxTouchedTextureUnit,                 SetSamplerViews)         \
+    X(GetMinSampleShadingValue,                 CreateRenderState)       \
+    X(GetPatchDefaultInnerLevel,                SetPatchState)           \
+    X(GetPatchDefaultOuterLevel,                SetPatchState)           \
+    X(GetPatchVertices,                         SetPatchState)           \
+    X(GetPipelineStateVersion,                  BindRenderState)         \
+    X(GetPixelStoreParameters,                  SetPixelPackState)       \
+    X(GetPolygonModeFront,                      CreateRenderState)       \
+    X(GetPolygonOffsetFactor,                   SetDynamicState)         \
+    X(GetPolygonOffsetUnits,                    SetDynamicState)         \
+    X(GetPrimitiveRestartIndex,                 DrawVbo)                 \
+    X(GetProgramForDispatch,                    SetDispatchProgram)      \
+    X(GetProgramForDraw,                        SetDrawProgram)          \
+    X(GetProgramObject,                         CreateShaderState)       \
+    /* ANSWERED by P2: it is in the pipeline half. SetProvokingVertexMode calls      */  \
+    /* BumpVersions(), and the chunk table's rule is exactly that, so it rides       */  \
+    /* pipeline chunk P4 - a strict superset of what ComputePipelineStateHash used   */  \
+    /* to hash (MGPipeRenderStateSpans.cpp records the provenance).                  */  \
+    X(GetProvokingVertexMode,                   CreateRenderState)       \
+    X(GetRenderStateParameters,                 CreateRenderState)       \
+    X(GetRenderStateParametersVersion,          BindRenderState)         \
+    X(GetSamplingResolutionGeneration,          SetSamplerViews)         \
+    X(GetScissorBox,                            SetDynamicState)         \
+    X(GetStencilState,                          CreateRenderState)       \
+    X(GetTextureBindGeneration,                 SetSamplerViews)         \
+    X(GetTextureContextId,                      SetSamplerViews)         \
+    X(GetTextureObject,                         SetSamplerViews)         \
+    X(GetTextureUnitObject,                     SetSamplerViews)         \
+    X(GetTransformFeedbackCapturedVertices,     DrawVbo)                 \
+    X(GetTransformFeedbackGeneration,           SetStreamOutputTargets)  \
+    X(GetTransformFeedbackPausedPrimitiveCounter, EndStreamOutput)       \
+    X(GetTransformFeedbackProgram,              SetStreamOutputTargets)  \
+    X(GetViewport,                              SetDynamicState)         \
+    X(GetViewportIndexed,                       SetDynamicState)         \
+    X(IsCapabilityEnabled,                      CreateRenderState)       \
+    X(IsCapabilityEnabledIndexed,               CreateRenderState)       \
+    X(IsTransformFeedbackActive,                BeginStreamOutput)       \
+    X(IsTransformFeedbackPaused,                PauseStreamOutput)       \
+    X(InvalidateCompileEnv,                     kClientResolved)         \
+    X(ValidateProgramName,                      kClientResolved)         \
+    X(RecordError,                              kReverseChannel)         \
+    /* The D21 XFB counter-slot rekey's reads (VulkanRenderer.cpp); the calls they   */  \
+    /* map to are GetTransformFeedbackGeneration's.                                 */  \
+    X(GetBoundTransformFeedbackLifetimeId,      SetStreamOutputTargets)  \
+    X(HasOpenTransformFeedbackSpan,             SetStreamOutputTargets)
+
+// X(Accessor, Reason) - the STICKY fields (P1 brief D6): the only PipeInputs fields whose
+// value is valid across verbs, so the poison's per-verb generation does not apply to them.
+// Exactly the seven F-class (forwarded) accessors, and the argument for each is the same:
+// it takes an argument that is not verb state - a GL name, a lifetime id, a target - i.e.
+// it is a lookup or a reverse-channel write, not a state read; there is no value the
+// filler could copy and no verb whose fill could make it stale; phase C replaces them
+// with handle tables and callbacks. None of the version/generation accessors is sticky:
+// those change under verbs and are precisely what the poison must protect. The verify
+// lane's Fatal{UnmigratedPipeInput} is fixed by a FillPoints.def row, never by a row here.
+// gen_pipe.py refuses a name that is not an accessor above.
+#define MGP_COVERAGE_STICKY_LIST(X)                                                                        \
+    X(GetBufferBindingPointCount, "keyed by target: a constexpr capacity table, not verb state")           \
+    X(GetProgramObject,           "keyed by GL name: an object lookup, not verb state")                    \
+    X(GetTextureObject,           "keyed by GL name: an object lookup, not verb state")                    \
+    X(HasOpenTransformFeedbackSpan, "keyed by lifetime id: an object lookup, not verb state")              \
+    X(ValidateProgramName,        "keyed by GL name: a name-table lookup, not verb state")                 \
+    X(InvalidateCompileEnv,       "reverse channel: a write into the frontend, not a state read")          \
+    X(RecordError,                "reverse channel: a write into the frontend, not a state read")
+
+// X(DeltaKind, PipeCall) - for inventory rows with no accessor in the member column.
+// Read by gen_pipe.py ONLY, never by the C++ preprocessor: the delta kinds are the
+// inventory's own free-text labels, not C tokens.
+#define MGP_COVERAGE_DELTA_LIST(X)                                       \
+    X(handle-ify (wire handle),                 kStructuralHandle)       \
+    X(Buffer ops delta,                         ResourceRespecify)
+
+// X(Accessor, PipeCall) - the emitted list: the call that supplies each PipeInputs field, so
+// the residual fill loop may skip it. gen_pipe.py turns it into kMGPipeFieldEmittedBy[]
+// (generated/PipeFilled.inc) and refuses an accessor or call not listed above or in
+// PipeCalls.def. A row names the call that carries the value, which may differ from the read
+// point above (GetPrimitiveRestartIndex rides dynamic chunk D6). A row alone does not skip the
+// fill: PipeFill.cpp's EmittedCallSuppliesTheWholeField is false where the call carries handles
+// but the field holds a frontend pointer. Deliberately absent: GetPixelStoreParameters (pack
+// half only), the texture shutters (answered from applier serials) and the sticky lookups.
+#define MGP_COVERAGE_EMITTED_LIST(X)                                     \
+    X(GetActiveTextureUnit,                     SetContextValues)        \
+    X(GetBlendColor,                            SetDynamicState)         \
+    X(GetBlendEquationIndexed,                  CreateRenderState)       \
+    X(GetBlendFuncIndexed,                      CreateRenderState)       \
+    X(GetBoundTransformFeedbackLifetimeId,      SetContextValues)        \
+    X(GetBoundVertexArray,                      BindVertexElements)      \
+    X(GetBufferBindingPoint,                    SetShaderBuffers)        \
+    X(GetClampReadColor,                        SetDynamicState)         \
+    X(GetClearColor,                            SetDynamicState)         \
+    X(GetClearDepth,                            SetDynamicState)         \
+    X(GetClearStencil,                          SetDynamicState)         \
+    X(GetColorMaskIndexed,                      CreateRenderState)       \
+    X(GetCullFaceMode,                          CreateRenderState)       \
+    X(GetCurrentVertexAttribute,                SetVertexAttribDefaults) \
+    X(GetDepthFunc,                             CreateRenderState)       \
+    X(GetDepthMask,                             CreateRenderState)       \
+    X(GetDepthRangeIndexed,                     SetDynamicState)         \
+    X(GetFramebufferBindingSlot,                SetFramebufferState)     \
+    X(GetImageTextureBinding,                   SetShaderImages)         \
+    X(GetLineWidth,                             SetDynamicState)         \
+    X(GetLogicOp,                               CreateRenderState)       \
+    X(GetMaxTouchedTextureUnit,                 SetContextValues)        \
+    X(GetMinSampleShadingValue,                 CreateRenderState)       \
+    X(GetPatchDefaultInnerLevel,                SetPatchState)           \
+    X(GetPatchDefaultOuterLevel,                SetPatchState)           \
+    X(GetPatchVertices,                         SetPatchState)           \
+    X(GetPipelineStateVersion,                  BindRenderState)         \
+    X(GetPolygonModeFront,                      CreateRenderState)       \
+    X(GetPolygonOffsetFactor,                   SetDynamicState)         \
+    X(GetPolygonOffsetUnits,                    SetDynamicState)         \
+    X(GetPrimitiveRestartIndex,                 SetDynamicState)         \
+    X(GetProgramForDispatch,                    SetDispatchProgram)      \
+    X(GetProgramForDraw,                        SetDrawProgram)          \
+    X(GetProvokingVertexMode,                   CreateRenderState)       \
+    X(GetRenderStateParameters,                 CreateRenderState)       \
+    X(GetRenderStateParametersVersion,          BindRenderState)         \
+    X(GetScissorBox,                            SetDynamicState)         \
+    X(GetStencilState,                          CreateRenderState)       \
+    X(GetTextureUnitObject,                     SetSamplerViews)         \
+    X(GetTouchedBufferBindingPointCount,        SetContextValues)        \
+    X(GetTransformFeedbackCapturedVertices,     SetContextValues)        \
+    X(GetTransformFeedbackGeneration,           SetContextValues)        \
+    X(GetViewport,                              SetDynamicState)         \
+    X(GetViewportIndexed,                       SetDynamicState)         \
+    X(IsCapabilityEnabled,                      CreateRenderState)       \
+    X(IsCapabilityEnabledIndexed,               CreateRenderState)       \
+    X(IsTransformFeedbackActive,                SetContextValues)        \
+    X(IsTransformFeedbackPaused,                SetContextValues)
+
+// clang-format on

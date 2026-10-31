@@ -35,6 +35,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             HashType vertexInputHash = 0;
             VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
             VkRenderPass renderPass = VK_NULL_HANDLE;
+            // Nonzero is an exact, renderer-lifetime compatibility identity.
+            // renderPass remains the valid creation handle, not the cache key.
+            Uint64 wireRenderPassCompatibilityId = 0;
             Uint32 colorAttachmentCount = 1;
             VkSampleCountFlagBits rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
             // glEnable(GL_SAMPLE_SHADING) + glMinSampleShading, which Vulkan bakes into the
@@ -78,6 +81,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // therefore hashed; the DYNAMIC viewport/scissor arrays the draw pushes must have
             // exactly this many elements (VUID-vkCmdDraw-viewportCount-03417/-03418).
             Uint32 viewportCount = 1;
+            // `stages` is the program's nonLayeredStages: the gl_Layer-zeroed modules a draw into
+            // a non-layered framebuffer uses (ZeroLayerOutputPass). Hashed - the two stage sets
+            // are different pipelines; the program hash alone names both.
+            Bool nonLayeredStages = false;
+            // Non-null: the fragment stage in `stages` is replaced by this module, the program's
+            // full-coverage gl_SampleMask variant (VkProgramObject::fullCoverageFragmentModule),
+            // because this draw has no multisample fragment operations. Hashed as presence only -
+            // the module is a pure function of the program, which programHash already names.
+            VkShaderModule fullCoverageFragmentModule = VK_NULL_HANDLE;
             VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;
             VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
             VkFrontFace frontFace = VK_FRONT_FACE_CLOCKWISE;
@@ -105,6 +117,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // The fragment module writes gl_FragDepth (SPIR-V DepthReplacing); exempts the
             // pipeline from the blended depth-write quirk (see ShouldSuppressDepthWrite).
             Bool fragmentReplacesDepth = false;
+            // The device enabled VK_KHR_fragment_shading_rate's pipeline rate, so the pipeline takes
+            // VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR and every draw sets glShadingRateEXT's rate
+            // and combiner ops on the command buffer. NOT hashed: it is a device constant, the same
+            // for every pipeline this renderer builds.
+            Bool fragmentShadingRateDynamic = false;
             Array<VkPipelineColorBlendAttachmentState, kMaxColorAttachments> colorBlendAttachments{};
             const Vector<VkPipelineShaderStageCreateInfo>* stages = nullptr;
             // The tessellation control stage this renderer synthesized for a program that has
@@ -137,15 +154,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // VkRenderPassManager::OnPresent's sweep. Returns the number of pipelines
         // destroyed so the caller can drop any memoized VkPipeline handle.
         Uint32 OnFrameBoundary();
-        // Destroys every cached pipeline hashed on one of `renderPasses`. Only safe
-        // when the caller guarantees GPU idleness for them - the render-pass manager
-        // calls this (via the renderer) for passes its own >1024-boundary-idle sweep
-        // just evicted, and a pipeline hashed on those handles is only ever bound by
-        // draws that also hit the render-pass entries. Also closes the handle-recycling
-        // hazard: a recycled VkRenderPass value must never serve a stale pipeline.
-        // Batched: one cache scan regardless of how many passes died in the sweep.
-        // Returns the number destroyed (callers invalidate memos when non-zero).
-        Uint32 EvictByRenderPasses(const Vector<VkRenderPass>& renderPasses);
         // Destroys every cached pipeline built from the program with content hash
         // `programHash`. Called from the ProgramFactory eviction path, which proves the
         // same >1024-boundary idleness (the program's pipelines are only bound by draws
@@ -166,8 +174,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static Bool IsSuppressBlendedDepthWriteEnabled() { return s_suppressBlendedDepthWrite; }
         // Device gate for the quirk: ForceOn/ForceOff bypass detection, Auto enables it on
         // the known-affected vendor (Qualcomm).
-        static Bool ShouldSuppressBlendedDepthWriteForDevice(MG_Config::QuirkOverride quirkOverride,
-                                                             Uint32 vendorId);
+        static Bool ShouldSuppressBlendedDepthWriteForDevice(MG_Config::QuirkOverride quirkOverride, Uint32 vendorId);
         // Pure per-pipeline strip decision (exempts gl_FragDepth writers, masked-out and
         // non-accumulation blends); combined with the device flag in CreatePipeline. Static
         // and payload-only so tests can pin the contract without a VkDevice.
@@ -194,7 +201,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UnorderedMap<HashType, PipelineCacheEntry> m_cache;
         // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
         Uint64 m_frameCounter = 0;
-        static inline XXH64_state_t* m_hashState = XXH64_createState();
+        static inline thread_local XXH64_state_t* m_hashState = XXH64_createState();
         static inline Bool s_suppressBlendedDepthWrite = false;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

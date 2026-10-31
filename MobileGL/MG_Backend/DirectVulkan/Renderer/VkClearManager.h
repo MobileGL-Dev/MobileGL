@@ -24,12 +24,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 stencil{};
     };
 
-    // A colour clear reaches us from one of glClear/ClearBufferfv, ClearBufferiv or
+    // A color clear reaches us from one of glClear/ClearBufferfv, ClearBufferiv or
     // ClearBufferuiv, and Vulkan reads VkClearColorValue's union according to the destination
     // image's format rather than converting between the members - a float written where an
     // integer format is expected is reinterpreted bit for bit, not rounded. Remember which entry
     // point supplied the value so the member written when the clear is materialized matches.
-    enum class ClearColorEncoding : Uint8 { Float, Int, Uint };
+    enum class ClearColorEncoding : Uint8 {
+        Float,
+        Int,
+        Uint
+    };
 
     struct ClearAttachmentPayload {
         GLbitfield mask = 0;
@@ -46,124 +50,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // expressed in whichever type matches (GL 4.6 core 15.2.3).
     VkClearColorValue MakeVkClearColorValue(const ClearAttachmentPayload& payload, Bool formatLacksAlpha);
 
-    // Applies that same rule in place, for the paths that have to bake it into the payload before
-    // the destination is known.
-    void ForceOpaqueClearAlpha(ClearAttachmentPayload& payload);
-
     // vkCmdClearColorImage names the image, so the driver applies the destination format's transfer
     // function to whatever value it is handed. Every other write path in this backend goes through
     // the UNORM twin view while GL_FRAMEBUFFER_SRGB is off (ResolveSrgbAttachmentWriteFormat) and
-    // therefore stores the raw value GL asked for. Rewrites `payload` to the linear colour whose
+    // therefore stores the raw value GL asked for. Rewrites `payload` to the linear color whose
     // encoding is that raw value, so a direct image clear of an sRGB destination agrees with them.
     // A no-op for every other format, for integer clear encodings, and when GL is doing the
     // encoding itself.
     void PreCompensateSrgbClearColor(ClearAttachmentPayload& payload, VkFormat destinationFormat);
 
-    struct PendingClearKey {
-        MG_State::GLState::ITextureObject* texture = nullptr;
-        Uint64 textureLifetimeId = 0;
-        Uint32 mipLevel = 0;
-        Uint32 baseArrayLayer = 0;
-        Uint32 layerCount = 1;
-
-        Bool operator==(const PendingClearKey& other) const {
-            return texture == other.texture && textureLifetimeId == other.textureLifetimeId &&
-                   mipLevel == other.mipLevel &&
-                   baseArrayLayer == other.baseArrayLayer && layerCount == other.layerCount;
-        }
-    };
-
-    struct TextureIdentity {
-        MG_State::GLState::ITextureObject* texture = nullptr;
-        Uint64 lifetimeId = 0;
-
-        Bool operator==(const TextureIdentity& other) const {
-            return texture == other.texture && lifetimeId == other.lifetimeId;
-        }
-    };
-
-    struct PendingClearEntry {
-        PendingClearKey key{};
-        ClearAttachmentPayload payload{};
-    };
-
-    struct PendingClearKeyHash {
-        SizeT operator()(const PendingClearKey& key) const {
-            const SizeT textureHash = std::hash<MG_State::GLState::ITextureObject*>{}(key.texture);
-            const SizeT textureLifetimeHash = std::hash<Uint64>{}(key.textureLifetimeId);
-            const SizeT mipHash = std::hash<Uint32>{}(key.mipLevel);
-            const SizeT layerHash = std::hash<Uint32>{}(key.baseArrayLayer);
-            const SizeT layerCountHash = std::hash<Uint32>{}(key.layerCount);
-            SizeT hash = textureHash;
-            hash ^= textureLifetimeHash + 0x9e3779b9u + (hash << 6) + (hash >> 2);
-            hash ^= mipHash + 0x9e3779b9u + (hash << 6) + (hash >> 2);
-            hash ^= layerHash + 0x9e3779b9u + (hash << 6) + (hash >> 2);
-            hash ^= layerCountHash + 0x9e3779b9u + (hash << 6) + (hash >> 2);
-            return hash;
-        }
-    };
-
-    struct TextureIdentityHash {
-        SizeT operator()(const TextureIdentity& key) const {
-            SizeT hash = std::hash<MG_State::GLState::ITextureObject*>{}(key.texture);
-            hash ^= std::hash<Uint64>{}(key.lifetimeId) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
-            return hash;
-        }
-    };
-
-    class VkClearManager {
-    public:
-        static PendingClearKey MakePendingClearKey(const MG_State::GLState::FramebufferAttachmentObject& attachment);
-        // Resolves a GL texture view to the storage it views before keying; see the definition.
-        static PendingClearKey MakePendingClearKey(MG_State::GLState::ITextureObject* rawTexture, Uint32 mipLevel = 0,
-                                                   Uint32 baseArrayLayer = 0, Uint32 layerCount = 1);
-
-        Bool Initialize();
-        void Shutdown();
-
-        void QueueClear(GLbitfield mask, const ClearFramebufferPayload& clearPayload, const MG_State::GLState::FramebufferObject& drawFbo);
-        void QueueClear(
-            const ClearAttachmentPayload& clearPayload,
-            const SharedPtr<MG_State::GLState::ITextureObject>& texture);
-        void QueueClear(const ClearAttachmentPayload& clearPayload,
-                        const MG_State::GLState::FramebufferAttachmentObject& attachment);
-        Bool HasPendingClear(MG_State::GLState::ITextureObject* texture);
-        Bool HasPendingClear(const PendingClearKey& key);
-        Bool HasPendingClear(const MG_State::GLState::FramebufferAttachmentObject& attachment);
-        Bool GetPendingClear(const PendingClearKey& key, ClearAttachmentPayload& outPayload);
-        Bool GetPendingClear(const PendingClearKey& key, ClearAttachmentPayload& outPayload,
-                             SharedPtr<MG_State::GLState::ITextureObject>& outTexture);
-        Bool GetPendingClear(const MG_State::GLState::FramebufferAttachmentObject& attachment,
-                             ClearAttachmentPayload& outPayload);
-        Bool GetPendingClears(MG_State::GLState::ITextureObject* texture, Vector<PendingClearEntry>& outEntries);
-        void PopPendingClear(MG_State::GLState::ITextureObject* texture);
-        void PopPendingClear(const PendingClearKey& key);
-        void PopPendingClear(const MG_State::GLState::FramebufferAttachmentObject& attachment);
-        SizeT CollectGarbage();
-    private:
-        static TextureIdentity MakeTextureIdentity(MG_State::GLState::ITextureObject* texture);
-        static void MergeClearPayload(ClearAttachmentPayload& dst, const ClearAttachmentPayload& src);
-        void ErasePendingClearsForTextureLocked(const TextureIdentity& identity);
-        Bool LockTextureIdentityLocked(const TextureIdentity& identity,
-                                      SharedPtr<MG_State::GLState::ITextureObject>& outTexture);
-        Bool LockTextureLocked(const PendingClearKey& key,
-                               SharedPtr<MG_State::GLState::ITextureObject>& outTexture);
-
-        Uint8 m_gcCounter = 0;
-    public:
-        // Lock-free probe for the consecutive-draw fast path: any pending clear
-        // forces the full SetupDraw path (which materializes/consumes it).
-        Bool HasAnyPendingClears() const { return m_pendingCount.load(std::memory_order_relaxed) != 0; }
-
-    private:
-        mutable std::mutex m_mutex;
-        // Lock-free mirror of m_pendingClears.size(), maintained under m_mutex
-        // by every mutation. The per-draw probes (HasPendingClear/GetPending*)
-        // read it before taking the lock: during draw batches the pending set
-        // is almost always empty, so this turns several locked map probes per
-        // draw into one relaxed load.
-        std::atomic<Uint32> m_pendingCount{0};
-        std::unordered_map<PendingClearKey, ClearAttachmentPayload, PendingClearKeyHash> m_pendingClears;
-        std::unordered_map<TextureIdentity, WeakPtr<MG_State::GLState::ITextureObject>, TextureIdentityHash> m_aliveObjects;
-    };
 } // namespace MobileGL::MG_Backend::DirectVulkan

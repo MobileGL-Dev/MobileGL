@@ -152,6 +152,30 @@ namespace MobileGL {
                 --m_nextInactiveVertexInLocation;
             }
         }
+        // INACTIVE FRAGMENT OUTPUTS go to the top of the draw-buffer range for the same reason:
+        // GL gives locations to active outputs only, and resolution runs in declaration order, so
+        // a dead output declared first would take location 0 and push the real one to 1, where no
+        // draw buffer reads it. The legacy lowering is where that happens: a source whose
+        // gl_FragColor sits in an inactive preprocessor arm (`#if __VERSION__ >= 130 / out vec4
+        // frag_color; / #else / #define frag_color gl_FragColor`) still gets the injected
+        // mg_FragColor declaration ahead of its own output. The slot is reserved, so no active
+        // output auto-assigned later can land on it.
+        if (!ent.live && stage == EShLangFragment && type.getQualifier().isPipeOutput() &&
+            !type.getQualifier().hasLocation() && !type.isBuiltIn()) {
+            const int size = std::max(1, glslang::TIntermediate::computeTypeLocationSize(type, stage));
+            const int drawBuffers = referenceIntermediate.getLimits().maxDrawBuffers;
+            const int top = (drawBuffers > 0 ? drawBuffers : kMinimumDrawBuffers) - size;
+            const int key = buildStorageKey(EShLangFragment, glslang::EvqInOut);
+            for (int location = top; location >= 0; --location) {
+                bool free = true;
+                for (int i = 0; i < size && free; ++i)
+                    free = checkEmpty(key, location + i);
+                if (!free) continue;
+                reserveSlot(key, location, size);
+                ent.symbol->getWritableType().getQualifier().layoutLocation = location;
+                break;
+            }
+        }
         return TDefaultGlslIoResolver::resolveInOutLocation(stage, ent);
     }
 
@@ -189,7 +213,7 @@ namespace MobileGL {
     // is the single derivation, and neither site computes a ceiling of its own.
     void TMglGlslIoResolver::CheckDeclaredBindingRange(const glslang::TType& type, const glslang::TString& name) {
         if (m_bindingLimits == nullptr || m_bindingViolation == nullptr) return;
-        if (!m_bindingViolation->empty()) return;   // first violation wins; the link is already lost
+        if (!m_bindingViolation->empty()) return; // first violation wins; the link is already lost
 
         const glslang::TQualifier& qualifier = type.getQualifier();
         const char* kind = nullptr;
@@ -209,8 +233,8 @@ namespace MobileGL {
             // TRAILING NUMBER is the GL binding the shader asked for (ParseContextBase::
             // growAtomicCounterBlock names it from bufferBinding). That name is the only surviving
             // record of the declaration, so it is what the counter ceiling is read off.
-            const Int counterBinding = MG_Util::ShaderTranspiler::AtomicCounterBlockGlBinding(
-                StringView(name.c_str(), name.size()));
+            const Int counterBinding =
+                MG_Util::ShaderTranspiler::AtomicCounterBlockGlBinding(StringView(name.c_str(), name.size()));
             if (counterBinding >= 0) {
                 kind = "atomic_uint";
                 limitName = "GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS";
@@ -242,7 +266,7 @@ namespace MobileGL {
         // of a storage block's trailing member, and legal on the block instance itself - aborts
         // the process inside mapIO's collect callback in any build with assertions live. The
         // repo defines no NDEBUG of its own, so a CMake Debug build is exactly such a build; the
-        // "reports 0" behaviour the previous comment relied on is only what NDEBUG happens to do.
+        // "reports 0" behavior the previous comment relied on is only what NDEBUG happens to do.
         // An unsized array occupies one binding here, which is also what GL means by it.
         long long elementCount = 1;
         if (type.isArray() && type.isSizedArray()) {
@@ -252,8 +276,8 @@ namespace MobileGL {
         const long long lastBinding = binding + elementCount - 1;
         if (lastBinding < static_cast<long long>(limit)) return;
 
-        String message = "Error: layout(binding = " + std::to_string(binding) + ") on " + kind + " '" +
-                         String(name.c_str()) + "'";
+        String message =
+            "Error: layout(binding = " + std::to_string(binding) + ") on " + kind + " '" + String(name.c_str()) + "'";
         if (elementCount > 1) {
             message += " (an array of " + std::to_string(elementCount) + ", occupying bindings " +
                        std::to_string(binding) + ".." + std::to_string(lastBinding) + ")";

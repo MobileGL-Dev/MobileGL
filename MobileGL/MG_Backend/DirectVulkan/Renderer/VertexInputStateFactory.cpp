@@ -7,321 +7,242 @@
 // End of Source File Header
 
 #include "VertexInputStateFactory.h"
+#include <MG_Backend/Record/ApplyRoleBackend.h>
+#include "MagmaPipeArms.h"
 #include "MG_Util/Converters/MGToStr/DataTypeConverter.h"
 #include <MG_Backend/BackendObjects.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <Config.h>
+#include <MG_Remote/Server/ServerLoop.h>
+#endif
 #include <utility>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-    VertexInputStateFactory::HashType VertexInputStateFactory::ComputeHash(
-        const MG_State::GLState::VertexArrayObject& vao) const {
-        XXHASH_VERIFY(XXH64_reset(m_hashState, m_config.CacheVersion));
+    namespace {
+        struct WireVertexInputMemo {
+            struct Key {
+                Uint64 Offset;
+                Uint32 Stride;
+                Uint32 Divisor;
+            };
+            Bool Valid = false;
+            Uint64 ContentSerial = 0;
+            Uint32 ActiveMask = 0;
+            Uint32 Start = 0;
+            Uint32 Count = 0;
+            Uint32 KeyCount = 0;
+            Array<Key, MG_Pipe::kMGPipeMaxVertexAttribs> Keys{};
+            VertexInputStateFactory::BackendVertexInputState State;
+        };
+    } // namespace
 
-        for (Int i = 0; i < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS; ++i) {
-            const auto& attr = vao.GetAttribute(i);
+    const VertexInputStateFactory::BackendVertexInputState* VertexInputStateFactory::ResolveWireVertexInput(
+        const MG_Pipe::MGPipeVertexElementsRecord& elements, const MG_Pipe::MGPipeApplierState& state,
+        Uint32 activeMask) const {
+        auto* memo = static_cast<WireVertexInputMemo*>(elements.BackendMemo.get());
+        if (memo == nullptr) {
+            auto created = std::make_shared<WireVertexInputMemo>();
+            memo = created.get();
+            elements.BackendMemo = Move(created);
+        }
+        // The window first: a location outside it is BuildWireVertexInput's refusal, and the
+        // keys below index the window.
+        Bool hit = memo->Valid && memo->ContentSerial == elements.ContentSerial && memo->ActiveMask == activeMask &&
+                   memo->Start == state.VertexBufferStart && memo->Count == state.VertexBufferCount;
+        if (hit) {
+            Uint32 n = 0;
+            for (Uint32 location = 0; location < elements.AttributeCount && hit; ++location) {
+                if (!elements.Attributes[location].Enabled || !(activeMask & (1u << location))) continue;
+                const auto& buffer = state.VertexBuffers[location];
+                const auto& key = memo->Keys[n++];
+                hit = key.Offset == buffer.Offset && key.Stride == buffer.Stride && key.Divisor == buffer.Divisor;
+            }
+            if (hit) return &memo->State;
+        }
+        memo->Valid = false;
+        if (!BuildWireVertexInput(elements, state, activeMask, memo->State)) return nullptr;
+        Uint32 n = 0;
+        for (Uint32 location = 0; location < elements.AttributeCount; ++location) {
+            if (!elements.Attributes[location].Enabled || !(activeMask & (1u << location))) continue;
+            const auto& buffer = state.VertexBuffers[location];
+            memo->Keys[n++] = {buffer.Offset, buffer.Stride, buffer.Divisor};
+        }
+        memo->KeyCount = n;
+        memo->ContentSerial = elements.ContentSerial;
+        memo->ActiveMask = activeMask;
+        memo->Start = state.VertexBufferStart;
+        memo->Count = state.VertexBufferCount;
+        memo->Valid = true;
+        return &memo->State;
+    }
 
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Enabled, sizeof(attr.Enabled)));
-            if (!attr.Enabled) {
+    Bool VertexInputStateFactory::BuildWireVertexInput(const MG_Pipe::MGPipeVertexElementsRecord& elements,
+                                                       const MG_Pipe::MGPipeApplierState& state, Uint32 activeMask,
+                                                       BackendVertexInputState& out) const {
+        // The caller's state is a per-draw scratch (WireDraw.cpp): reset it without freeing.
+        out.ResetKeepingCapacity();
+        for (Uint32 location = 0; location < elements.AttributeCount; ++location) {
+            const auto& attr = elements.Attributes[location];
+            if (!attr.Enabled || !(activeMask & (1u << location))) continue;
+            // P7 wave 2 package C, CONTRACT-P7 §3.2 `vertex-layout`: THE ONE STRING BECAME TWO
+            // VERDICTS, and the split is by what the reason is ABOUT rather than by severity.
+            //
+            // Every reason here used to return false, and the single caller answered that with
+            // one P7-marked MagmaWireFatal - an abort, bypassing Session::Fail, invisible
+            // to the census gate and with no equivalent on the monolith arm at all. But the
+            // reasons are not one kind of thing:
+            //
+            //   * `buffer-window` is a statement about the RECORD: an enabled attribute the
+            //     program reads names a slot outside the window set_vertex_buffers published.
+            //     Nothing about the device or the format is involved; the two halves of the
+            //     protocol disagree about what crossed. It stays a named Fatal through the hook
+            //     (see the caller), and it is load-bearing rather than defensive - it is what
+            //     caught the Redmi VAO hash collision fixed in 376c04be.
+            //
+            //   * every other reason is a statement about what VULKAN CAN EXPRESS on this
+            //     device: a GL type with no VkFormat, a format without
+            //     VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT, a component size we cannot compute, an
+            //     offset sum that does not fit. The monolith arm has had an answer for these
+            //     since it was written, and it is not an abort: mask the attribute out of the
+            //     vertex input state and carry on (the `unsupportedAttribMask |= ...; continue;`
+            //     sites in GetOrCreateVertexInputState above). The draw path then decides,
+            //     loudly and once, whether the masked attribute was one the program actually
+            //     reads. This arm now does exactly that, which is what "same observable as the
+            //     monolith lane" means for this row.
+            //
+            // THE COUNT: the contract says "the other six"; there are SEVEN return sites below
+            // it, because `offset-overflow` was added after the audit's count and is an
+            // arithmetic guard rather than a shape one. It is masked with the rest: an
+            // attribute whose base offsets cannot be added is one Vulkan cannot fetch, the
+            // monolith arm never computes that sum at all, and masking is strictly safer than
+            // a Fatal for a number no application can reach on purpose. Recorded in
+            // the phase notes rather than silently reconciled.
+            const auto describe = [&](const char* reason, VkFormat format) {
+                MGLOG_E_ONCE("Magma wire vertex layout: %s location=%u type=%u size=%u normalized=%u integer=%u "
+                             "long=%u bgra=%u stride=%d offset=%llu format=%d bufferWindow=%u+%u activeMask=0x%x",
+                             reason, location, attr.Type, static_cast<Uint32>(attr.Size),
+                             static_cast<Uint32>(attr.Normalized), static_cast<Uint32>(attr.IsInteger),
+                             static_cast<Uint32>(attr.IsLong), static_cast<Uint32>(attr.IsBgra), attr.Stride,
+                             static_cast<unsigned long long>(attr.Offset), static_cast<Int>(format),
+                             state.VertexBufferStart, state.VertexBufferCount, activeMask);
+            };
+            // The protocol verdict: the caller turns a false into the named Fatal.
+            const auto reject = [&](const char* reason, VkFormat format = VK_FORMAT_UNDEFINED) {
+                describe(reason, format);
+                return false;
+            };
+            // The device verdict: MGLOG_E_ONCE + mask + continue, the monolith arm's shape.
+            // MGLOG_E_ONCE and not MGLOG_E, also the monolith arm's: an unmappable attribute is
+            // a property of the VAO and the device, so it repeats every draw, and the per-draw
+            // line is what made the old abort look preferable to whoever wrote it.
+            const auto maskOut = [&](const char* reason, VkFormat format = VK_FORMAT_UNDEFINED) {
+                describe(reason, format);
+                out.unsupportedAttribMask |= 1u << location;
+            };
+            // set_vertex_buffers is flattened PER ATTRIBUTE (VertexInputEmit.h), not
+            // indexed by the original ARB binding point in attr.BindingIndex.
+            if (location < state.VertexBufferStart || location - state.VertexBufferStart >= state.VertexBufferCount)
+                return reject("buffer-window");
+            const auto& buffer = state.VertexBuffers[location];
+            const auto type = static_cast<DataType>(attr.Type);
+            if (attr.Stride < 0 || attr.Size < 1 || attr.Size > 4) {
+                maskOut("attribute-shape");
                 continue;
             }
-
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Size, sizeof(attr.Size)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Type, sizeof(attr.Type)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Normalized, sizeof(attr.Normalized)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Stride, sizeof(attr.Stride)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Offset, sizeof(attr.Offset)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsInteger, sizeof(attr.IsInteger)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsLong, sizeof(attr.IsLong)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsBgra, sizeof(attr.IsBgra)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Divisor, sizeof(attr.Divisor)));
-
-            // The bound buffer's IDENTITY is a component of the key, and it has to be the
-            // buffer's never-reused lifetime id - NOT its heap address, which this used to
-            // hash. An address is recycled by the allocator, so a deleted-and-recreated
-            // buffer reproduces it; combined with a byte-identical attribute layout that
-            // reproduces the WHOLE content hash, and the hash is what
-            // TryBindResolvedVertexBindings accepts as proof that a memoised binding still
-            // reads the buffer it was resolved from. It did not: a destroyed buffer's GPU
-            // slice was bound for its successor's draw, which is how a transform-feedback
-            // capture came back holding a dead VAO's vertex data (0,0,0,1 - the previous
-            // test's positions) instead of its own.
-            // Zero for client memory (no buffer), which is a distinct identity of its own.
-            const Uint64 bufferKey = attr.Buffer ? attr.Buffer->GetLifetimeId() : 0;
-            XXHASH_VERIFY(XXH64_update(m_hashState, &bufferKey, sizeof(bufferKey)));
-        }
-
-        return XXH64_digest(m_hashState);
-    }
-
-    VertexInputStateFactory::HashType VertexInputStateFactory::GetOrComputeHash(
-        const MG_State::GLState::VertexArrayObject& vao) const {
-        HashType hash = 0;
-        if (!vao.GetBackendHashMemo(hash)) {
-            hash = ComputeHash(vao);
-            vao.SetBackendHashMemo(hash);
-        }
-        return hash;
-    }
-
-    const VertexInputStateFactory::BackendVertexInputState& VertexInputStateFactory::GetOrCreateVertexInputState(
-        const MG_State::GLState::VertexArrayObject& vao) {
-        // Per-draw fast path: the VAO carries a pointer to its resolved entry,
-        // valid while its config version and the cache's eviction epoch both
-        // match - no re-hash, no map lookup.
-        const void* memoState = nullptr;
-        Uint64 memoEpoch = 0;
-        if (vao.GetBackendStateMemo(memoState, memoEpoch) && memoEpoch == m_evictionEpoch) {
-            const auto* entry = static_cast<const BackendVertexInputState*>(memoState);
-            entry->lastUsedFrameBoundary = m_frameBoundaryCounter;
-            return *entry;
-        }
-        const BackendVertexInputState& entry = GetOrCreateVertexInputState(vao, GetOrComputeHash(vao));
-        vao.SetBackendStateMemo(&entry, m_evictionEpoch);
-        // Also mirror the layout identity and the two per-draw masks into the VAO's aux
-        // memo (pure VALUES derived from the VAO configuration, so config-version
-        // guarding alone is sound). The draw fast path reads them from the VAO object it
-        // already touched instead of chasing into this entry - see PackVertexInputAuxMemo.
-        vao.SetBackendAuxMemo(entry.layoutHash,
-                              PackVertexInputAuxMasks(entry.unsupportedAttribMask, entry.attributeLocationMask));
-        return entry;
-    }
-
-    const VertexInputStateFactory::BackendVertexInputState& VertexInputStateFactory::GetOrCreateVertexInputState(
-        const MG_State::GLState::VertexArrayObject& vao, HashType hash) {
-        auto it = m_cache.find(hash);
-        if (it != m_cache.end()) {
-            it->second->lastUsedFrameBoundary = m_frameBoundaryCounter;
-            return *it->second;
-        }
-
-        VertexInputStateBuilder builder;
-        Vector<SizeT> bindingBufferKeys;
-        Vector<SizeT> bindingBaseOffsets;
-        Vector<Uint32> bindingAttributeLocations;
-        Vector<Bool> bindingUsesClientMemory;
-        Vector<VertexStreamConversion> bindingConversions;
-        Vector<VkVertexInputBindingDivisorDescriptionEXT> bindingDivisors;
-        Uint32 unsupportedAttribMask = 0;
-
-        for (Uint32 location = 0; location < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS; ++location) {
-            const auto& attr = vao.GetAttribute(location);
-            if (!attr.Enabled) {
-                continue;
-            }
-
-            VkFormat sourceVkFormat =
-                ToVkVertexFormat(attr.Type, attr.Size, attr.Normalized, attr.IsInteger, attr.IsBgra, attr.IsLong);
-            VertexStreamConversion conversion = VertexStreamConversion::None;
-            // Gated on the SAME flag ToVkVertexFormat gates its 64-bit path on, and that is
-            // load-bearing rather than belt-and-braces: the narrowing is only correct because the
-            // shader's `dvec` input is a `vec` by the time the pipeline is built, and what
-            // guarantees that is the flag being clear. It is clear on every backend today, and a
-            // program with a 64-bit float vertex input is demoted WHOLE for the same reason even
-            // where the device has native fp64 (ProgramSpirvTask::GenerateSpirv). With the flag
-            // set, a dvec3/dvec4 would be declined by ToVkVertexFormat AND left 64-bit in the
-            // module, so a float32 stream would be fed to a Float64 input.
-            const Bool narrowFloat64Arrays =
-                MG_Backend::pActiveBackendObject == nullptr ||
-                !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes;
-            if (sourceVkFormat == VK_FORMAT_UNDEFINED && attr.Type == DataType::Float64 && narrowFloat64Arrays) {
-                // No native 64-bit fetch here (see ToVkVertexFormat's Float64 case), but the
-                // source bytes are ordinary IEEE-754 doubles and DemoteFloat64Pass has already
-                // narrowed every dvec input to a vec, so the array is narrowed to match rather
-                // than dropped. Mirrors what DirectGLES does for the same state.
-                const VkFormat narrowedFormat = ToFloat32VertexFormat(attr.Size);
-                if (narrowedFormat != VK_FORMAT_UNDEFINED && SupportsVertexBufferFormat(narrowedFormat)) {
-                    sourceVkFormat = narrowedFormat;
-                    conversion = VertexStreamConversion::Float64ToFloat32;
-                    MGLOG_W_ONCE("Vertex attribute location=%u is a 64-bit (GL_DOUBLE) array; fetching it at "
-                            "float32 precision through format=%d (size=%d long=%s)",
-                            location, static_cast<Int>(narrowedFormat), attr.Size, attr.IsLong ? "true" : "false");
+            VkFormat format =
+                ToVkVertexFormat(type, attr.Size, attr.Normalized, attr.IsInteger, attr.IsBgra, attr.IsLong);
+            auto conversion = VertexStreamConversion::None;
+            if (format == VK_FORMAT_UNDEFINED && type == DataType::Float64) {
+                const auto* backend = MG_Backend::ApplyRoleBackend();
+                if (backend && backend->GetDynamicParameters().SupportsFloat64VertexAttributes) {
+                    // Exactly the monolith arm's answer for the same state: with native fp64
+                    // the module KEPT its 64-bit inputs (DemoteFloat64Pass did not run), so
+                    // narrowing the stream would feed float32 to a Float64 input - and the
+                    // monolith build therefore leaves sourceVkFormat UNDEFINED and falls into
+                    // its own mask-out below. Same place, same mask.
+                    maskOut("native-fp64-format");
+                    continue;
                 }
+                format = ToFloat32VertexFormat(attr.Size);
+                conversion = VertexStreamConversion::Float64ToFloat32;
             }
-            if (sourceVkFormat == VK_FORMAT_UNDEFINED) {
-                MGLOG_E_ONCE("Unsupported vertex attribute layout (location=%u, type=%s, size=%d): the array is "
-                        "enabled but cannot be mapped to a VkFormat",
-                        location, MG_Util::ConvertDataTypeToString(attr.Type).c_str(), attr.Size);
-                unsupportedAttribMask |= (1u << location);
+            // GL_INT / GL_UNSIGNED_INT read as float (glVertexAttribFormat without the I suffix):
+            // Vulkan has no 32-bit SCALED or NORM vertex format, so the stream is converted to
+            // float32 on the CPU, normalized when the attribute asks for it.
+            if (format == VK_FORMAT_UNDEFINED && !attr.IsInteger && !attr.IsLong && !attr.IsBgra &&
+                (type == DataType::Int32 || type == DataType::Uint32)) {
+                format = ToFloat32VertexFormat(attr.Size);
+                conversion = VertexStreamConversion::ScaledIntegerToFloat32;
+            }
+            if (format == VK_FORMAT_UNDEFINED) {
+                maskOut("format-map");
                 continue;
             }
-
-            VkFormat vkFormat = sourceVkFormat;
-            if (conversion == VertexStreamConversion::None && !SupportsVertexBufferFormat(vkFormat)) {
-                if (IsScaledIntegerVertexFormat(vkFormat)) {
-                    const VkFormat fallbackFormat = ToFloat32VertexFormat(attr.Size);
-                    if (fallbackFormat != VK_FORMAT_UNDEFINED && SupportsVertexBufferFormat(fallbackFormat)) {
-                        vkFormat = fallbackFormat;
-                        conversion = VertexStreamConversion::ScaledIntegerToFloat32;
-                        MGLOG_W_ONCE("Vertex attribute location=%u format=%d lacks "
-                                "VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT; using float32 stream format=%d "
-                                "(type=%s size=%d normalized=%s integer=%s)",
-                                location, static_cast<Int>(sourceVkFormat), static_cast<Int>(vkFormat),
-                                MG_Util::ConvertDataTypeToString(attr.Type).c_str(), attr.Size,
-                                attr.Normalized ? "true" : "false", attr.IsInteger ? "true" : "false");
-                    }
+            if (!SupportsVertexBufferFormat(format)) {
+                if (!IsScaledIntegerVertexFormat(format)) {
+                    maskOut("native-format-feature", format);
+                    continue;
                 }
-
-                if (conversion == VertexStreamConversion::None) {
-                    MGLOG_E_ONCE("Unsupported Vulkan vertex format (location=%u, format=%d, type=%s, size=%d): "
-                            "VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT is unavailable and no semantic fallback exists",
-                            location, static_cast<Int>(sourceVkFormat),
-                            MG_Util::ConvertDataTypeToString(attr.Type).c_str(), attr.Size);
-                    unsupportedAttribMask |= (1u << location);
+                format = ToFloat32VertexFormat(attr.Size);
+                conversion = VertexStreamConversion::ScaledIntegerToFloat32;
+                if (!SupportsVertexBufferFormat(format)) {
+                    maskOut("converted-format-feature", format);
                     continue;
                 }
             }
-
-            const SizeT attribByteSize = GetAttributeByteSize(attr.Type, attr.Size, attr.IsBgra);
-            if (attribByteSize == 0) {
-                MGLOG_E_ONCE("Vertex attribute with unknown component size (location=%u, type=%s): the array is "
-                        "enabled but cannot be sized",
-                        location, MG_Util::ConvertDataTypeToString(attr.Type).c_str());
-                unsupportedAttribMask |= (1u << location);
+            const SizeT elementSize = GetAttributeByteSize(type, attr.Size, attr.IsBgra);
+            if (!elementSize) {
+                maskOut("element-size", format);
                 continue;
             }
-
-            // Verbatim, zero included. The frontend already resolved a pointer call's
-            // "tightly packed" stride 0 into the element size (see VertexAttribute::Stride),
-            // so a zero here is the binding model's stride 0 - every vertex reads the same
-            // element - which is exactly what a zero VkVertexInputBindingDescription::stride
-            // means. Substituting the element size fetched a fresh element per vertex and ran
-            // off the end of the buffer (KHR-GL43.vertex_attrib_binding.basic-input-case7/8).
-            // Client-memory arrays cannot reach zero: they only exist on the pointer path.
-            const Uint32 sourceStride = static_cast<Uint32>(attr.Stride);
-            const Bool packedAttribute = attr.Type == DataType::Int2101010Rev ||
-                                         attr.Type == DataType::Uint2101010Rev;
-            const SizeT requiredAlignment = packedAttribute ? attribByteSize : GetComponentSize(attr.Type);
-            // For a client-memory array attr.Offset holds the raw client pointer, and the
-            // draw path re-uploads the data to a 16-aligned transient slice with attribute
-            // offset 0, so only the stride can violate Vulkan's fetch alignment there.
-            const Bool clientMemoryAttribute = attr.Buffer == nullptr;
-            if (conversion == VertexStreamConversion::None && requiredAlignment > 1 &&
-                ((sourceStride % requiredAlignment) != 0 ||
-                 (!clientMemoryAttribute && (attr.Offset % requiredAlignment) != 0))) {
-                // GL accepts arbitrary byte strides and offsets. Core Vulkan vertex fetches do not
-                // unless VK_EXT_legacy_vertex_attributes is available, so deinterleave this one
-                // attribute into a tightly packed transient stream without changing its format.
+            const Uint64 offset = attr.Offset + buffer.Offset;
+            if (offset < attr.Offset) {
+                maskOut("offset-overflow", format);
+                continue;
+            }
+            const SizeT alignment = (type == DataType::Int2101010Rev || type == DataType::Uint2101010Rev)
+                                        ? elementSize
+                                        : GetComponentSize(type);
+            if (conversion == VertexStreamConversion::None && alignment > 1 &&
+                (offset % alignment || static_cast<Uint32>(attr.Stride) % alignment))
                 conversion = VertexStreamConversion::Repack;
-                MGLOG_W_ONCE("Vertex attribute location=%u uses Vulkan-incompatible alignment "
-                        "(offset=%zu stride=%u required=%zu); using a tightly packed stream",
-                        location, attr.Offset, sourceStride, requiredAlignment);
-            }
-
-            Uint32 stride = sourceStride;
-            // A converted stream is tightly packed, so its stride is the converted element
-            // size - unless the source stride is zero, which does not describe a packing at
-            // all but "never advance". That survives the conversion unchanged: the draw path
-            // converts exactly one element and every vertex reads it.
-            if (sourceStride != 0) {
-                if (conversion == VertexStreamConversion::Repack) {
-                    stride = static_cast<Uint32>(attribByteSize);
-                } else if (conversion == VertexStreamConversion::ScaledIntegerToFloat32 ||
-                           conversion == VertexStreamConversion::Float64ToFloat32) {
-                    stride = static_cast<Uint32>(attr.Size * static_cast<Int>(sizeof(Float)));
-                }
-            }
-            const VkVertexInputRate inputRate =
-                (attr.Divisor == 0) ? VK_VERTEX_INPUT_RATE_VERTEX : VK_VERTEX_INPUT_RATE_INSTANCE;
-
-            const SizeT bufferKey = reinterpret_cast<SizeT>(attr.Buffer.get());
-            const Uint32 binding = static_cast<Uint32>(bindingBufferKeys.size());
-            bindingBufferKeys.push_back(bufferKey);
-            bindingBaseOffsets.push_back(attr.Buffer ? attr.Offset : 0);
-            bindingAttributeLocations.push_back(location);
-            bindingUsesClientMemory.push_back(attr.Buffer == nullptr);
-            bindingConversions.push_back(conversion);
-            builder.AddBinding(binding, stride, inputRate);
-            builder.AddAttribute(location, binding, vkFormat, 0);
-            // Divisor 1 is what VK_VERTEX_INPUT_RATE_INSTANCE already means; only anything
-            // else needs the extension to say it.
-            if (inputRate == VK_VERTEX_INPUT_RATE_INSTANCE && attr.Divisor != 1) {
-                bindingDivisors.push_back({binding, static_cast<Uint32>(attr.Divisor)});
-            }
+            Uint32 stride = static_cast<Uint32>(attr.Stride);
+            if (stride && conversion != VertexStreamConversion::None)
+                stride = conversion == VertexStreamConversion::Repack ? static_cast<Uint32>(elementSize)
+                                                                      : static_cast<Uint32>(attr.Size) * sizeof(Float);
+            const Uint32 binding = static_cast<Uint32>(out.bindings.size());
+            out.bindings.push_back(
+                {binding, stride, buffer.Divisor ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX});
+            out.attributes.push_back({location, binding, format, 0});
+            out.narrowIntegerAttributes.Note(location, format);
+            out.bindingAttributeLocations.push_back(location);
+            out.bindingBaseOffsets.push_back(static_cast<SizeT>(offset));
+            out.bindingConversions.push_back(conversion);
+            if (buffer.Divisor > 1) out.bindingDivisors.push_back({binding, buffer.Divisor});
+            out.attributeLocationMask |= 1u << location;
         }
-
-        const auto& state = builder.Build();
-
-        auto& slot = m_cache[hash];
-        if (!slot) {
-            slot = MakeUnique<BackendVertexInputState>();
+        // Native handles/offsets do not decide the pipeline layout. Include only the
+        // resolved binding/attribute/divisor values, including a legal zero stride.
+        Uint64 hash = XXH64(out.bindings.data(), out.bindings.size() * sizeof(out.bindings[0]), 0);
+        hash = XXH64(out.attributes.data(), out.attributes.size() * sizeof(out.attributes[0]), hash);
+        hash = XXH64(out.bindingDivisors.data(), out.bindingDivisors.size() * sizeof(out.bindingDivisors[0]), hash);
+        // THE MASK IS PART OF THE LAYOUT NOW, for the same reason the monolith entry's hash
+        // carries it (the XXH64_update over unsupportedAttribMask in GetOrCreateVertexInputState
+        // above). Before this package the mask was always zero here, so leaving it out of the
+        // hash was free; now two VAOs can produce the SAME bindings, attributes and divisors
+        // and differ only in which enabled attribute was masked out, and a hash blind to that
+        // would serve one of them the other's pipeline.
+        out.layoutHash = XXH64(&out.unsupportedAttribMask, sizeof(out.unsupportedAttribMask), hash);
+        out.state.vertexBindingDescriptionCount = static_cast<Uint32>(out.bindings.size());
+        out.state.pVertexBindingDescriptions = out.bindings.data();
+        out.state.vertexAttributeDescriptionCount = static_cast<Uint32>(out.attributes.size());
+        out.state.pVertexAttributeDescriptions = out.attributes.data();
+        if (!out.bindingDivisors.empty()) {
+            out.divisorState.vertexBindingDivisorCount = static_cast<Uint32>(out.bindingDivisors.size());
+            out.divisorState.pVertexBindingDivisors = out.bindingDivisors.data();
+            out.state.pNext = &out.divisorState;
         }
-        BackendVertexInputState& entry = *slot;
-        entry.hash = hash;
-        entry.lastUsedFrameBoundary = m_frameBoundaryCounter;
-        entry.bindingDivisors = Move(bindingDivisors);
-        entry.bindings = builder.GetBindings();
-        entry.attributes = builder.GetAttributes();
-        // See the layoutHash declaration: hash only the resolved layout, never
-        // buffer identities, so identical layouts across VAOs/buffers agree.
-        XXHASH_VERIFY(XXH64_reset(m_hashState, 0));
-        for (const auto& binding : entry.bindings) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, &binding.binding, sizeof(binding.binding)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &binding.stride, sizeof(binding.stride)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &binding.inputRate, sizeof(binding.inputRate)));
-        }
-        for (const auto& attribute : entry.attributes) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.location, sizeof(attribute.location)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.binding, sizeof(attribute.binding)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.format, sizeof(attribute.format)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.offset, sizeof(attribute.offset)));
-        }
-        for (const auto& divisor : entry.bindingDivisors) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, &divisor.binding, sizeof(divisor.binding)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &divisor.divisor, sizeof(divisor.divisor)));
-        }
-        XXHASH_VERIFY(XXH64_update(m_hashState, &unsupportedAttribMask, sizeof(unsupportedAttribMask)));
-        entry.layoutHash = XXH64_digest(m_hashState);
-        entry.attributeLocationMask = 0;
-        for (const auto& attribute : entry.attributes) {
-            if (attribute.location < 32u) {
-                entry.attributeLocationMask |= (1u << attribute.location);
-            }
-        }
-        entry.bindingBufferKeys = std::move(bindingBufferKeys);
-        entry.bindingBaseOffsets = std::move(bindingBaseOffsets);
-        entry.bindingAttributeLocations = std::move(bindingAttributeLocations);
-        entry.bindingUsesClientMemory = std::move(bindingUsesClientMemory);
-        entry.bindingConversions = std::move(bindingConversions);
-        entry.unsupportedAttribMask = unsupportedAttribMask;
-        entry.state = state;
-        entry.state.pVertexBindingDescriptions = entry.bindings.empty() ? nullptr : entry.bindings.data();
-        entry.state.pVertexAttributeDescriptions = entry.attributes.empty() ? nullptr : entry.attributes.data();
-        if (!entry.bindingDivisors.empty()) {
-            entry.divisorState.vertexBindingDivisorCount = static_cast<Uint32>(entry.bindingDivisors.size());
-            entry.divisorState.pVertexBindingDivisors = entry.bindingDivisors.data();
-            entry.state.pNext = &entry.divisorState;
-        } else {
-            entry.state.pNext = nullptr;
-        }
-        return entry;
-    }
-
-    void VertexInputStateFactory::OnFrameBoundary() {
-        ++m_frameBoundaryCounter;
-
-        // Sweep occasionally; evict entries whose last hit is far in the past.
-        // Erasure happens only here, never mid-frame: the draw path holds a
-        // reference into the current entry across its setup, and unordered_map
-        // erase would invalidate it. Entries are CPU-side only, so no GPU-idle
-        // proof is needed; an evicted entry that is used again is simply rebuilt
-        // from the VAO state (same hash, same content).
-        constexpr Uint64 kSweepInterval = 256;
-        constexpr Uint64 kRetireAgeBoundaries = 1024;
-        if ((m_frameBoundaryCounter % kSweepInterval) != 0) {
-            return;
-        }
-
-        for (auto it = m_cache.begin(); it != m_cache.end();) {
-            if (m_frameBoundaryCounter - it->second->lastUsedFrameBoundary > kRetireAgeBoundaries) {
-                it = m_cache.erase(it);
-                // Invalidate every VAO's state-pointer memo: the erased node's
-                // address may be reused by a future insert. Advance through the
-                // process-wide source so the value stays unique across factory
-                // instances (see the member comment).
-                m_evictionEpoch = ++s_evictionEpochSource;
-            } else {
-                ++it;
-            }
-        }
+        return true;
     }
 
     VkFormat VertexInputStateFactory::ToVkVertexFormat(DataType type, Int size, Bool normalized, Bool isInteger,
@@ -367,55 +288,89 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // demoted `vec` input - the same thing DirectGLES does for the same state. The
             // frontend RECORDS the format either way, so this gate is the only thing standing
             // between a legal glVertexAttribLFormat and a mismatched pipeline.
-            if (MG_Backend::pActiveBackendObject == nullptr ||
-                !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes) {
+            if (
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P5c (hd, CONTRACT-P5C §3.7): see the narrowFloat64Arrays site above.
+                MG_Config::Transport != MG_Config::TransportMode::Monolith
+                    ? (MG_Remote::Server::ServerLoopInstance().Backend() == nullptr ||
+                       !MG_Remote::Server::ServerLoopInstance()
+                            .Backend()
+                            ->GetDynamicParameters()
+                            .SupportsFloat64VertexAttributes)
+                    :
+#endif
+                    MG_Backend::pActiveBackendObject == nullptr ||
+                        !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes) {
                 return VK_FORMAT_UNDEFINED;
             }
             if (!isLong || isInteger || normalized) return VK_FORMAT_UNDEFINED;
             switch (size) {
-            case 1: return VK_FORMAT_R32G32_UINT;
-            case 2: return VK_FORMAT_R32G32B32A32_UINT;
+            case 1:
+                return VK_FORMAT_R32G32_UINT;
+            case 2:
+                return VK_FORMAT_R32G32B32A32_UINT;
             // A dvec3/dvec4 input is 6/8 uint32 components: no single VkFormat, and GL spreads it
             // over two attribute locations, which the location-per-VAO-index model here does not
             // express. Declined rather than fetched wrong.
-            default: return VK_FORMAT_UNDEFINED;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Float32:
             switch (size) {
-            case 1: return VK_FORMAT_R32_SFLOAT;
-            case 2: return VK_FORMAT_R32G32_SFLOAT;
-            case 3: return VK_FORMAT_R32G32B32_SFLOAT;
-            case 4: return VK_FORMAT_R32G32B32A32_SFLOAT;
-            default: return VK_FORMAT_UNDEFINED;
+            case 1:
+                return VK_FORMAT_R32_SFLOAT;
+            case 2:
+                return VK_FORMAT_R32G32_SFLOAT;
+            case 3:
+                return VK_FORMAT_R32G32B32_SFLOAT;
+            case 4:
+                return VK_FORMAT_R32G32B32A32_SFLOAT;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Float16:
             // GL_HALF_FLOAT is a floating-point array type: it is never an integer attribute, and
             // GL_TRUE for `normalized` is ignored for float types rather than selecting a *NORM format.
             if (isInteger) return VK_FORMAT_UNDEFINED;
             switch (size) {
-            case 1: return VK_FORMAT_R16_SFLOAT;
-            case 2: return VK_FORMAT_R16G16_SFLOAT;
-            case 3: return VK_FORMAT_R16G16B16_SFLOAT;
-            case 4: return VK_FORMAT_R16G16B16A16_SFLOAT;
-            default: return VK_FORMAT_UNDEFINED;
+            case 1:
+                return VK_FORMAT_R16_SFLOAT;
+            case 2:
+                return VK_FORMAT_R16G16_SFLOAT;
+            case 3:
+                return VK_FORMAT_R16G16B16_SFLOAT;
+            case 4:
+                return VK_FORMAT_R16G16B16A16_SFLOAT;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Int32:
             if (!isInteger || normalized) return VK_FORMAT_UNDEFINED;
             switch (size) {
-            case 1: return VK_FORMAT_R32_SINT;
-            case 2: return VK_FORMAT_R32G32_SINT;
-            case 3: return VK_FORMAT_R32G32B32_SINT;
-            case 4: return VK_FORMAT_R32G32B32A32_SINT;
-            default: return VK_FORMAT_UNDEFINED;
+            case 1:
+                return VK_FORMAT_R32_SINT;
+            case 2:
+                return VK_FORMAT_R32G32_SINT;
+            case 3:
+                return VK_FORMAT_R32G32B32_SINT;
+            case 4:
+                return VK_FORMAT_R32G32B32A32_SINT;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Uint32:
             if (!isInteger || normalized) return VK_FORMAT_UNDEFINED;
             switch (size) {
-            case 1: return VK_FORMAT_R32_UINT;
-            case 2: return VK_FORMAT_R32G32_UINT;
-            case 3: return VK_FORMAT_R32G32B32_UINT;
-            case 4: return VK_FORMAT_R32G32B32A32_UINT;
-            default: return VK_FORMAT_UNDEFINED;
+            case 1:
+                return VK_FORMAT_R32_UINT;
+            case 2:
+                return VK_FORMAT_R32G32_UINT;
+            case 3:
+                return VK_FORMAT_R32G32B32_UINT;
+            case 4:
+                return VK_FORMAT_R32G32B32A32_UINT;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Int16:
             switch (size) {
@@ -430,7 +385,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             case 4:
                 return isInteger ? VK_FORMAT_R16G16B16A16_SINT
                                  : (normalized ? VK_FORMAT_R16G16B16A16_SNORM : VK_FORMAT_R16G16B16A16_SSCALED);
-            default: return VK_FORMAT_UNDEFINED;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Uint16:
             switch (size) {
@@ -445,37 +401,38 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             case 4:
                 return isInteger ? VK_FORMAT_R16G16B16A16_UINT
                                  : (normalized ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R16G16B16A16_USCALED);
-            default: return VK_FORMAT_UNDEFINED;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Int8:
             switch (size) {
             case 1:
                 return isInteger ? VK_FORMAT_R8_SINT : (normalized ? VK_FORMAT_R8_SNORM : VK_FORMAT_R8_SSCALED);
             case 2:
-                return isInteger ? VK_FORMAT_R8G8_SINT
-                                 : (normalized ? VK_FORMAT_R8G8_SNORM : VK_FORMAT_R8G8_SSCALED);
+                return isInteger ? VK_FORMAT_R8G8_SINT : (normalized ? VK_FORMAT_R8G8_SNORM : VK_FORMAT_R8G8_SSCALED);
             case 3:
                 return isInteger ? VK_FORMAT_R8G8B8_SINT
                                  : (normalized ? VK_FORMAT_R8G8B8_SNORM : VK_FORMAT_R8G8B8_SSCALED);
             case 4:
                 return isInteger ? VK_FORMAT_R8G8B8A8_SINT
                                  : (normalized ? VK_FORMAT_R8G8B8A8_SNORM : VK_FORMAT_R8G8B8A8_SSCALED);
-            default: return VK_FORMAT_UNDEFINED;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Uint8:
             switch (size) {
             case 1:
                 return isInteger ? VK_FORMAT_R8_UINT : (normalized ? VK_FORMAT_R8_UNORM : VK_FORMAT_R8_USCALED);
             case 2:
-                return isInteger ? VK_FORMAT_R8G8_UINT
-                                 : (normalized ? VK_FORMAT_R8G8_UNORM : VK_FORMAT_R8G8_USCALED);
+                return isInteger ? VK_FORMAT_R8G8_UINT : (normalized ? VK_FORMAT_R8G8_UNORM : VK_FORMAT_R8G8_USCALED);
             case 3:
                 return isInteger ? VK_FORMAT_R8G8B8_UINT
                                  : (normalized ? VK_FORMAT_R8G8B8_UNORM : VK_FORMAT_R8G8B8_USCALED);
             case 4:
                 return isInteger ? VK_FORMAT_R8G8B8A8_UINT
                                  : (normalized ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R8G8B8A8_USCALED);
-            default: return VK_FORMAT_UNDEFINED;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         default:
             return VK_FORMAT_UNDEFINED;
@@ -531,6 +488,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case VK_FORMAT_R16G16B16_SSCALED:
         case VK_FORMAT_R16G16B16A16_USCALED:
         case VK_FORMAT_R16G16B16A16_SSCALED:
+        // Packed 2_10_10_10 fetches are optional too (Adreno has neither SCALED form); the
+        // converter decodes the fields itself, normalized or not.
+        case VK_FORMAT_A2B10G10R10_USCALED_PACK32:
+        case VK_FORMAT_A2B10G10R10_SSCALED_PACK32:
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+        case VK_FORMAT_A2B10G10R10_SNORM_PACK32:
             return true;
         default:
             return false;
@@ -539,11 +502,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     VkFormat VertexInputStateFactory::ToFloat32VertexFormat(Int componentCount) {
         switch (componentCount) {
-        case 1: return VK_FORMAT_R32_SFLOAT;
-        case 2: return VK_FORMAT_R32G32_SFLOAT;
-        case 3: return VK_FORMAT_R32G32B32_SFLOAT;
-        case 4: return VK_FORMAT_R32G32B32A32_SFLOAT;
-        default: return VK_FORMAT_UNDEFINED;
+        case 1:
+            return VK_FORMAT_R32_SFLOAT;
+        case 2:
+            return VK_FORMAT_R32G32_SFLOAT;
+        case 3:
+            return VK_FORMAT_R32G32B32_SFLOAT;
+        case 4:
+            return VK_FORMAT_R32G32B32A32_SFLOAT;
+        default:
+            return VK_FORMAT_UNDEFINED;
         }
     }
 
@@ -551,8 +519,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (m_physicalDevice == VK_NULL_HANDLE || format == VK_FORMAT_UNDEFINED) {
             return false;
         }
+        const auto found = m_wireVertexFormatSupport.find(format);
+        if (found != m_wireVertexFormatSupport.end()) return found->second;
         VkFormatProperties properties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &properties);
-        return (properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
+        const Bool supported = (properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
+        m_wireVertexFormatSupport.emplace(format, supported);
+        return supported;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

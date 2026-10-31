@@ -173,8 +173,7 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
             bool StorageBlocksInVertexStage() const {
                 GLint blocks = 0;
                 glGetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &blocks);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return blocks >= 1;
             }
 
@@ -194,14 +193,13 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
                                              &length, name);
                     const GLenum props[4] = {GL_OFFSET, GL_ARRAY_SIZE, GL_ARRAY_STRIDE, GL_TOP_LEVEL_ARRAY_SIZE};
                     GLint values[4] = {-1, -1, -1, -1};
-                    glGetProgramResourceiv(program, GL_BUFFER_VARIABLE, static_cast<GLuint>(i), 4, props,
-                                           4, nullptr, values);
+                    glGetProgramResourceiv(program, GL_BUFFER_VARIABLE, static_cast<GLuint>(i), 4, props, 4, nullptr,
+                                           values);
                     out += "    " + std::string(name) + ": offset=" + std::to_string(values[0]) +
                            " arraySize=" + std::to_string(values[1]) + " arrayStride=" + std::to_string(values[2]) +
                            " topLevelArraySize=" + std::to_string(values[3]) + "\n";
                 }
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return out;
             }
 
@@ -215,7 +213,7 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
 
                 // The three corners of a triangle that covers the whole viewport, which is what
                 // the block is expected to deliver to gl_Position.
-                const float positions[12] = {-1.0f, -1.0f, 0.0f, 1.0f, 3.0f, -1.0f,
+                const float positions[12] = {-1.0f, -1.0f, 0.0f,  1.0f, 3.0f, -1.0f,
                                              0.0f,  1.0f,  -1.0f, 3.0f, 0.0f, 1.0f};
                 GLuint buffer = 0;
                 glGenBuffers(1, &buffer);
@@ -280,12 +278,11 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
 
     } // namespace
 
-#define MGL_SSBO_FORM_CASE(index, name)                                       \
-    TEST_F(SsboDeclarationFormScenario, name) {                               \
-        if (!Ready()) return;                                                 \
-        if (!StorageBlocksInVertexStage())                                    \
-            GTEST_SKIP() << "no vertex-stage shader storage blocks";          \
-        RunForm(index);                                                       \
+#define MGL_SSBO_FORM_CASE(index, name)                                                                                \
+    TEST_F(SsboDeclarationFormScenario, name) {                                                                        \
+        if (!Ready()) return;                                                                                          \
+        if (!StorageBlocksInVertexStage()) GTEST_SKIP() << "no vertex-stage shader storage blocks";                    \
+        RunForm(index);                                                                                                \
     }
 
     MGL_SSBO_FORM_CASE(0, InstanceNamedBlockWithNoBindingQualifier)

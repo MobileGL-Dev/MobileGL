@@ -81,8 +81,8 @@ namespace MGITest {
             // interpolated, so a driver is within its rights to reject the unqualified form
             // even with no matching fragment input. The capture reads the same value either
             // way, and the qualifier keeps this scenario portable off llvmpipe.
-            const std::string vertexSource = "#version 450\n\n" + declarations +
-                                             "flat out int sum;\n\nvoid main()\n{\n" + copies + "}\n";
+            const std::string vertexSource =
+                "#version 450\n\n" + declarations + "flat out int sum;\n\nvoid main()\n{\n" + copies + "}\n";
             const std::string fragmentSource = R"(#version 450
 
 out vec4 color;
@@ -148,7 +148,8 @@ void main()
                 glGenBuffers(1, &m_vbo);
                 glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
                 std::vector<GLint> reference(static_cast<std::size_t>(m_attributeCount));
-                for (int i = 0; i < m_attributeCount; ++i) reference[static_cast<std::size_t>(i)] = i;
+                for (int i = 0; i < m_attributeCount; ++i)
+                    reference[static_cast<std::size_t>(i)] = i;
                 glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(reference.size() * sizeof(GLint)),
                              reference.data(), GL_STATIC_DRAW);
                 for (int i = 0; i < m_attributeCount; ++i) {
@@ -196,7 +197,8 @@ void main()
 
             int ExpectedSum(int parity) const {
                 int sum = 0;
-                for (int i = parity; i < m_attributeCount; i += 2) sum += i;
+                for (int i = parity; i < m_attributeCount; i += 2)
+                    sum += i;
                 return sum;
             }
 

@@ -9,8 +9,10 @@
 #include "SamplerObject.h"
 
 #include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/StateObjectDeathNotice.h>
 
 #include <atomic>
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL {
     namespace MG_State {
@@ -24,6 +26,33 @@ namespace MobileGL {
             SamplerObject::SamplerObject(Uint externalIndex)
                 : m_externalIndex(externalIndex), m_lifetimeId(AllocateLifetimeId()) {}
 
+            SamplerObject::~SamplerObject() {
+                // P2 step e2: ANNOUNCE the death instead of leaving the backend to discover it in a
+                // garbage sweep. This is the last SharedPtr to this object dropping - not the
+                // glDelete* that only marks the name and leaves a still-bound object very much
+                // alive - so it is the exact moment the backend's twin, and the driver storage
+                // that twin owns, stop being reachable. The notice carries the lifetime id
+                // because the object no longer exists to be passed, and because the lifetime id
+                // is what the client slot allocator resolves the handle from. No-op unless a
+                // backend registered the ops (a pull build declares none at all).
+                //
+                // P4a D-I1: the notice is no longer raised directly - it is step 2 of the ONE
+                // client-side death helper for this kind, which emits delete_sampler_state
+                // first, raises the notice second and frees the slot last. Making the client
+                // the only death path is what stops a slot leaking under a backend that
+                // installs no death-ops table at all, and the backend's own notice becomes a
+                // redundant, idempotent second path rather than the only one.
+                //
+                // FOR A CONTENT-ADDRESSED SAMPLER CSO THIS HELPER CORRECTLY FREES NOTHING, and
+                // that is the design rather than a gap: the CSO belongs to a VALUE, not to this
+                // object (two identical SamplerObjects share one), so it is allocated with no
+                // lifetime id, the helper resolves nothing for this one, and the only death
+                // path for that slot is the CSO cache's LRU eviction - which is client-side and
+                // therefore backend-neutral on day one. What still goes out, unconditionally
+                // and exactly as before, is the notice.
+                MG_Pipe::MGPipeEmitSamplerCsoDestroyAndFree(m_lifetimeId);
+            }
+
             void SamplerObject::BumpVersion() {
                 ++m_version;
                 // Every setter early-outs on an unchanged value, so this only runs on a real
@@ -32,6 +61,9 @@ namespace MobileGL {
                 // bindings must never miss an invalidation, and over-invalidating on a wrap-mode
                 // write costs one re-resolve.
                 if (pGLContext) pGLContext->BumpSamplingResolutionGeneration();
+                // Every sampler parameter is a texture PARAMETER as far as the dirty walk is
+                // concerned, and BumpVersion is the one choke point every setter reaches.
+                MGP_NOTE_AGGREGATE(TextureParams);
             }
 
             void SamplerObject::SetWrapS(SamplerWrapMode mode) {
@@ -151,14 +183,14 @@ namespace MobileGL {
                 return m_samplerParameters.maxAnisotropy;
             }
 
-            // The three border-colour representations are kept in step so a getter of any form has
+            // The three border-color representations are kept in step so a getter of any form has
             // an answer whichever form was written. Integer <-> float uses the plain value, matching
             // what glTexParameterIiv/Iuiv mean: those forms are for integer texture formats, whose
             // border components are the raw integers rather than a normalized fraction.
             //
             // Which of the three the application actually WROTE is recorded separately in
             // borderColorForm, because the derived values erase it: a backend has to know whether to
-            // forward the colour through glSamplerParameterfv or glSamplerParameterIiv (and which
+            // forward the color through glSamplerParameterfv or glSamplerParameterIiv (and which
             // VkBorderColor family to ask Vulkan for), and the numbers alone cannot say. That is also
             // why every setter's early-out tests the form as well as the value - a float (0,0,0,1)
             // followed by an integer (0,0,0,1) is a real state change even though nothing numeric
@@ -172,8 +204,8 @@ namespace MobileGL {
                 m_samplerParameters.borderColorForm = BorderColorForm::Float;
                 m_samplerParameters.borderColor = color;
                 m_samplerParameters.borderColorI =
-                    IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()),
-                            static_cast<Int32>(color.z()), static_cast<Int32>(color.w()));
+                    IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()), static_cast<Int32>(color.z()),
+                            static_cast<Int32>(color.w()));
                 m_samplerParameters.borderColorUI =
                     UintVec4(static_cast<Uint32>(color.x()), static_cast<Uint32>(color.y()),
                              static_cast<Uint32>(color.z()), static_cast<Uint32>(color.w()));
@@ -206,8 +238,8 @@ namespace MobileGL {
                 m_samplerParameters.borderColorForm = BorderColorForm::Uint;
                 m_samplerParameters.borderColorUI = color;
                 m_samplerParameters.borderColorI =
-                    IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()),
-                            static_cast<Int32>(color.z()), static_cast<Int32>(color.w()));
+                    IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()), static_cast<Int32>(color.z()),
+                            static_cast<Int32>(color.w()));
                 m_samplerParameters.borderColor =
                     FloatVec4(static_cast<Float>(color.x()), static_cast<Float>(color.y()),
                               static_cast<Float>(color.z()), static_cast<Float>(color.w()));

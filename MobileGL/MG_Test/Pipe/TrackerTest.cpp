@@ -1,0 +1,1477 @@
+// MobileGL - MobileGL/MG_Test/Pipe/TrackerTest.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// The frontend state tracker: the dirty walk, the aggregate generations, the per-bit fire
+// counters (P2 brief D4). Owned by P2 package B (p2/tracker); the file and its CMake
+// registration are the contract commit's.
+//
+// Needs the push sources, so every case is a visible SKIP in a pull build rather than a
+// vanishing test - the shape PipeInputsTest.cpp established.
+#include <gtest/gtest.h>
+
+#include "Includes.h"
+#include <MG_Pipe/MGPipe.h>
+
+#include <Config.h>
+// P5e (sb): the binding-point shutter cases drive the REAL glBindBufferBase entry point,
+// because the claim they make is about what a frontend mutator publishes.
+#include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
+#include <MG_Impl/Pipe/CsoCache.h>
+#include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Impl/Pipe/SetHashSuppressor.h>
+#include <MG_Impl/Pipe/Tracker.h>
+#include <MG_Impl/Pipe/VertexInputEmit.h>
+#include <MG_Pipe/MGPipeRenderStateSpans.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeMutation.h>
+#include <MG_State/GLState/Core.h>
+#include <MG_Util/Metrics/PipeStats.h>
+
+#include <algorithm>
+#include <cstring>
+#include <limits>
+#include <string>
+
+using namespace MobileGL;
+using namespace MobileGL::MG_Pipe;
+
+namespace {
+    // The subsystem bitmask the tracker dispatches on is allocated in every build.
+    TEST(Tracker, SubsystemBitsDoNotOverlapTheBehaviorBit) {
+        EXPECT_EQ(kMGPipeSubsystemsMigratedAtP2 & kMGPipeBehaviorNoCsoContentAddressing, 0ull);
+    }
+
+    // A composite shutter is only as good as its mix: a collision is a missed fire. The pairs
+    // below collided under the hash_combine step the mix used to be - the second one on a
+    // phone, the third is bit 12's (bind generation, program units) pair that left a draw
+    // sampling the previous unit set's texture.
+    TEST(Tracker, ShutterMixSeparatesSmallCounterPairs) {
+        EXPECT_NE(MGPipeMixShutter(1, 64), MGPipeMixShutter(2, 1));
+        EXPECT_NE(MGPipeMixShutter(174, 37), MGPipeMixShutter(48, 8026));
+        const auto bit12 = [](Uint64 content, Uint64 params, Uint64 bind, Uint64 units) {
+            return MGPipeMixShutter(MGPipeMixShutter(MGPipeMixShutter(content, params), bind), units);
+        };
+        Vector<Uint64> seen;
+        for (Uint64 content = 0; content < 4; ++content)
+            for (Uint64 params = 0; params < 40; ++params)
+                for (Uint64 bind = 0; bind < 16; ++bind)
+                    for (Uint64 program = 1; program < 8; ++program)
+                        for (Uint64 version = 0; version < 8; ++version) {
+                            seen.push_back(bit12(content, params, bind, MGPipeMixShutter(program, version)));
+                        }
+        std::sort(seen.begin(), seen.end());
+        EXPECT_EQ(std::adjacent_find(seen.begin(), seen.end()), seen.end())
+            << "two distinct small states share a shutter value";
+    }
+
+    using GLContext = MG_State::GLState::GLContext;
+
+    using MG_State::GLState::TextureObjectBase;
+    using MobileGL::TextureTarget;
+
+    constexpr SizeT kAggregateCount = static_cast<SizeT>(MGPipeAggregate::Count);
+
+    // A live frontend context for the bump points to find, restored on the way out so the
+    // cases stay independent (PipeInputsTest's idiom).
+    class TrackerAggregates : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            m_previous = MG_State::pGLContext.Take();
+            MG_State::pGLContext = MakeUnique<GLContext>();
+        }
+        void TearDown() override { MG_State::pGLContext = Move(m_previous); }
+
+        static GLContext& Ctx() { return *MG_State::pGLContext; }
+
+        struct Snapshot {
+            Uint64 Values[kAggregateCount];
+            Uint64 operator[](MGPipeAggregate a) const { return Values[static_cast<SizeT>(a)]; }
+        };
+
+        static Snapshot Snap() {
+            GLContext& c = Ctx();
+            Snapshot s{};
+            s.Values[static_cast<SizeT>(MGPipeAggregate::VaoAttribute)] = c.GetAnyVaoAttributeGeneration();
+            s.Values[static_cast<SizeT>(MGPipeAggregate::FramebufferAttachment)] =
+                c.GetAnyFramebufferAttachmentGeneration();
+            s.Values[static_cast<SizeT>(MGPipeAggregate::TextureContent)] = c.GetAnyTextureContentGeneration();
+            s.Values[static_cast<SizeT>(MGPipeAggregate::TextureParams)] = c.GetAnyTextureParamsGeneration();
+            s.Values[static_cast<SizeT>(MGPipeAggregate::BufferChange)] = c.GetAnyBufferChangeGeneration();
+            s.Values[static_cast<SizeT>(MGPipeAggregate::VertexAttribDefault)] =
+                c.GetAnyVertexAttribDefaultGeneration();
+            return s;
+        }
+
+        // The whole contract of an aggregate generation in one assertion: the bump point
+        // moved ITS counter and moved NO other. The second half is what stops a bump point
+        // being wired to the wrong aggregate, which would over-fire one dirty bit and
+        // under-fire another - and under-firing is the direction that renders stale.
+        static void ExpectOnly(MGPipeAggregate moved, const Snapshot& before, const Snapshot& after) {
+            for (SizeT i = 0; i < kAggregateCount; ++i) {
+                const auto which = static_cast<MGPipeAggregate>(i);
+                if (which == moved) {
+                    EXPECT_GT(after.Values[i], before.Values[i]) << "aggregate " << i << " did not move";
+                } else {
+                    EXPECT_EQ(after.Values[i], before.Values[i]) << "aggregate " << i << " moved and must not";
+                }
+            }
+        }
+
+        SharedPtr<GLContext> m_previous;
+    };
+
+    TEST_F(TrackerAggregates, EveryAggregateStartsAtZero) {
+        const Snapshot s = Snap();
+        for (SizeT i = 0; i < kAggregateCount; ++i)
+            EXPECT_EQ(s.Values[i], 0ull);
+    }
+
+    TEST_F(TrackerAggregates, AVertexArrayAttributeMovesOnlyTheVaoAggregate) {
+        const auto& vao = Ctx().CreateVertexArrayObject(1);
+        ASSERT_TRUE(vao != nullptr);
+        const Snapshot before = Snap();
+        vao->EnableAttribute(3);
+        ExpectOnly(MGPipeAggregate::VaoAttribute, before, Snap());
+    }
+
+    TEST_F(TrackerAggregates, AFramebufferObjectWriteMovesOnlyTheFramebufferAggregate) {
+        const auto& fbo = Ctx().CreateFramebufferObject(1);
+        ASSERT_TRUE(fbo != nullptr);
+        fbo->SetReadBuffer(FramebufferAttachmentType::Color0);
+        const Snapshot before = Snap();
+        fbo->SetReadBuffer(FramebufferAttachmentType::Color1);
+        ExpectOnly(MGPipeAggregate::FramebufferAttachment, before, Snap());
+    }
+
+    TEST_F(TrackerAggregates, AFramebufferDefaultSetterMovesOnlyTheFramebufferAggregate) {
+        const auto& fbo = Ctx().CreateFramebufferObject(2);
+        ASSERT_TRUE(fbo != nullptr);
+        const Snapshot before = Snap();
+        // The five MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER bodies are one macro, so the
+        // bump statement inside it has to carry its own line continuation or the macro
+        // silently swallows the next line. This case is what says it did not.
+        fbo->SetDefaultWidth(64);
+        ExpectOnly(MGPipeAggregate::FramebufferAttachment, before, Snap());
+    }
+
+    TEST_F(TrackerAggregates, ATextureContentWriteMovesOnlyTheContentAggregate) {
+        const auto& tex = Ctx().CreateTextureObject(1, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        const Snapshot before = Snap();
+        static_cast<TextureObjectBase*>(tex.get())->BumpContentVersion();
+        ExpectOnly(MGPipeAggregate::TextureContent, before, Snap());
+    }
+
+    TEST_F(TrackerAggregates, ATextureParameterMovesOnlyTheParamsAggregate) {
+        const auto& tex = Ctx().CreateTextureObject(2, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        const Snapshot before = Snap();
+        tex->SetMaxLevel(4);
+        ExpectOnly(MGPipeAggregate::TextureParams, before, Snap());
+    }
+
+    TEST_F(TrackerAggregates, ASamplerParameterMovesOnlyTheParamsAggregate) {
+        const auto& sampler = Ctx().CreateSamplerObject(1);
+        ASSERT_TRUE(sampler != nullptr);
+        const Snapshot before = Snap();
+        sampler->SetWrapS(MobileGL::SamplerWrapMode::ClampToEdge);
+        ExpectOnly(MGPipeAggregate::TextureParams, before, Snap());
+    }
+
+    TEST_F(TrackerAggregates, ABufferRespecifyMovesOnlyTheBufferAggregate) {
+        const auto& buffer = Ctx().CreateBufferObject(1);
+        ASSERT_TRUE(buffer != nullptr);
+        const Snapshot before = Snap();
+        buffer->Respecify(64, nullptr);
+        ExpectOnly(MGPipeAggregate::BufferChange, before, Snap());
+    }
+
+    TEST_F(TrackerAggregates, AVertexAttribDefaultMovesOnlyItsOwnAggregate) {
+        const Snapshot before = Snap();
+        Ctx().SetCurrentVertexAttributeFloat(2, Array<Float, 4>{1.0f, 2.0f, 3.0f, 4.0f});
+        ExpectOnly(MGPipeAggregate::VertexAttribDefault, before, Snap());
+    }
+
+    TEST_F(TrackerAggregates, ANoteWithoutALiveContextIsANoOp) {
+        SharedPtr<GLContext> held = MG_State::pGLContext.Take();
+        MGP_NOTE_AGGREGATE(BufferChange); // must not dereference a null context
+        MG_State::pGLContext = Move(held);
+        SUCCEED();
+    }
+
+    // P4a FABLE SEAM F-3. set_framebuffer_state INLINES an attachment's format, extent and
+    // samples (D-C1), so the setters that define a texture's storage are setters of a
+    // framebuffer-record field - and the record-field -> setter -> shutter rule (Tracker.h's
+    // table) says they must move the aggregate bit 11 reads. They still move the params
+    // aggregate they always moved; what this case pins is the SECOND bump, which the
+    // "moves only" cases above cannot see and which is the whole of F-3's fix.
+    TEST_F(TrackerAggregates, ATextureStorageDefinitionMovesTheFramebufferAggregateToo) {
+        const auto& tex = Ctx().CreateTextureObject(3, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        const Snapshot before = Snap();
+        tex->SetInternalFormat(MobileGL::TextureInternalFormat::RGBA8);
+        const Snapshot after = Snap();
+        EXPECT_GT(after[MGPipeAggregate::FramebufferAttachment], before[MGPipeAggregate::FramebufferAttachment])
+            << "a texture whose storage is redefined WHILE ATTACHED left set_framebuffer_state "
+               "describing the previous format (F-3)";
+        EXPECT_GT(after[MGPipeAggregate::TextureParams], before[MGPipeAggregate::TextureParams]);
+        EXPECT_EQ(after[MGPipeAggregate::TextureContent], before[MGPipeAggregate::TextureContent]);
+        EXPECT_EQ(after[MGPipeAggregate::VaoAttribute], before[MGPipeAggregate::VaoAttribute]);
+        EXPECT_EQ(after[MGPipeAggregate::BufferChange], before[MGPipeAggregate::BufferChange]);
+        EXPECT_EQ(after[MGPipeAggregate::VertexAttribDefault], before[MGPipeAggregate::VertexAttribDefault]);
+    }
+
+    // The renderbuffer twin, and the one that had NO aggregate at all before: its three storage
+    // setters bumped no version and raised no notice (D-D2 closed the resource record by emitting
+    // from the entry point and left the framebuffer record stale).
+    TEST_F(TrackerAggregates, ARenderbufferStorageDefinitionMovesTheFramebufferAggregate) {
+        const auto& rbo = Ctx().CreateRenderbufferObject(1);
+        ASSERT_TRUE(rbo != nullptr);
+        const Snapshot before = Snap();
+        rbo->AllocateStorage(IntVec2{8, 8});
+        ExpectOnly(MGPipeAggregate::FramebufferAttachment, before, Snap());
+    }
+
+    // ===================================================================================
+    // The dirty walk itself, and the render-state emission it drives (P2 brief D4, D6, D7)
+    // ===================================================================================
+    //
+    // These drive the tracker and the cache DIRECTLY rather than through
+    // MGPipeValidateForVerb. That is deliberate: MGPipeValidateForVerb reaches the library's
+    // one process-wide tracker, and a unit test that asserts on a shared singleton is a test
+    // that fails when ctest runs the suite in parallel. The emission logic these reproduce is
+    // three lines long and is the same three lines the validate point runs.
+    // Resetting the applier without resetting the process-wide cache and tracker would leave
+    // the next bind_render_state naming a CSO the applier no longer has - it asserts and
+    // returns, leaving m_renderState unwritten. The three are one state, so they are reset
+    // together, here and in TrackerShippedEmitter.
+    // P3a adds two more pieces to that one state. MGPipeApplierReset is a MAKE-CURRENT and
+    // deliberately keeps the object records now, so a fixture that means "this applier is
+    // going away" has to say the other verb as well (PipeApply.h); and the vertex-input
+    // emitter's latches say "this handle has already published this configuration" about an
+    // applier that is about to be empty, so a bind would be suppressed against a record that
+    // is no longer there.
+    void ResetTheServerSideSingletons() {
+        MGPipeApplierReset();
+        MGPipeApplierReleaseObjectRecords();
+        MGPipeCsoCacheInstance().Reset();
+        MGPipeCsoCacheInstance().ResetCounters();
+        MGPipeTrackerInstance().Reset();
+        MGPipeSetHashSuppressorInstance().InvalidateAll();
+        MGPipeVertexInputEmitterInstance().Reset();
+        MGPipeVertexInputEmitterInstance().ResetCounters();
+    }
+
+    class TrackerWalk : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            m_previous = MG_State::pGLContext.Take();
+            MG_State::pGLContext = MakeUnique<GLContext>();
+            m_savedPush = MG_Config::Features.PipePush;
+            ResetTheServerSideSingletons();
+        }
+        void TearDown() override {
+            MG_Config::Features.PipePush = m_savedPush;
+            ResetTheServerSideSingletons();
+            MG_State::pGLContext = Move(m_previous);
+        }
+
+        static GLContext& Ctx() { return *MG_State::pGLContext; }
+
+        // What MGPipeValidateForVerb's step 3 does, minus the PipeStats plumbing: acquire a
+        // CSO when the pipeline version moved, and compute the dynamic chunk mask when
+        // m_version moved.
+        Uint32 Walk(MGPipeVerbClass verbClass = MGPipeVerbClass::kDraw) {
+            const Uint32 dirty = m_tracker.Update(Ctx(), verbClass);
+            const RenderStateParameters& live = Ctx().GetRenderStateParameters();
+            m_lastDynamicMask = 0;
+            if (dirty & MGPipeDirtyBit(MGPipeDirty::NewPipelineState)) {
+                m_lastCso = m_cache.Acquire(live, m_payloadBytes);
+                ++m_binds;
+            }
+            if (dirty & MGPipeDirtyBit(MGPipeDirty::NewRenderState)) {
+                m_lastDynamicMask =
+                    m_tracker.FreshlyPrimed() ? ~0u : MGPipeDynamicChunksThatMoved(live, m_tracker.Staged());
+            }
+            if (dirty & (MGPipeDirtyBit(MGPipeDirty::NewPipelineState) | MGPipeDirtyBit(MGPipeDirty::NewRenderState))) {
+                m_tracker.Staged() = live;
+            }
+            return dirty;
+        }
+
+        MGPipeTracker m_tracker;
+        MGPipeCsoCache m_cache;
+        MGPipeHandle m_lastCso = kMGPipeNullHandle;
+        Uint32 m_lastDynamicMask = 0;
+        Uint64 m_payloadBytes = 0;
+        Uint64 m_binds = 0;
+        Uint64 m_savedPush = 0;
+        SharedPtr<GLContext> m_previous;
+    };
+
+    TEST_F(TrackerWalk, EveryBitHasAName) {
+        for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
+            ASSERT_NE(kMGPipeDirtyNames[i], nullptr);
+            EXPECT_EQ(std::string(kMGPipeDirtyNames[i]).rfind("NEW_", 0), 0u);
+        }
+    }
+
+    // The five P2 emits for each name their own subsystem; the rest name none, which is what
+    // makes MOBILEGL_PIPE_PUSH a per-subsystem A/B instead of one switch.
+    // THE NAME IS P2's AND IT STAYS. A test name is never removed (only added), so this case
+    // keeps the name it was born with and follows the phase constant instead of a literal
+    // five: what it has always asserted is "a bit names a subsystem if and only if this build
+    // emits a call for it", which is the property the emission gate and the residual-fill
+    // skip both rest on. P3a took the vertex-input family over, P4a took seven more bits across
+    // four subsystems, and P5e takes THE LAST THREE onto kMGPipeSubsystemBufferBindings, so the
+    // set it compares against is now kMGPipeDirtyEmittedAtP5e - and a bit that gained an arm
+    // without gaining an emitter, or the reverse, still fails here.
+    TEST_F(TrackerWalk, OnlyTheFiveEmittedBitsNameASubsystem) {
+        for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
+            const auto bit = static_cast<MGPipeDirty>(i);
+            const Bool emitted = (kMGPipeDirtyEmittedAtP5e & MGPipeDirtyBit(bit)) != 0;
+            EXPECT_EQ(MGPipeSubsystemForDirty(bit) != 0, emitted) << kMGPipeDirtyNames[i];
+        }
+        // Each phase's constant SURVIVES as the next phase's A/B control, so the three are
+        // pinned as a chain rather than one being edited into the next: 0x1ff is P4a's "T2"
+        // arm and 0x7f is P3a's, and an operator's recorded mask has to keep meaning what it
+        // meant.
+        EXPECT_EQ(kMGPipeDirtyEmittedAtP5e & kMGPipeDirtyEmittedAtP4a, kMGPipeDirtyEmittedAtP4a);
+        EXPECT_EQ(kMGPipeDirtyEmittedAtP4a & kMGPipeDirtyEmittedAtP3a, kMGPipeDirtyEmittedAtP3a);
+        EXPECT_EQ(kMGPipeDirtyEmittedAtP3a & kMGPipeDirtyEmittedAtP2, kMGPipeDirtyEmittedAtP2);
+        // THE LAST THREE BITS, which P4a still did not emit for and P5e takes: the const-buffer,
+        // shader-buffer and stream-output sets are ONE family - the indexed buffer binding
+        // points - on ONE subsystem, so an operator clearing bit 13 gets the whole family's
+        // frontend walk back rather than two thirds of it. Stated positively as well as through
+        // the loop above, because "these three, together" is the phase's own scope statement.
+        //
+        // set_stream_output_targets stays UNEMITTED for the whole of P5e (XFB is lockstep by
+        // escalation, the contract §5.7) and still names the subsystem, for the
+        // same reason: the bit answers "which A/B switch owns this family's legacy arm", not
+        // "is there a record on the wire for me today".
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewConstBuffers), kMGPipeSubsystemBufferBindings);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBuffers), kMGPipeSubsystemBufferBindings);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewSoTargets), kMGPipeSubsystemBufferBindings);
+        // AND THE PHASE CONSTANT IS NOW THE WHOLE BIT SET: after P5e every dirty bit names a
+        // subsystem, so the loop above has no "names none" case left to exercise, and this is
+        // what says so rather than leaving the loop looking stronger than it is.
+        EXPECT_EQ(kMGPipeDirtyEmittedAtP5e, static_cast<Uint32>((Uint64{1} << kMGPipeDirtyCount) - 1u));
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewRenderState), kMGPipeSubsystemRenderState);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewPixelPack), kMGPipeSubsystemPixelPack);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewPatchState), kMGPipeSubsystemPatchState);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexAttribDefaults), kMGPipeSubsystemVertexAttribDefaults);
+        // P3a's three, one subsystem: an operator who clears bit 8 gets the whole legacy
+        // vertex-input arm rather than two thirds of it.
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexElements), kMGPipeSubsystemVertexInput);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexBuffers), kMGPipeSubsystemVertexInput);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewIndexBuffer), kMGPipeSubsystemVertexInput);
+        // P4a's seven, across FOUR subsystems, and the grouping is the whole point: the three
+        // program bits are one family because an operator switching programs off has to get
+        // the whole legacy arm, and so are the three unit-set bits.
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewShader), kMGPipeSubsystemPrograms);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBindings), kMGPipeSubsystemPrograms);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewGlobalConstants), kMGPipeSubsystemPrograms);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewFramebuffer), kMGPipeSubsystemFramebuffer);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewSamplerViews), kMGPipeSubsystemSamplers);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewSamplers), kMGPipeSubsystemSamplers);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderImages), kMGPipeSubsystemSamplers);
+        // AND NO BIT NAMES THE TEXTURE-RESOURCE SUBSYSTEM. Its calls are dispatched from the
+        // GL entry points that cause them - a constructor, a storage definition, a
+        // glTexParameter - not from a dirty walk, exactly as P3a's buffer family is, so a bit
+        // that started naming it would gate the emission twice and the two gates would
+        // disagree the first time one of them was edited.
+        for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
+            EXPECT_NE(MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(i)), kMGPipeSubsystemTextureResources)
+                << kMGPipeDirtyNames[i];
+        }
+    }
+
+    TEST_F(TrackerWalk, TheFirstWalkOnAFreshContextPublishesEverything) {
+        const Uint32 dirty = Walk();
+        EXPECT_TRUE(m_tracker.FreshlyPrimed());
+        for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
+            EXPECT_NE(dirty & (Uint32{1} << static_cast<Uint32>(i)), 0u)
+                << kMGPipeDirtyNames[i] << " did not fire on a fresh context";
+        }
+    }
+
+    // The whole point of a validate-point tracker: two identical draws in a row cost two
+    // Uint16 compares and emit nothing at all.
+    TEST_F(TrackerWalk, SteadyStateEmitsNothing) {
+        Walk();
+        const Uint64 mintsAfterFirst = m_cache.GetCounters().Mints;
+        const Uint64 bindsAfterFirst = m_binds;
+        for (int i = 0; i < 8; ++i)
+            EXPECT_EQ(Walk(), 0u) << "walk " << i << " fired with nothing moved";
+        EXPECT_EQ(m_cache.GetCounters().Mints, mintsAfterFirst);
+        EXPECT_EQ(m_binds, bindsAfterFirst);
+    }
+
+    // The Blaze3D shape ARCHITECTURE.md 5.1 names as the reason push happens at validate and
+    // not in the setter: enable / draw / disable / draw forever mints exactly TWO CSOs and
+    // reuses them for every toggle after that.
+    TEST_F(TrackerWalk, BlendToggleReusesTwoCsos) {
+        constexpr int kToggles = 32;
+        Walk(); // prime
+        // The priming walk already minted and cached the blend-DISABLED state, so the cache
+        // starts empty here or the count below would be one short of the shape it describes.
+        m_cache.Reset();
+        m_cache.ResetCounters();
+        m_binds = 0;
+        for (int i = 0; i < kToggles; ++i) {
+            Ctx().SetCapability(CapabilityInput::Blend, true);
+            Walk();
+            Ctx().SetCapability(CapabilityInput::Blend, false);
+            Walk();
+        }
+        EXPECT_EQ(m_cache.GetCounters().Mints, 2u)
+            << "a two-state ping-pong must mint two CSOs and then never mint again";
+        EXPECT_EQ(m_binds, static_cast<Uint64>(2 * kToggles));
+        EXPECT_EQ(m_cache.GetCounters().Hits, static_cast<Uint64>(2 * kToggles - 2));
+        EXPECT_EQ(m_cache.Size(), 2u);
+        m_cache.Reset();
+    }
+
+    // The regression RenderState.h records: a glViewport must not evict a cached pipeline.
+    // It mints nothing and its payload is one dynamic chunk - D0, the viewports - and not the
+    // other seven.
+    TEST_F(TrackerWalk, ViewportDoesNotMintACso) {
+        Walk(); // prime
+        m_cache.ResetCounters();
+        for (Int i = 1; i <= 16; ++i) {
+            Ctx().SetViewport(IntVec4(0, 0, 64 + i, 48 + i));
+            const Uint32 dirty = Walk();
+            EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewRenderState), 0u);
+            EXPECT_EQ(dirty & MGPipeDirtyBit(MGPipeDirty::NewPipelineState), 0u)
+                << "glViewport moved the PIPELINE version";
+            EXPECT_EQ(m_lastDynamicMask, 1u) << "glViewport sent something other than chunk D0";
+        }
+        EXPECT_EQ(m_cache.GetCounters().Mints, 0u);
+        EXPECT_EQ(m_binds, 1u) << "only the priming walk may bind";
+        m_cache.Reset();
+    }
+
+    // RenderState's two shutters are Uint16 and the tracker widens them in its OWN state,
+    // never in MG_State. A wrap must cost an extra re-push at worst and never a missed one.
+    TEST_F(TrackerWalk, WrapAroundRePushesButNeverMisses) {
+        Walk();                       // prime
+        constexpr int kMoves = 70000; // past 65535 with room to spare
+        Uint64 fired = 0;
+        for (int i = 0; i < kMoves; ++i) {
+            // Never the default 1.0f: a setter that early-outs on an unchanged value would
+            // not move m_version, and the first iteration would then be a false miss.
+            Ctx().SetLineWidth((i & 1) ? 2.0f : 3.0f);
+            if (Walk() & MGPipeDirtyBit(MGPipeDirty::NewRenderState)) ++fired;
+        }
+        EXPECT_EQ(fired, static_cast<Uint64>(kMoves)) << "a Uint16 wrap swallowed a render-state change";
+        m_cache.Reset();
+    }
+
+    // The one direction the P1 verify comparator cannot see: it compares object-class fields
+    // by IDENTITY only, so a bound texture whose CONTENT moved looks unchanged to it.
+    // ARCHITECTURE.md 13.2 names under-firing as the dangerous direction, and this is the
+    // first test of it.
+    TEST_F(TrackerWalk, AggregateGenerationCatchesABoundTextureMoving) {
+        const auto& tex = Ctx().CreateTextureObject(1, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        Walk(); // prime
+        EXPECT_EQ(Walk() & MGPipeDirtyBit(MGPipeDirty::NewSamplerViews), 0u);
+
+        static_cast<TextureObjectBase*>(tex.get())->BumpContentVersion();
+        EXPECT_NE(Walk() & MGPipeDirtyBit(MGPipeDirty::NewSamplerViews), 0u)
+            << "a bound texture's content moved and NEW_SAMPLER_VIEWS did not fire";
+        // and it settles again, so the bit is a shutter and not a stuck flag
+        EXPECT_EQ(Walk() & MGPipeDirtyBit(MGPipeDirty::NewSamplerViews), 0u);
+        m_cache.Reset();
+    }
+
+    // A NaN outer level is a legal glPatchParameterfv value and has to compare equal to
+    // itself, which float equality does not do and a byte compare does.
+    TEST_F(TrackerWalk, ANaNPatchLevelEqualsItselfAndDoesNotFireForever) {
+        Walk(); // prime
+        Ctx().SetPatchDefaultOuterLevel(FloatVec4(std::numeric_limits<Float>::quiet_NaN(), 1.0f, 1.0f, 1.0f));
+        EXPECT_NE(Walk() & MGPipeDirtyBit(MGPipeDirty::NewPatchState), 0u);
+        EXPECT_EQ(Walk() & MGPipeDirtyBit(MGPipeDirty::NewPatchState), 0u)
+            << "a NaN patch level re-fired against itself";
+        m_cache.Reset();
+    }
+
+    TEST_F(TrackerWalk, ThePixelPackShutterIsAByteCompareOfThePackHalfOnly) {
+        Walk(); // prime
+        EXPECT_EQ(Walk() & MGPipeDirtyBit(MGPipeDirty::NewPixelPack), 0u);
+        Ctx().SetPixelStoreParam(PixelStoreParam::PackAlignment, 8);
+        EXPECT_NE(Walk() & MGPipeDirtyBit(MGPipeDirty::NewPixelPack), 0u);
+        EXPECT_EQ(Walk() & MGPipeDirtyBit(MGPipeDirty::NewPixelPack), 0u);
+        // The UNPACK half has no carrier at all, so it must not move the pack shutter.
+        Ctx().SetPixelStoreParam(PixelStoreParam::UnpackAlignment, 8);
+        EXPECT_EQ(Walk() & MGPipeDirtyBit(MGPipeDirty::NewPixelPack), 0u) << "an unpack write moved the PACK shutter";
+        m_cache.Reset();
+    }
+
+    TEST_F(TrackerWalk, TheFireTalliesOnlyRunWhilePipeStatsIsOn) {
+        // PipeStats is off in a unit-test process, which is the state the ROADMAP rule about
+        // hot-path instrumentation cares about: the walk must cost nothing extra there.
+        ASSERT_FALSE(MG_Util::PipeStats::Enabled());
+        Walk();
+        Ctx().SetLineWidth(3.0f);
+        Walk();
+        EXPECT_EQ(m_tracker.WalkCount(), 0u);
+        EXPECT_EQ(m_tracker.FireCount(MGPipeDirty::NewRenderState), 0u);
+        m_cache.Reset();
+    }
+
+    // ===================================================================================
+    // P3a D-I: bit 10's narrowed shutter
+    // ===================================================================================
+    //
+    // NEW_INDEX_BUFFER used to be MixShutter(the whole buffer-CONTENT aggregate, the VAO
+    // identity), so it fired on any buffer write anywhere - a glBufferSubData into a texture
+    // upload staging buffer re-published the index binding. It now reads the bound VAO's own
+    // element-slot version and the identity of whatever is bound to it.
+    //
+    // THIS IS THE ONE CASE THE OLD SHUTTER COULD NOT PASS, which is why it is here rather
+    // than in the narrowing commit's prose.
+    // ---- P5e (sb): the indexed binding points, bits 15/16/17 -------------------------
+    //
+    // THE RED-ONCE FOR THE SHUTTER REWRITE (CONTRACT-P5E.md §5.6, brief red-once (b)). Until
+    // P5e all three bits shuttered on the buffer CONTENT aggregate, and glBindBufferBase moves
+    // a binding point through a returned reference - BindingSlotRange1D::Bind, which advances
+    // the slot's own Uint16 version - so this sequence fired NOTHING. Harmless while nothing
+    // was emitted for the bits; an under-fire the moment set_shader_buffers is, because the
+    // server would go on binding the first buffer. Same defect class as P4a's glBindSampler
+    // hole, closed the same way: the shutter reads the generation the mutator moves.
+    //
+    // The action under test is the BIND ITSELF, through the real GL entry point, because the
+    // claim is about what a frontend mutator publishes and not about what a generation does
+    // once bumped (ID-102).
+    TEST_F(TrackerWalk, ARebindOfOneUniformPointToADifferentBufferFiresTheConstBufferBit) {
+        GLuint a = 0;
+        GLuint b = 0;
+        MG_Impl::GLImpl::GenBuffers(1, &a);
+        MG_Impl::GLImpl::GenBuffers(1, &b);
+
+        MG_Impl::GLImpl::BindBufferBase(GL_UNIFORM_BUFFER, 1, a);
+        Walk();
+        Walk();
+        ASSERT_EQ(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewConstBuffers), 0u)
+            << "the steady state must be quiet before the interesting half of this case";
+
+        // The same point, a different buffer. Nothing about any buffer's CONTENTS moved.
+        MG_Impl::GLImpl::BindBufferBase(GL_UNIFORM_BUFFER, 1, b);
+        Walk();
+        EXPECT_NE(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewConstBuffers), 0u)
+            << "NEW_CONST_BUFFERS did not fire when a uniform binding point moved onto another "
+               "buffer - the emitted window would still name the first one";
+        // And the unbind, which is the case a shutter may least afford to miss: it leaves the
+        // high-water mark where it was, so nothing but the generation can carry it.
+        Walk();
+        ASSERT_EQ(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewConstBuffers), 0u);
+        MG_Impl::GLImpl::BindBufferBase(GL_UNIFORM_BUFFER, 1, 0);
+        Walk();
+        EXPECT_NE(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewConstBuffers), 0u)
+            << "NEW_CONST_BUFFERS did not fire for an unbind";
+        m_cache.Reset();
+    }
+
+    // The other half of the rewrite, and the reason it is a narrowing rather than a swap: the
+    // content aggregate LEFT all three bits, so a glBufferSubData into an unrelated buffer no
+    // longer republishes every binding-point set in the context. Whether the BYTES behind a
+    // bound buffer moved is the resource family's question, answered server-side by the
+    // resource record's own Serial; what these records carry is {handle, offset, size}.
+    TEST_F(TrackerWalk, TheBindingPointBitsDoNotFireOnAnUnrelatedBufferWrite) {
+        GLuint bound = 0;
+        MG_Impl::GLImpl::GenBuffers(1, &bound);
+        MG_Impl::GLImpl::BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, bound);
+        Walk();
+        Walk();
+        const Uint32 family = MGPipeDirtyBit(MGPipeDirty::NewConstBuffers) |
+                              MGPipeDirtyBit(MGPipeDirty::NewShaderBuffers) | MGPipeDirtyBit(MGPipeDirty::NewSoTargets);
+        ASSERT_EQ(m_tracker.LastDirty() & family, 0u)
+            << "the steady state must be quiet before the interesting half of this case";
+
+        const SharedPtr<MG_State::GLState::BufferObject> unrelated = Ctx().CreateBufferObject(64);
+        unrelated->Respecify(4096, nullptr);
+        Array<Uint8, 16> bytes{};
+        unrelated->UploadSubData(DataPtr{bytes.data(), bytes.size()}, 0);
+        ASSERT_NE(Ctx().GetAnyBufferChangeGeneration(), 0u) << "the buffer aggregate did move";
+        Walk();
+        EXPECT_EQ(m_tracker.LastDirty() & family, 0u)
+            << "a write to a buffer bound to no binding point republished the binding-point sets";
+        m_cache.Reset();
+    }
+
+    TEST_F(TrackerWalk, TheIndexBufferBitDoesNotFireOnAnUnrelatedBufferWrite) {
+        const SharedPtr<MG_State::GLState::BufferObject> indices = Ctx().CreateBufferObject(1);
+        indices->Respecify(64, nullptr);
+        Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot().Bind(indices);
+        Walk();
+        Walk();
+        ASSERT_EQ(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer), 0u)
+            << "the steady state must be quiet before the interesting half of this case";
+
+        // An entirely unrelated buffer's contents move. Nothing about the element binding
+        // changed, so the bit must stay down.
+        const SharedPtr<MG_State::GLState::BufferObject> unrelated = Ctx().CreateBufferObject(2);
+        unrelated->Respecify(4096, nullptr);
+        Array<Uint8, 16> bytes{};
+        unrelated->UploadSubData(DataPtr{bytes.data(), bytes.size()}, 0);
+        ASSERT_NE(Ctx().GetAnyBufferChangeGeneration(), 0u) << "the buffer aggregate did move";
+        Walk();
+        EXPECT_EQ(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer), 0u)
+            << "NEW_INDEX_BUFFER fired on a write to a buffer that is not the element binding";
+
+        // And the control, on the same tracker: the binding itself moving DOES fire it, so
+        // the quiet above is a narrowing and not a dead bit.
+        const SharedPtr<MG_State::GLState::BufferObject> other = Ctx().CreateBufferObject(3);
+        other->Respecify(64, nullptr);
+        Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot().Bind(other);
+        Walk();
+        EXPECT_NE(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer), 0u)
+            << "NEW_INDEX_BUFFER did not fire when the element binding changed";
+        m_cache.Reset();
+    }
+
+    // The slot version is a WRAPPING Uint16 that BindingSlot bumps only on a real change, so
+    // it is widened at this boundary - and the bound object's lifetime id joins it because
+    // identity is what closes the wrap hole. 65536 binds later the version reads the same
+    // number it did at the start; if that number were the whole shutter, a binding that had
+    // moved onto a DIFFERENT buffer would read as unchanged and the draw would fetch indices
+    // from the previous one.
+    TEST_F(TrackerWalk, TheIndexBufferBitFiresWhenTheSlotVersionWrapsOntoADifferentBuffer) {
+        const SharedPtr<MG_State::GLState::BufferObject> objects[3] = {
+            Ctx().CreateBufferObject(1), Ctx().CreateBufferObject(2), Ctx().CreateBufferObject(3)};
+        for (const auto& object : objects)
+            object->Respecify(64, nullptr);
+        auto& slot = Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot();
+
+        slot.Bind(objects[0]);
+        Walk();
+        Walk();
+        ASSERT_EQ(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer), 0u);
+        const Uint16 versionAtStart = slot.GetVersion();
+
+        // Drive the Uint16 all the way round WITHOUT the tracker looking, which is exactly
+        // the window a wrap needs: every bind between two walks is invisible to it.
+        //
+        // THREE buffers, not two, and that is the whole construction: BindingSlot bumps its
+        // version only on a real change, so strictly alternating between two objects makes
+        // the version and the bound object share a parity - 65536 changes always land back on
+        // the object they started from, and the wrap is unobservable. Cycling three lands on
+        // objects[65536 % 3] == objects[1] at exactly the same raw version.
+        for (Uint32 i = 1; i <= 65536u; ++i)
+            slot.Bind(objects[i % 3]);
+        ASSERT_EQ(slot.GetVersion(), versionAtStart) << "the version did not come back round";
+        ASSERT_EQ(slot.GetBoundObject(), objects[1]) << "the binding did not land on a different buffer";
+
+        Walk();
+        EXPECT_NE(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer), 0u)
+            << "the slot version wrapped onto a DIFFERENT buffer and the bit stayed down - the "
+               "identity half of the shutter is what has to close that hole";
+        m_cache.Reset();
+    }
+
+    // THE PENDING BASE INSTANCE IS THIS CALL'S ARGUMENT, NOT A LATCH, and Update() is where
+    // the difference bites: it calls Reset() from inside itself whenever the current
+    // GLContext pointer moves, and the draw entry point wrote the value one statement EARLIER
+    // (D-H2.1 puts MGP_SET_BASE_INSTANCE immediately above MGP_FILL, and Update is inside
+    // MGP_FILL). So `eglMakeCurrent(ctxB); glDrawArraysInstancedBaseInstance(..., 7)` used to
+    // put a BaseInstance of 0 on the wire - one silently mis-shifted instanced draw per
+    // context switch, on the emulation path, invisible to a single-context retrace corpus and
+    // to every case that drives the emitter directly.
+    //
+    // A FRESH TRACKER IS EXACTLY THAT SWITCH: m_context starts null, so the first Walk() takes
+    // the same `m_context != &ctx` branch a make-current does.
+    TEST_F(TrackerWalk, ABaseInstanceSurvivesTheFirstWalkOnAFreshContext) {
+        m_tracker.SetPendingBaseInstance(7);
+        const Uint32 dirty = Walk();
+        EXPECT_EQ(m_tracker.PendingBaseInstance(), 7u)
+            << "the walk that follows a make-current cleared the base instance the same call set";
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewVertexBuffers), 0u)
+            << "NEW_VERTEX_BUFFERS did not fire on the first walk of a fresh context";
+
+        // And the control, so the assertion above is about Reset() and not about a value that
+        // is never cleared at all: the verb that consumes it clears it, and the next walk on
+        // the SAME context then sees 0.
+        m_tracker.ClearPendingBaseInstance();
+        Walk();
+        EXPECT_EQ(m_tracker.PendingBaseInstance(), 0u);
+        m_cache.Reset();
+    }
+
+    // ===================================================================================
+    // P4a c0d: the two under-fires that only a bit WITH an emitter can be hurt by
+    // ===================================================================================
+
+    // BIT 13 IS WHAT bind_sampler_states IS EMITTED OFF (PipeFill.cpp gates EmitSamplerStates
+    // on NEW_SAMPLERS), and glBindSampler moved neither half of what its shutter used to read:
+    // GL_Sampler.cpp's BindSampler_State calls NoteTextureUnitTouched and then
+    // TextureUnit::SetSamplerObject, and BOTH of those bump the TEXTURE BIND generation, which
+    // is bit 12's. The only writers of the sampling-resolution generation are parameter
+    // changes. This case makes those two calls, in that order, with nothing else moving.
+    TEST_F(TrackerWalk, ASamplerBindAloneFiresTheSamplerStateBit) {
+        ASSERT_TRUE(Ctx().CreateSamplerObject(1) != nullptr);
+        ASSERT_TRUE(Ctx().CreateSamplerObject(2) != nullptr);
+
+        Ctx().NoteTextureUnitTouched(3);
+        Ctx().GetTextureUnitObject(3).SetSamplerObject(Ctx().GetSamplerObject(1));
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        // The one and only change: unit 3 now carries a DIFFERENT sampler object, whose
+        // parameters happen to differ from the first one's. No glSamplerParameter*, no
+        // glTexParameter*, so the sampling-resolution generation cannot have moved.
+        Ctx().NoteTextureUnitTouched(3);
+        Ctx().GetTextureUnitObject(3).SetSamplerObject(Ctx().GetSamplerObject(2));
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplers), 0u)
+            << "bind_sampler_states is emitted off NEW_SAMPLERS and never saw the sampler bind";
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplerViews), 0u)
+            << "the view set is re-resolved on a sampler bind too - completeness depends on the "
+               "effective sampler - and that half was already right";
+        EXPECT_EQ(Walk(), 0u) << "the widened shutter fires forever";
+    }
+
+    TEST_F(TrackerWalk, ARedundantDefaultBindStillPublishesAGrowingSamplerWindow) {
+        Walk();
+        ASSERT_EQ(Walk(), 0u);
+        const Uint64 generation = Ctx().GetTextureBindGeneration();
+        Ctx().NoteTextureUnitTouched(7, false);
+        ASSERT_EQ(Ctx().GetTextureBindGeneration(), generation);
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplerViews), 0u);
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplers), 0u);
+        EXPECT_EQ(Walk(), 0u);
+    }
+
+    // BITS 6/7/8 UNDER A SEPARABLE PROGRAM PIPELINE. GetCurrentProgram() is null for the whole
+    // life of a bound pipeline, so all three shutters used to latch 0 and never move again
+    // after the first walk: glUseProgramStages would rebuild the composite and EmitShaderState
+    // would never be called, leaving the new composite with no ShaderCso handle at all.
+    TEST_F(TrackerWalk, ARestagedProgramPipelineFiresTheProgramBits) {
+        Vector<Uint> names;
+        Ctx().GenProgramPipelineNames(1, names);
+        ASSERT_EQ(names.size(), 1u);
+        Ctx().CreateProgramPipelineObject(names[0]);
+        Ctx().BindProgramPipelineObject(names[0]);
+        const auto& pipeline = Ctx().GetBoundProgramPipeline();
+        ASSERT_TRUE(pipeline != nullptr);
+        ASSERT_TRUE(Ctx().GetCurrentProgram() == nullptr)
+            << "the premise of this case is that the program family has no current program";
+
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        // What glUseProgramStages does at the end of its validation: one stage changes.
+        const Uint vertex = Ctx().CreateProgram();
+        pipeline->SetStageProgram(MobileGL::ShaderStage::Vertex, Ctx().GetProgramObject(vertex));
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShader), 0u)
+            << "the re-composited pipeline would never get a ShaderCso handle";
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShaderBindings), 0u);
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewGlobalConstants), 0u)
+            << "set_global_constants would never be sent for a pipeline draw";
+        EXPECT_EQ(Walk(), 0u) << "the pipeline arm fires forever";
+    }
+
+    // The same three bits, moved by the OTHER event that changes what a pipeline draws: a
+    // stage program's relink. The stage set does not move at all here - only the link version
+    // the composite cache is keyed on, which is what makes GetProgramForDraw build a new one.
+    TEST_F(TrackerWalk, ARelinkOfAStageProgramFiresTheProgramBits) {
+        Vector<Uint> names;
+        Ctx().GenProgramPipelineNames(1, names);
+        ASSERT_EQ(names.size(), 1u);
+        Ctx().CreateProgramPipelineObject(names[0]);
+        Ctx().BindProgramPipelineObject(names[0]);
+        const auto& pipeline = Ctx().GetBoundProgramPipeline();
+        ASSERT_TRUE(pipeline != nullptr);
+
+        const Uint vertex = Ctx().CreateProgram();
+        const SharedPtr<MG_State::GLState::ProgramObject> stage = Ctx().GetProgramObject(vertex);
+        ASSERT_TRUE(stage != nullptr);
+        pipeline->SetStageProgram(MobileGL::ShaderStage::Vertex, stage);
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        // A real relink, through the entry point glLinkProgram drives. It fails - the
+        // program has no shaders attached - and that is deliberate: Link()'s PROLOGUE is where
+        // the link-observable versions are bumped, before any early-out, precisely so that
+        // every memo keyed on them reads stale from the instant the relink is enqueued.
+        stage->Link();
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShader), 0u);
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShaderBindings), 0u);
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewGlobalConstants), 0u);
+        EXPECT_EQ(Walk(), 0u);
+    }
+
+    // AND THE HANDOVER, which is the shape an application actually writes: a program is in
+    // use, a pipeline is bound underneath it, and glUseProgram(0) hands the draw to the
+    // pipeline (GL 4.6 core 7.4). The program in use wins while there is one - so the bits
+    // must move when the SOURCE changes - and the pipeline must drive them afterwards.
+    TEST_F(TrackerWalk, UseProgramZeroLeavesTheBoundPipelineDrivingTheProgramBits) {
+        Vector<Uint> names;
+        Ctx().GenProgramPipelineNames(1, names);
+        ASSERT_EQ(names.size(), 1u);
+        Ctx().CreateProgramPipelineObject(names[0]);
+        Ctx().BindProgramPipelineObject(names[0]);
+        const auto& pipeline = Ctx().GetBoundProgramPipeline();
+        ASSERT_TRUE(pipeline != nullptr);
+
+        const Uint installed = Ctx().CreateProgram();
+        Ctx().UseProgram(installed);
+        ASSERT_TRUE(Ctx().GetCurrentProgram() != nullptr);
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        Ctx().UseProgram(0);
+        const Uint32 handover = Walk();
+        EXPECT_NE(handover & MGPipeDirtyBit(MGPipeDirty::NewShader), 0u)
+            << "the draw's program source changed and bit 6 did not fire";
+        ASSERT_EQ(Walk(), 0u);
+
+        // The pipeline is the source now, so a stage change has to reach the same bits.
+        const Uint vertex = Ctx().CreateProgram();
+        pipeline->SetStageProgram(MobileGL::ShaderStage::Vertex, Ctx().GetProgramObject(vertex));
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShader), 0u)
+            << "with no program in use the bound pipeline has to drive the program family";
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShaderBindings), 0u);
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewGlobalConstants), 0u);
+    }
+
+    // P4a FABLE SEAM F-1. set_sampler_views is resolved for the PROGRAM IN USE (the sampler
+    // uniform's type picks which of a unit's targets is the view), and bit 12's shutter read
+    // only the texture-content aggregate and the bind generation - so `glUseProgram(P1); draw;
+    // glUseProgram(P2); draw` never re-emitted the set and the record went on describing P1's
+    // units. A program switch alone, with no bind and no texture change, has to fire it.
+    TEST_F(TrackerWalk, AProgramSwitchAloneFiresTheSamplerViewBit) {
+        const Uint first = Ctx().CreateProgram();
+        const Uint second = Ctx().CreateProgram();
+        Ctx().UseProgram(first);
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        Ctx().UseProgram(second);
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplerViews), 0u)
+            << "the view set is resolved for the program in use and a glUseProgram alone did not "
+               "re-emit it (F-1)";
+        EXPECT_EQ(Walk(), 0u) << "the widened shutter fires forever";
+    }
+
+    // The other input F-1 added: the params aggregate. SamplerEmit.h drops a unit's view to
+    // null when SamplesAsIncompleteTexture says so, and that predicate reads the effective
+    // sampler's filters and the level range - a glTexParameteri that completes a texture fired
+    // bit 13 and left the view entry null.
+    TEST_F(TrackerWalk, ATextureParameterAloneFiresTheSamplerViewBit) {
+        const auto& tex = Ctx().CreateTextureObject(1, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        tex->SetMaxLevel(4);
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplerViews), 0u)
+            << "completeness is a view-set input and a parameter change did not re-resolve it";
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplers), 0u);
+        EXPECT_EQ(Walk(), 0u);
+    }
+
+    // P4a FABLE SEAM F-2 (and E's SD-4, which is this bit through a buffer image). Bit 14's
+    // plain-program arm mixed GetImageUnitVersion() ALONE - a per-program counter that two
+    // programs routinely share, 0 == 0 for any pair that never moved an image unit through
+    // glUniform1i - so a glUseProgram between them fired nothing and set_shader_images' window
+    // stayed the previous program's. The pipeline arm already mixed stageLinks; the plain arm
+    // now mixes the same identity bit 6 reads.
+    TEST_F(TrackerWalk, AProgramSwitchBetweenEqualImageUnitCountersFiresTheShaderImageBit) {
+        const Uint first = Ctx().CreateProgram();
+        const Uint second = Ctx().CreateProgram();
+        ASSERT_EQ(Ctx().GetProgramObject(first)->GetImageUnitVersion(),
+                  Ctx().GetProgramObject(second)->GetImageUnitVersion())
+            << "the premise of this case is two programs whose image-unit counters are equal";
+        Ctx().UseProgram(first);
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        Ctx().UseProgram(second);
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShaderImages), 0u)
+            << "set_shader_images' window is the program's and a glUseProgram alone did not "
+               "re-emit it (F-2)";
+        EXPECT_EQ(Walk(), 0u) << "the widened shutter fires forever";
+    }
+
+    // ===================================================================================
+    // set_vertex_attrib_defaults' payload (P2 brief D10)
+    // ===================================================================================
+    //
+    // A CurrentVertexAttributeValue is ONE value in three views and GLContext converts
+    // numerically between them, so four words on the wire are not the value unless the class
+    // travels with them. These pin exactly that, because nothing else can: the emission
+    // happens at step 3 and the residual fill re-pulls the field at step 4, so at a kDraw
+    // verb a wrong payload is overwritten before any comparator or backend read sees it -
+    // which is how a hard-coded ValueClass of 0 survived a green verify lane.
+    class TrackerAttribPayload : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            m_previous = MG_State::pGLContext.Take();
+            MG_State::pGLContext = MakeUnique<GLContext>();
+        }
+        void TearDown() override { MG_State::pGLContext = Move(m_previous); }
+
+        static GLContext& Ctx() { return *MG_State::pGLContext; }
+
+        static MGPAttribValue PayloadFor(Uint location) {
+            MGPAttribValue value{};
+            MGPipeFillAttribValue(static_cast<Uint32>(location), Ctx().GetCurrentVertexAttribute(location),
+                                  Ctx().GetCurrentVertexAttributeClass(location), value);
+            return value;
+        }
+
+        static Uint32 Word(Float value) {
+            Uint32 bits = 0;
+            std::memcpy(&bits, &value, sizeof(bits));
+            return bits;
+        }
+
+        SharedPtr<GLContext> m_previous;
+    };
+
+    TEST_F(TrackerAttribPayload, AFloatWriteCarriesTheFloatBitsAndNamesItsClass) {
+        Ctx().SetCurrentVertexAttributeFloat(3, Array<Float, 4>{1.5f, -2.5f, 3.0f, 4.0f});
+        const MGPAttribValue value = PayloadFor(3);
+        EXPECT_EQ(value.Location, 3u);
+        EXPECT_EQ(value.ValueClass, MG_State::GLState::kVertexAttribValueClassFloat);
+        EXPECT_EQ(value.FloatView[0], Word(1.5f));
+        EXPECT_EQ(value.FloatView[1], Word(-2.5f));
+        // P5c rv: the record carries ALL THREE VIEWS VERBATIM (CONTRACT-P5C.md §5.3), so the
+        // frontend's converted int view travels too - 1.5f's int VIEW is 1, and the carrier
+        // that used to send the float bits into all three views would be sending 0x3FC00000
+        // where the frontend holds 1.
+        EXPECT_EQ(value.IntView[0], static_cast<Uint32>(Ctx().GetCurrentVertexAttribute(3).intValue[0]));
+        EXPECT_NE(value.FloatView[0], value.IntView[0]);
+    }
+
+    TEST_F(TrackerAttribPayload, AnIntWriteCarriesTheIntWordsAndNamesItsClass) {
+        Ctx().SetCurrentVertexAttributeInt(5, Array<Int32, 4>{7, -9, 11, 13});
+        const MGPAttribValue value = PayloadFor(5);
+        EXPECT_EQ(value.ValueClass, MG_State::GLState::kVertexAttribValueClassInt);
+        EXPECT_EQ(static_cast<Int32>(value.IntView[0]), 7);
+        EXPECT_EQ(static_cast<Int32>(value.IntView[1]), -9);
+        // and the float view is the frontend's CONVERSION of it, not the int bits
+        EXPECT_EQ(value.FloatView[0], Word(7.0f));
+        EXPECT_NE(value.IntView[0], Word(7.0f));
+    }
+
+    TEST_F(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) {
+        Ctx().SetCurrentVertexAttributeUint(6, Array<Uint32, 4>{4000000000u, 2u, 3u, 4u});
+        const MGPAttribValue value = PayloadFor(6);
+        EXPECT_EQ(value.ValueClass, MG_State::GLState::kVertexAttribValueClassUint);
+        EXPECT_EQ(value.UintView[0], 4000000000u);
+        EXPECT_EQ(value.FloatView[0], Word(4000000000.0f));
+        EXPECT_NE(value.UintView[0], Word(4000000000.0f));
+    }
+
+    // The class is PER ATTRIBUTE and it is the last writer's, not the context's - a payload
+    // that took one attribute's class for all 32 would be the same defect as a hard-coded 0.
+    TEST_F(TrackerAttribPayload, TheSameNumbersWrittenThroughADifferentClassAreADifferentValue) {
+        Ctx().SetCurrentVertexAttributeFloat(1, Array<Float, 4>{1.0f, 2.0f, 3.0f, 4.0f});
+        Ctx().SetCurrentVertexAttributeInt(2, Array<Int32, 4>{1, 2, 3, 4});
+        EXPECT_EQ(PayloadFor(1).ValueClass, MG_State::GLState::kVertexAttribValueClassFloat);
+        EXPECT_EQ(PayloadFor(2).ValueClass, MG_State::GLState::kVertexAttribValueClassInt);
+        // Same numbers, different classes, so the WRITTEN views differ: 1.0f is 0x3F800000
+        // and the integer 1 is 0x00000001.
+        EXPECT_NE(PayloadFor(1).FloatView[0], PayloadFor(2).IntView[0]);
+        // An attribute nobody wrote answers Float, which is what the GL default (0,0,0,1) is.
+        EXPECT_EQ(PayloadFor(7).ValueClass, MG_State::GLState::kVertexAttribValueClassFloat);
+        // and a later write of the other class moves the class of THAT attribute only
+        Ctx().SetCurrentVertexAttributeUint(1, Array<Uint32, 4>{1u, 2u, 3u, 4u});
+        EXPECT_EQ(PayloadFor(1).ValueClass, MG_State::GLState::kVertexAttribValueClassUint);
+        EXPECT_EQ(PayloadFor(2).ValueClass, MG_State::GLState::kVertexAttribValueClassInt);
+    }
+
+    // ===================================================================================
+    // The SHIPPED emitter, driven through MGPipeValidateForVerb itself
+    // ===================================================================================
+    //
+    // TrackerWalk above reproduces step 3 against a local tracker and cache, which cannot
+    // fail on a defect in the validate point itself (a bit gated on the wrong subsystem, an
+    // emission dropped). These drive the real entry point and read the real singletons back.
+    // Safe because ctest runs one gtest case per process and the fixture resets all three
+    // pieces of server-side state on both sides of every case.
+    class TrackerShippedEmitter : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            m_previous = MG_State::pGLContext.Take();
+            MG_State::pGLContext = MakeUnique<GLContext>();
+            m_savedPush = MG_Config::Features.PipePush;
+            MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP2;
+            ResetTheServerSideSingletons();
+        }
+        void TearDown() override {
+            MGPipeLeaveVerb();
+            MG_Config::Features.PipePush = m_savedPush;
+            ResetTheServerSideSingletons();
+            MG_State::pGLContext = Move(m_previous);
+        }
+
+        static GLContext& Ctx() { return *MG_State::pGLContext; }
+        static void Draw() { MGPipeValidateForVerb(MGPipeVerb::DrawArrays); }
+        static const MGPipeCsoCache::Counters& Cso() { return MGPipeCsoCacheInstance().GetCounters(); }
+
+        Uint64 m_savedPush = 0;
+        SharedPtr<GLContext> m_previous;
+    };
+
+    TEST_F(TrackerShippedEmitter, CollidingVaoShuttersStillPublishTheCurrentElementsAndBufferWindow) {
+        MG_Config::Features.PipePush =
+            kMGPipeSubsystemsMigratedAtP2 | kMGPipeSubsystemResources | kMGPipeSubsystemVertexInput;
+        using MG_State::GLState::VertexArrayObject;
+        const SharedPtr<VertexArrayObject> a = Ctx().CreateVertexArrayObject(1);
+        const SharedPtr<VertexArrayObject> b = Ctx().CreateVertexArrayObject(2);
+        const auto buffer = Ctx().CreateBufferObject(1);
+        buffer->Respecify(256, nullptr);
+        for (Uint location : {0u, 1u}) {
+            a->SetAttributeFormat(location, location == 0 ? 3 : 2, DataType::Float32, false, 20, location == 0 ? 0 : 12,
+                                  false);
+            a->BindAttributeBuffer(location, buffer);
+            a->EnableAttribute(location);
+        }
+        b->SetAttributeFormat(0, 3, DataType::Float32, false, 12, 0, false);
+        b->BindAttributeBuffer(0, buffer);
+        b->EnableAttribute(0);
+
+        // Preserve the old collision independently of how production later mixes
+        // shutters. These ordinary small counter pairs really collide, rather
+        // than requiring a probabilistic 64-bit hash collision search.
+        constexpr Uint64 kCombine = 0x9e3779b97f4a7c15ull;
+        const auto oldMix = [](Uint64 identity, Uint64 version) {
+            return identity ^ (version + kCombine + (identity << 6) + (identity >> 2));
+        };
+        ASSERT_EQ(oldMix(1, 64), oldMix(2, 1));
+        ASSERT_EQ(oldMix(174, 37), oldMix(48, 8026)); // observed on Redmi while switching world draws
+        Uint32 versionA = 0, versionB = 0;
+        const Uint32 firstA = a->GetConfigVersion() + 64;
+        const Uint32 firstB = b->GetConfigVersion() + 1;
+        for (Uint32 candidate = firstA; candidate < firstA + 4096; ++candidate) {
+            const Uint64 hash = oldMix(a->GetLifetimeId(), candidate);
+            const Uint64 other =
+                (hash ^ b->GetLifetimeId()) - kCombine - (b->GetLifetimeId() << 6) - (b->GetLifetimeId() >> 2);
+            if (other < firstB || other >= firstB + 4096) continue;
+            versionA = candidate;
+            versionB = static_cast<Uint32>(other);
+            break;
+        }
+        ASSERT_NE(versionA, 0u) << "could not construct a bounded collision for these real VAO identities";
+        const auto advanceConfig = [](VertexArrayObject& vao, Uint32 version) {
+            // Change a disabled attribute, leaving the enabled 0/1 versus 0
+            // windows intact. No private lifetime/version field is overwritten.
+            while (vao.GetConfigVersion() < version) {
+                vao.SetAttributeFormat(31, 4, DataType::Float32, !vao.GetAttribute(31).Normalized, 16, 0, false);
+            }
+        };
+        advanceConfig(*a, versionA);
+        Ctx().BindVertexArray(1);
+        Draw();
+        const MGPipeHandle handleA = MGPipeApplier().BoundVertexElements;
+        ASSERT_FALSE(MGPipeHandleIsNull(handleA));
+        ASSERT_EQ(MGPipeApplier().VertexBufferCount, 2u);
+        ASSERT_TRUE(MGPipeApplier().VertexElementsCsos[handleA.Slot].Attributes[1].Enabled);
+
+        // Mutating B after A's draw moves the attribute aggregate. Before the
+        // repair this publishes B's Count=1 buffer set, but the colliding CSO
+        // shutter leaves A bound with attribute 1 still enabled: the phone's
+        // exact "buffer-window location=1 window=0+1" mismatch.
+        advanceConfig(*b, versionB);
+        ASSERT_EQ(oldMix(a->GetLifetimeId(), a->GetConfigVersion()), oldMix(b->GetLifetimeId(), b->GetConfigVersion()));
+        Ctx().BindVertexArray(2);
+        Draw();
+        const MGPipeHandle handleB = MGPipeApplier().BoundVertexElements;
+        ASSERT_FALSE(MGPipeHandleIsNull(handleB));
+        EXPECT_NE(handleB, handleA) << "a VAO identity change must publish its vertex-elements binding";
+        EXPECT_EQ(MGPipeApplier().VertexBufferCount, 1u);
+        EXPECT_FALSE(MGPipeApplier().VertexElementsCsos[handleB.Slot].Attributes[1].Enabled);
+
+        // Switching back moves no attribute aggregate: the exact identity pair
+        // must also re-open the buffer-family shutter, restoring Count=2.
+        Ctx().BindVertexArray(1);
+        Draw();
+        EXPECT_EQ(MGPipeApplier().BoundVertexElements, handleA);
+        EXPECT_EQ(MGPipeApplier().VertexBufferCount, 2u);
+        EXPECT_TRUE(MGPipeApplier().VertexElementsCsos[handleA.Slot].Attributes[1].Enabled);
+    }
+
+    TEST_F(TrackerShippedEmitter, ABlendToggleThroughTheValidatePointMintsTwoCsos) {
+        constexpr int kToggles = 16;
+        Draw(); // prime: a fresh context resets the cache inside the emitter and mints once
+        MGPipeCsoCacheInstance().ResetCounters();
+        for (int i = 0; i < kToggles; ++i) {
+            Ctx().SetCapability(CapabilityInput::Blend, true);
+            Draw();
+            Ctx().SetCapability(CapabilityInput::Blend, false);
+            Draw();
+        }
+        EXPECT_EQ(Cso().Mints, 1u) << "the blend-disabled state was already cached by the priming draw";
+        EXPECT_EQ(Cso().Binds, static_cast<Uint64>(2 * kToggles));
+        EXPECT_EQ(Cso().Hits, static_cast<Uint64>(2 * kToggles - 1));
+        EXPECT_EQ(MGPipeCsoCacheInstance().Size(), 2u);
+    }
+
+    TEST_F(TrackerShippedEmitter, TheSteadyStateThroughTheValidatePointEmitsNothing) {
+        Draw();
+        // The positive half, so "nothing was emitted" cannot pass because nothing is wired:
+        // the first draw on a fresh context mints and binds exactly one CSO.
+        ASSERT_EQ(Cso().Mints, 1u) << "the priming draw emitted no create_render_state at all";
+        ASSERT_EQ(Cso().Binds, 1u);
+        MGPipeCsoCacheInstance().ResetCounters();
+        for (int i = 0; i < 8; ++i) {
+            Draw();
+            EXPECT_EQ(MGPipeTrackerInstance().LastDirty(), 0u) << "walk " << i << " fired with nothing moved";
+        }
+        EXPECT_EQ(Cso().Mints, 0u);
+        EXPECT_EQ(Cso().Binds, 0u) << "a steady-state draw bound a render-state CSO";
+    }
+
+    // The window the repair covers: a glVertexAttrib* write followed by a verb whose class
+    // does NOT read m_currentVertexAttribute. The call still goes out (the dirty bit and the
+    // subsystem bit are all step 3 looks at), and today's applier writes four words into all
+    // three views because it ignores ValueClass, so nothing in step 4 puts the converted
+    // value back and the client repairs the mirror itself.
+    //
+    // THE ASSERTION IS THE INVARIANT, NOT THE DEFECT. "repairs == before + 1" would pin
+    // today's applier and go red the day package A teaches
+    // MGPipeApplySetVertexAttribDefaults to switch on MGPAttribValue::ValueClass - which is
+    // the hand-off this package declares as blocking, and which is supposed to need no edit
+    // here. What must hold either way is that the call went out naming exactly the attribute
+    // that moved, and that the mirror ends up right by at most one repair: zero repairs once
+    // the applier reproduces the value, one until then.
+    TEST_F(TrackerShippedEmitter, APushedAttributeDefaultTheApplierCannotReproduceIsRepaired) {
+        Draw();
+        const Uint64 before = MGPipeVertexAttribDefaultRepairCount();
+        // 1.5f is the point: its int view is 1 and its bit pattern is 0x3FC00000, so the two
+        // cannot be the same four words whichever view the carrier picks.
+        Ctx().SetCurrentVertexAttributeFloat(0, Array<Float, 4>{1.5f, 2.5f, 3.5f, 4.5f});
+        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
+        const MGPVertexAttribDefaults header = MGPipeVertexAttribDefaultsLastHeader();
+        ASSERT_EQ(header.Count, 1u) << "the moved attribute default did not go out at all";
+        EXPECT_EQ(header.Mask, 1u) << "the call named an attribute that did not move";
+        const Uint64 repairs = MGPipeVertexAttribDefaultRepairCount() - before;
+        EXPECT_LE(repairs, 1u) << "one call cannot need two repairs";
+        // and the repair is not free-running: a second identical walk moves nothing, so it
+        // neither re-emits nor re-repairs.
+        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
+        EXPECT_EQ(MGPipeVertexAttribDefaultRepairCount() - before, repairs);
+    }
+
+    // MAJOR 1 of round 2's review, pinned. glEnable(GL_CLIP_DISTANCE0) is one of the 35
+    // capabilities the residual block carries AND one of the eight whose SetCapability arm
+    // deliberately does not BumpVersions(), so it moves m_version alone. An arming condition
+    // that reads the PIPELINE version - which is what this emitter used - never re-arms for
+    // those eight, and nothing can see it downstream: a block that is not emitted cannot
+    // diverge, so the trip wire is simply disarmed.
+    // P13 W3c: the residual block is gone, so the case now asserts what the re-arm stood in for -
+    // that the capability itself reaches the applier's assembled block on the next draw.
+    TEST_F(TrackerShippedEmitter, AClipDistanceEnableReArmsTheResidualBlock) {
+        Draw();
+        ASSERT_FALSE(MobileGL::MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::ClipDistance0))
+            << "the premise is gone: a fresh context already has clip distance 0 enabled";
+
+        Ctx().SetCapability(CapabilityInput::ClipDistance0, true);
+        // The premise: this moved the render-state counter and NOT the pipeline one.
+        const Uint16 pipelineBefore = static_cast<Uint16>(Ctx().GetPipelineStateVersion());
+        Draw();
+        ASSERT_EQ(MGPipeTrackerInstance().LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewPipelineState), 0u)
+            << "the premise is gone: a clip-distance enable now moves the pipeline version";
+        EXPECT_EQ(static_cast<Uint16>(Ctx().GetPipelineStateVersion()), pipelineBefore);
+
+        EXPECT_TRUE(MobileGL::MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::ClipDistance0))
+            << "a capability change that moves only m_version never reached the applier's block";
+    }
+
+    // MAJOR 3 of round 2's review, pinned. A fresh context resets the tracker's staging
+    // mirror to the GL defaults, which are exactly what a fresh GLContext holds - so the
+    // per-attribute diff is empty on the one walk that must publish everything, while the
+    // applier's mirror still holds the PREVIOUS context's defaults.
+    TEST_F(TrackerShippedEmitter, AFreshContextRepublishesEveryVertexAttributeDefault) {
+        // The fixture's context is itself fresh, so the priming draw is the first half of the
+        // same statement: a fresh context publishes the COMPLETE set, not a difference.
+        Draw();
+        ASSERT_EQ(MGPipeVertexAttribDefaultsLastHeader().Count, 32u)
+            << "the first walk on a fresh context published an increment, not a complete state";
+        Ctx().SetCurrentVertexAttributeFloat(3, Array<Float, 4>{9.f, 8.f, 7.f, 6.f});
+        Draw();
+        ASSERT_EQ(MGPipeVertexAttribDefaultsLastHeader().Count, 1u)
+            << "a steady context published more than the one attribute that moved";
+
+        // A different context, whose 32 defaults are the value-initialized {0,0,0,1} the
+        // tracker's own reset produces - so a diff against the staging mirror finds nothing.
+        MG_State::pGLContext = MakeUnique<GLContext>();
+        Draw();
+        const MGPVertexAttribDefaults header = MGPipeVertexAttribDefaultsLastHeader();
+        EXPECT_EQ(header.Count, 32u) << "a fresh context published " << header.Count
+                                     << " attribute defaults; the server's mirror still holds the previous context's";
+        EXPECT_EQ(header.Mask, 0xFFFFFFFFu);
+    }
+
+    // Minor 4 of round 2's review. The fresh-context reset of the applier and the CSO cache
+    // used to sit inside EmitRenderState, i.e. behind bit 0 of MOBILEGL_PIPE_PUSH, so the
+    // per-subsystem A/B D14 invites gave a fresh context a never-reset applier holding the
+    // previous context's CSO records while every suppressor slot WAS invalidated.
+    TEST_F(TrackerShippedEmitter, AFreshContextResetsTheApplierWithTheRenderStateSubsystemOff) {
+        Draw();
+        ASSERT_FALSE(MGPipeApplier().RenderStateCsos.empty())
+            << "the priming draw created no CSO record to leak into the next context";
+
+        MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP2 & ~kMGPipeSubsystemRenderState;
+        MG_State::pGLContext = MakeUnique<GLContext>();
+        Draw();
+        EXPECT_TRUE(MGPipeApplier().RenderStateCsos.empty())
+            << "a fresh context kept the previous context's CSO records because the reset was "
+               "behind the render-state subsystem bit";
+        EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundRenderStateCso));
+    }
+
+    TEST_F(TrackerShippedEmitter, AViewportThroughTheValidatePointMintsNoCso) {
+        Draw();
+        ASSERT_EQ(Cso().Mints, 1u) << "the priming draw emitted no create_render_state at all";
+        MGPipeCsoCacheInstance().ResetCounters();
+        for (Int i = 1; i <= 8; ++i) {
+            Ctx().SetViewport(IntVec4(0, 0, 64 + i, 48 + i));
+            Draw();
+            EXPECT_NE(MGPipeTrackerInstance().LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewRenderState), 0u);
+            EXPECT_EQ(MGPipeTrackerInstance().LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewPipelineState), 0u);
+        }
+        EXPECT_EQ(Cso().Mints, 0u);
+        EXPECT_EQ(Cso().Binds, 0u) << "glViewport reached the CSO cache";
+    }
+
+    // B-C1's scenario END TO END, through the shipped entry point and read back off the real
+    // applier: the setter runs, THEN a make-current happens inside the same fill (the fresh
+    // GLContext below is the switch), and what set_vertex_buffers carries has to be the 7 the
+    // draw entry point passed - not the 0 the tracker's context Reset used to leave behind.
+    //
+    // It also pins the two halves D-H2.3 makes one property: the applier's raw
+    // VertexFetchBaseInstance, and the ContentHash the suppressor keys on - which has to mix
+    // BaseInstance in, or the SECOND draw at a different base instance over the same buffer
+    // set would be suppressed as unchanged and the server would keep the first one's shift.
+    TEST_F(TrackerShippedEmitter, ABaseInstancedDrawAfterAMakeCurrentPublishesItsOwnBaseInstance) {
+        MG_Config::Features.PipePush =
+            kMGPipeSubsystemsMigratedAtP2 | kMGPipeSubsystemResources | kMGPipeSubsystemVertexInput;
+        Draw(); // prime this context, so the switch below is a real make-current
+        ASSERT_EQ(MGPipeApplier().VertexFetchBaseInstance, 0u);
+
+        // The make-current, then the entry point's one line, then the fill - in that order,
+        // which is the order GL_Drawing.cpp has.
+        MG_State::pGLContext = MakeUnique<GLContext>();
+        const SharedPtr<MG_State::GLState::BufferObject> vertices = Ctx().CreateBufferObject(1);
+        vertices->Respecify(4096, nullptr);
+        Ctx().GetBoundVertexArray()->SetAttributeFormat(0, 4, DataType::Float32, false, 16, 0, false, false, -1);
+        Ctx().GetBoundVertexArray()->BindAttributeBuffer(0, vertices);
+        Ctx().GetBoundVertexArray()->EnableAttribute(0);
+
+        MGPipeSetPendingBaseInstance(7);
+        ASSERT_EQ(MGPipePendingBaseInstance(), 7u) << "the setter did not take";
+        Draw();
+
+        EXPECT_EQ(MGPipeApplier().VertexFetchBaseInstance, 7u)
+            << "the make-current between the setter and the fill ate the base instance";
+        EXPECT_EQ(MGPipeApplier().VertexBufferCount, 1u);
+        const Uint64 hashAtSeven = MGPipeVertexInputEmitterInstance().LastVertexBuffers().ContentHash;
+        EXPECT_EQ(hashAtSeven,
+                  MGPipeVertexBufferSetContentHash(MGPipeVertexInputEmitterInstance().LastEntries().data(), 0, 1, 7))
+            << "the emitted set's ContentHash does not include the base instance it went out with";
+
+        // CONSUMED by the verb that carried it: the next plain draw sees 0 again, and the
+        // clear that makes that true is the validate point's, not MGPipeLeaveVerb's (no GL
+        // entry point calls that one).
+        EXPECT_EQ(MGPipePendingBaseInstance(), 0u);
+        const Uint64 setsAtSeven = MGPipeVertexInputEmitterInstance().VertexBufferSetCount();
+        Draw();
+        EXPECT_EQ(MGPipeApplier().VertexFetchBaseInstance, 0u)
+            << "a plain draw after a base-instanced one kept the previous fetch shift";
+        EXPECT_GT(MGPipeVertexInputEmitterInstance().VertexBufferSetCount(), setsAtSeven)
+            << "the buffer set was suppressed on a base-instance-only change - the hash or the "
+               "bit-9 shutter is missing it";
+        EXPECT_NE(MGPipeVertexInputEmitterInstance().LastVertexBuffers().ContentHash, hashAtSeven);
+
+        // THE OTHER EXIT. MGPipeValidateForVerb returns early when there is no live context,
+        // which skips step 3 and therefore skips step 3's clear - and since Reset() no longer
+        // clears it either, that exit is the only path left on which a base instance could
+        // stand into the next verb. A draw with no context is a no-op; its argument must not
+        // outlive it.
+        MGPipeSetPendingBaseInstance(11);
+        SharedPtr<GLContext> parked = MG_State::pGLContext.Take();
+        Draw();
+        EXPECT_EQ(MGPipePendingBaseInstance(), 0u)
+            << "the no-live-context exit left the draw's base instance standing for the next verb";
+        MG_State::pGLContext = Move(parked);
+    }
+
+    // ===================================================================================
+    // Bits 11-14 across the contexts of one share group (C8)
+    // ===================================================================================
+    //
+    // Textures, renderbuffers and samplers belong to the share group, but the aggregates
+    // bits 11-14 read are bumped on the context a change is made THROUGH. These change an
+    // object through context B and then walk context A with B never walking in between -
+    // what a second thread drawing into its own context does, and on one thread the shape
+    // that leaves the monolith's one tracker latched on A (no context switch reaches it).
+    class TrackerShareGroup : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            m_previous = MG_State::pGLContext.Take();
+            const auto group = MakeShared<MG_State::GLState::ShareGroupState>();
+            m_a = MakeShared<GLContext>(group);
+            m_b = MakeShared<GLContext>(group);
+            MakeLive(m_a);
+        }
+        void TearDown() override { MG_State::pGLContext = Move(m_previous); }
+
+        // The live context is the one MGP_NOTE_AGGREGATE lands on.
+        static void MakeLive(const SharedPtr<GLContext>& ctx) { MG_State::pGLContext = ctx; }
+
+        Uint32 WalkA() {
+            MakeLive(m_a);
+            return m_tracker.Update(*m_a, MGPipeVerbClass::kDraw);
+        }
+        // Prime A and prove the steady state, so whatever fires next is the change's.
+        void PrimeA() {
+            WalkA();
+            ASSERT_EQ(WalkA(), 0u) << "the fixture did not reach a steady state";
+        }
+
+        static void ExpectFired(Uint32 dirty, MGPipeDirty bit, const char* why) {
+            EXPECT_NE(dirty & MGPipeDirtyBit(bit), 0u)
+                << kMGPipeDirtyNames[static_cast<SizeT>(bit)] << " did not fire on A: " << why;
+        }
+
+        MGPipeTracker m_tracker;
+        SharedPtr<GLContext> m_a;
+        SharedPtr<GLContext> m_b;
+        SharedPtr<GLContext> m_previous;
+    };
+
+    TEST_F(TrackerShareGroup, OnlyASecondContextMakesTheWalkReadTheShareClocks) {
+        EXPECT_TRUE(m_a->GetShareGroup()->HasSeveralContexts());
+        const GLContext solo;
+        EXPECT_FALSE(solo.GetShareGroup()->HasSeveralContexts());
+    }
+
+    // glTexParameteri through B on a texture A samples: completeness (bit 12's null view),
+    // the effective sampler (bit 13) and the image window (bit 14) all moved.
+    TEST_F(TrackerShareGroup, ATextureParameterThroughASiblingFiresTheUnitSetBits) {
+        const auto& tex = m_a->CreateTextureObject(1, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        ASSERT_EQ(m_b->GetTextureObject(1), tex) << "the premise is ONE texture seen by both contexts";
+        PrimeA();
+
+        MakeLive(m_b);
+        tex->SetMaxLevel(4);
+        const Uint32 dirty = WalkA();
+        ExpectFired(dirty, MGPipeDirty::NewSamplerViews, "a sibling's glTexParameteri moved completeness");
+        ExpectFired(dirty, MGPipeDirty::NewSamplers, "a sibling's glTexParameteri moved the sampler state");
+        ExpectFired(dirty, MGPipeDirty::NewShaderImages, "a sibling's glTexParameteri moved the image window");
+        EXPECT_EQ(WalkA(), 0u) << "the share clocks fire forever";
+    }
+
+    TEST_F(TrackerShareGroup, ATextureUploadThroughASiblingFiresTheViewAndImageBits) {
+        const auto& tex = m_a->CreateTextureObject(1, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        PrimeA();
+
+        MakeLive(m_b);
+        static_cast<TextureObjectBase*>(tex.get())->BumpContentVersion();
+        const Uint32 dirty = WalkA();
+        ExpectFired(dirty, MGPipeDirty::NewSamplerViews, "a sibling's upload can define the level a view needs");
+        ExpectFired(dirty, MGPipeDirty::NewShaderImages, "a sibling's upload moved the image window's input");
+        EXPECT_EQ(WalkA(), 0u);
+    }
+
+    // F-3 across contexts: set_framebuffer_state inlines an attachment's format and extent, so
+    // B redefining the storage of a texture attached to A's framebuffer has to re-emit A's.
+    TEST_F(TrackerShareGroup, ATextureStorageDefinitionThroughASiblingFiresTheFramebufferBit) {
+        const auto& tex = m_a->CreateTextureObject(1, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        const auto& fbo = m_a->CreateFramebufferObject(1);
+        ASSERT_TRUE(fbo != nullptr);
+        fbo->AttachTexture(FramebufferAttachmentType::Color0, tex, TextureUploadTarget::Texture2D);
+        m_a->GetFramebufferBindingSlot(FramebufferTarget::Draw).Bind(fbo);
+        PrimeA();
+
+        MakeLive(m_b);
+        tex->SetInternalFormat(MobileGL::TextureInternalFormat::RGBA8);
+        const Uint32 dirty = WalkA();
+        ExpectFired(dirty, MGPipeDirty::NewFramebuffer, "A's attachment was redefined through B (F-3)");
+        ExpectFired(dirty, MGPipeDirty::NewSamplerViews, "the definition moved the params aggregate too");
+        EXPECT_EQ(WalkA(), 0u);
+    }
+
+    TEST_F(TrackerShareGroup, ARenderbufferStorageThroughASiblingFiresTheFramebufferBit) {
+        const auto& rbo = m_a->CreateRenderbufferObject(1);
+        ASSERT_TRUE(rbo != nullptr);
+        rbo->AllocateStorage(IntVec2{4, 4});
+        const auto& fbo = m_a->CreateFramebufferObject(1);
+        ASSERT_TRUE(fbo != nullptr);
+        fbo->AttachRenderbuffer(FramebufferAttachmentType::Color0, rbo);
+        m_a->GetFramebufferBindingSlot(FramebufferTarget::Draw).Bind(fbo);
+        PrimeA();
+
+        MakeLive(m_b);
+        rbo->AllocateStorage(IntVec2{8, 8});
+        const Uint32 dirty = WalkA();
+        ExpectFired(dirty, MGPipeDirty::NewFramebuffer, "A's attached renderbuffer was resized through B");
+        EXPECT_EQ(WalkA(), 0u);
+    }
+
+    TEST_F(TrackerShareGroup, ASamplerParameterThroughASiblingFiresTheSamplerBit) {
+        const auto& sampler = m_a->CreateSamplerObject(1);
+        ASSERT_TRUE(sampler != nullptr);
+        PrimeA();
+
+        MakeLive(m_b);
+        sampler->SetWrapS(MobileGL::SamplerWrapMode::ClampToEdge);
+        const Uint32 dirty = WalkA();
+        ExpectFired(dirty, MGPipeDirty::NewSamplers, "a sibling's glSamplerParameteri moved the CSO");
+        EXPECT_EQ(WalkA(), 0u);
+    }
+
+    // The split shape: one tracker per context, and B walks as well. B's own walk sees its own
+    // aggregate; A's sees the clock.
+    TEST_F(TrackerShareGroup, EachContextsOwnTrackerSeesTheSiblingsChange) {
+        const auto& tex = m_a->CreateTextureObject(1, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        MGPipeTracker trackerB;
+        PrimeA();
+        MakeLive(m_b);
+        trackerB.Update(*m_b, MGPipeVerbClass::kDraw);
+        ASSERT_EQ(trackerB.Update(*m_b, MGPipeVerbClass::kDraw), 0u);
+
+        tex->SetMaxLevel(4);
+        EXPECT_NE(trackerB.Update(*m_b, MGPipeVerbClass::kDraw) & MGPipeDirtyBit(MGPipeDirty::NewSamplers), 0u);
+        ExpectFired(WalkA(), MGPipeDirty::NewSamplers, "B's tracker saw the change and A's did not");
+        EXPECT_EQ(WalkA(), 0u);
+        MakeLive(m_b);
+        EXPECT_EQ(trackerB.Update(*m_b, MGPipeVerbClass::kDraw), 0u)
+            << "B fired again with nothing moved: its own change reached it twice";
+    }
+
+    // The claim the share clocks rest on for the program bits: a program is a group object too,
+    // but bits 6-8 read its versions off the object itself, so a change through B already
+    // reaches A's walk with no clock at all.
+    TEST_F(TrackerShareGroup, AProgramChangeThroughASiblingNeedsNoShareClock) {
+        const Uint program = m_a->CreateProgram();
+        m_a->UseProgram(program);
+        PrimeA();
+
+        MakeLive(m_b);
+        m_b->GetProgramObject(program)->MarkUBOContentDirty();
+        ExpectFired(WalkA(), MGPipeDirty::NewGlobalConstants, "a sibling's glUniform* on the program in use");
+    }
+
+} // namespace

@@ -11,6 +11,7 @@
 #include <Includes.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
 #include <MG_State/GLState/RenderbufferState/RenderbufferObject.h>
+#include <MG_Pipe/MGPipeValueTypes.h>
 
 namespace MobileGL {
     enum class FramebufferTarget {
@@ -73,8 +74,8 @@ namespace MobileGL {
         class FramebufferAttachmentObject {
         public:
             explicit FramebufferAttachmentObject(const SharedPtr<MG_State::GLState::ITextureObject>& texture,
-                                                 TextureUploadTarget textureUploadTarget,
-                                                 Int level = 0, Int layer = 0, Bool layered = false);
+                                                 TextureUploadTarget textureUploadTarget, Int level = 0, Int layer = 0,
+                                                 Bool layered = false);
             explicit FramebufferAttachmentObject(const SharedPtr<RenderbufferObject>& renderbuffer);
             explicit FramebufferAttachmentObject(Bool IsValid = true);
 
@@ -103,7 +104,7 @@ namespace MobileGL {
 
         class FramebufferObject {
         public:
-            static constexpr Uint MAX_DRAW_BUFFERS = 8;
+            static constexpr Uint MAX_DRAW_BUFFERS = MobileGL::kMGMaxDrawBuffers;
 
             using TargetEnum = FramebufferTarget;
             using FramebufferAttachmentObjectArray =
@@ -114,6 +115,10 @@ namespace MobileGL {
                 Array<Uint16, static_cast<SizeT>(FramebufferAttachmentType::FramebufferAttachmentTypeCount)>;
 
             FramebufferObject(Uint externalIndex);
+            // P2 step e2. Out of line, and declared only where there is a notice to raise:
+            // in a pull build this class keeps its implicit destructor, which is what keeps
+            // the pull build's symbol set byte-for-byte the pre-P2 one (G1).
+            ~FramebufferObject();
 
             void AttachTexture(FramebufferAttachmentType type, const SharedPtr<ITextureObject>& texture,
                                TextureUploadTarget textureUploadTarget = TextureUploadTarget::Unknown, int level = 0,
@@ -123,6 +128,10 @@ namespace MobileGL {
             const FramebufferAttachmentObject& GetAttachment(FramebufferAttachmentType type) const;
             const FramebufferAttachmentObjectArray& GetAllAttachmentObjects() const;
             Bool CheckCompleteness() const;
+            // GL 4.6 core 9.4.2 FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS: some populated attachment is
+            // layered while another is not, or the layered color attachments come from textures of
+            // different targets. CheckCompleteness() includes it; this tells the status apart.
+            Bool HasLayerTargetMismatch() const;
             // aka. `buffer` as in glDrawBuffers/glReadBuffers
             void SetDrawBuffer(Uint index, FramebufferAttachmentType buffer);
             const FramebufferAttachmentArray& GetDrawBuffers() const;

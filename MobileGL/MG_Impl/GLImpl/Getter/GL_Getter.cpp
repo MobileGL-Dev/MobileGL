@@ -18,6 +18,13 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/ErrorInfo.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
+
+// GUARDED AT THE INCLUDE, not just around the call. This file compiles in the PULL build too,
+// and G1 requires that build's symbol set and .text to be byte-identical - a header that drags
+// in MG_Remote would change it whether or not any code path reaches the session.
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Remote/Client/ClientSession.h>
+#endif
 #include <MG_Util/Converters/GLToMG/BufferEnumConverter.h>
 #include <MG_Util/Converters/GLToMG/RenderStateEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/FramebufferEnumConverter.h>
@@ -30,6 +37,13 @@
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Impl/EGLImpl/EGLImpl.h>
+// CONTRACT-P5.md §7 / ID-14: a null check on a GLFunctionsTable slot may not survive into the
+// client under split - it becomes a caps-mirror read. SlotCaps.h carries the rule and the test
+// that decides which of its two spellings a site takes; in a pull build both expand to exactly
+// the check they replaced.
+#include <MG_Remote/Client/SlotCaps.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     // Declared rather than #included from GL_RenderState.h on purpose: that header also declares
@@ -54,38 +68,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // limits below: gl_MaxComputeUniformComponents expands from BuildTBuiltInResource.
         constexpr GLint kFrontendMaxComputeUniformComponents =
             static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_COMPUTE_UNIFORM_COMPONENTS);
-        // Every atomic-counter limit is shared with the glslang resource table
-        // (BuildTBuiltInResource) through MG_Util/ShaderTranspiler/Types.h: GL 4.6 requires
-        // glGetIntegerv and the gl_MaxAtomicCounter* built-in constants to agree, and the two
-        // used to be independent tables that disagreed on both the binding count and the buffer
-        // size. Never move one of these without the other.
-        constexpr GLint kFrontendMaxComputeAtomicCounters =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTERS_PER_STAGE);
-        constexpr GLint kFrontendMaxComputeAtomicCounterBuffers =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE);
         constexpr GLint kFrontendMaxComputeSharedMemorySize = 32768;
         constexpr GLint kFrontendMaxComputeWorkGroupInvocations = 1024;
-        constexpr GLint kFrontendMaxCombinedAtomicCounters =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTERS_PER_STAGE);
-        constexpr GLint kFrontendMaxCombinedAtomicCounterBuffers =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE);
-        constexpr GLint kFrontendMaxFragmentAtomicCounters =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTERS_PER_STAGE);
-        constexpr GLint kFrontendMaxFragmentAtomicCounterBuffers =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE);
-        constexpr GLint kFrontendMaxGeometryAtomicCounters = 0;
-        constexpr GLint kFrontendMaxTessControlAtomicCounters = 0;
-        constexpr GLint kFrontendMaxTessEvaluationAtomicCounters = 0;
-        constexpr GLint kFrontendMaxVertexAtomicCounters = 0;
-        // Zero counters means zero buffers to hold them. These have to be ANSWERED rather than
-        // left to the default INVALID_ENUM: a well-behaved application queries the limit exactly
-        // to find out that the stage cannot do this, and an error instead both leaves its output
-        // untouched (so it reads uninitialised memory and may conclude the opposite) and leaves a
-        // GL error pending that surfaces at whatever unrelated call checks next.
-        constexpr GLint kFrontendMaxGeometryAtomicCounterBuffers = 0;
-        constexpr GLint kFrontendMaxTessControlAtomicCounterBuffers = 0;
-        constexpr GLint kFrontendMaxTessEvaluationAtomicCounterBuffers = 0;
-        constexpr GLint kFrontendMaxVertexAtomicCounterBuffers = 0;
         // GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE: the byte offset ceiling a counter may be declared
         // at. The matching binding count is applied in GetIndexedBufferQueryPointCount, so that
         // the getter, the indexed queries and glBindBufferBase all share one ceiling.
@@ -104,23 +88,28 @@ namespace MobileGL::MG_Impl::GLImpl {
             static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_VERTEX_UNIFORM_COMPONENTS);
         constexpr GLint kFrontendMaxVertexUniformVectors =
             static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_VERTEX_UNIFORM_VECTORS);
-        constexpr GLint kFrontendMaxVertexUniformBlocks = 14;
+        constexpr GLint kFrontendMaxVertexUniformBlocks =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS);
         constexpr GLint kFrontendMaxVertexOutputComponents = 64;
         constexpr GLint kFrontendMaxFragmentInputComponents = 128;
         constexpr GLint kFrontendMaxFragmentUniformComponents = 4096;
         constexpr GLint kFrontendMaxFragmentUniformVectors = 256;
-        constexpr GLint kFrontendMaxFragmentUniformBlocks = 14;
+        constexpr GLint kFrontendMaxFragmentUniformBlocks =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS);
         constexpr GLint kFrontendMaxGeometryInputComponents = 64;
         constexpr GLint kFrontendMaxGeometryOutputComponents = 128;
         constexpr GLint kFrontendMaxGeometryTextureImageUnits = 16;
         constexpr GLint kFrontendMaxGeometryUniformComponents = 1024;
-        constexpr GLint kFrontendMaxGeometryUniformBlocks = 14;
+        constexpr GLint kFrontendMaxGeometryUniformBlocks =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS);
         // ARB_geometry_shader4's per-invocation count. No TBuiltInResource field and no
         // gl_MaxGeometryShaderInvocations built-in exists to keep in step, so this is a getter
         // answer only; 32 is the GL 4.6 core minimum (table 23.57).
         constexpr GLint kFrontendMaxGeometryShaderInvocations = 32;
-        constexpr GLint kFrontendMaxTessControlUniformBlocks = 14;
-        constexpr GLint kFrontendMaxTessEvaluationUniformBlocks = 14;
+        constexpr GLint kFrontendMaxTessControlUniformBlocks =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS);
+        constexpr GLint kFrontendMaxTessEvaluationUniformBlocks =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS);
         // The compute stage's share of the combined sum below. Compute's own per-stage answer is
         // backend-derived (GL_MAX_COMPUTE_UNIFORM_BLOCKS reads dynamicParameters), so this is not
         // what that query returns - it is the GL 4.3 core minimum, present here only so the
@@ -141,8 +130,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             kFrontendMaxFragmentUniformBlocks + kFrontendMaxComputeUniformBlocksShare;
         constexpr GLint kFrontendMaxVaryingComponents =
             static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_VARYING_COMPONENTS);
-        constexpr GLint kFrontendMaxVaryingVectors =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_VARYING_VECTORS);
+        constexpr GLint kFrontendMaxVaryingVectors = static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_VARYING_VECTORS);
         constexpr GLint kFrontendMaxProgramTexelOffset = 7;
         constexpr GLint kFrontendMinProgramTexelOffset = -8;
         constexpr GLint kFrontendMaxTransformFeedbackInterleavedComponents = 64;
@@ -159,13 +147,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         // the ceiling here.
         constexpr GLint kFrontendMinUniformBufferBindings = 84;
         constexpr GLint kFrontendSubpixelBits = 4;
-        constexpr GLint kFrontendMaxSamples =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MIN_ADVERTISED_MAX_SAMPLES);
+        constexpr GLint kFrontendMaxSamples = static_cast<GLint>(MG_Util::ShaderTranspiler::MIN_ADVERTISED_MAX_SAMPLES);
         // ARB_shader_subroutine's two limits. NOTHING IMPLEMENTS SUBROUTINES: there is no
         // glGetSubroutineIndex / glUniformSubroutinesuiv, only the program-interface enum
         // plumbing. These are answered - with the GL 4.5 core minimums - because the conformance
         // suite queries them before it checks for the feature and an INVALID_ENUM both leaves the
-        // caller reading its own uninitialised stack slot and strands an error for the next
+        // caller reading its own uninitialized stack slot and strands an error for the next
         // unrelated call to trip over. The extension is deliberately NOT advertised, so the
         // numbers are a table entry, not a capability claim.
         constexpr GLint kFrontendMaxSubroutines = 256;
@@ -314,7 +301,19 @@ namespace MobileGL::MG_Impl::GLImpl {
         // ARM's GLES driver reports 0 for all four (a Mali-G925 does), and advertising 16 there
         // bought nothing: the program still failed to link inside the backend, the frontend
         // still reported LINK_STATUS as true, and every draw with it silently rendered nothing.
-        GLint StageStorageBlockCount(Int MG_Backend::DynamicBackendParameters::*stageLimit) {
+        // Every per-stage and combined atomic-counter limit. Shared with the glslang resource
+        // table (BuildTBuiltInResource) through ResolveAtomicCounterLimits: GL 4.6 requires
+        // glGetIntegerv and the gl_Max*AtomicCounter* built-in constants to agree, and the link
+        // fails a program over them. A stage that cannot host a counter answers 0 rather than
+        // INVALID_ENUM - an application queries the limit exactly to find that out.
+        MG_Util::ShaderTranspiler::AtomicCounterLimits AdvertisedAtomicCounterLimits() {
+            static const MG_Backend::DynamicBackendParameters kBackendlessDefaults{};
+            return MG_Util::ShaderTranspiler::ResolveAtomicCounterLimits(
+                MG_Backend::pActiveBackendObject ? MG_Backend::pActiveBackendObject->GetDynamicParameters()
+                                                 : kBackendlessDefaults);
+        }
+
+        GLint StageStorageBlockCount(Int MG_Backend::DynamicBackendParameters::* stageLimit) {
             static const MG_Backend::DynamicBackendParameters kBackendlessDefaults{};
             const MG_Backend::DynamicBackendParameters& parameters =
                 MG_Backend::pActiveBackendObject ? MG_Backend::pActiveBackendObject->GetDynamicParameters()
@@ -366,10 +365,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         void RecordIndexedOnlyGetterError(const char* functionName, GLenum pname) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", functionName,
-                    "pname " + MG_Util::ConvertGLEnumToString(pname) +
-                        " is only valid with indexed getter entrypoints."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "pname " + MG_Util::ConvertGLEnumToString(pname) +
+                                                 " is only valid with indexed getter entrypoints."));
         }
 
         bool ValidateIndexedBufferQueryIndex(GLenum pname, GLuint index, const char* functionName,
@@ -392,10 +390,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (index >= GetIndexedBufferQueryPointCount(bufferTarget)) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidValue,
-                    MakeUnique<GenericErrorInfo>(
-                        "MG_Impl/GLImpl", functionName,
-                        "index " + std::to_string(index) + " is out of range for indexed buffer query " +
-                            std::to_string(pname) + "."));
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                 "index " + std::to_string(index) +
+                                                     " is out of range for indexed buffer query " +
+                                                     std::to_string(pname) + "."));
                 return false;
             }
 
@@ -407,20 +405,44 @@ namespace MobileGL::MG_Impl::GLImpl {
         // pname -> target decode, so it lives here instead of being spelled out twice.
         bool TryDecodeTextureUnitBindingPname(GLenum pname, TextureTarget& outTarget) {
             switch (pname) {
-            case GL_TEXTURE_BINDING_1D: outTarget = TextureTarget::Texture1D; return true;
-            case GL_TEXTURE_BINDING_1D_ARRAY: outTarget = TextureTarget::Texture1DArray; return true;
-            case GL_TEXTURE_BINDING_2D: outTarget = TextureTarget::Texture2D; return true;
-            case GL_TEXTURE_BINDING_2D_ARRAY: outTarget = TextureTarget::Texture2DArray; return true;
-            case GL_TEXTURE_BINDING_2D_MULTISAMPLE: outTarget = TextureTarget::Texture2DMultisample; return true;
+            case GL_TEXTURE_BINDING_1D:
+                outTarget = TextureTarget::Texture1D;
+                return true;
+            case GL_TEXTURE_BINDING_1D_ARRAY:
+                outTarget = TextureTarget::Texture1DArray;
+                return true;
+            case GL_TEXTURE_BINDING_2D:
+                outTarget = TextureTarget::Texture2D;
+                return true;
+            case GL_TEXTURE_BINDING_2D_ARRAY:
+                outTarget = TextureTarget::Texture2DArray;
+                return true;
+            case GL_TEXTURE_BINDING_2D_MULTISAMPLE:
+                outTarget = TextureTarget::Texture2DMultisample;
+                return true;
             case GL_TEXTURE_BINDING_2D_MULTISAMPLE_ARRAY:
                 outTarget = TextureTarget::Texture2DMultisampleArray;
                 return true;
-            case GL_TEXTURE_BINDING_3D: outTarget = TextureTarget::Texture3D; return true;
-            case GL_TEXTURE_BINDING_BUFFER: outTarget = TextureTarget::TextureBuffer; return true;
-            case GL_TEXTURE_BINDING_CUBE_MAP: outTarget = TextureTarget::TextureCubeMap; return true;
-            case GL_TEXTURE_BINDING_CUBE_MAP_ARRAY: outTarget = TextureTarget::TextureCubeMapArray; return true;
-            case GL_TEXTURE_BINDING_RECTANGLE: outTarget = TextureTarget::TextureRectangle; return true;
-            default: return false;
+            case GL_TEXTURE_BINDING_3D:
+                outTarget = TextureTarget::Texture3D;
+                return true;
+            case GL_TEXTURE_BINDING_BUFFER:
+                outTarget = TextureTarget::TextureBuffer;
+                return true;
+            case GL_TEXTURE_BINDING_CUBE_MAP:
+                outTarget = TextureTarget::TextureCubeMap;
+                return true;
+            case GL_TEXTURE_BINDING_CUBE_MAP_ARRAY:
+                outTarget = TextureTarget::TextureCubeMapArray;
+                return true;
+            case GL_TEXTURE_BINDING_RECTANGLE:
+                outTarget = TextureTarget::TextureRectangle;
+                return true;
+            case GL_TEXTURE_BINDING_EXTERNAL_OES:
+                outTarget = TextureTarget::External;
+                return true;
+            default:
+                return false;
             }
         }
 
@@ -537,7 +559,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // see the note on GetAdvertisedMaxSamples. A zero would be a probe that never ran, so it is
     // floored rather than trusted.
     namespace {
-        GLint AdvertisedCategoryMaxSamples(Int MG_Backend::DynamicBackendParameters::*categoryLimit) {
+        GLint AdvertisedCategoryMaxSamples(Int MG_Backend::DynamicBackendParameters::* categoryLimit) {
             if (MG_Backend::pActiveBackendObject == nullptr) {
                 return 1;
             }
@@ -560,8 +582,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // Declared in GL_Getter.h, so that the draw path can feed the same number to the reserved
     // gl_NumSamples stand-in that glGetIntegerv(GL_SAMPLES) reports.
     GLint ResolveDrawFramebufferSampleCount() {
-        const auto& drawFbo =
-            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+        const auto& drawFbo = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         if (!drawFbo) return 0;
 
         GLint maxSamples = 0;
@@ -575,6 +596,135 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
         return maxSamples;
+    }
+
+    namespace {
+        Bool EsIdentityActive();
+
+        // One list for glGetString and glGetStringi, so the two forms always agree.
+        const Vector<const char*>& ClientSideExtensions() {
+            const Bool images = MG_Impl::EGLImpl::SharedImagesAvailable();
+            const Bool esApi =
+                MG_State::pEGLContext && MG_State::pEGLContext->GetCurrentContextClientAPI() == EGL_OPENGL_ES_API;
+            const Bool external =
+                images && ClientSideExternalImageExtensionsAllowed() && MG_Impl::EGLImpl::SharedImageYuvAvailable();
+            return ClientSideExtensionList(images, external, EsIdentityActive(), esApi);
+        }
+
+        // Robust buffer access as GL 4.5 / KHR_robust_buffer_access_behavior define it: the backend
+        // promises it by listing one of the behavior extensions. Neither backend does today, so a
+        // context that asked for robust access gets it reported as absent rather than claimed.
+        Bool BackendProvidesRobustBufferAccess() {
+            const auto& backend = MG_Backend::pActiveBackendObject;
+            if (!backend) return false;
+            const auto& extensions = backend->GetRendererInfo().RendererGLInfo.Extensions;
+            return std::find(extensions.begin(), extensions.end(), E_GL_KHR_robust_buffer_access_behavior) !=
+                       extensions.end() ||
+                   std::find(extensions.begin(), extensions.end(), E_GL_ARB_robust_buffer_access_behavior) !=
+                       extensions.end();
+        }
+
+        // MOBILEGL_ES_CONTEXT_IDENTITY=1: a context created for the OpenGL ES API names itself OpenGL
+        // ES 3.2 (GL_VERSION, GL_SHADING_LANGUAGE_VERSION, GL_MAJOR/MINOR_VERSION) instead of the
+        // desktop version every context reports by default. Opt-in, for an application that
+        // decides what it may use from that identity: ANGLE's GL-on-EGL backend offers
+        // GL_OES_EGL_image - which Chrome's GPU process presents through - only over a native
+        // driver that calls itself OpenGL ES, and reads the desktop identity's extension names
+        // otherwise.
+        Bool EsIdentityActive() {
+            static const Bool requested = [] {
+                const char* value = std::getenv("MOBILEGL_ES_CONTEXT_IDENTITY");
+                return value != nullptr && value[0] == '1';
+            }();
+            return requested && MG_State::pEGLContext &&
+                   MG_State::pEGLContext->GetCurrentContextClientAPI() == EGL_OPENGL_ES_API;
+        }
+
+        Bool CurrentContextHasRobustAccess() {
+            return MG_State::pEGLContext && MG_State::pEGLContext->IsCurrentContextRobustAccessRequested() &&
+                   BackendProvidesRobustBufferAccess();
+        }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // KHR_robustness 2.6.1: a context whose reset notification behavior is
+        // NO_RESET_NOTIFICATION is never told of a reset - glGetGraphicsResetStatus answers
+        // GL_NO_ERROR and no command raises GL_CONTEXT_LOST. That is what an explicit core-profile
+        // context gets. Everywhere else (MG_State::IsRelaxedSemanticsActive) the loss is reported
+        // to every context, as before the strategy existed: an application that queries the reset
+        // status without having asked for notification still learns that its context is gone,
+        // which on a split client it is - there is nothing to recover in place. A context created
+        // with EGL_LOSE_CONTEXT_ON_RESET is always told.
+        Bool ResetIsNotified() {
+            if (MG_State::pEGLContext &&
+                MG_State::pEGLContext->GetCurrentContextResetNotificationStrategy() == EGL_LOSE_CONTEXT_ON_RESET) {
+                return true;
+            }
+            return MG_State::IsRelaxedSemanticsActive();
+        }
+#endif
+    } // namespace
+
+    // Extensions this library implements itself, appended after the backend's own list (the
+    // server's, under split), which cannot know about them:
+    //   * GL_OES_EGL_image binds the EGL side's dma-buf images, which only a backend with
+    //     shared images has (EGLImpl::SharedImagesAvailable);
+    //   * the robustness family - reset notification (glGetGraphicsResetStatus, the contexts'
+    //     EGL reset strategy, GL_CONTEXT_LOST) and the bounded queries (glReadnPixels,
+    //     glGetnUniform*) are this frontend's, whatever the backend. KHR for GL and ES, ARB for
+    //     desktop GL applications that ask for that name, EXT for ES applications that ask for
+    //     that one. Robust buffer ACCESS is a separate promise (GL_CONTEXT_ROBUST_ACCESS) and is
+    //     not implied by any of them.
+    const Vector<const char*>& ClientSideExtensionList(Bool images, Bool external, Bool es, Bool esApi) {
+        // GL_OES_EGL_image_external(_essl3) only where the server samples YUV images: an
+        // external texture is a 2D texture holding the image converted to RGBA, which needs
+        // the server to hold the YUV image in the first place (EGLImpl::SharedImageYuvAvailable).
+        static const auto build = [](Bool images, Bool external, Bool es, Bool esApi) {
+            Vector<const char*> list;
+            if (images) list.push_back("GL_OES_EGL_image");
+            if (images && external) {
+                list.push_back("GL_OES_EGL_image_external");
+                list.push_back("GL_OES_EGL_image_external_essl3");
+            }
+            // An ES context lists no ARB names (KHR-GLES*.exposed_extensions).
+            list.push_back("GL_KHR_robustness");
+            if (!esApi) list.push_back("GL_ARB_robustness");
+            list.push_back("GL_EXT_robustness");
+            // Under the ES identity (EsIdentityActive) the ES names of what desktop GL has in core:
+            // BGRA textures, render targets and read-backs. GL_BGRA_EXT / GL_BGRA8_EXT as internal
+            // formats are taken as RGBA storage (TextureEnumConverter), the byte order being the
+            // pixel transfer format's, as on desktop GL.
+            if (es) {
+                list.push_back("GL_EXT_texture_format_BGRA8888");
+                list.push_back("GL_EXT_read_format_bgra");
+            }
+            // Any context created for the OpenGL ES API, whatever it calls itself: the ES 2.0
+            // names of what desktop GL has in core - RGB8/RGBA8 and DEPTH_COMPONENT24
+            // renderbuffers, and glMapBuffer (exported under its OES names as well).
+            if (esApi) {
+                list.push_back("GL_OES_rgb8_rgba8");
+                list.push_back("GL_OES_depth24");
+                list.push_back("GL_OES_mapbuffer");
+            }
+            return list;
+        };
+        static const Vector<const char*> lists[16] = {
+            build(false, false, false, false), build(false, false, false, true), build(false, false, true, false),
+            build(false, false, true, true),   build(false, true, false, false), build(false, true, false, true),
+            build(false, true, true, false),   build(false, true, true, true),   build(true, false, false, false),
+            build(true, false, false, true),   build(true, false, true, false),  build(true, false, true, true),
+            build(true, true, false, false),   build(true, true, false, true),   build(true, true, true, false),
+            build(true, true, true, true)};
+        return lists[(images ? 8 : 0) + (external ? 4 : 0) + (es ? 2 : 0) + (esApi ? 1 : 0)];
+    }
+
+    // The external-image names are ES extensions (GL_OES_EGL_image_external_essl3 extends ESSL
+    // only), and a desktop context lists no OES name but GL_OES_EGL_image
+    // (KHR-GL40.exposed_extensions). An explicit core-profile context therefore does not list
+    // them; samplerExternalOES itself stays accepted on every context, only the names are gated.
+    Bool ClientSideExternalImageExtensionsAllowed() {
+        const Bool esApi =
+            MG_State::pEGLContext && MG_State::pEGLContext->GetCurrentContextClientAPI() == EGL_OPENGL_ES_API;
+        return esApi || MG_State::IsRelaxedSemanticsActive();
     }
 
     /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */
@@ -604,11 +754,24 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("vendorString: %s", vendorString.c_str());
             return (const GLubyte*)vendorString.c_str();
         case GL_VERSION: {
-            versionStr =
-                std::format("{} {} {}, {} Backend, GIT@" GIT_COMMIT_HASH_SHORT,
-                            rendererInfo.RendererGLInfo.TargetGLVersion.toString(), MG_Config::ProjectName,
-                            MG_Config::CoreVersion.toFormattedString(MG_Config::DefaultVersionStringFormatAttrib),
-                            rendererInfo.BackendName);
+            // "OpenGL ES" must not appear anywhere in a desktop GL_VERSION: some callers (ANGLE's GL
+            // backend among them) search the whole string for it rather than its prefix, and
+            // then take this for an ES driver, read the version from the wrong offsets and look
+            // for ES-named extensions. The backend is named "GLES" here for that reason only.
+            String backendName = rendererInfo.BackendName;
+            if (const auto at = backendName.find("OpenGL ES"); at != String::npos) {
+                backendName.replace(at, sizeof("OpenGL ES") - 1, "GLES");
+            }
+            if (EsIdentityActive()) {
+                versionStr = std::format(
+                    "OpenGL ES 3.2 {} {}, {} Backend, GIT@" GIT_COMMIT_HASH_SHORT, MG_Config::ProjectName,
+                    MG_Config::CoreVersion.toFormattedString(MG_Config::DefaultVersionStringFormatAttrib), backendName);
+                return (const GLubyte*)versionStr.c_str();
+            }
+            versionStr = std::format(
+                "{} {} {}, {} Backend, GIT@" GIT_COMMIT_HASH_SHORT,
+                rendererInfo.RendererGLInfo.TargetGLVersion.toString(), MG_Config::ProjectName,
+                MG_Config::CoreVersion.toFormattedString(MG_Config::DefaultVersionStringFormatAttrib), backendName);
             MGLOG_D("versionStr: %s", versionStr.c_str());
             return (const GLubyte*)versionStr.c_str();
         }
@@ -620,9 +783,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return (const GLubyte*)rendererString.c_str();
         }
         case GL_SHADING_LANGUAGE_VERSION:
-            shadingLanguageVersion =
-                std::format("{} {}", rendererInfo.RendererGLInfo.TargetGLSLVersion.toString({true, false}),
-                            MG_Config::ProjectName);
+            if (EsIdentityActive()) return (const GLubyte*)"OpenGL ES GLSL ES 3.20";
+            shadingLanguageVersion = std::format(
+                "{} {}", rendererInfo.RendererGLInfo.TargetGLSLVersion.toString({true, false}), MG_Config::ProjectName);
             MGLOG_D("shadingLanguageVersion: %s", shadingLanguageVersion.c_str());
             return (const GLubyte*)shadingLanguageVersion.c_str();
         case GL_EXTENSIONS:
@@ -633,6 +796,10 @@ namespace MobileGL::MG_Impl::GLImpl {
                 }
                 extensionsString += MG_Util::ConvertGLExtToString(ext);
             }
+            for (const char* extra : ClientSideExtensions()) {
+                if (!extensionsString.empty()) extensionsString += " ";
+                extensionsString += extra;
+            }
             return (const GLubyte*)extensionsString.c_str();
         default:
             return (const GLubyte*)"Unknown Enum";
@@ -641,8 +808,19 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     const GLubyte* GetStringi(GLenum name, GLuint index) {
         MGLOG_D("glGetStringi, name: %s, index: %u", MG_Util::ConvertGLEnumToString(name).c_str(), index);
+        // GL 4.6 core 22.2: an index at or past the list's GL_NUM_* count is INVALID_VALUE, and a
+        // name glGetStringi does not index is INVALID_ENUM; both return NULL.
+        const auto recordError = [](ErrorCode code, const char* message) -> const GLubyte* {
+            MG_State::pGLContext->RecordError(code,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetStringi", message));
+            return nullptr;
+        };
+        if (name == GL_SPIR_V_EXTENSIONS) {
+            // GL_NUM_SPIR_V_EXTENSIONS is zero (see GetIntegerv), so every index is past the end.
+            return recordError(ErrorCode::InvalidValue, "index is not below GL_NUM_SPIR_V_EXTENSIONS.");
+        }
         if (name != GL_EXTENSIONS) {
-            return (const GLubyte*)"";
+            return recordError(ErrorCode::InvalidEnum, "name is not an indexed string list.");
         }
 
         const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
@@ -654,7 +832,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         const auto& exts = rendererInfo.RendererGLInfo.Extensions;
         if (index >= exts.size()) {
-            return nullptr;
+            const auto& extras = ClientSideExtensions();
+            if (index - exts.size() < extras.size()) return (const GLubyte*)extras[index - exts.size()];
+            return recordError(ErrorCode::InvalidValue, "index is not below GL_NUM_EXTENSIONS.");
         }
 
         static Vector<String> extStrings;
@@ -739,31 +919,25 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PolygonOffsetFill) ? GL_TRUE : GL_FALSE;
             return;
         case GL_PRIMITIVE_RESTART_FIXED_INDEX:
-            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex)
-                          ? GL_TRUE
-                          : GL_FALSE;
+            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex) ? GL_TRUE
+                                                                                                             : GL_FALSE;
             return;
         case GL_RASTERIZER_DISCARD:
             *params =
                 MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard) ? GL_TRUE : GL_FALSE;
             return;
         case GL_SAMPLE_ALPHA_TO_COVERAGE:
-            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleAlphaToCoverage)
-                          ? GL_TRUE
-                          : GL_FALSE;
+            *params =
+                MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleAlphaToCoverage) ? GL_TRUE : GL_FALSE;
             return;
         case GL_SAMPLE_ALPHA_TO_ONE:
-            *params =
-                MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleAlphaToOne) ? GL_TRUE : GL_FALSE;
+            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleAlphaToOne) ? GL_TRUE : GL_FALSE;
             return;
         case GL_SAMPLE_COVERAGE:
-            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleCoverage)
-                          ? GL_TRUE
-                          : GL_FALSE;
+            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleCoverage) ? GL_TRUE : GL_FALSE;
             return;
         case GL_SAMPLE_MASK:
-            *params =
-                MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleMask) ? GL_TRUE : GL_FALSE;
+            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleMask) ? GL_TRUE : GL_FALSE;
             return;
         case GL_SCISSOR_TEST:
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ScissorTest) ? GL_TRUE : GL_FALSE;
@@ -1047,8 +1221,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return;
             }
             *data = target == GL_SAMPLER_BINDING
-                ? QuerySamplerBindingOnUnit(static_cast<Int>(index))
-                : QueryTextureBindingOnUnit(static_cast<Int>(index), textureBindingTarget);
+                        ? QuerySamplerBindingOnUnit(static_cast<Int>(index))
+                        : QueryTextureBindingOnUnit(static_cast<Int>(index), textureBindingTarget);
             return;
         }
 
@@ -1118,9 +1292,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_IMAGE_BINDING_LAYER:
         case GL_IMAGE_BINDING_ACCESS:
         case GL_IMAGE_BINDING_FORMAT: {
-            const auto maxImageUnits = static_cast<GLuint>(std::min<GLint>(
-                MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxImageUnits,
-                MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS));
+            const auto maxImageUnits = static_cast<GLuint>(
+                std::min<GLint>(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxImageUnits,
+                                MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS));
             if (index >= maxImageUnits) {
                 *data = 0;
                 MG_State::pGLContext->RecordError(
@@ -1162,17 +1336,25 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (index >= 3) {
                 *data = 0;
                 MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidValue,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                                 "Compute work group index is out of range."));
+                    ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                                          "Compute work group index is out of range."));
                 return;
             }
 
-            const GLint minimum = target == GL_MAX_COMPUTE_WORK_GROUP_COUNT
-                ? GetMinComputeWorkGroupCount(index)
-                : GetMinComputeWorkGroupSize(index);
+            const GLint minimum = target == GL_MAX_COMPUTE_WORK_GROUP_COUNT ? GetMinComputeWorkGroupCount(index)
+                                                                            : GetMinComputeWorkGroupSize(index);
             GLint backendValue = 0;
             if (getIntegeri) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // Transport's Class A caps mirror answers these two pnames
+                // locally and emits no record. A fill would wrongly quiesce
+                // the apply thread before every compute dispatch validation.
+                if (MG_Config::Transport == MG_Config::TransportMode::Monolith) {
+#endif
+                    MGP_FILL(GetIntegeri_v);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                }
+#endif
                 getIntegeri(target, index, &backendValue);
             }
             *data = std::max(backendValue, minimum);
@@ -1183,7 +1365,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             *data = 0;
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Backend does not support indexed integer queries."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Backend does not support indexed integer queries."));
             return;
         }
         getIntegeri(target, index, data);
@@ -1352,7 +1535,17 @@ namespace MobileGL::MG_Impl::GLImpl {
             // full 64-bit GPU timestamp survives; LWJGL reads it this way.
             Int64 timestamp = 0;
             if (!MG_Config::Features.DisableTimerQuery) {
-                if (const auto getGpuTimestampNs = MG_Backend::gBackendFunctionsTable.GL.GetGpuTimestampNs) {
+                // glGetInteger64v(GL_TIMESTAMP). GetGpuTimestampNs is class C - a LIVE GPU
+                // timestamp is not a static property, so R-15 does not reach it - and the
+                // documented answer when it is unavailable is 0 (GLFunctionsTable::GetGpuTimestampNs), which
+                // is correct rather than merely quiet. kCapTimerQuery is the published bit.
+                //
+                // The POINTER-valued macro, so the init-statement below is unchanged in a pull
+                // build and G1 cannot see this edit: the Bool-valued spelling moved this
+                // function by -150 bytes for no behavioral reason at all.
+                if (const auto getGpuTimestampNs =
+                        MGL_BACKEND_SLOT_PTR_CAP(GetGpuTimestampNs, MG_Pipe::kCapTimerQuery)) {
+                    MGP_FILL(GetGpuTimestampNs);
                     timestamp = getGpuTimestampNs();
                 }
             }
@@ -1438,6 +1631,121 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // GL_EXT_fragment_shading_rate's state and limits (tables 23.9 / 23.53 of the extension).
+    // Returns false for any other pname. The tokens belong to the extension, so a context whose
+    // backend cannot back it answers them like any unknown pname, and the attachment limits the
+    // same way unless the attachment extension is advertised too.
+    static Bool TryGetFragmentShadingRateInteger(GLenum pname, GLint* params) {
+        Bool attachmentToken = false;
+        switch (pname) {
+        case GL_SHADING_RATE_EXT:
+        case GL_FRAGMENT_SHADING_RATE_NON_TRIVIAL_COMBINERS_SUPPORTED_EXT:
+        case GL_FRAGMENT_SHADING_RATE_WITH_SHADER_DEPTH_STENCIL_WRITES_SUPPORTED_EXT:
+        case GL_FRAGMENT_SHADING_RATE_WITH_SAMPLE_MASK_SUPPORTED_EXT:
+        case GL_FRAGMENT_SHADING_RATE_PRIMITIVE_RATE_WITH_MULTI_VIEWPORT_SUPPORTED_EXT:
+            break;
+        case GL_MIN_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_WIDTH_EXT:
+        case GL_MIN_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_HEIGHT_EXT:
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_WIDTH_EXT:
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_HEIGHT_EXT:
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_ASPECT_RATIO_EXT:
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_LAYERS_EXT:
+        case GL_FRAGMENT_SHADING_RATE_ATTACHMENT_WITH_DEFAULT_FRAMEBUFFER_SUPPORTED_EXT:
+            attachmentToken = true;
+            break;
+        default:
+            return false;
+        }
+
+        const auto& caps = MG_Backend::pActiveBackendObject->GetDynamicParameters();
+        if (!caps.SupportsFragmentShadingRate || (attachmentToken && !caps.SupportsAttachmentFragmentShadingRate)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetIntegerv",
+                                             std::format("Invalid enum: 0x{:X} (its fragment shading rate extension "
+                                                         "is not supported)",
+                                                         pname)));
+            return true;
+        }
+
+        switch (pname) {
+        case GL_SHADING_RATE_EXT:
+            *params = static_cast<GLint>(MGUnpackShadingRate(MG_State::pGLContext->GetShadingRate()));
+            return true;
+        case GL_FRAGMENT_SHADING_RATE_NON_TRIVIAL_COMBINERS_SUPPORTED_EXT:
+            *params = caps.FragmentShadingRateNonTrivialCombiners ? GL_TRUE : GL_FALSE;
+            return true;
+        case GL_FRAGMENT_SHADING_RATE_WITH_SHADER_DEPTH_STENCIL_WRITES_SUPPORTED_EXT:
+            *params = caps.FragmentShadingRateWithShaderDepthStencilWrites ? GL_TRUE : GL_FALSE;
+            return true;
+        case GL_FRAGMENT_SHADING_RATE_WITH_SAMPLE_MASK_SUPPORTED_EXT:
+            *params = caps.FragmentShadingRateWithSampleMask ? GL_TRUE : GL_FALSE;
+            return true;
+        case GL_FRAGMENT_SHADING_RATE_PRIMITIVE_RATE_WITH_MULTI_VIEWPORT_SUPPORTED_EXT:
+            *params = caps.FragmentShadingRatePrimitiveWithMultiViewport ? GL_TRUE : GL_FALSE;
+            return true;
+        case GL_MIN_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_WIDTH_EXT:
+            *params = caps.MinFragmentShadingRateAttachmentTexelWidth;
+            return true;
+        case GL_MIN_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_HEIGHT_EXT:
+            *params = caps.MinFragmentShadingRateAttachmentTexelHeight;
+            return true;
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_WIDTH_EXT:
+            *params = caps.MaxFragmentShadingRateAttachmentTexelWidth;
+            return true;
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_HEIGHT_EXT:
+            *params = caps.MaxFragmentShadingRateAttachmentTexelHeight;
+            return true;
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_ASPECT_RATIO_EXT:
+            *params = caps.MaxFragmentShadingRateAttachmentTexelAspectRatio;
+            return true;
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_LAYERS_EXT:
+            *params = caps.MaxFragmentShadingRateAttachmentLayers;
+            return true;
+        case GL_FRAGMENT_SHADING_RATE_ATTACHMENT_WITH_DEFAULT_FRAMEBUFFER_SUPPORTED_EXT:
+            *params = caps.FragmentShadingRateAttachmentWithDefaultFramebuffer ? GL_TRUE : GL_FALSE;
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    // GL_EXT_fragment_shading_rate 14.X.1. The rates come from the backend's per-sample-count
+    // mask, largest area first (the order the Vulkan query uses; the extension leaves it open).
+    // A sample count the device does not list - including any that is not a power of two -
+    // answers zero rates rather than an error: the only error the extension gives is a negative
+    // maxCount.
+    void GetFragmentShadingRatesEXT(GLsizei samples, GLsizei maxCount, GLsizei* count, GLenum* shadingRates) {
+        if (maxCount < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "maxCount must not be negative"));
+            return;
+        }
+        const auto& caps = MG_Backend::pActiveBackendObject->GetDynamicParameters();
+        Uint16 mask = 0;
+        if (caps.SupportsFragmentShadingRate) {
+            // GL counts a non-multisampled framebuffer as samples = 0 or 1; both are the 1x mask.
+            const GLsizei effectiveSamples = samples <= 1 ? 1 : samples;
+            for (SizeT i = 0; i < std::size(caps.FragmentShadingRateMasks); ++i) {
+                if (effectiveSamples == (GLsizei{1} << i)) {
+                    mask = caps.FragmentShadingRateMasks[i];
+                    break;
+                }
+            }
+        }
+        // Largest area first, then the wider rate of an equal area.
+        static constexpr Uint8 kOrder[] = {0xa, 0x9, 0x6, 0x8, 0x5, 0x2, 0x4, 0x1, 0x0};
+        GLsizei written = 0;
+        for (Uint8 packed : kOrder) {
+            if ((mask & (1u << packed)) == 0) continue;
+            if (written >= maxCount) break;
+            if (shadingRates != nullptr) shadingRates[written] = MGUnpackShadingRate(packed);
+            ++written;
+        }
+        if (count != nullptr) *count = written;
+    }
+
     void GetIntegerv(GLenum pname, GLint* params) {
         MGLOG_D("glGetIntegerv, pname: %s", MG_Util::ConvertGLEnumToString(pname).c_str());
         if (!params) {
@@ -1453,6 +1761,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = QueryTextureBindingOnUnit(MG_State::pGLContext->GetActiveTextureUnit(), textureBindingTarget);
             return;
         }
+
+        if (TryGetFragmentShadingRateInteger(pname, params)) return;
 
         switch (pname) {
         case GL_ACTIVE_TEXTURE:
@@ -1566,10 +1876,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxComputeUniformComponents;
             return;
         case GL_MAX_COMPUTE_ATOMIC_COUNTERS:
-            *params = kFrontendMaxComputeAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().stageCounters[5];
             return;
         case GL_MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxComputeAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().stageBuffers[5];
             return;
         case GL_MAX_COMPUTE_SHARED_MEMORY_SIZE:
             *params = kFrontendMaxComputeSharedMemorySize;
@@ -1617,8 +1927,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_CONTEXT_FLAGS: {
             *params = MG_State::pEGLContext ? MG_State::pEGLContext->GetCurrentContextFlags() : 0;
+            if (CurrentContextHasRobustAccess()) *params |= GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT;
             return;
         }
+        case GL_CONTEXT_ROBUST_ACCESS:
+            // GL ES 3.2 / KHR_robustness: true only where it was asked for AND is provided.
+            *params = CurrentContextHasRobustAccess() ? GL_TRUE : GL_FALSE;
+            return;
+        case GL_RESET_NOTIFICATION_STRATEGY:
+            // The EGL reset notification behavior the context was created with.
+            *params = MG_State::pEGLContext && MG_State::pEGLContext->GetCurrentContextResetNotificationStrategy() ==
+                                                   EGL_LOSE_CONTEXT_ON_RESET
+                          ? GL_LOSE_CONTEXT_ON_RESET
+                          : GL_NO_RESET_NOTIFICATION;
+            return;
         case GL_CULL_FACE:
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::CullFace) ? GL_TRUE : GL_FALSE;
             return;
@@ -1626,7 +1948,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(MG_Util::ConvertCullFaceModeToGLEnum(MG_State::pGLContext->GetCullFaceMode()));
             return;
         case GL_FRONT_FACE:
-            *params = static_cast<GLint>(MG_Util::ConvertFrontFaceModeToGLEnum(MG_State::pGLContext->GetFrontFaceMode()));
+            *params =
+                static_cast<GLint>(MG_Util::ConvertFrontFaceModeToGLEnum(MG_State::pGLContext->GetFrontFaceMode()));
             return;
         case GL_CURRENT_PROGRAM: {
             const auto& currentProgram = MG_State::pGLContext->GetCurrentProgram();
@@ -1655,9 +1978,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::DebugOutput) ? GL_TRUE : GL_FALSE;
             return;
         case GL_DEBUG_OUTPUT_SYNCHRONOUS:
-            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::DebugOutputSynchronous)
-                          ? GL_TRUE
-                          : GL_FALSE;
+            *params =
+                MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::DebugOutputSynchronous) ? GL_TRUE : GL_FALSE;
             return;
         case GL_DITHER:
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::Dither) ? GL_TRUE : GL_FALSE;
@@ -1688,8 +2010,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_DRAW_BUFFER13:
         case GL_DRAW_BUFFER14:
         case GL_DRAW_BUFFER15:
-            if (const auto& fbo = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw)
-                                      .GetBoundObject()) {
+            if (const auto& fbo =
+                    MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject()) {
                 SizeT drawBufferIndex = 0;
                 const bool decoded = TryDecodeDrawBufferQuery(pname, drawBufferIndex);
                 MOBILEGL_ASSERT(decoded, "Draw buffer query enum should have been decoded already: 0x%X", pname);
@@ -1750,10 +2072,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(MG_Util::ConvertLogicOperationToGLEnum(MG_State::pGLContext->GetLogicOp()));
             return;
         case GL_MAX_COMBINED_ATOMIC_COUNTERS:
-            *params = kFrontendMaxCombinedAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().combinedCounters;
             return;
         case GL_MAX_COMBINED_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxCombinedAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().combinedBuffers;
             return;
         case GL_MAX_COMBINED_UNIFORM_BLOCKS:
             *params = ClampUniformBlockCount(kFrontendMaxCombinedUniformBlocks);
@@ -1768,10 +2090,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = 1024 * 1024; // TODO
             return;
         case GL_MAX_FRAGMENT_ATOMIC_COUNTERS:
-            *params = kFrontendMaxFragmentAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().stageCounters[4];
             return;
         case GL_MAX_FRAGMENT_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxFragmentAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().stageBuffers[4];
             return;
         case GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS:
             *params = StageStorageBlockCount(&MG_Backend::DynamicBackendParameters::MaxFragmentShaderStorageBlocks);
@@ -1794,10 +2116,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = ClampUniformBlockCount(kFrontendMaxFragmentUniformBlocks);
             return;
         case GL_MAX_GEOMETRY_ATOMIC_COUNTERS:
-            *params = kFrontendMaxGeometryAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().stageCounters[3];
             return;
         case GL_MAX_GEOMETRY_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxGeometryAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().stageBuffers[3];
             return;
         case GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS:
             *params = StageStorageBlockCount(&MG_Backend::DynamicBackendParameters::MaxGeometryShaderStorageBlocks);
@@ -1860,22 +2182,26 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = INT_MAX; // TODO
             return;
         case GL_MAX_TESS_CONTROL_ATOMIC_COUNTERS:
-            *params = kFrontendMaxTessControlAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().stageCounters[1];
             return;
         case GL_MAX_TESS_CONTROL_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxTessControlAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().stageBuffers[1];
             return;
         case GL_MAX_TESS_EVALUATION_ATOMIC_COUNTERS:
-            *params = kFrontendMaxTessEvaluationAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().stageCounters[2];
             return;
         case GL_MAX_TESS_EVALUATION_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxTessEvaluationAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().stageBuffers[2];
             return;
         case GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS:
-            *params = 0;
+            *params = MG_Backend::pActiveBackendObject
+                          ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxTessControlImageUniforms
+                          : MG_Backend::DynamicBackendParameters{}.MaxTessControlImageUniforms;
             return;
         case GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS:
-            *params = 0;
+            *params = MG_Backend::pActiveBackendObject
+                          ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxTessEvaluationImageUniforms
+                          : MG_Backend::DynamicBackendParameters{}.MaxTessEvaluationImageUniforms;
             return;
         case GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS:
             *params = StageStorageBlockCount(&MG_Backend::DynamicBackendParameters::MaxTessControlShaderStorageBlocks);
@@ -1951,10 +2277,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxVaryingVectors;
             return;
         case GL_MAX_VERTEX_ATOMIC_COUNTERS:
-            *params = kFrontendMaxVertexAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().stageCounters[0];
             return;
         case GL_MAX_VERTEX_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxVertexAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().stageBuffers[0];
             return;
         case GL_MAX_VERTEX_IMAGE_UNIFORMS:
             *params = MG_Backend::pActiveBackendObject
@@ -2023,7 +2349,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = MG_State::pGLContext->GetPixelStoreParam(PixelStoreParam::PackSwapBytes);
             return;
         case GL_PIXEL_PACK_BUFFER_BINDING:
-            if (const auto& obj = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject()) {
+            if (const auto& obj =
+                    MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject()) {
                 *params = static_cast<GLint>(obj->GetExternalIndex());
             } else {
                 *params = 0;
@@ -2049,8 +2376,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(MG_State::pGLContext->GetPointSpriteCoordOrigin());
             return;
         case GL_PRIMITIVE_RESTART:
-            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ? GL_TRUE
-                                                                                                    : GL_FALSE;
+            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ? GL_TRUE : GL_FALSE;
             return;
         case GL_PRIMITIVE_RESTART_INDEX:
             *params = static_cast<GLint>(MG_State::pGLContext->GetPrimitiveRestartIndex());
@@ -2105,17 +2431,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(MG_State::pGLContext->GetHint(pname));
             return;
         case GL_READ_BUFFER:
-            if (const auto& fbo = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read)
-                                      .GetBoundObject()) {
-                *params =
-                    static_cast<GLint>(MG_Util::ConvertFramebufferAttachmentTypeToGLEnum(fbo->GetReadBuffer()));
+            if (const auto& fbo =
+                    MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject()) {
+                *params = static_cast<GLint>(MG_Util::ConvertFramebufferAttachmentTypeToGLEnum(fbo->GetReadBuffer()));
             } else {
                 *params = 0;
             }
             return;
         case GL_RENDERBUFFER_BINDING:
-            if (const auto& obj =
-                    MG_State::pGLContext->GetRenderbufferBindingSlot(RenderbufferTarget::Renderbuffer).GetBoundObject()) {
+            if (const auto& obj = MG_State::pGLContext->GetRenderbufferBindingSlot(RenderbufferTarget::Renderbuffer)
+                                      .GetBoundObject()) {
                 *params = static_cast<GLint>(obj->GetExternalIndex());
             } else {
                 *params = 0;
@@ -2135,12 +2460,10 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleAlphaToCoverage) ? GL_TRUE : GL_FALSE;
             return;
         case GL_SAMPLE_ALPHA_TO_ONE:
-            *params =
-                MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleAlphaToOne) ? GL_TRUE : GL_FALSE;
+            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleAlphaToOne) ? GL_TRUE : GL_FALSE;
             return;
         case GL_SAMPLE_COVERAGE:
-            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleCoverage) ? GL_TRUE
-                                                                                                  : GL_FALSE;
+            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleCoverage) ? GL_TRUE : GL_FALSE;
             return;
         case GL_SAMPLE_MASK:
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleMask) ? GL_TRUE : GL_FALSE;
@@ -2187,24 +2510,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             RecordIndexedOnlyGetterError(__func__, pname);
             return;
         case GL_STENCIL_BACK_FAIL:
-            *params = static_cast<GLint>(
-                MG_Util::ConvertStencilOperationToGLEnum(
-                    MG_State::pGLContext->GetStencilState(StencilFace::Back).FailOp));
+            *params = static_cast<GLint>(MG_Util::ConvertStencilOperationToGLEnum(
+                MG_State::pGLContext->GetStencilState(StencilFace::Back).FailOp));
             return;
         case GL_STENCIL_BACK_FUNC:
             *params = static_cast<GLint>(
-                MG_Util::ConvertDepthTestFuncToGLEnum(
-                    MG_State::pGLContext->GetStencilState(StencilFace::Back).Func));
+                MG_Util::ConvertDepthTestFuncToGLEnum(MG_State::pGLContext->GetStencilState(StencilFace::Back).Func));
             return;
         case GL_STENCIL_BACK_PASS_DEPTH_FAIL:
-            *params = static_cast<GLint>(
-                MG_Util::ConvertStencilOperationToGLEnum(
-                    MG_State::pGLContext->GetStencilState(StencilFace::Back).PassDepthFailOp));
+            *params = static_cast<GLint>(MG_Util::ConvertStencilOperationToGLEnum(
+                MG_State::pGLContext->GetStencilState(StencilFace::Back).PassDepthFailOp));
             return;
         case GL_STENCIL_BACK_PASS_DEPTH_PASS:
-            *params = static_cast<GLint>(
-                MG_Util::ConvertStencilOperationToGLEnum(
-                    MG_State::pGLContext->GetStencilState(StencilFace::Back).PassDepthPassOp));
+            *params = static_cast<GLint>(MG_Util::ConvertStencilOperationToGLEnum(
+                MG_State::pGLContext->GetStencilState(StencilFace::Back).PassDepthPassOp));
             return;
         case GL_STENCIL_BACK_REF:
             *params = MG_State::pGLContext->GetStencilState(StencilFace::Back).Ref;
@@ -2219,24 +2538,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(MG_State::pGLContext->GetClearStencil());
             return;
         case GL_STENCIL_FAIL:
-            *params = static_cast<GLint>(
-                MG_Util::ConvertStencilOperationToGLEnum(
-                    MG_State::pGLContext->GetStencilState(StencilFace::Front).FailOp));
+            *params = static_cast<GLint>(MG_Util::ConvertStencilOperationToGLEnum(
+                MG_State::pGLContext->GetStencilState(StencilFace::Front).FailOp));
             return;
         case GL_STENCIL_FUNC:
             *params = static_cast<GLint>(
-                MG_Util::ConvertDepthTestFuncToGLEnum(
-                    MG_State::pGLContext->GetStencilState(StencilFace::Front).Func));
+                MG_Util::ConvertDepthTestFuncToGLEnum(MG_State::pGLContext->GetStencilState(StencilFace::Front).Func));
             return;
         case GL_STENCIL_PASS_DEPTH_FAIL:
-            *params = static_cast<GLint>(
-                MG_Util::ConvertStencilOperationToGLEnum(
-                    MG_State::pGLContext->GetStencilState(StencilFace::Front).PassDepthFailOp));
+            *params = static_cast<GLint>(MG_Util::ConvertStencilOperationToGLEnum(
+                MG_State::pGLContext->GetStencilState(StencilFace::Front).PassDepthFailOp));
             return;
         case GL_STENCIL_PASS_DEPTH_PASS:
-            *params = static_cast<GLint>(
-                MG_Util::ConvertStencilOperationToGLEnum(
-                    MG_State::pGLContext->GetStencilState(StencilFace::Front).PassDepthPassOp));
+            *params = static_cast<GLint>(MG_Util::ConvertStencilOperationToGLEnum(
+                MG_State::pGLContext->GetStencilState(StencilFace::Front).PassDepthPassOp));
             return;
         case GL_STENCIL_REF:
             *params = MG_State::pGLContext->GetStencilState(StencilFace::Front).Ref;
@@ -2262,7 +2577,17 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TIMESTAMP: {
             Int64 timestamp = 0;
             if (!MG_Config::Features.DisableTimerQuery) {
-                if (const auto getGpuTimestampNs = MG_Backend::gBackendFunctionsTable.GL.GetGpuTimestampNs) {
+                // glGetInteger64v(GL_TIMESTAMP). GetGpuTimestampNs is class C - a LIVE GPU
+                // timestamp is not a static property, so R-15 does not reach it - and the
+                // documented answer when it is unavailable is 0 (GLFunctionsTable::GetGpuTimestampNs), which
+                // is correct rather than merely quiet. kCapTimerQuery is the published bit.
+                //
+                // The POINTER-valued macro, so the init-statement below is unchanged in a pull
+                // build and G1 cannot see this edit: the Bool-valued spelling moved this
+                // function by -150 bytes for no behavioral reason at all.
+                if (const auto getGpuTimestampNs =
+                        MGL_BACKEND_SLOT_PTR_CAP(GetGpuTimestampNs, MG_Pipe::kCapTimerQuery)) {
+                    MGP_FILL(GetGpuTimestampNs);
                     timestamp = getGpuTimestampNs();
                 }
             }
@@ -2440,8 +2765,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                       dynamicParameters.MaxUniformBlockSize);
             break;
         case GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS:
-            *params = std::max(dynamicParameters.MaxComputeWorkGroupInvocations,
-                               kFrontendMaxComputeWorkGroupInvocations);
+            *params =
+                std::max(dynamicParameters.MaxComputeWorkGroupInvocations, kFrontendMaxComputeWorkGroupInvocations);
             break;
         case GL_MAX_COMPUTE_WORK_GROUP_COUNT:
             GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0, &params[0]);
@@ -2454,7 +2779,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, &params[2]);
             break;
         case GL_MAJOR_VERSION:
-            *params = rendererInfo.RendererGLInfo.TargetGLVersion.Major;
+            *params = EsIdentityActive() ? 3 : rendererInfo.RendererGLInfo.TargetGLVersion.Major;
             break;
         case GL_MAX_3D_TEXTURE_SIZE:
             *params = dynamicParameters.Max3DTextureSize;
@@ -2553,12 +2878,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         // everything its own switch does not handle, does not report INVALID_ENUM for them.
         case GL_PATCH_DEFAULT_OUTER_LEVEL: {
             const FloatVec4& outer = MG_State::pGLContext->GetPatchDefaultOuterLevel();
-            for (Uint i = 0; i < 4; ++i) params[i] = static_cast<GLint>(std::lround(outer[i]));
+            for (Uint i = 0; i < 4; ++i)
+                params[i] = static_cast<GLint>(std::lround(outer[i]));
             break;
         }
         case GL_PATCH_DEFAULT_INNER_LEVEL: {
             const FloatVec2& inner = MG_State::pGLContext->GetPatchDefaultInnerLevel();
-            for (Uint i = 0; i < 2; ++i) params[i] = static_cast<GLint>(std::lround(inner[i]));
+            for (Uint i = 0; i < 2; ++i)
+                params[i] = static_cast<GLint>(std::lround(inner[i]));
             break;
         }
         // GL 4.6 core table 23.66: whether the primitive-restart index terminates a patch.
@@ -2610,8 +2937,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_SHADER_STORAGE_BLOCK_SIZE:
             // 64-bit state (see GetInteger64v); the 32-bit query saturates, per the GL
             // state-query conversion rules.
-            *params = static_cast<GLint>(std::min<Uint64>(dynamicParameters.MaxShaderStorageBlockSize,
-                                                          static_cast<Uint64>(INT32_MAX)));
+            *params = static_cast<GLint>(
+                std::min<Uint64>(dynamicParameters.MaxShaderStorageBlockSize, static_cast<Uint64>(INT32_MAX)));
             break;
         case GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS:
             // NOT the frontend's binding-point array size: GetIndexedBufferQueryPointCount
@@ -2741,10 +3068,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(RenderStateParameters::MAX_VIEWPORTS);
             break;
         case GL_MINOR_VERSION:
-            *params = rendererInfo.RendererGLInfo.TargetGLVersion.Minor;
+            *params = EsIdentityActive() ? 2 : rendererInfo.RendererGLInfo.TargetGLVersion.Minor;
             break;
         case GL_NUM_EXTENSIONS:
-            *params = static_cast<Int>(rendererInfo.RendererGLInfo.Extensions.size());
+            *params = static_cast<Int>(rendererInfo.RendererGLInfo.Extensions.size() + ClientSideExtensions().size());
             break;
         case GL_POINT_SIZE_GRANULARITY:
             *params = static_cast<GLint>(dynamicParameters.PointSizeGranularity);
@@ -2809,6 +3136,18 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLenum GetError() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // KHR_robustness: a lost context's commands generate GL_CONTEXT_LOST. Reported ONCE per
+        // context and ahead of whatever else is queued, so an application that learns of the loss
+        // from glGetError (Chromium's decoder does) learns of it, and one that drains errors in a
+        // loop until GL_NO_ERROR still terminates.
+        // Only where the reset is notified at all (ResetIsNotified: not on a NO_RESET_NOTIFICATION
+        // explicit core-profile context).
+        if (MG_Remote::Client::ClientSession::DeviceLost() && MG_State::pGLContext && ResetIsNotified() &&
+            MG_State::pGLContext->TakeContextLostReport()) {
+            return GL_CONTEXT_LOST;
+        }
+#endif
         auto error = MG_State::pGLContext->PopGLError();
         if (!error || !error->get()) {
             return GL_NO_ERROR;
@@ -2817,6 +3156,49 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLenum GetGraphicsResetStatus() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P6 `dl` (CONTRACT-P6 5.3): THE ONE GL-VISIBLE CONSEQUENCE OF A DEAD SERVER.
+        //
+        // Before this, "a dead server leaves the client silently DECLINE-ing every verb forever
+        // with glGetError clean" - the contract's own words, and the reason the latch is a
+        // package rather than carriage. An application that asks the robustness question has no
+        // other way to find out, because a DECLINE is indistinguishable from a verb that
+        // happened.
+        //
+        // GL_UNKNOWN_CONTEXT_RESET, not GUILTY or INNOCENT. Those two assign BLAME - guilty
+        // means this context's commands caused the reset, innocent means another context's did -
+        // and neither is knowable here:
+        //   * a session ends for a fault the server names by FAMILY only (BackendDeviceLost, a
+        //     protocol fault, ...) or by hanging up; nothing it sends attributes the fault to a
+        //     context, and a hangup is a server death, not a GPU reset at all;
+        //   * a GPU device loss is not attributable either: Vulkan's device loss carries no
+        //     culprit, and the host GL driver's own GUILTY/INNOCENT (which Espryt reads when it
+        //     latches) is about whichever backend context the server had current, while the
+        //     session ends as a whole - every context of it is lost with that one;
+        //   * INNOCENT would mean another context's fault reset this one, but a loss ends exactly
+        //     the session that faulted (every other session keeps running), so the contexts that
+        //     see it are all in the faulting session.
+        // UNKNOWN is the spec's answer for exactly that, and it is the one that does not lie. The
+        // cause - the latch's words, with the fault family where the server named one - is
+        // logged once per context, the first time its reset is reported.
+        //
+        // The status does not go back to GL_NO_ERROR: the context stays lost (KHR_robustness
+        // allows a reset status to be returned repeatedly while the reset "is in progress", and
+        // this one never completes - the context has to be recreated, which puts it on a fresh
+        // session).
+        //
+        // WHOLLY INSIDE THE GUARD, including the include above. In a pull build this function is
+        // byte-for-byte what it was, which is what G1 measures.
+        if (MG_Remote::Client::ClientSession::DeviceLost()) {
+            if (!ResetIsNotified()) return GL_NO_ERROR;
+            if (MG_State::pGLContext && MG_State::pGLContext->TakeResetStatusReport()) {
+                const String reason = MG_Remote::Client::ClientSession::LastLossReason();
+                MGLOG_W("glGetGraphicsResetStatus: GL_UNKNOWN_CONTEXT_RESET for a context of a lost session (%s)",
+                        reason.empty() ? "the session was lost" : reason.c_str());
+            }
+            return GL_UNKNOWN_CONTEXT_RESET;
+        }
+#endif
         // MobileGL does not implement robustness reset notification, so report GL_NO_ERROR
         // ("no reset detected"). Returning the generic stub's (GLenum)1 makes dEQP read a lost
         // device after every case (gl3cTestPackages.cpp:121) and, under the default

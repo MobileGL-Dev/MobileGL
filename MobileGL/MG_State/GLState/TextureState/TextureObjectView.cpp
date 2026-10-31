@@ -18,7 +18,11 @@ namespace MobileGL::MG_State::GLState {
         // TextureObject.cpp's completeness walk assumes); every other layered target keeps them
         // in z. GL_TEXTURE_3D is deliberately None: its depth is a spatial axis, not layers, and
         // ARB_texture_view forbids anything but a full-depth 3D->3D view of it.
-        enum class LayerAxis { None, Y, Z };
+        enum class LayerAxis {
+            None,
+            Y,
+            Z
+        };
 
         LayerAxis LayerAxisOf(TextureTarget target) {
             switch (target) {
@@ -79,6 +83,16 @@ namespace MobileGL::MG_State::GLState {
         // to the view. GetImmutableLevels() forwards to the owner for the actual GL query, which
         // GL 4.6 core 8.18 defines as the ORIGINAL texture's value.
         SetImmutableLevels(numLevels);
+        // ViewOf, and it is published from HERE rather than left to SetImmutableLevels above,
+        // which early-returns when the composed level count happens to be the base class's
+        // current value - a degenerate view (the spec's min() composition narrowed to zero
+        // levels) would otherwise never publish the one field that makes it a view. The
+        // descriptor is deduped on its own bytes, so the ordinary case pays one compare.
+        //
+        // ONE HOP ALWAYS REACHES STORAGE: glTextureView composes a view-of-a-view onto the ROOT
+        // at creation, which is what the spec's additive min-level rule describes and what the
+        // assertion above pins, so the owner named here is never itself a view.
+        PipePublishDescriptor();
     }
 
     Uint TextureObjectView::GetImmutableLevels() const {
@@ -179,10 +193,9 @@ namespace MobileGL::MG_State::GLState {
         const SizeT bytesPerTexel = ownerBytes / ownerTexels;
         // One "layer" is a whole x*y slice for a 2D/cube array, and a single row of `width`
         // texels for a 1D array (whose layer count lives in the state-side height).
-        const SizeT layerTexels = ownerAxis == LayerAxis::Y
-                                      ? static_cast<SizeT>(std::max(ownerSize.x(), 0))
-                                      : static_cast<SizeT>(std::max(ownerSize.x(), 0)) *
-                                            static_cast<SizeT>(std::max(ownerSize.y(), 0));
+        const SizeT layerTexels = ownerAxis == LayerAxis::Y ? static_cast<SizeT>(std::max(ownerSize.x(), 0))
+                                                            : static_cast<SizeT>(std::max(ownerSize.x(), 0)) *
+                                                                  static_cast<SizeT>(std::max(ownerSize.y(), 0));
         const SizeT offset = static_cast<SizeT>(layerIndex) * layerTexels * bytesPerTexel;
         return offset < ownerBytes ? offset : 0;
     }
@@ -327,8 +340,7 @@ namespace MobileGL::MG_State::GLState {
                                                      Vector<MipmapDirtyRegion>& outRects) const {
         outRects.clear();
         if (m_ownerMipmap == nullptr) return;
-        m_ownerMipmap->GetStorageDirtyFootprint(ToOwnerUploadTarget(uploadTarget), ToOwnerLevel(mipmapLevel),
-                                                outRects);
+        m_ownerMipmap->GetStorageDirtyFootprint(ToOwnerUploadTarget(uploadTarget), ToOwnerLevel(mipmapLevel), outRects);
     }
 
     void TextureObjectView::SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,

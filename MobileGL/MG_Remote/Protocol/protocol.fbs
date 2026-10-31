@@ -1,0 +1,459 @@
+// MobileGL - MobileGL/MG_Remote/Protocol/protocol.fbs
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// MobileGL disaggregated wire protocol - CONTROL PLANE ONLY.
+//
+// Plan B (docs plan "MGPipe") section 8.1 inherits the transport design of the
+// earlier plan verbatim, and its section 7.1 splits the schema in two:
+//
+//   - rare / variable-length / must-evolve messages -> FlatBuffers *tables*,
+//     carried as complete framed messages over the control channel. That is
+//     everything in this file.
+//   - the hot path -> FlatBuffers *structs* (fixed layout, no vtable, no
+//     offset indirection) written straight into the SEG_CMD ring. Those
+//     records are generated from MG_Pipe/PipeCalls.def and are deliberately
+//     NOT in this schema yet: the call catalog is a separate P0 deliverable
+//     and record numbering must never churn.
+//
+// Regeneration: scripts/gen_protocol.py (flatc is NOT part of the default
+// build graph). generated/protocol_generated.h is committed and CI's
+// flatc-check regenerates it and runs `git diff --exit-code`.
+
+namespace MobileGL.Wire;
+
+// ---------------------------------------------------------------------------
+// Segments
+// ---------------------------------------------------------------------------
+
+// Segment layout is inherited unchanged (earlier plan section 6.1):
+// SEG_CMD 8MiB / SEG_STAGE 32MiB+ / SEG_REPLY 8MiB / SEG_EVENT 256KiB /
+// SEG_SHADOW[n] / SEG_ADOPT[n].
+enum SegmentKind : ubyte {
+  None = 0,
+  Cmd = 1,     // client-owned command ring (RingControl + records)
+  Stage = 2,   // client-owned bulk staging
+  Reply = 3,   // server-owned reply pool
+  Event = 4,   // server-owned event ring
+  Shadow = 5,  // client-owned per-object shadow (P4.5+)
+  Adopt = 6,   // server-owned adopted store, client RW (>= 16MiB)
+}
+
+// The fd itself never travels in a message: POSIX passes it with SCM_RIGHTS on
+// the aux socket (ITransport::ShareFd), Windows resolves `name`.
+table SegmentRef {
+  id: uint;
+  kind: SegmentKind;
+  sizeBytes: ulong;
+  name: string;
+}
+
+// ---------------------------------------------------------------------------
+// Handshake
+// ---------------------------------------------------------------------------
+
+// P6.5: independent control and data-plane choices. Values are append-only.
+enum DataPlane : ubyte { SharedSegments = 0, Stream = 1 }
+enum WireForm : ubyte { StructImage = 0 }
+enum DialMode : ubyte { No = 0, Fork = 1, Connect = 2 }
+
+// Window sizes are stated by the server; the client's values are proposals only.
+table LinkTerms {
+  dataPlane: DataPlane;
+  wireForm: WireForm;
+  maxReplyBytes: ulong;
+  cmdWindowBytes: ulong;
+  stageWindowBytes: ulong;
+  eventWindowBytes: ulong;
+  // P11 B2 (MG_Remote/CONTRACT-P11.md B2), appended. In the Hello: the persistent-map adoption
+  // tier the client ASKS for - 0 = T0 (it allocates each adopted store as an AHardwareBuffer and
+  // hands it over the aux socket), 0x80 = T0 by DEFAULT (the client's knob is unset: the same T0,
+  // but the server names a refusal only at debug level), 2 = T2 (emulate: shadow + push). 1 (T1)
+  // is closed and never sent; a stream plane always asks 2. In the Welcome: the server's echo of the ask it
+  // recorded. It is not the tier: T0 needs the server's POST self-test, which runs at the first
+  // native bind (the GPU context does not exist yet), and is published as kCapAdoptT0 in the
+  // CapsSnapshot that bind republishes. Absent (an older peer) reads 2.
+  adoptTier: ubyte = 2;
+}
+
+enum RefuseCode : uint {
+  None = 0,
+  ProtocolVersion = 1,
+  WireFingerprint = 2,
+  BuildFingerprint = 3,
+  Authentication = 4,
+  LinkTerms = 5,
+  Backend = 6,
+  Busy = 7,
+  MalformedHello = 8,
+}
+
+// A handshake rejection is a normal session outcome, never a process abort.
+table Refuse {
+  code: RefuseCode;
+  detail: string;
+  expected: ulong;
+  actual: ulong;
+  peerValue: string;
+}
+
+table LogFlush {
+  seq: ulong;
+  ack: bool;
+}
+
+table Hello {
+  abiMajor: uint;
+  abiMinor: uint;
+  buildFingerprint: string;
+  backendType: uint;
+  pid: uint;
+  configBlob: [ubyte];
+  // Retained legacy slot. P6.5 peers compare wireFingerprint instead.
+  abiFingerprint: ulong;
+  wireFingerprint: ulong;
+  linkTerms: LinkTerms;
+  token: string;
+  dialMode: DialMode;
+}
+
+table Welcome {
+  abiMajor: uint;
+  abiMinor: uint;
+  serverPid: uint;
+  cmdRing: SegmentRef;
+  stageRing: SegmentRef;
+  replyPool: SegmentRef;
+  eventRing: SegmentRef;
+  buildFingerprint: string;
+  // Retained legacy slot; do not reuse or renumber it.
+  abiFingerprint: ulong;
+  wireFingerprint: ulong;
+  linkTerms: LinkTerms;
+  backendType: uint;
+  // PH-7 (4), ID-P7-3. 128 bits from the server's CSPRNG, minted after the Hello authenticated
+  // and only on a Stream data plane. The client opens its data connection AFTER this Welcome
+  // and presents the value as that connection's first frame (DataBind); the server binds the
+  // connection to this session by the value, not by which connection arrived second. Absent on
+  // SharedSegments, whose descriptors travel over the control connection's own aux socket.
+  dataNonce: [ubyte];
+}
+
+// PH-7 (4). The FIRST and only control-framed message on a TCP data connection: the Welcome's
+// dataNonce, handed back. Everything after it on that connection is StreamLink's own framing.
+// A connection whose first frame is not this, or whose nonce is not the live session's, is
+// refused by name (`Refuse{Authentication}`) and never becomes a data plane.
+table DataBind {
+  nonce: [ubyte];
+}
+
+// P11 PAIR. The FIRST frame on each of the two connections a socket client opens with
+// SocketTransport::ConnectTo - control, then aux (the SCM_RIGHTS socket; the data connection on a
+// tcp:// ConnectTo) - and on control the only frame before the Hello. `nonce` is 128 bits from the
+// client's CSPRNG, the same on both; `aux` says which of the two this connection is. The server
+// holds every accepted connection until it has presented this and pairs the two halves by the
+// nonce, never by arrival order (Server/PairAcceptor.h): a stray connection, or a second client
+// connecting at the same moment, cannot become half of this client's session. A control connection
+// whose first frame is a Hello is a peer from before this message and is refused by name.
+table PairBind {
+  nonce: [ubyte];
+  aux: bool;
+}
+
+// ---------------------------------------------------------------------------
+// Capabilities
+// ---------------------------------------------------------------------------
+
+// Replaces the 40 `pActiveBackendObject->` reads plus the 89 caps read sites
+// (plan B appendix A, `get_caps`). The three blobs are byte-for-byte images of
+// the corresponding POD structs; they are versioned by structSize-first
+// discipline, not by this schema.
+// The four fields this table used to end with are RETIRED (CONTRACT-P5 table 0,
+// "CapsSnapshot redundancy"):
+//
+//   maxComputeWorkGroupCount / maxComputeWorkGroupSize - they ride inside
+//     `dynamicParameters` already (BackendObject.h:392-393), and two spellings of
+//     one number is how the two sides come to disagree about it.
+//   tableSlotMask - GLFunctionsTable has SIXTY-NINE function-pointer slots
+//     (BackendObject.h:117-292) and a ulong is 64 bits, so the field could never
+//     address the table its own comment named; and ARCHITECTURE.md:114 already
+//     retired "is this table slot null" as the capability probe in favor of
+//     CallMask, so keeping it would re-introduce exactly what replaced it.
+//   prefersCpuXfbPrimitiveAccounting - answered by kCapCpuXfbPrimitiveAccounting
+//     in `callMask` below.
+//
+// THEY ARE `(deprecated)`, NOT DELETED, AND THAT IS NOT A STYLE CHOICE. In
+// FlatBuffers a table field's id IS its vtable slot, and REMOVING a field FREES
+// that slot for the next field appended to the table - so plainly deleting these
+// four would have handed slots 14 and 16, which used to carry `[int]` vectors
+// (4-byte uoffsets), to `callMask` (an 8-byte inline ulong) and `backendType` (a
+// 4-byte inline uint). Two peers straddling that edit both still announce
+// abiMajor 1, and the ABI fingerprint mixes struct sizes and a git stamp, not the
+// schema, so neither the handshake nor the fingerprint could see it: the reader
+// would parse a uoffset as a ulong. `(deprecated)` keeps 14/18/20 burned, pushes
+// the two new fields to 22/24, generates no accessor for the retired names so
+// nothing can read or write them, and costs zero bytes on the wire. The
+// alternative - bumping MOBILEGL_PROTOCOL_ABI_MAJOR - is a real break for a
+// change that does not need to be one.
+table CapsSnapshot {
+  dynamicParameters: [ubyte];
+  rendererInfo: [ubyte];
+  formatCaps: [ubyte];
+  extensions: [string];
+  apiVersion: string;
+  maxComputeWorkGroupCount: [int] (deprecated);
+  maxComputeWorkGroupSize: [int] (deprecated);
+  tableSlotMask: ulong (deprecated);
+  prefersCpuXfbPrimitiveAccounting: bool (deprecated);
+  // MGPCaps::CallMask (MGPipeTypes.h:127). Bits 0..8 are MGPCapBit; bits 32..47
+  // are the CONSUMER MASK - bit (32+n) means "the server has a consumer for
+  // MGPipe subsystem bit n" - and MG_Remote/CapsCodec.h holds the four constexprs
+  // that are the only legal way to fold and test them. It needs a carrier of its
+  // own because `dynamicParameters` is the image of DynamicBackendParameters,
+  // which CallMask is not a member of; and without a carrier R-8's rule that the
+  // client's liveness gates read the caps mirror has nothing to read.
+  callMask: ulong;
+  // The SERVER's backend type, for CapsMirror::Backend(). Hello.backendType is
+  // the CLIENT's request; this is the answer, and the frontend branches that
+  // switch on it (GL_Framebuffer.cpp:47, GL_Texture.cpp:6536, CompileEnv.cpp:122)
+  // take a wrong arm rather than fail on a value they do not know, so it may not
+  // be guessed from the renderer string.
+  backendType: uint;
+}
+
+table DefaultFramebufferInfo {
+  width: int;
+  height: int;
+  colorFormat: uint;
+  depthFormat: uint;
+  stencilFormat: uint;
+}
+
+// ---------------------------------------------------------------------------
+// Surface / EGL lifecycle
+// ---------------------------------------------------------------------------
+
+enum SurfaceOpKind : ubyte {
+  None = 0,
+  InitializeDisplay = 1,
+  CreateWindowSurface = 2,
+  CreatePbufferSurface = 3,
+  ResizeWindowSurface = 4,
+  ReleaseSurface = 5,
+  MakeCurrent = 6,
+  ReleaseCurrent = 7,
+  // P5f (package fc) appended these three. Append-only, always: the enum's values ARE the wire.
+  SetSwapInterval = 8,
+  ReleaseResources = 9,
+  SetWindowHandle = 10,
+  // P6 (package cp) appended this one. The draft held that InitCapabilities needs
+  // no wire form because "the CapsSnapshot answers it" - but a CapsSnapshot is the
+  // ANSWER and this is the REQUEST, and a spawn client has a live caller for it
+  // (Client/BackendObject_Remote.cpp). Without the tag the codec refused it by
+  // name and every spawned eglMakeCurrent failed with InprocOnlyOpOnTheWire.
+  InitCapabilities = 11,
+  // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). THE EGL CONTEXT LIFECYCLE, as two
+  // more ops on the same frame the nine surface ops ride - the shape §"wire changes" 2 prescribes,
+  // and deliberately NOT two new CtrlMsg tables: a context is created, destroyed and made current
+  // by the SAME caller on the SAME thread as a surface, through the same blocking frame channel,
+  // and a second channel would only be a second place for the two orderings to disagree.
+  //
+  //   CreateContext  `context` is the clientContextToken EGLState minted, `shareGroupToken` the
+  //                  group it was derived into (the sharing context's group, or a fresh one),
+  //                  `contextFlags` the frame's reserved extension word (0 today). `display` and
+  //                  `surface` are 0: a context is display-scoped in EGL but the server's display
+  //                  is the session's own, so nothing is named.
+  //   DestroyContext `context` is the token to drop. The server forgets it and, if it was the
+  //                  bound one, unbinds it.
+  //
+  // Both are answered by the ordinary SurfaceReply (ok, plus the refusal enum) - S1 creates a
+  // PLACEHOLDER runtime (token, share group, flags) and no native context, so there is nothing
+  // for the reply to carry that a Bool does not say already.
+  CreateContext = 12,
+  DestroyContext = 13,
+}
+
+enum WindowKind : ubyte {
+  None = 0,
+  AndroidNativeWindow = 1,
+  X11 = 2,
+  Win32Hwnd = 3,
+  Surfaceless = 4,
+  Pbuffer = 5,
+  // P5f (package fc): WindowBackend (MG_Backend/BackendObject.h) has a fourth window backend and
+  // the two enums may only meet through the explicit mapping table in Protocol/SurfaceOpCodec.cpp
+  // - Surfaceless/Pbuffer are surface SHAPES, not window backends, and answer "no backend" there.
+  MetalLayer = 6,
+  // P12 (on-screen server window), appended. THE WINDOW IS THE SERVER'S OWN: the client asks the
+  // server to create the surface on the window the server process owns (the display Activity's
+  // SurfaceView) and has none of its own to name, so `nativeToken` is always 0 and no pointer
+  // crosses (Rule G/H). Legal on CreateWindowSurface only; SetWindowHandle may not name it.
+  ServerOwned = 7,
+}
+
+// P12, appended: WHY A SURFACE OP WAS DECLINED, so the client can name the refusal in its own log
+// instead of reading a bare `ok = false`. None of these latches the session: each is a
+// configuration or ordering answer, not a peer's corrupt bytes.
+enum SurfaceRefusal : ubyte {
+  None = 0,
+  NoServerDisplay = 1,              // ServerOwned asked of a server that owns no display
+  NoServerWindow = 2,               // the server owns a display, but no window came within its wait
+  SurfaceModeMismatch = 3,          // the session's surface mode (on-screen / offscreen) is the other one
+  ServerOwnedOnSetWindowHandle = 4, // SetWindowHandle named the server's own window
+}
+
+table SurfaceOp {
+  seq: ulong;
+  kind: SurfaceOpKind;
+  display: ulong;
+  surface: ulong;
+  windowKind: WindowKind;
+  nativeToken: ulong;   // X11 XID / HWND; 0 for ServerOwned (the server substitutes its own window)
+  width: int;
+  height: int;
+  swapInterval: int;
+  // P5f (package fc), appended (a FlatBuffers table field's id IS its vtable slot - append only):
+  // MakeCurrent's semantic unit is the (display, draw, read, context) four-tuple, and `surface`
+  // alone cannot carry it. `surface` stays the DRAW surface; `readSurface` and `context` are 0
+  // ("no surface" / "no context") for every other op and for a ReleaseCurrent.
+  readSurface: ulong;
+  context: ulong;
+  // P14 S1, appended (a FlatBuffers table field's id IS its vtable slot - append only). The two
+  // values CreateContext carries beyond the token itself: the share group the new context was
+  // derived into, and a reserved flags word so a later context attribute (a profile, a robustness
+  // ask) has a slot to land in without moving the fields beside it. 0 on every other op.
+  shareGroupToken: ulong;
+  contextFlags: uint;
+}
+
+table SurfaceReply {
+  seq: ulong;
+  ok: bool;
+  eglMajor: int;
+  eglMinor: int;
+  defaultFb: DefaultFramebufferInfo;
+  // P6.5: all preceding data-plane events must arrive before this reply is observed.
+  eventHead: ulong;
+  // P12, appended. The surface's REAL extent as the server has it - for a ServerOwned
+  // CreateWindowSurface, the server window's size - so a headless client knows its surface
+  // geometry when eglCreateWindowSurface returns, before any backend has published a
+  // surface-changed event (Magma creates its swapchain only at the first MakeCurrent). 0/0 for
+  // every other op.
+  width: int;
+  height: int;
+  refusal: SurfaceRefusal;
+}
+
+// ---------------------------------------------------------------------------
+// Resync / aux / diagnostics
+// ---------------------------------------------------------------------------
+
+// Sent by the client after it observes a serverEpoch bump (context lost or
+// server restart): every cached ring offset and every server-side object is
+// gone and the whole pushed state has to be replayed.
+table ResyncRequest {
+  serverEpoch: uint;
+}
+
+table ResyncDone {}
+
+enum AuxRequestKind : ubyte {
+  None = 0,
+  FenceClientWait = 1,
+  QueryResult = 2,
+  ScalarGet = 3,
+}
+
+// Requests issued from a thread that is not the ring producer (foreign-thread
+// sync / query polling), so they cannot take the SPSC ring.
+table AuxRequest {
+  seq: ulong;
+  kind: AuxRequestKind;
+  payload: [ubyte];
+}
+
+enum FatalCode : uint {
+  None = 0,
+  ProtocolCorruption = 1,  // record bounds / self-describing length violated
+  RingOverrun = 2,
+  SegmentMismatch = 3,
+  DeviceLost = 4,
+  ServerCrashed = 5,
+  AbiMismatch = 6,
+}
+
+table Fatal {
+  code: FatalCode;
+  message: string;
+  // P6 dl (CONTRACT-P6 5.2, D2). The internal MGFatalFamily word, so a peer that receives this
+  // frame before the sender aborts can name WHICH family ended the session instead of reading a
+  // bare EOF. `code` stays the coarse seven-value projection; this carries the full vocabulary.
+  // Append-only: an older peer that does not read it still gets `code` and `message`.
+  family: string;
+}
+
+// Severity-graded per plan B section 8.2: <= Warn is lossy, >= Error is
+// lossless and rate limited.
+enum LogLevel : ubyte {
+  Debug = 0,
+  Info = 1,
+  Warn = 2,
+  Error = 3,
+  Fatal = 4,
+}
+
+table LogLine {
+  level: LogLevel;
+  text: string;
+}
+
+// P7 (p7/spawnhang). THE SERVER IS STILL RUNNING THE CLIENT'S SURFACE OP. Sent only by the
+// server's control pump, only while its apply thread is running a SurfaceOp it has TAKEN, and
+// only before that op's SurfaceReply - once per progress interval after the op has run that long
+// (ServerLoop.cpp, kControlProgressIntervalMs). It is how a client tells a server that is BUSY
+// with its op (a cold native bring-up inside the first surface creation or MakeCurrent: eglInitialize
+// loading a software rasteriser off a cold disk) from one that is SILENT: the client's reply budget
+// restarts on each report, up to a ceiling. A server that never took the op, or is frozen, sends
+// none and still times out by name (CONTRACT-P6 5.4 D5b).
+table SurfaceProgress {
+  seq: ulong;       // the SurfaceOp.seq being run
+  elapsedMs: uint;  // since the op was posted to the apply thread
+}
+
+// ---------------------------------------------------------------------------
+// Envelope
+// ---------------------------------------------------------------------------
+
+// Union tags are wire values: only ever APPEND to this list.
+// ProgramReflection from the earlier plan's section 7.1 is intentionally
+// absent - plan B ships program artifacts inside the create_shader_state CSO
+// blob, so if a control-plane reflection message is ever needed it appends
+// here rather than reserving a tag today.
+union CtrlMsg {
+  Hello,
+  Welcome,
+  CapsSnapshot,
+  SurfaceOp,
+  SurfaceReply,
+  ResyncRequest,
+  ResyncDone,
+  AuxRequest,
+  Fatal,
+  LogLine,
+  Refuse,
+  LogFlush,
+  DataBind,
+  SurfaceProgress,
+  PairBind,
+}
+
+table CtrlEnvelope {
+  msg: CtrlMsg;
+}
+
+root_type CtrlEnvelope;
+file_identifier "MGLC";

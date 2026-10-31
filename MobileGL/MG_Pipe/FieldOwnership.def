@@ -1,0 +1,135 @@
+// MobileGL - MobileGL/MG_Pipe/FieldOwnership.def
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// Server-read class of each PipeInputs field and sticky forward; the generator requires one.
+//   RECORD_SUPPLIED  not listed: Coverage.def's emitted fields minus the refusals in PipeFill.cpp's
+//                    EmittedCallSuppliesTheWholeField (legacy pointer getters, two-sided pixel
+//                    store). Never relabel a pointer getter to zero the debt.
+//   APPLIER_DERIVED  answered from server state.
+//   FATAL            every server read aborts, whatever the record or configuration.
+//   BARRIER_PULLED   schema only, for the generator's controls; no production row uses it.
+// clang-format off
+
+// X(Field, Class, RetiringPhase, Why)
+#define MGP_FIELD_OWNERSHIP_LIST(X) \
+    X(GetBoundVertexArray, FATAL, "-", "server reads vertex-element handles; the legacy SharedPtr is not a wire value") \
+    X(GetBufferBindingSlot, FATAL, "-", "server reads verb buffer handles/reply scratch; legacy binding-slot pointers are forbidden") \
+    X(GetBufferBindingPoint, FATAL, "-", "server reads indexed buffer ranges or XFB Begin targets; never a client table base") \
+    X(GetFramebufferBindingSlot, FATAL, "-", "server reads framebuffer records; never a client BindingSlot") \
+    X(GetImageTextureBinding, FATAL, "-", "server reads shader-image records; never the client image-unit array") \
+    X(GetTextureUnitObject, FATAL, "-", "server reads sampler/view records or verb texture handles; never a client TextureUnit") \
+    X(GetProgramForDraw, FATAL, "-", "server reads draw-program handles and its owned ProgramArchive") \
+    X(GetProgramForDispatch, FATAL, "-", "server reads dispatch-program handles and its owned ProgramArchive") \
+    X(GetTransformFeedbackProgram, FATAL, "-", "server reads the capture-program archive retained by the Begin snapshot") \
+    X(GetBoundTransformFeedbackName, FATAL, "-", "no backend reader; XFB identity crosses as a lifetime value") \
+    X(GetTransformFeedbackPausedPrimitiveCounter, FATAL, "-", "query-only legacy accessor; transport entry is a named class-C refusal") \
+    X(GetProgramObject, FATAL, "-", "program identity is resolved on the client and crosses as a shader-CSO handle") \
+    X(GetTextureObject, FATAL, "-", "texture identity crosses as a handle; no server GL-name lookup into the client") \
+    X(ValidateProgramName, FATAL, "-", "validation belongs to the client; the server validates the carried handle") \
+    X(InvalidateCompileEnv, FATAL, "-", "transport caps republication replaces direct frontend invalidation") \
+    X(RecordError, FATAL, "-", "transport OnGlError posts an event before the legacy frontend-error-queue arm") \
+    X(GetPixelStoreParameters, APPLIER_DERIVED, "-", "set_pixel_pack_state writes the pack half; unpack is forbidden below") \
+    X(GetSamplingResolutionGeneration, APPLIER_DERIVED, "-", "server-owned applier texture shutter serial") \
+    X(GetTextureBindGeneration, APPLIER_DERIVED, "-", "server-owned applier texture shutter serial") \
+    X(GetTextureContextId, APPLIER_DERIVED, "-", "server-owned applier context serial") \
+    X(GetBufferBindingPointCount, APPLIER_DERIVED, "-", "fixed indexed binding-point capacity; no client lookup") \
+    X(HasOpenTransformFeedbackSpan, APPLIER_DERIVED, "-", "server Begin/End snapshot table keyed by XFB lifetime id")
+
+// The seven sticky forwards carry the same verdict as their field rows.
+#define MGP_FIELD_OWNERSHIP_FORWARD_LIST(X) \
+    X(GetBufferBindingPointCount, APPLIER_DERIVED, "-", "fixed indexed binding-point capacity; no client lookup") \
+    X(GetProgramObject, FATAL, "-", "program identity is resolved on the client and crosses as a shader-CSO handle") \
+    X(GetTextureObject, FATAL, "-", "texture identity crosses as a handle; no server GL-name lookup into the client") \
+    X(HasOpenTransformFeedbackSpan, APPLIER_DERIVED, "-", "server Begin/End snapshot table keyed by XFB lifetime id") \
+    X(ValidateProgramName, FATAL, "-", "validation belongs to the client; the server validates the carried handle") \
+    X(InvalidateCompileEnv, FATAL, "-", "transport caps republication replaces direct frontend invalidation") \
+    X(RecordError, FATAL, "-", "transport OnGlError posts an event before the legacy frontend-error-queue arm")
+
+// X(Field, Arg0, Class, Why) - argument-keyed exceptions. A row narrows one argument value of
+// one field to another class; the field keeps its single row above, because it is one array
+// (as GetBufferBindingSlot is in Coverage.def).
+// GetPixelStoreParameters(isUnpack): only the pack half has a carrier, written by the applier,
+// and every backend call site passes false. The unpack half is FATAL so a future backend read
+// aborts by name instead of reading a stale struct.
+#define MGP_FIELD_OWNERSHIP_ARG_LIST(X)                                                              \
+    X(GetPixelStoreParameters, 1, FATAL,                                                             \
+      "the unpack half has no carrier AND no backend reader; all six gPipeInputs sites pass false")
+
+// X(WireOp, Verb) - where the server stamps a verb boundary (ARCHITECTURE.md §9.2.1). Op and
+// verb names differ (draw_vbo stamps DrawArrays, blit BlitFramebuffer), so the map is checked
+// against PipeCalls.def and FillPoints.def. An unlisted op is not a boundary: a
+// set_dynamic_state between two draws belongs to the draw's verb. The generator requires every
+// verb-shaped call (kind kCtxVerb in PipeCalls.def, or named like an MGPipeVerb in
+// FillPoints.def) to have a row here or in the exemption list, since a missing row would apply
+// the record under the previous verb's stamp. A boundary that is neither goes undetected and
+// needs a hand-written row.
+#define MGP_VERB_OP_LIST(X)                                                                          \
+    /* CONTRACT §7 class B - the four that can actually arrive in P5. */                              \
+    X(Clear,              Clear)                                                                     \
+    X(DrawVbo,            DrawArrays)                                                                \
+    X(ReadPixels,         ReadPixels)                                                                \
+    X(Blit,               BlitFramebuffer)                                                           \
+    /* Class C today (Fatal{UnmigratedVerb}); mapped so the phase that emits one cannot get NO  */   \
+    /* stamp by omission. DrawVbo above has the same shape and a worse case: it stands for all  */   \
+    /* twenty draw verbs, which share the kDraw mask but not the NAME a Fatal prints.           */   \
+    X(LaunchGrid,         DispatchCompute)                                                           \
+    X(MemoryBarrier,      MemoryBarrier)                                                             \
+    X(BeginStreamOutput,  BeginTransformFeedback)                                                    \
+    X(EndStreamOutput,    EndTransformFeedback)                                                      \
+    X(PauseStreamOutput,  PauseTransformFeedback)                                                    \
+    X(ResumeStreamOutput, ResumeTransformFeedback)                                                   \
+    X(GenerateMipmap,     GenerateMipmap)                                                            \
+    X(GetTextureImage,    GetTextureImage)                                                           \
+    /* P5b (docs/archive/contracts/CONTRACT-P5B.md). The ONE renamed, non-kCtxVerb boundary the file above  */   \
+    /* said "the phase that emits it adds its row and decides which verb it is": P5b rules      */   \
+    /* resource_copy_region = glCopyImageSubData ONLY; the two framebuffer-sourced copies       */   \
+    /* (CopyTexImage2D / CopyTexSubImage2D) are copy_framebuffer_to_texture below, stamped as   */   \
+    /* CopyTexImage2D - both are kBlitOrCopy, one mask, and a row can name one verb.           */   \
+    X(ResourceCopyRegion, CopyImageSubData)                                                          \
+    /* The five P5b-appended verbs, opcodes 72..76, each stamped as the GLFunctionsTable verb   */   \
+    /* it reproduces.                                                                          */   \
+    X(BindShaderImage,    BindImageTexture)                                                          \
+    X(PatchParameter,     PatchParameteri)                                                           \
+    X(BindStreamOutput,   BindTransformFeedback)                                                     \
+    X(SetStorageBlockBinding, ShaderStorageBlockBinding)                                             \
+    X(CopyFramebufferToTexture, CopyTexImage2D)                                                       \
+    X(FenceCreate,        FenceSync)                                                                  \
+    X(FenceStatus,        GetSyncStatus)                                                              \
+    X(FenceWait,          ClientWaitSync)                                                             \
+    X(FenceDestroy,       DeleteSync)                                                                 \
+    X(FenceWaitServer,    WaitSync)                                                                   \
+    X(QueryCreate,        BeginXfbPrimitivesQuery)                                                    \
+    X(QueryBegin,         BeginXfbPrimitivesQuery)                                                    \
+    X(QueryEnd,           EndXfbPrimitivesQuery)                                                      \
+    X(QueryAvailable,     IsQueryResultAvailable)                                                     \
+    X(QueryResult,        GetQueryResult64)                                                           \
+    X(QueryDestroy,       DeleteBackendQuery)                                                        \
+    X(QueryCounter,       QueryCounterTimestamp)                                                     \
+    X(QueryTimestamp,     GetGpuTimestampNs)                                                          \
+    X(DeleteStreamOutput, DeleteTransformFeedback)                                                   \
+    /* P9 (CONTRACT-P9.md §1): the pack-buffer halves stamp as the verb they reproduce. */           \
+    X(ReadPixelsToBuffer, ReadPixels)                                                                \
+    X(GetTextureImageToBuffer, GetTextureImage)
+
+// X(Op, Why) - verb-shaped calls that are deliberately NOT stamp points.
+//
+// An exemption is a ROW, not an absence, so that the reason is in the file rather than in a
+// reviewer's head and so that the generator's completeness check has something to accept.
+#define MGP_VERB_OP_EXEMPT_LIST(X)                                                                   \
+    X(Present,                                                                                       \
+      "Present and SetSwapInterval go through BackendObject virtuals and "                           \
+      "read no frontend state, so they are not verbs here. There is no MGPipeVerb::Present, "        \
+      "MGPipeValidateForVerb is never called for it, and stamping would retire the previous "        \
+      "verb's answers with nothing to put in their place. It is class B all the same.")              \
+    X(SetSwapInterval,                                                                               \
+      "not a verb for the same reason as Present, and it is class C besides")                        \
+    X(Flush,                                                                                         \
+      "not a verb at all: the verb census (BRIEF §12 C-3) found Flush is not a GLFunctionsTable "    \
+      "slot and glFlush/glFinish are empty function bodies (Definitions.cpp:111-112), so there "     \
+      "is no MGPipeVerb::Flush for a row to name")
+// clang-format on

@@ -23,6 +23,14 @@ The bundled fixtures cover:
   campaign's benchmark scene: benchmark mode replays the whole window and the tail frames measure steady-state
   in-world frame time. The golden is still the final frame, so it works as an ordinary correctness case too.
   ![Minecraft 1.21.4 render distance 12 in-world golden](fixtures/minecraft-1.21.4-rd12-odinlite-in-world.0004660351.png)
+- minecraft-1.21.5-vanilla-fcl-in-world: captured on an Android device through FCL (MobileGL Magma, 854x480) from
+  vanilla Minecraft 1.21.5 in the world and view distance of the FCL performance bench (a night-time forest), so the
+  trace matrix covers the per-frame clear, blit and sub-data pattern FCL's MC 1.21.5 runs, which the 1.21.4 traces do
+  not. A 252-frame window (gltrim `-f 6701-6951`) for benchmarking, golden on the final frame. FCL captures bind
+  `EGL_OPENGL_ES_API`, so a desktop glretrace cannot make the golden; it is a DirectGLES replay of dev, matched exactly
+  by DirectVulkan within 8 pixels. The archive is 22.7 MB, over the 20 MiB budget: the floor is the setup state
+  (textures and chunk buffers), and a 151-frame window measured the same size. `ci: false` like rd12.
+  ![Minecraft 1.21.5 FCL vanilla in-world golden](fixtures/minecraft-1.21.5-vanilla-fcl-in-world.0005998912.png)
 - minecraft-1.21.4-fabric-sodium-in-world: captured from Minecraft 1.21.4 Fabric with Sodium after entering a
   singleplayer world with Fancy graphics.
   ![Minecraft 1.21.4 Fabric Sodium in-world golden](fixtures/minecraft-1.21.4-fabric-sodium-in-world.0000923340.png)
@@ -103,6 +111,16 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   iterationT after entering a singleplayer world, with Iris' DSA path disabled.
   ![Minecraft 1.21.4 Fabric Iris iterationT no-DSA in-world golden](fixtures/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0000115019.png)
+- minecraft-1.20.1-fabric-iris-iterationt-in-world: captured from Minecraft 1.20.1 Fabric with Sodium 0.5.13, Iris
+  1.7.6 and iterationT 3.2.0, in daylight with a block outlined. Iris 1.7 declares Sodium 0.5's lightmap input as
+  `ivec4` while Sodium feeds it `GL_UNSIGNED_BYTE`, a pairing the 1.21.4 fixtures never reach: sign-extending that
+  data turns all terrain black. The trace is a single-frame trim of a capture with a masked GL vendor; its ~64 MiB
+  archive is mostly the pack's own textures (two 33 MiB RGBA32F atmosphere volumes and an 8 MiB noise volume).
+  The golden is the Mesa picture and the NVIDIA capture is the alternate. The pack's outline shader compares the
+  outline alpha with `== 0.4f` and scales its width by `sign(lineOffset.x)`. NVIDIA rounds UNORM8 102/255 exactly and
+  fuses `ndc2.y - ndc1.y` into an FMA, so it draws a full gray box. Mesa is one ulp off and does not fuse, so the
+  outline is black and its screen-horizontal edges have zero width. Both are within GL's precision rules.
+  ![Minecraft 1.20.1 Fabric Iris iterationT in-world golden](fixtures/minecraft-1.20.1-fabric-iris-iterationt-in-world.0000375557-linux-mesa.png)
 - minecraft-1.21.4-fabric-iris-iterationrp-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   iterationRP after entering a singleplayer world, framing the iterationRP name overlay over a lake with far-shore
   tree reflections. iterationRP's temporal auto-exposure makes a single-frame trim overexpose and drop the overlay,
@@ -189,7 +207,7 @@ build-test/tools/trace_replay/mobilegl_trace_replay \
 ```
 
 At each call boundary it walks every live framebuffer object (or only the named
-ones), reads back every colour attachment and the depth attachment, and writes
+ones), reads back every color attachment and the depth attachment, and writes
 `fbo<N>-att<M>.png` / `fbo<N>-depth.png` plus a `manifest.txt` line per
 attachment recording the attached object, size, internal format, component type
 and per-channel min/max/mean and a content hash. Attachments are read as floats
@@ -293,6 +311,41 @@ unflushed persistent maps, e.g. the Create fixtures), pass
 `avoid_angle_llvmpipe_explicit_lod_bias` (DirectGLES on ANGLE llvmpipe, e.g. the
 sundial-lite fixture), pass `--ez avoid_angle_llvmpipe_explicit_lod_bias true` so
 the replay runs with `MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS=1`.
+
+### Repeats, the CI split subset, and keeping every repeat's evidence
+
+`run_android_retrace_local.py` drives the above through `trace-replay-ci.sh`. Three
+options exist for the P7-7 device diagnostics, where the question is not "did this
+case pass" but "which cases diverge, and is the divergence reproducible":
+
+| option | what it does |
+| --- | --- |
+| `--matrix` | run the **CI split subset** (the set `retrace-split` runs; 40 cases today) instead of the whole manifest. `--all` additionally includes the non-CI workloads such as rd12, which ID-P7-4 excludes from the exit-gate-3 denominator. Each case runs only the backends its own `ci_backends` names - and a case NAMED with `--case` that does not run the requested backend is an error, not a silent skip. |
+| `--repeat N` | replay each case/backend N times. Repeats after the first pass `--reuse-fixture`, so they measure the replay and not the push. |
+| `--archive-dir DIR` | copy each repeat's `result.json`, actual PNG, both role logs, `transport-proof.json` and `logcat.txt` to `DIR/<case>-<backend>/repeat-NN/` **before the next run overwrites them**, plus `DIR/run.json` recording the APK SHA-256, the arm and the environment. |
+
+The archive exists because `.trace-work/android-retrace-result/<case>-<backend>/` is
+keyed by case and backend and by nothing else: without `--archive-dir` the only
+artifact that survives a three-repeat run is the last one, and "were the three
+repeats the same picture?" becomes unanswerable after the fact.
+
+```sh
+python tools/trace_replay/run_android_retrace_local.py \
+  --matrix --backend DirectVulkan --use-pbuffer --transport inproc --repeat 3 \
+  --archive-dir .trace-work/p7w1/E0-inproc
+python3 tools/trace_replay/compare_actuals.py summary .trace-work/p7w1/E0-inproc \
+  --json E0-inproc-summary.json
+```
+
+`compare_actuals.py` computes the pair `result.json` cannot: SSIM between two actual
+PNGs. It is the retrace gate's OWN SSIM - a transcription of `ComputeChannelSsim` /
+`ComputeRgbSsim` (`android-plugin/app/src/trace/cpp/trace_replay_core.cpp:630` and
+`:671`), one global window per channel, C1 = (0.01*255)², C2 = (0.03*255)², alpha
+ignored - and the crop comes from each repeat's own `result.json`, so the
+`ssim_vs_first` column describes the same rectangle as the recorded `ssim_vs_golden`.
+`summary` prints `case × repeat × ssim_vs_golden × ssim_vs_first × bit-identical`;
+`compare A.png B.png` scores one pair; `--self-test` checks the transcription against
+closed-form values. Unit tests: `python3 tools/trace_replay/test_compare_actuals.py`.
 
 ## Benchmark mode (frame timing)
 
@@ -411,3 +464,186 @@ the ANGLE the Android lane runs. The CI lane uses a pinned build
 extension set differ from the SDK copy (`GL_EXT_texture_buffer` support, ES 3.2
 entry points). Compare `GL_RENDERER` and the relevant extension lists on both
 stacks before treating a local result as a statement about CI.
+
+
+## TCP matrix driver (Linux / WSL)
+
+`run_tcp_matrix.py` uses a CTest JSON catalog plus the **current** `trace_cases.json`.
+It does not build, install an APK, or launch the remote server. For the formal
+P6.5 run-ahead matrix, use `--require-run-ahead`. It forces `MOBILEGL_IPC_RUN_AHEAD=1`,
+then requires `run-ahead ARMED` in each private client log and rejects any
+`running lockstep` / `DISARMED` marker. The checkpoint records `requested_arm` and
+`actual_arm`; strict resume cannot reuse an earlier lockstep image pass. Start the intended
+server first, then run serially:
+
+```bash
+ctest --test-dir /path/to/retrace-build --show-only=json-v1 > /tmp/trace-catalog.json
+python3 tools/trace_replay/run_tcp_matrix.py \
+  --catalog /tmp/trace-catalog.json \
+  --runner /path/to/mobilegl_trace_replay --library /path/to/libMobileGL.so \
+  --endpoint tcp://192.168.21.181:40613 --token devtoken \
+  --backend DirectGLES --credit 2 --require-run-ahead --out /tmp/tcp-matrix
+# Continue the same frozen library/runner/peer:
+python3 tools/trace_replay/run_tcp_matrix.py \
+  --catalog /tmp/trace-catalog.json \
+  --runner /path/to/mobilegl_trace_replay --library /path/to/libMobileGL.so \
+  --endpoint tcp://192.168.21.181:40613 --token devtoken \
+  --backend DirectGLES --credit 2 --require-run-ahead --out /tmp/tcp-matrix --resume
+```
+
+`--build-dir` can replace `--catalog` to obtain the JSON without building.
+`--runner` overrides the catalog runner; fixture paths default to the catalog's
+fixture directory and can be overridden with `--fixtures`. Repeat `--case` or
+`--backend` to select a subset. The default is the manifest's CI split subset
+(currently 40 cases), honoring each case's backend list. Explicit `--case
+minecraft-1.21.4-rd12-odinlite-in-world` permits that non-CI workload separately;
+an explicit `split:false` always remains excluded.
+
+### Both backends, one driver
+
+`--backend DirectVulkan` runs P7 exit gate 3's device matrix with the same
+run-ahead proof, resume and watchdog the DirectGLES matrix uses. Three things are
+per backend and the rest is deliberately shared:
+
+- **selection** - a case is planned for a backend only if its own `ci_backends`
+  names it, so `minecraft-1.21.4-fabric-iris-iterationrp-in-world` appears in a
+  DirectVulkan sweep (40 cases) and not in a DirectGLES one (39). A `--case` named
+  explicitly that does not run a requested backend is a refusal that names the
+  case, not one plan fewer and no message;
+- **golden and threshold** - from `backend_overrides.<backend>` in
+  `trace_cases.json` when the case declares one. A per-backend `golden` REPLACES
+  the shared `golden`/`alternate_golden` pair for that backend rather than adding
+  to it, and a run that matched an image another backend declares is refused by
+  name. (`alternate_golden` alone cannot express this: it is an OR across
+  backends, so a DirectVulkan run matching the DirectGLES picture passes.) The
+  block may restate only `golden`, `alternate_golden` and `ssim_threshold` -
+  restating `target_call` or a crop would stop the two backends retracing the same
+  frame through the same window, which is what makes the two numbers comparable;
+- **result naming and checkpoint key** - `<backend>/credit-<n>/<case>`, plus the
+  golden, alternate golden and threshold recorded in each `results.json` row.
+
+A case with no `backend_overrides` is resolved to itself, so DirectGLES plans,
+identities and checkpoint keys are unchanged by this option's existence - and the
+key is dropped from the fingerprint even for the backend that overrides nothing,
+so giving DirectVulkan its own golden does not invalidate the DirectGLES
+checkpoints. **The CTest catalog emitter and the APK matrix refuse a case that
+declares `backend_overrides`**: both carry one golden path for both backends, so
+emitting such a case through them would register one backend's arm against the
+other's image. Teach them the key in the same commit that adds an override.
+
+The watchdog defaults to **300 seconds without log progress** and a separate
+**7200-second absolute ceiling** (`--idle-seconds`, `--max-seconds`). It observes
+runner output and trace/client/server log changes. It deliberately ignores the
+old local CTest/manifest `timeout_seconds`: TCP main-menu kept progressing beyond
+its old local 180-second budget. A growing log does not bypass the explicit absolute ceiling.
+On timeout the driver terminates and reaps the entire case process group,
+including a child that ignores TERM after CMake exits, and stops the matrix to
+avoid cascading Busy failures. Check the peer before resuming. Ctrl-C/TERM/HUP
+also clean up the group and save a canceled checkpoint.
+
+Each attempt has a new directory. `checkpoint.json` is written atomically, and
+only a zero exit plus current-attempt successful result, matching backend/call/
+golden, adequate SSIM, an actual image, and the requested TCP arm marker count
+as passed. Resume also checks request/artifact identity and stored evidence
+hashes. Failed, timed-out, interrupted, changed, or missing evidence is rerun;
+old scratch `results.json` files are retained but never silently promoted into
+successful checkpoints. Replacing the remote deployment requires a new output
+root unless it is the same frozen peer. `results.json` summarizes the currently
+selected runs and marks reused evidence with `resumed:true`.
+
+`--wake-adb-serial 2f7cbe2e` explicitly opts into `adb shell input keyevent
+KEYCODE_WAKEUP` every 15 seconds during a case. It does not install anything or
+change global power/idle settings. Its own adb log is excluded from the progress
+watchdog, so wakeup messages cannot conceal a stalled trace.
+
+Tool regression tests use short process stubs, never a GPU/device/trace. They run
+in CI beside the other executable negative controls (`test.yml`, the R-16 step):
+
+```bash
+python3 tools/trace_replay/test_run_tcp_matrix.py
+```
+
+## Device servers: offscreen or on the phone's screen
+
+`tcp_device_server.py` starts one of the trace APK's two TCP servers; only one is active
+at a time (whichever starts last stops the other). `stop` force-stops the package.
+
+```bash
+# Offscreen (default): MobileGLServerService exec's the supervisor, one child per session.
+python3 tools/trace_replay/tcp_device_server.py start --serial 2f7cbe2e \
+  --listen tcp://127.0.0.1:40613 --token devtoken-of-16-bytes --forward
+# On-screen: MobileGLDisplayActivity (process :mglwin) serves in its own process and a
+# client's window surface renders on its SurfaceView. The screen must be on and unlocked.
+python3 tools/trace_replay/tcp_device_server.py start --surface window [--backend DirectVulkan] \
+  --serial 2f7cbe2e --listen tcp://127.0.0.1:40613 --token devtoken-of-16-bytes --forward
+```
+
+A headless client replays onto the phone's screen with `--window-surface` and
+`MOBILEGL_IPC_SURFACE=server` (plus the usual `MOBILEGL_TRANSPORT=spawn`,
+`MOBILEGL_IPC_CONTROL=tcp://127.0.0.1:40613`, `MOBILEGL_IPC_DATA=stream`,
+`MOBILEGL_IPC_TOKEN`). The server sizes its window to the trace's EGL_WIDTH/EGL_HEIGHT
+(letterboxed on screen) and the client's `eglQuerySurface` answers that size. Without
+`--backend` the on-screen server pins the first session's backend for its process; restart
+it (`stop`, then `start`) to switch. The same knob against the offscreen service is refused
+by name (`NoServerDisplay`) and that service goes on serving.
+
+## TCP credit and Stage measurements
+
+For a paired frame-time breakdown, enable `MOBILEGL_PIPE_STATS=1` in both roles
+and keep their logs. The following reducer matches client and server present
+serials, drops the first (unpaired) server interval and one warmup frame, and
+reports avg/p50/p99 in milliseconds plus percentages of client present time:
+
+```bash
+python3 tools/trace_replay/frame_stats.py \
+  --client-log mobilegl.client.log --server-log mobilegl.server.log \
+  --warmup-frames 1 --output frame-stats.json
+```
+
+`transport_wait_ms` measures wall time in the client producer's transport park
+(flush, spin and sleep). It includes waiting for replies, present credit and
+ring space; it is not socket latency. Client and server CPU can overlap with
+each other and with a transport wait, so each percentage uses the client
+present interval as its denominator and the three percentages need not sum to
+100%. A missing frame is rejected. Percentiles use nearest rank over per-frame
+samples.
+
+`benchmark_tcp_credits.py` runs the complete OpenRA and rd12 traces at credits
+1, 2, and 3, then selects matching client/server tail frame IDs (100 and 200
+frames respectively). Extract the unchanged trace files as
+`inputs/OpenRA/openra.trace` and `inputs/rd12/trace.trace`. Keep the server and
+library frozen, enable server `MOBILEGL_PIPE_STATS=1` and
+`MOBILEGL_PIPE_STATS_PERIOD=1`, and leave the device connection free:
+
+```bash
+python3 tools/trace_replay/benchmark_tcp_credits.py \
+  --runner /path/to/mobilegl_trace_replay --library /path/to/libMobileGL.so \
+  --inputs /path/to/inputs --out /tmp/tcp-credits \
+  --endpoint tcp://192.168.21.181:40613 --token devtoken --serial 2f7cbe2e
+python3 tools/trace_replay/measure_tcp_stage_burst.py \
+  --library /path/to/libMobileGL.so --out /tmp/tcp-stage-burst \
+  --endpoint tcp://192.168.21.181:40613 --token devtoken
+```
+
+The credit runner serializes all six runs, sends the same explicit awake key as
+the matrix driver, and preserves complete benchmark and role logs. It requires
+the requested credit and continuous run-ahead ARMED proof in the client log,
+matching complete tail frames, and positive per-thread CPU observations.
+`--case` and `--credit` select a subset; `--resume` reuses only matching identity
+and intact evidence. FPS, `kWaitReply` counts, bucketed RTT distribution, Stage
+bytes, and the two role CPU clocks come from the selected steady window.
+Completing this benchmark does not perform or replace a golden image comparison.
+
+The Stage tool uploads exactly 64 MiB after one warmup frame, consumes the dirty
+buffer in a draw, and waits for apply. It requires actual TCP run-ahead and at
+least 64 MiB of observed Stage bytes in frame 2, preserves artifact hashes, and
+refuses to overwrite an existing output directory. Its throughput includes
+client copies and backend work; it is not raw Wi-Fi bandwidth. Divide steady
+frame Stage traffic by this separately measured throughput only with that
+interpretation. Device matrices, benchmarks, and the burst must run one at a time.
+
+Offline evidence controls (no device):
+
+```bash
+python3 tools/trace_replay/test_benchmark_tcp_credits.py
+```

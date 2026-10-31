@@ -19,7 +19,7 @@
 // zero-pass Optimizer::Run and a bare BuildModule on the same binary, so the FIXED
 // parse/serialize overhead can be separated from the work the passes actually do. It also
 // runs the same pass set merged onto ONE Optimizer, which is the saving a merged chain
-// would realise.
+// would realize.
 //
 // Measurement only: it links MobileGL_s and drives the public ShaderCompiler API, so it
 // needs no GL context and no driver. The driver's own glCompileShader/glLinkProgram is
@@ -104,9 +104,9 @@ namespace {
     // kMaxReps. Three untimed warm-up calls first, so allocator growth and first-touch page
     // faults land outside the sample set.
     template <typename F>
-    Stat Measure(F&& body, const double budgetMs = 250.0, const int minReps = 15,
-                 const int maxReps = 2000) {
-        for (int i = 0; i < 3; ++i) body();
+    Stat Measure(F&& body, const double budgetMs = 250.0, const int minReps = 15, const int maxReps = 2000) {
+        for (int i = 0; i < 3; ++i)
+            body();
 
         std::vector<double> samples;
         samples.reserve(64);
@@ -127,9 +127,9 @@ namespace {
     // stages whose set-up (a fresh glslang parse, a fresh link) has to happen per iteration
     // and must NOT be counted.
     template <typename F>
-    Stat MeasureInner(F&& body, const double budgetMs = 250.0, const int minReps = 15,
-                      const int maxReps = 2000) {
-        for (int i = 0; i < 3; ++i) (void)body();
+    Stat MeasureInner(F&& body, const double budgetMs = 250.0, const int minReps = 15, const int maxReps = 2000) {
+        for (int i = 0; i < 3; ++i)
+            (void)body();
 
         std::vector<double> samples;
         samples.reserve(64);
@@ -137,8 +137,7 @@ namespace {
         while (true) {
             samples.push_back(body());
             if (static_cast<int>(samples.size()) >= maxReps) break;
-            const double elapsedMs =
-                std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+            const double elapsedMs = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
             if (static_cast<int>(samples.size()) >= minReps && elapsedMs >= budgetMs) break;
         }
         return Summarize(samples);
@@ -146,21 +145,20 @@ namespace {
 
     struct Row {
         std::string corpus;
-        std::string stage;   // "VS" / "FS" / "program"
+        std::string stage; // "VS" / "FS" / "program"
         std::string what;
-        std::string kind;    // roundtrip / probe / frontend / crosscompile / baseline / merged
+        std::string kind; // roundtrip / probe / frontend / crosscompile / baseline / merged
         size_t moduleWords = 0;
         Stat stat;
     };
 
     std::vector<Row> g_rows;
 
-    void Emit(const std::string& corpus, const std::string& stage, const std::string& what,
-              const std::string& kind, size_t words, const Stat& s) {
+    void Emit(const std::string& corpus, const std::string& stage, const std::string& what, const std::string& kind,
+              size_t words, const Stat& s) {
         g_rows.push_back(Row{corpus, stage, what, kind, words, s});
-        std::printf("%-14s %-8s %-40s %-13s %7zu %10.1f %10.1f %10.1f %6d\n", corpus.c_str(),
-                    stage.c_str(), what.c_str(), kind.c_str(), words, s.medianUs, s.p10Us,
-                    s.p90Us, s.reps);
+        std::printf("%-14s %-8s %-40s %-13s %7zu %10.1f %10.1f %10.1f %6d\n", corpus.c_str(), stage.c_str(),
+                    what.c_str(), kind.c_str(), words, s.medianUs, s.p10Us, s.p90Us, s.reps);
         std::fflush(stdout);
     }
 
@@ -648,24 +646,22 @@ void main() {
 
     struct BuiltProgram {
         std::vector<GLenum> types;
-        std::vector<std::vector<unsigned>> raw;         // straight out of GlslangToSpv
-        std::vector<std::vector<unsigned>> sanitized;   // after SanitizeAndOptimizeBinary
+        std::vector<std::vector<unsigned>> raw;       // straight out of GlslangToSpv
+        std::vector<std::vector<unsigned>> sanitized; // after SanitizeAndOptimizeBinary
     };
 
     // Fresh parse of both stages. glslang mutates a TShader during link/mapIO, so anything
     // that needs to be timed repeatedly has to rebuild these each iteration.
-    std::vector<SharedPtr<glslang::TShader>> ParseBoth(const std::string& vsPre,
-                                                       const std::string& fsPre,
+    std::vector<SharedPtr<glslang::TShader>> ParseBoth(const std::string& vsPre, const std::string& fsPre,
                                                        const CompileEnv& env) {
         std::vector<SharedPtr<glslang::TShader>> out;
-        for (const auto& [type, src] :
-             {std::pair<GLenum, const std::string*>{GL_VERTEX_SHADER, &vsPre},
-              std::pair<GLenum, const std::string*>{GL_FRAGMENT_SHADER, &fsPre}}) {
+        for (const auto& [type, src] : {std::pair<GLenum, const std::string*>{GL_VERTEX_SHADER, &vsPre},
+                                        std::pair<GLenum, const std::string*>{GL_FRAGMENT_SHADER, &fsPre}}) {
             ShaderAttrib attrib{.shaderType = type, .sourceStr = *src, .flags = 0, .env = &env};
             auto r = ShaderCompiler::CompileShader(attrib);
             if (!r) {
-                std::fprintf(stderr, "PARSE FAILED (%s):\n%s\n",
-                             type == GL_VERTEX_SHADER ? "VS" : "FS", r.error().log.c_str());
+                std::fprintf(stderr, "PARSE FAILED (%s):\n%s\n", type == GL_VERTEX_SHADER ? "VS" : "FS",
+                             r.error().log.c_str());
                 std::abort();
             }
             out.push_back(r.value());
@@ -750,7 +746,7 @@ void main() {
             Emit(name, "program", "glslang.GlslangToSpv (both stages)", "frontend", 0, inner);
         }
 
-        // ---- build the artefacts every later measurement runs against ----
+        // ---- build the artifacts every later measurement runs against ----
         BuiltProgram built;
         {
             auto shaders = ParseBoth(vsPre, fsPre, env);
@@ -843,8 +839,7 @@ void main() {
             }
             {
                 Stat s = Measure([&] {
-                    auto ctx = spvtools::BuildModule(SPV_ENV_VULKAN_1_1, SilentConsumer(),
-                                                     mod.data(), mod.size());
+                    auto ctx = spvtools::BuildModule(SPV_ENV_VULKAN_1_1, SilentConsumer(), mod.data(), mod.size());
                     benchmarkSink(ctx != nullptr);
                 });
                 Emit(name, stage, "BASELINE BuildModule only (parse, no emit)", "baseline", words, s);
@@ -859,27 +854,19 @@ void main() {
                 Emit(name, stage, "ProbeSpirvGateFeatures (merged 2 gates)", "probe", words, s);
             }
             {
-                Stat s = Measure([&] {
-                    benchmarkSink(ShaderCompiler::DeclaresViewportIndexBuiltin(mod));
-                });
+                Stat s = Measure([&] { benchmarkSink(ShaderCompiler::DeclaresViewportIndexBuiltin(mod)); });
                 Emit(name, stage, "DeclaresViewportIndexBuiltin", "probe", words, s);
             }
             {
-                Stat s = Measure([&] {
-                    benchmarkSink(ShaderCompiler::DeclaresMultisampledImage(mod));
-                });
+                Stat s = Measure([&] { benchmarkSink(ShaderCompiler::DeclaresMultisampledImage(mod)); });
                 Emit(name, stage, "DeclaresMultisampledImage", "probe", words, s);
             }
             {
-                Stat s = Measure([&] {
-                    benchmarkSink(ShaderCompiler::DeclaresFormatlessStorageImage(mod));
-                });
+                Stat s = Measure([&] { benchmarkSink(ShaderCompiler::DeclaresFormatlessStorageImage(mod)); });
                 Emit(name, stage, "DeclaresFormatlessStorageImage", "probe", words, s);
             }
             {
-                Stat s = Measure([&] {
-                    benchmarkSink(ShaderCompiler::ModuleDeclaresBufferTextureSampler(mod));
-                });
+                Stat s = Measure([&] { benchmarkSink(ShaderCompiler::ModuleDeclaresBufferTextureSampler(mod)); });
                 Emit(name, stage, "ModuleDeclaresBufferTextureSampler", "probe", words, s);
             }
             {
@@ -931,8 +918,7 @@ void main() {
                     ShaderCompiler::LowerDrawParametersForEssl(mod, out, false);
                     benchmarkSink(out.size());
                 });
-                Emit(name, stage, "LowerDrawParametersForEssl (no-op stage: def-use cost)",
-                     "roundtrip", words, s);
+                Emit(name, stage, "LowerDrawParametersForEssl (no-op stage: def-use cost)", "roundtrip", words, s);
             }
             {
                 Stat s = Measure([&] {
@@ -993,8 +979,7 @@ void main() {
                     session.CreateOptions(&options);
                     spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION, 320);
                     spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
-                    spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS,
-                                                   SPVC_FALSE);
+                    spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS, SPVC_FALSE);
                     session.SetOptions(options);
                     const char* result = nullptr;
                     session.Compile(&result);
@@ -1010,23 +995,19 @@ void main() {
                 Stat s = Measure([&] {
                     const Vector<Uint32>* eff = &mod;
                     Vector<uint32_t> a, b, c, d, e, f;
-                    if (isVs && ShaderCompiler::LowerDrawParametersForEssl(*eff, a, false) && !a.empty())
-                        eff = &a;
+                    if (isVs && ShaderCompiler::LowerDrawParametersForEssl(*eff, a, false) && !a.empty()) eff = &a;
                     auto gates = ShaderCompiler::ProbeSpirvGateFeatures(*eff);
                     if (gates.DeclaresMultisampledImage &&
-                        ShaderCompiler::ClampMultisampleFetchesForEssl(*eff, b, 4, 1, 1, 4, false) &&
-                        !b.empty())
+                        ShaderCompiler::ClampMultisampleFetchesForEssl(*eff, b, 4, 1, 1, 4, false) && !b.empty())
                         eff = &b;
-                    if (isVs && ShaderCompiler::SplitArrayVertexInputsForEssl(*eff, c, false) &&
-                        !c.empty() && c != *eff)
+                    if (isVs && ShaderCompiler::SplitArrayVertexInputsForEssl(*eff, c, false) && !c.empty() &&
+                        c != *eff)
                         eff = &c;
-                    if (ShaderCompiler::StripUboMemberRelaxedPrecisionForEssl(*eff, d, false) && !d.empty())
-                        eff = &d;
+                    if (ShaderCompiler::StripUboMemberRelaxedPrecisionForEssl(*eff, d, false) && !d.empty()) eff = &d;
                     if (ShaderCompiler::LowerRectImages(*eff, e, false) && !e.empty()) eff = &e;
                     if (ShaderCompiler::Lower1DArrayImagesForEssl(*eff, f, false) && !f.empty()) eff = &f;
                     Vector<uint32_t> g;
-                    if (!isVs && ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(*eff, g, false) &&
-                        !g.empty())
+                    if (!isVs && ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(*eff, g, false) && !g.empty())
                         eff = &g;
                     benchmarkSink(eff->size());
                 });
@@ -1043,8 +1024,7 @@ void main() {
                         opt.RegisterPass(SplitArrayVertexInputsPass::CreateSplitArrayVertexInputsPass());
                     }
                     opt.RegisterPass(ClampMultisampleFetchPass::CreateClampMultisampleFetchPass(4, 1, 1, 4));
-                    opt.RegisterPass(
-                        StripUboMemberRelaxedPrecisionPass::CreateStripUboMemberRelaxedPrecisionPass());
+                    opt.RegisterPass(StripUboMemberRelaxedPrecisionPass::CreateStripUboMemberRelaxedPrecisionPass());
                     opt.RegisterPass(NormalizeRectCoordinatesPass::CreateNormalizeRectCoordinatesPass());
                     spvtools::OptimizerOptions o;
                     o.set_run_validator(false);
@@ -1065,8 +1045,7 @@ void main() {
                         opt.RegisterPass(SplitArrayVertexInputsPass::CreateSplitArrayVertexInputsPass());
                     }
                     opt.RegisterPass(ClampMultisampleFetchPass::CreateClampMultisampleFetchPass(4, 1, 1, 4));
-                    opt.RegisterPass(
-                        StripUboMemberRelaxedPrecisionPass::CreateStripUboMemberRelaxedPrecisionPass());
+                    opt.RegisterPass(StripUboMemberRelaxedPrecisionPass::CreateStripUboMemberRelaxedPrecisionPass());
                     opt.RegisterPass(NormalizeRectCoordinatesPass::CreateNormalizeRectCoordinatesPass());
                     opt.RegisterPass(Lower1DArrayImagesPass::CreateLower1DArrayImagesPass());
                     spvtools::OptimizerOptions o;
@@ -1112,15 +1091,14 @@ int main(int argc, char** argv) {
         std::printf("# floor loop; sample me\n");
         std::fflush(stdout);
         for (;;) {
-            ShaderAttrib a{
-                .shaderType = GL_VERTEX_SHADER, .sourceStr = pre, .flags = 0, .env = &env};
+            ShaderAttrib a{.shaderType = GL_VERTEX_SHADER, .sourceStr = pre, .flags = 0, .env = &env};
             auto r = ShaderCompiler::CompileShader(a);
             benchmarkSink(r.has_value());
         }
     }
 
-    std::printf("\n%-14s %-8s %-40s %-13s %7s %10s %10s %10s %6s\n", "corpus", "stage", "what",
-                "kind", "words", "median_us", "p10_us", "p90_us", "reps");
+    std::printf("\n%-14s %-8s %-40s %-13s %7s %10s %10s %10s %6s\n", "corpus", "stage", "what", "kind", "words",
+                "median_us", "p10_us", "p90_us", "reps");
     std::printf("%s\n", std::string(120, '-').c_str());
 
     // The per-parse FLOOR. glslang caches its version/profile built-in symbol table across
@@ -1136,13 +1114,11 @@ int main(int argc, char** argv) {
             String pre = src;
             PreprocessShaderSource(ShaderStage::Vertex, pre, env);
             Stat s = Measure([&] {
-                ShaderAttrib a{
-                    .shaderType = GL_VERTEX_SHADER, .sourceStr = pre, .flags = 0, .env = &env};
+                ShaderAttrib a{.shaderType = GL_VERTEX_SHADER, .sourceStr = pre, .flags = 0, .env = &env};
                 auto r = ShaderCompiler::CompileShader(a);
                 benchmarkSink(r.has_value());
             });
-            Emit("floor", "VS", std::string("glslang.parse of empty main(), #version ") + label,
-                 "frontend", 0, s);
+            Emit("floor", "VS", std::string("glslang.parse of empty main(), #version ") + label, "frontend", 0, s);
         }
     }
 
@@ -1177,8 +1153,8 @@ int main(int argc, char** argv) {
             150.0, 15, 400);
         glslang::SetThreadPoolAllocator(nullptr);
         Emit("floor", "VS", "  of which: TBuiltIns::initialize (generate only)", "frontend", 0, s);
-        std::printf("#   generated built-in declaration text: common %zu bytes, vertex stage %zu bytes\n",
-                    commonBytes, stageBytes);
+        std::printf("#   generated built-in declaration text: common %zu bytes, vertex stage %zu bytes\n", commonBytes,
+                    stageBytes);
     }
 
     // Splitting the floor further: how much of it is object set-up that never touches the
@@ -1216,8 +1192,8 @@ int main(int argc, char** argv) {
         Emit("floor", "VS", "  parse() with NO MobileGL env configuration", "frontend", 0, bare);
     }
 
-    std::printf("\n%-14s %-8s %-40s %-13s %7s %10s %10s %10s %6s\n", "corpus", "stage", "what",
-                "kind", "words", "median_us", "p10_us", "p90_us", "reps");
+    std::printf("\n%-14s %-8s %-40s %-13s %7s %10s %10s %10s %6s\n", "corpus", "stage", "what", "kind", "words",
+                "median_us", "p10_us", "p90_us", "reps");
     std::printf("%s\n", std::string(120, '-').c_str());
 
     ProfileCorpus("tiny", kTinyVs, kTinyFs);

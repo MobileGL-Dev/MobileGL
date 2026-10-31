@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 #include <spirv_reflect.h>
+#include <cstdio>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -37,8 +38,7 @@ protected:
     // GL error flags are sticky per code and the context outlives an individual test in this
     // binary, so a pending error would be handed to whoever runs next.
     static void DrainProgramTestErrors() {
-        for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
-        }
+        for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {}
     }
 };
 
@@ -161,9 +161,8 @@ TEST_F(ProgramTest, CompileFragment) {
     CompileShader(fs);
 }
 
-TEST_F(ProgramTest, CompileVoxySubgroupProbeShader) {
-    char infoLog[1024] = "";
-    const char* csSrc = R"(#version 430
+namespace {
+    const char* const kVoxySubgroupProbe = R"(#version 430
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 layout(local_size_x=32) in;
@@ -172,14 +171,48 @@ void main() {
 }
 )";
 
-    GLuint cs = CreateShader(GL_COMPUTE_SHADER);
-    ShaderSource(cs, 1, &csSrc, nullptr);
-    CompileShader(cs);
+    GLint CompileStatusOf(GLenum stage, const char* source, String& infoLog) {
+        GLuint shader = CreateShader(stage);
+        ShaderSource(shader, 1, &source, nullptr);
+        CompileShader(shader);
+        GLint compileStatus = GL_FALSE;
+        GetShaderiv(shader, GL_COMPILE_STATUS, &compileStatus);
+        char log[1024] = "";
+        GetShaderInfoLog(shader, sizeof(log), nullptr, log);
+        infoLog = log;
+        DeleteShader(shader);
+        return compileStatus;
+    }
+} // namespace
 
-    GLint compileStatus = GL_FALSE;
-    GetShaderiv(cs, GL_COMPILE_STATUS, &compileStatus);
-    GetShaderInfoLog(cs, sizeof(infoLog), nullptr, infoLog);
-    EXPECT_EQ(compileStatus, GL_TRUE) << infoLog;
+// A `#extension GL_KHR_shader_subgroup_* : require` compiles exactly where the active backend
+// offers that feature in that stage: against native compute subgroups with arithmetic it does;
+// against a backend advertising no subgroups at all (no native support, emulation forced off) the
+// frontend refuses it, rather than accepting a shader the backend would then fail on.
+TEST_F(ProgramTest, CompileVoxySubgroupProbeShader) {
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    const auto savedEmulation = MG_Config::Features.SubgroupEmulation;
+    auto backend = MakeUnique<MG_Backend::DirectVulkan::BackendObject_DirectVulkan>();
+    auto* backendPtr = backend.get();
+    MG_Backend::pActiveBackendObject = Move(backend);
+    String infoLog;
+
+    MG_External::VulkanCapabilities nativeCaps;
+    nativeCaps.SupportsShaderSubgroup = true;
+    nativeCaps.SubgroupSize = 64;
+    nativeCaps.SubgroupSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
+    nativeCaps.SubgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+    backendPtr->ApplyVulkanCapabilitiesForTesting(nativeCaps);
+    EXPECT_EQ(CompileStatusOf(GL_COMPUTE_SHADER, kVoxySubgroupProbe, infoLog), GL_TRUE) << infoLog;
+
+    MG_Config::Features.SubgroupEmulation = MG_Config::QuirkOverride::ForceOff;
+    MG_External::VulkanCapabilities noCaps;
+    backendPtr->ApplyVulkanCapabilitiesForTesting(noCaps);
+    EXPECT_EQ(CompileStatusOf(GL_COMPUTE_SHADER, kVoxySubgroupProbe, infoLog), GL_FALSE);
+    EXPECT_NE(infoLog.find("is not available to this shader stage"), String::npos) << infoLog;
+
+    MG_Config::Features.SubgroupEmulation = savedEmulation;
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
 }
 
 TEST_F(ProgramTest, CompileVoxyGpuShaderInt64QuadDecode) {
@@ -326,10 +359,10 @@ TEST_F(ProgramTest, ImageUniformLayoutBindingInitializesImageUnit) {
     char infoLog[1024] = "";
     const char* csSrc = R"(#version 460 core
 layout(local_size_x = 1) in;
-layout(binding = 4, rgba8) uniform writeonly image2D colourTexOut;
+layout(binding = 4, rgba8) uniform writeonly image2D colorTexOut;
 
 void main() {
-    imageStore(colourTexOut, ivec2(0), vec4(1.0));
+    imageStore(colorTexOut, ivec2(0), vec4(1.0));
 }
 )";
 
@@ -349,7 +382,7 @@ void main() {
     GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
     ASSERT_EQ(linkStatus, GL_TRUE) << infoLog;
 
-    const GLint location = GetUniformLocation(program, "colourTexOut");
+    const GLint location = GetUniformLocation(program, "colorTexOut");
     ASSERT_GE(location, 0);
     auto programObject = MobileGL::MG_State::pGLContext->GetProgramObject(program);
     ASSERT_NE(programObject, nullptr);
@@ -379,6 +412,217 @@ void main() {
     EXPECT_NE(String(infoLog).find("GL_MAX_COMPUTE_WORK_GROUP_SIZE"), String::npos) << infoLog;
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+// P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): THE ARCHIVE'S STORAGE-BLOCK INDEX SPACE IS
+// SPIRV-REFLECT'S, ELEMENT FOR ELEMENT.
+//
+// This is the equivalence the whole slice rests on. DirectVulkan's resource queries speak an
+// index space that used to be DERIVED, by running SPIRV-Reflect over the program's modules -
+// per draw on the wire path (MagmaProgramSource) and behind a mutable cache in the monolith
+// one (DirectVulkan.cpp's GetProgramResourceCache). It is now PUBLISHED at link time out of
+// glslang's reflection instead (ProgramLinkTask::SnapshotStorageBlockIndexSpace). Two
+// different producers, one index space: if they ever disagree,
+// ProgramFactory::ReflectLayout - which looks blocks up by the name ITS OWN reflect pass
+// produced - starts binding storage buffers at the wrong descriptor, silently.
+//
+// THE REFERENCE IS COMPUTED HERE, not copied as a constant, and it is computed with the same
+// algorithm the old consumer used: per module in linked-stage order, STORAGE_BUFFER
+// descriptors only, sorted by (normalized name, binding), deduplicated across modules by name.
+// Comparing against a hand-written expected list would only pin what the author believed.
+//
+// THE PROGRAM IS THE ONE THE CONTRACT ASKS FOR: multi-stage (vertex + fragment), with an
+// ARRAYED SSBO and an ATOMIC-COUNTER block. Both are the cases where the two producers could
+// legitimately have disagreed and neither is exotic:
+//   * an instance array reflects in glslang as one entry PER ELEMENT ("Blocks[0]",
+//     "Blocks[1]") and in SPIR-V as ONE descriptor with a count, so the archive has to strip
+//     the subscript and keep the first element - which is the one whose binding the single
+//     descriptor reports;
+//   * an atomic_uint is lowered by the transpiler onto a synthesized gl_AtomicCounterBlock_<N>
+//     BUFFER block, so SPIRV-Reflect sees an ordinary storage descriptor for it and the
+//     backend's space has always contained it - even though GL's own GL_SHADER_STORAGE_BLOCK
+//     enumeration excludes it. The archive must follow the BACKEND's space, not GL's.
+namespace {
+    // A limits-only backend: what the link checks against comes from GetDynamicParameters, and the
+    // no-backend defaults are the spec minimums, which give the vertex stage no storage blocks.
+    class StorageBlockLimitsBackend final : public MG_Backend::BackendObject {
+    public:
+        StorageBlockLimitsBackend() {
+            m_params.MaxVertexShaderStorageBlocks = 8;
+            m_params.MaxCombinedShaderStorageBlocks = 16;
+            m_params.MaxShaderStorageBufferBindings = 16;
+        }
+        void Initialize() override {}
+        Bool InitCapabilities() override { return true; }
+        Bool InitWindowSurface() override { return true; }
+        const RendererInfo& GetRendererInfo() const override {
+            static RendererInfo info = {};
+            return info;
+        }
+        String GetBackendAPIVersionString() const override { return {}; }
+        const MG_Backend::GlobalBackendFunctionsTable& GetBackendFunctions() const override {
+            static MG_Backend::GlobalBackendFunctionsTable table = {};
+            return table;
+        }
+        const MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override { return m_params; }
+        BackendType GetBackendType() const override { return BackendType::Unknown; }
+
+    private:
+        MG_Backend::DynamicBackendParameters m_params{};
+    };
+
+    class ScopedLimitsBackend {
+    public:
+        ScopedLimitsBackend() : m_previous(Move(MG_Backend::pActiveBackendObject)) {
+            MG_Backend::pActiveBackendObject = MakeUnique<StorageBlockLimitsBackend>();
+        }
+        ~ScopedLimitsBackend() { MG_Backend::pActiveBackendObject = Move(m_previous); }
+
+    private:
+        UniquePtr<MG_Backend::BackendObject> m_previous;
+    };
+} // namespace
+
+TEST_F(ProgramTest, TheArchivesStorageBlockOrderIsTheOneSpirvReflectProduces) {
+    // The vertex stage below uses storage blocks, which a link only accepts against a backend
+    // that advertises them.
+    const ScopedLimitsBackend limits;
+    char infoLog[1024] = "";
+    const char* vsSrc = R"(#version 460 core
+layout(std430, binding = 3) buffer Blocks {
+    uint value;
+} blocks[2];
+layout(binding = 0, offset = 0) uniform atomic_uint counter;
+layout(std430, binding = 6) buffer VertexOnly {
+    uint value;
+} vertexOnly;
+void main() {
+    atomicCounterIncrement(counter);
+    blocks[0].value = 1u;
+    vertexOnly.value = 2u;
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+    const char* fsSrc = R"(#version 460 core
+layout(std430, binding = 5) buffer FragmentOnly {
+    uint value;
+} fragmentOnly;
+layout(std430, binding = 3) buffer Blocks {
+    uint value;
+} blocks[2];
+layout(location = 0) out vec4 color;
+void main() {
+    fragmentOnly.value = 3u;
+    color = vec4(float(blocks[1].value), 0.0, 0.0, 1.0);
+}
+)";
+
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &vsSrc, nullptr);
+    CompileShader(vs);
+    GLint status = GL_FALSE;
+    GetShaderiv(vs, GL_COMPILE_STATUS, &status);
+    GetShaderInfoLog(vs, sizeof(infoLog), nullptr, infoLog);
+    ASSERT_EQ(status, GL_TRUE) << infoLog;
+
+    const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(fs, 1, &fsSrc, nullptr);
+    CompileShader(fs);
+    GetShaderiv(fs, GL_COMPILE_STATUS, &status);
+    GetShaderInfoLog(fs, sizeof(infoLog), nullptr, infoLog);
+    ASSERT_EQ(status, GL_TRUE) << infoLog;
+
+    const GLuint program = CreateProgram();
+    AttachShader(program, vs);
+    AttachShader(program, fs);
+    LinkProgram(program);
+    GetProgramiv(program, GL_LINK_STATUS, &status);
+    GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+    ASSERT_EQ(status, GL_TRUE) << infoLog;
+
+    auto programObject = MobileGL::MG_State::pGLContext->GetProgramObject(program);
+    ASSERT_NE(programObject, nullptr);
+
+    // ---- the reference: the old consumer's algorithm, run here over the real modules ----
+    const auto normalize = [](const SpvReflectDescriptorBinding& binding) {
+        const char* raw = binding.name;
+        if (binding.type_description != nullptr && binding.type_description->type_name != nullptr) {
+            raw = binding.type_description->type_name;
+        }
+        String name = raw ? raw : "";
+        const auto suffix = name.find("[0]");
+        return suffix == String::npos ? name : name.substr(0, suffix);
+    };
+    std::vector<String> reference;
+    const auto& spirvs = programObject->GetSpirvReflection().generatedSpirv;
+    ASSERT_GE(spirvs.size(), 2u) << "the case needs a multi-stage program to be a real test of "
+                                    "the cross-stage dedupe";
+    for (const auto& spirv : spirvs) {
+        if (spirv.empty()) continue;
+        SpvReflectShaderModule module{};
+        ASSERT_EQ(spvReflectCreateShaderModule(spirv.size() * sizeof(Uint), spirv.data(), &module),
+                  SPV_REFLECT_RESULT_SUCCESS);
+        uint32_t count = 0;
+        ASSERT_EQ(spvReflectEnumerateDescriptorBindings(&module, &count, nullptr), SPV_REFLECT_RESULT_SUCCESS);
+        std::vector<SpvReflectDescriptorBinding*> bindings(count);
+        if (count != 0) {
+            ASSERT_EQ(spvReflectEnumerateDescriptorBindings(&module, &count, bindings.data()),
+                      SPV_REFLECT_RESULT_SUCCESS);
+        }
+        std::sort(bindings.begin(), bindings.end(),
+                  [&](const SpvReflectDescriptorBinding* lhs, const SpvReflectDescriptorBinding* rhs) {
+                      const String lhsName = lhs ? normalize(*lhs) : String();
+                      const String rhsName = rhs ? normalize(*rhs) : String();
+                      if (lhsName != rhsName) return lhsName < rhsName;
+                      return lhs->binding < rhs->binding;
+                  });
+        for (const SpvReflectDescriptorBinding* binding : bindings) {
+            if (binding == nullptr || binding->descriptor_type != SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+                continue;
+            }
+            const String name = normalize(*binding);
+            if (name.empty()) continue;
+            if (std::find(reference.begin(), reference.end(), name) != reference.end()) continue;
+            reference.push_back(name);
+        }
+        spvReflectDestroyShaderModule(&module);
+    }
+
+    // ---- what the archive published ----
+    std::vector<String> archived;
+    for (const auto& block : programObject->GetLinkReflection().storageBlocks) {
+        archived.push_back(block.name);
+    }
+
+    ASSERT_FALSE(reference.empty())
+        << "the reference walk found no storage descriptors at all, so the comparison below "
+           "would be vacuous - the shaders or the SPIR-V generation changed under this case";
+    EXPECT_EQ(archived, reference)
+        << "LinkArtifacts::storageBlocks is not the index space SPIRV-Reflect produces. "
+           "GetShaderStorageBlockIndex/Binding hand these indices to ProgramFactory::ReflectLayout, "
+           "which resolves blocks by the name its own reflect pass produced, so a divergence "
+           "here binds storage buffers at the wrong descriptor rather than failing loudly.";
+
+    // The arrayed block must appear ONCE, under its stripped name: glslang reflects it per
+    // element and SPIR-V carries one descriptor, and collapsing the two is the whole reason
+    // the archive normalizes.
+    EXPECT_EQ(std::count(archived.begin(), archived.end(), String("Blocks")), 1)
+        << "the arrayed SSBO must collapse to one entry named without its subscript";
+    // The atomic counter is in the BACKEND's space even though GL's own enumeration excludes it.
+    EXPECT_NE(std::find_if(archived.begin(), archived.end(),
+                           [](const String& name) { return name.rfind("gl_AtomicCounterBlock", 0) == 0; }),
+              archived.end())
+        << "the synthesized atomic-counter block is a STORAGE_BUFFER descriptor in SPIR-V, so "
+           "DirectVulkan's index space contains it and the archive has to as well";
+
+    // And the indices actually resolve, which is what the consumers do with them.
+    for (Uint i = 0; i < archived.size(); ++i) {
+        EXPECT_EQ(MG_Backend::DirectVulkan::GetShaderStorageBlockIndex(*programObject, archived[i]), i)
+            << "name " << archived[i] << " did not resolve to its own index";
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+#endif // MOBILEGL_BUILD_DISAGGREGATED
 
 TEST_F(ProgramTest, DirectVulkanStorageBlockUsesShaderLayoutBinding) {
     char infoLog[1024] = "";
@@ -490,13 +734,37 @@ TEST_F(ProgramTest, CompileAndLink) {
     GetUniformiv(program, locInt, &intVal);
     EXPECT_EQ(intVal, 114514);
 
+    // glGetnUniform* (GL 4.5 / KHR_robustness): the same answers, bounded by bufSize. A
+    // destination too small for the uniform's components is GL_INVALID_OPERATION and untouched.
+    while (GetError() != GL_NO_ERROR) {}
+    float boundedRed[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+    GetnUniformfv(program, locRed, static_cast<GLsizei>(3 * sizeof(float)), boundedRed);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_NO_ERROR));
+    EXPECT_EQ(boundedRed[0], 1.0f);
+    EXPECT_EQ(boundedRed[2], 5.0f);
+    EXPECT_EQ(boundedRed[3], -1.0f) << "glGetnUniformfv wrote past the uniform";
+    float tooSmall[3] = {-1.0f, -1.0f, -1.0f};
+    GetnUniformfv(program, locRed, static_cast<GLsizei>(2 * sizeof(float)), tooSmall);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+    EXPECT_EQ(tooSmall[0], -1.0f) << "a refused glGetnUniformfv wrote anyway";
+    int boundedInt = 0;
+    GetnUniformiv(program, locInt, static_cast<GLsizei>(sizeof(int)), &boundedInt);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_NO_ERROR));
+    EXPECT_EQ(boundedInt, 114514);
+    GetnUniformiv(program, locInt, -1, &boundedInt);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+    // Every other error is the unbounded query's: a location the program does not have.
+    GetnUniformfv(program, 4096, static_cast<GLsizei>(sizeof(boundedRed)), boundedRed);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+
     auto programObj = MG_State::pGLContext->GetProgramObject(program);
     auto& shaderSpirvs = programObj->GetGeneratedSpirv();
     for (int index = 0; index < shaderSpirvs.size(); ++index) {
         String source;
         auto& spirvCode = shaderSpirvs[index];
 
-        MG_Util::ShaderTranspiler::SpvcSession spvcSession(spirvCode, MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
+        MG_Util::ShaderTranspiler::SpvcSession spvcSession(spirvCode,
+                                                           MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
 
         spvc_compiler_options options;
         spvcSession.CreateOptions(&options);
@@ -1340,7 +1608,8 @@ TEST_F(ProgramTest, CompileAndLinkWithExplicitVertexIn) {
     char* pSrcVertIn = nullptr;
     const char* needle = "layout(location = 2) in vec2 UV0;";
     for (auto spirv : spirvs) {
-        MG_Util::ShaderTranspiler::SpvcSession spvcSession(spirv, MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
+        MG_Util::ShaderTranspiler::SpvcSession spvcSession(spirv,
+                                                           MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
         spvc_compiler_options options;
         spvcSession.CreateOptions(&options);
 
@@ -1442,6 +1711,83 @@ void main() {
     EXPECT_EQ(locationMask, 0x1u);
 }
 
+// An X server's 2D shaders name gl_FragColor only in the arm of a version guard that a 1.30
+// compile does not take, and write their own output instead. The legacy lowering still declares
+// mg_FragColor (it cannot see the guard), ahead of the shader's output: that declaration is
+// inactive and must not take location 0, or every copy and fill writes to a draw buffer nobody
+// enabled and the window keeps whatever it held before.
+TEST_F(ProgramTest, InactiveLoweredFragColorDoesNotDisplaceTheActiveOutput) {
+    const char* vertexSource = R"(#version 130
+in vec2 primitive;
+out vec2 fill_pos;
+uniform vec4 v_matrix;
+void main() {
+    gl_Position = vec4(primitive * v_matrix.xz + v_matrix.yw, 0.0, 1.0);
+    fill_pos = primitive;
+}
+)";
+    const char* fragmentSource = R"(#version 130
+#if __VERSION__ >= 130
+out vec4 frag_color;
+#else
+#define frag_color gl_FragColor
+#endif
+in vec2 fill_pos;
+uniform sampler2D sampler;
+void main() {
+    frag_color = texture(sampler, fill_pos);
+}
+)";
+    const auto compile = [](GLenum stage, const char* source) {
+        const GLuint shader = CreateShader(stage);
+        ShaderSource(shader, 1, &source, nullptr);
+        CompileShader(shader);
+        GLint status = GL_FALSE;
+        GetShaderiv(shader, GL_COMPILE_STATUS, &status);
+        char log[1024] = "";
+        GetShaderInfoLog(shader, sizeof log, nullptr, log);
+        EXPECT_EQ(status, GL_TRUE) << log;
+        return shader;
+    };
+    const GLuint program = CreateProgram();
+    AttachShader(program, compile(GL_VERTEX_SHADER, vertexSource));
+    AttachShader(program, compile(GL_FRAGMENT_SHADER, fragmentSource));
+    BindAttribLocation(program, 0, "primitive");
+    LinkProgram(program);
+    GLint linkStatus = GL_FALSE;
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    ASSERT_EQ(linkStatus, GL_TRUE);
+
+    EXPECT_EQ(GetFragDataLocation(program, "frag_color"), 0);
+
+    auto programObject = MG_State::pGLContext->GetProgramObject(program);
+    ASSERT_NE(programObject, nullptr);
+    const Int fragmentIndex = programObject->GetShaderIndexByStage(ShaderStage::Fragment);
+    ASSERT_GE(fragmentIndex, 0);
+    const auto& spirvs = programObject->GetGeneratedSpirv();
+    ASSERT_LT(static_cast<SizeT>(fragmentIndex), spirvs.size());
+    const auto& fragmentSpirv = spirvs[fragmentIndex];
+    spv_reflect::ShaderModule reflection(fragmentSpirv.size() * sizeof(Uint), fragmentSpirv.data());
+    ASSERT_EQ(reflection.GetResult(), SPV_REFLECT_RESULT_SUCCESS);
+    uint32_t outputCount = 0;
+    ASSERT_EQ(reflection.EnumerateOutputVariables(&outputCount, nullptr), SPV_REFLECT_RESULT_SUCCESS);
+    Vector<SpvReflectInterfaceVariable*> outputs(outputCount);
+    ASSERT_EQ(reflection.EnumerateOutputVariables(&outputCount, outputs.data()), SPV_REFLECT_RESULT_SUCCESS);
+    Bool sawActive = false;
+    for (const auto* output : outputs) {
+        if (output == nullptr || output->name == nullptr) continue;
+        const String name = output->name;
+        if (name == "frag_color") {
+            sawActive = true;
+            EXPECT_EQ(output->location, 0u);
+        } else {
+            // The lowered declaration, if it survives at all, sits clear of the active output.
+            EXPECT_NE(output->location, 0u) << name;
+        }
+    }
+    EXPECT_TRUE(sawActive);
+}
+
 TEST_F(ProgramTest, CompileAndLinkWithExplicitFragmentOut) {
     char infoLog[1024] = "";
 
@@ -1488,7 +1834,8 @@ TEST_F(ProgramTest, CompileAndLinkWithExplicitFragmentOut) {
     char* pSrcfragOut = nullptr;
     const char* needle = "layout(location = 7) out vec4 fragColor;";
     // for (auto spirv: spirvs) {
-    MG_Util::ShaderTranspiler::SpvcSession spvcSession(fragSpirv, MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
+    MG_Util::ShaderTranspiler::SpvcSession spvcSession(fragSpirv,
+                                                       MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
     spvc_compiler_options options;
     spvcSession.CreateOptions(&options);
 
@@ -1534,6 +1881,22 @@ TEST_F(ProgramTest, CompileAndLinkWithExplicitFragmentOut) {
     const char* indexNeedle = "index = 1";
     ASSERT_TRUE(strstr(resultIndexed, indexNeedle) != nullptr)
         << "Expected dual-source color index in generated shader.\n(Searching for \"" << indexNeedle << "\")";
+
+    // The ESSL the GLES backend hands the driver keeps index 1, and ESSL accepts it only with
+    // GL_EXT_blend_func_extended enabled in the shader itself.
+    MG_Util::ShaderTranspiler::SpvcSession spvcSessionEs(fragSpirvIndexed,
+                                                         MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
+    spvc_compiler_options optionsEs;
+    spvcSessionEs.CreateOptions(&optionsEs);
+    spvc_compiler_options_set_uint(optionsEs, SPVC_COMPILER_OPTION_GLSL_VERSION, 320);
+    spvc_compiler_options_set_bool(optionsEs, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
+    spvcSessionEs.SetOptions(optionsEs);
+    spvcSessionEs.DropDefaultFragmentOutputColorIndex();
+    const char* resultEs = nullptr;
+    spvcSessionEs.Compile(&resultEs);
+    ASSERT_NE(resultEs, nullptr);
+    EXPECT_NE(strstr(resultEs, indexNeedle), nullptr) << resultEs;
+    EXPECT_NE(strstr(resultEs, "#extension GL_EXT_blend_func_extended : require"), nullptr) << resultEs;
 
     // glBindFragDataLocation is equivalent to index 0 and resets it.
     BindFragDataLocation(program, 0, "fragColor");
@@ -1765,7 +2128,8 @@ TEST_F(ProgramTest, CompileShaderWithSamplerAsVarName) {
     auto programObject = MG_State::pGLContext->GetCurrentProgram();
     auto& spirvs = programObject->GetGeneratedSpirv();
     auto& fragSpirv = spirvs[programObject->GetShaderIndexByStage(ShaderStage::Fragment)];
-    MG_Util::ShaderTranspiler::SpvcSession spvcSession(fragSpirv, MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
+    MG_Util::ShaderTranspiler::SpvcSession spvcSession(fragSpirv,
+                                                       MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
     spvc_compiler_options options;
     spvcSession.CreateOptions(&options);
 
@@ -1789,17 +2153,11 @@ namespace {
         const char* vsSrc = R"(#version 330 core
 void main() { gl_Position = vec4(0.0); }
 )";
-        std::string fsSrc = std::string("#version 330 core\n") +
-                            "layout(std140" + matrixLayout + ") uniform Block {\n" +
-                            "    float uScalar;\n" +
-                            "    vec4  uArray[3];\n" +
-                            "    mat4  uMatrix;\n" +
-                            "};\n" +
-                            "uniform sampler2D uTex;\n" +
-                            "out vec4 fragColor;\n" +
+        std::string fsSrc = std::string("#version 330 core\n") + "layout(std140" + matrixLayout +
+                            ") uniform Block {\n" + "    float uScalar;\n" + "    vec4  uArray[3];\n" +
+                            "    mat4  uMatrix;\n" + "};\n" + "uniform sampler2D uTex;\n" + "out vec4 fragColor;\n" +
                             "void main() {\n" +
-                            "    fragColor = texture(uTex, uArray[0].xy) * uScalar * uMatrix[0];\n" +
-                            "}\n";
+                            "    fragColor = texture(uTex, uArray[0].xy) * uScalar * uMatrix[0];\n" + "}\n";
         const char* fsPtr = fsSrc.c_str();
 
         GLuint vs = CreateShader(GL_VERTEX_SHADER);
@@ -1899,8 +2257,7 @@ TEST_F(ProgramTest, GetActiveUniformsivStd140Block) {
     GLint size = 0;
     GLenum type = 0;
     GetActiveUniform(program, m, sizeof(nameBuf), &nameLen, &size, &type, nameBuf);
-    EXPECT_EQ(QueryUniformiv(program, m, GL_UNIFORM_NAME_LENGTH),
-              static_cast<GLint>(std::strlen(nameBuf) + 1));
+    EXPECT_EQ(QueryUniformiv(program, m, GL_UNIFORM_NAME_LENGTH), static_cast<GLint>(std::strlen(nameBuf) + 1));
 
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
@@ -2039,7 +2396,7 @@ void main() {
         ASSERT_GE(locUiOne, 0) << "body: '" << body << "'";
 
         UseProgram(program);
-        Uniform1i(locOne, 1);   // crashed with a null MapUBO() before the fallback storage
+        Uniform1i(locOne, 1); // crashed with a null MapUBO() before the fallback storage
         Uniform1i(locUiOne, 2);
         EXPECT_EQ(GetError(), GL_NO_ERROR) << "body: '" << body << "'";
 
@@ -2092,8 +2449,7 @@ void main() {
 
     // Distinct scalar leaves must land at distinct UBO offsets (they all aliased
     // offset 0 before the fix).
-    const char* scalarLeaves[] = {"s[0].b[0].a", "s[0].b[1].a", "s[0].b[2].a", "s[1].a", "s[1].b[1].a",
-                                  "s[1].b[2].a"};
+    const char* scalarLeaves[] = {"s[0].b[0].a", "s[0].b[1].a", "s[0].b[2].a", "s[1].a", "s[1].b[1].a", "s[1].b[2].a"};
     const GLfloat scalarValues[] = {0.5f, 0.25f, 0.125f, 7.0f, 3.0f, 4.0f};
     for (SizeT i = 0; i < std::size(scalarLeaves); ++i) {
         const GLint loc = GetUniformLocation(program, scalarLeaves[i]);
@@ -2222,8 +2578,7 @@ void main() {
         Uint firstOffset = MG_State::GLState::ProgramObject::kInvalidUniformOffset;
         for (int i = 0; i < outer; ++i) {
             for (int j = 0; j < inner; ++j) {
-                const std::string name =
-                    std::string(base) + "[" + std::to_string(i) + "][" + std::to_string(j) + "]";
+                const std::string name = std::string(base) + "[" + std::to_string(i) + "][" + std::to_string(j) + "]";
                 const GLint location = GetUniformLocation(program, name.c_str());
                 ASSERT_GE(location, 0) << name;
                 const Uint offset = programObject->GetUniformOffset(static_cast<Uint>(location));
@@ -2511,7 +2866,7 @@ TEST_F(ProgramTest, UniformBlockListExcludesStorageAndAtomicCounterBlocks) {
     GetActiveUniformBlockiv(program, blk2, GL_UNIFORM_BLOCK_BINDING, &binding);
     EXPECT_EQ(binding, 7);
     GetActiveUniformBlockiv(program, blk, GL_UNIFORM_BLOCK_BINDING, &binding);
-    EXPECT_NE(binding, 7) << "the rebind must not have leaked onto the neighbouring block";
+    EXPECT_NE(binding, 7) << "the rebind must not have leaked onto the neighboring block";
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 
     // An index past the end of the (now shorter) list is GL_INVALID_VALUE, not a silently
@@ -2563,8 +2918,7 @@ TEST_F(ProgramTest, UniformBlockProgramInterfaceMatchesTheUniformBlockList) {
     GetProgramInterfaceiv(program, GL_SHADER_STORAGE_BLOCK, GL_ACTIVE_RESOURCES, &storageBlocks);
     EXPECT_EQ(storageBlocks, 1);
     EXPECT_EQ(GetProgramResourceIndex(program, GL_UNIFORM_BLOCK, "AVeryLongStorageBlockName"), GL_INVALID_INDEX);
-    EXPECT_NE(GetProgramResourceIndex(program, GL_SHADER_STORAGE_BLOCK, "AVeryLongStorageBlockName"),
-              GL_INVALID_INDEX);
+    EXPECT_NE(GetProgramResourceIndex(program, GL_SHADER_STORAGE_BLOCK, "AVeryLongStorageBlockName"), GL_INVALID_INDEX);
     // ... and the buffer variable by GL_BUFFER_VARIABLE, not GL_UNIFORM.
     EXPECT_NE(GetProgramResourceIndex(program, GL_BUFFER_VARIABLE, "storageVec"), GL_INVALID_INDEX);
     EXPECT_EQ(GetProgramResourceIndex(program, GL_UNIFORM, "storageVec"), GL_INVALID_INDEX);
@@ -2582,8 +2936,7 @@ TEST_F(ProgramTest, UniformBlockProgramInterfaceMatchesTheUniformBlockList) {
         ASSERT_EQ(memberCount, 1) << blockName;
         const GLenum activeVariables = GL_ACTIVE_VARIABLES;
         GLint memberIndex = -1;
-        GetProgramResourceiv(program, GL_UNIFORM_BLOCK, interfaceIndex, 1, &activeVariables, 1, nullptr,
-                             &memberIndex);
+        GetProgramResourceiv(program, GL_UNIFORM_BLOCK, interfaceIndex, 1, &activeVariables, 1, nullptr, &memberIndex);
         GLint viaBlockiv = -1;
         GetActiveUniformBlockiv(program, interfaceIndex, GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, &viaBlockiv);
         EXPECT_EQ(memberIndex, viaBlockiv) << blockName;
@@ -2600,8 +2953,7 @@ TEST_F(ProgramTest, ActiveUniformsExcludeBufferVariablesButKeepAtomicCounters) {
 
     GLint activeUniforms = -1;
     GetProgramiv(program, GL_ACTIVE_UNIFORMS, &activeUniforms);
-    ASSERT_EQ(activeUniforms, 4)
-        << "uboVec, uboVec2[0], uScale and counter - storageVec is a buffer variable";
+    ASSERT_EQ(activeUniforms, 4) << "uboVec, uboVec2[0], uScale and counter - storageVec is a buffer variable";
 
     // Neither spelling of the buffer variable is a uniform index.
     EXPECT_EQ(UniformIndexByName(program, "storageVec"), GL_INVALID_INDEX);
@@ -2623,8 +2975,7 @@ TEST_F(ProgramTest, ActiveUniformsExcludeBufferVariablesButKeepAtomicCounters) {
     // uniform block, and still points at its atomic counter BUFFER.
     const GLuint counter = UniformIndexByName(program, "counter");
     ASSERT_NE(counter, GL_INVALID_INDEX);
-    EXPECT_EQ(QueryUniformiv(program, counter, GL_UNIFORM_TYPE),
-              static_cast<GLint>(GL_UNSIGNED_INT_ATOMIC_COUNTER));
+    EXPECT_EQ(QueryUniformiv(program, counter, GL_UNIFORM_TYPE), static_cast<GLint>(GL_UNSIGNED_INT_ATOMIC_COUNTER));
     EXPECT_EQ(QueryUniformiv(program, counter, GL_UNIFORM_BLOCK_INDEX), -1);
     EXPECT_EQ(QueryUniformiv(program, counter, GL_UNIFORM_ATOMIC_COUNTER_BUFFER_INDEX), 0);
     EXPECT_EQ(QueryUniformiv(program, counter, GL_UNIFORM_OFFSET), 0);
@@ -2639,8 +2990,7 @@ TEST_F(ProgramTest, ActiveUniformsExcludeBufferVariablesButKeepAtomicCounters) {
     GetActiveAtomicCounterBufferiv(program, 0, GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTERS, &counterCount);
     ASSERT_EQ(counterCount, 1);
     GLint counterIndex = -1;
-    GetActiveAtomicCounterBufferiv(program, 0, GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTER_INDICES,
-                                   &counterIndex);
+    GetActiveAtomicCounterBufferiv(program, 0, GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTER_INDICES, &counterIndex);
     EXPECT_EQ(static_cast<GLuint>(counterIndex), counter);
     GLint counterBinding = -1;
     GetActiveAtomicCounterBufferiv(program, 0, GL_ATOMIC_COUNTER_BUFFER_BINDING, &counterBinding);
@@ -2768,8 +3118,7 @@ void main() { fragColor = uUsedColor; }
         GLint size = 0;
         GLenum type = 0;
         GetActiveUniform(program, static_cast<GLuint>(i), sizeof(nameBuf), &nameLen, &size, &type, nameBuf);
-        EXPECT_TRUE(std::strcmp(nameBuf, "uDeadVec") != 0 && std::strcmp(nameBuf, "uDeadFloat") != 0)
-            << nameBuf;
+        EXPECT_TRUE(std::strcmp(nameBuf, "uDeadVec") != 0 && std::strcmp(nameBuf, "uDeadFloat") != 0) << nameBuf;
     }
 
     // No named blocks are declared, so GL must see zero uniform blocks - the global
@@ -2968,8 +3317,8 @@ namespace {
         Vector<MobileGL::String> esslModules;
         auto programObj = MG_State::pGLContext->GetProgramObject(program);
         for (auto& spirvCode : programObj->GetGeneratedSpirv()) {
-            MG_Util::ShaderTranspiler::SpvcSession spvcSession(
-                spirvCode, MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
+            MG_Util::ShaderTranspiler::SpvcSession spvcSession(spirvCode,
+                                                               MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
             spvc_compiler_options options;
             spvcSession.CreateOptions(&options);
             spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION, 320);
@@ -3068,8 +3417,7 @@ namespace {
         const MobileGL::String needle = name + "(";
         for (SizeT pos = essl.find(needle); pos != String::npos; pos = essl.find(needle, pos + 1)) {
             const char before = pos == 0 ? ' ' : essl[pos - 1];
-            const bool isIdentifierChar =
-                std::isalnum(static_cast<unsigned char>(before)) != 0 || before == '_';
+            const bool isIdentifierChar = std::isalnum(static_cast<unsigned char>(before)) != 0 || before == '_';
             if (!isIdentifierChar) return true;
         }
         return false;
@@ -3171,7 +3519,6 @@ void main() { fragColor = vec4(pow(uBase, 2.2), 1.0); }
     }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
-
 
 // ---------------------------------------------------------------------------
 // P0b: source-hash dedupe for shader recompiles.
@@ -3332,11 +3679,11 @@ TEST_F(ProgramTest, TwoShaderObjectsWithIdenticalSourceLinkIndependently) {
     //     single parse - made safe by ClaimParsedShader's CAS, exactly as it already was for
     //     one shader object attached to two programs. ShaderCompileAdoptionTest pins that
     //     down by linking both objects and comparing the generated SPIR-V.
-    //   * The translation memo's compile half (L1c) recognises the second object's source and
+    //   * The translation memo's compile half (L1c) recognizes the second object's source and
     //     publishes its verdict WITHOUT parsing, so that object legitimately holds no TShader
     //     at all until a link asks ClaimParsedShader for one. Asserting a non-null parse here
     //     would be asserting that the parse had NOT been skipped - i.e. testing the absence
-    //     of the optimisation rather than the invariant.
+    //     of the optimization rather than the invariant.
     //
     // So the pointer assertion applies only where the two objects are genuinely INDEPENDENT,
     // i.e. where job adoption is not in play. What every mode has to agree on is the two
@@ -3347,7 +3694,7 @@ TEST_F(ProgramTest, TwoShaderObjectsWithIdenticalSourceLinkIndependently) {
         // Either may legitimately hold NO parse: that is an L1c hit, where the AST is made on
         // demand at link instead. So this asserts they are not the SAME non-null parse, and
         // deliberately not that both have one - the latter would be asserting that the
-        // optimisation had not happened.
+        // optimization had not happened.
         if (shaderA != nullptr && shaderB != nullptr) {
             EXPECT_NE(shaderA, shaderB) << "two independent shader objects share one consume-once parse";
         }
@@ -3424,7 +3771,7 @@ TEST_F(ProgramTest, PreprocessCacheOverflowKeepsCompilingCorrectly) {
 
 // glUniformMatrix{2x3,2x4,3x2,3x4,4x2,4x3}fv and their twelve glProgramUniformMatrix* twins were
 // validate-only no-ops: they never took the value pointer at all. They upload column-at-a-time at
-// the std140 16-byte column stride, honouring `transpose`, and glGetUniformfv undoes that padding.
+// the std140 16-byte column stride, honoring `transpose`, and glGetUniformfv undoes that padding.
 TEST_F(ProgramTest, NonSquareMatrixUniformsRoundTripThroughTheGlobalUbo) {
     const char* vsSource = R"(#version 430 core
 uniform mat2x3 uM2x3;
@@ -3542,11 +3889,10 @@ void main() { fragColor = vec4(1.0); }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 
-// GL 4.6 core 7.1: shaderType is an enum, so an unrecognised one is INVALID_ENUM - it used to be
+// GL 4.6 core 7.1: shaderType is an enum, so an unrecognized one is INVALID_ENUM - it used to be
 // reported as INVALID_VALUE. glCreateShaderProgramv adds a count < 0 gate ahead of everything.
 TEST_F(ProgramTest, CreateShaderAndCreateShaderProgramvReportTheRightErrorClasses) {
-    while (GetError() != GL_NO_ERROR) {
-    }
+    while (GetError() != GL_NO_ERROR) {}
 
     EXPECT_EQ(CreateShader(GL_FLOAT), 0u);
     EXPECT_EQ(GetError(), GL_INVALID_ENUM);
@@ -3610,7 +3956,7 @@ void main() { fragColor = vec4(1.0); }
 // link gets to judge: a bare `layout(location = MAX)` is already a compile error inside glslang
 // ("location is too large"), while an array's base compiles fine and only its last element passes
 // the ceiling (...uniform-loc-negative-link-max-num-of-locations).
-TEST_F(ProgramTest, ExplicitUniformLocationsHonourMaxUniformLocations) {
+TEST_F(ProgramTest, ExplicitUniformLocationsHonorMaxUniformLocations) {
     GLint maxLocations = 0;
     GetIntegerv(GL_MAX_UNIFORM_LOCATIONS, &maxLocations);
     ASSERT_GE(maxLocations, 1024) << "GL 4.3 requires at least 1024 uniform locations";
@@ -3622,8 +3968,7 @@ void main() { fragColor = vec4(1.0); }
     const GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
 
     {
-        const String source = String("#version 430 core\nlayout(location = ") +
-                              std::to_string(maxLocations - 1) +
+        const String source = String("#version 430 core\nlayout(location = ") + std::to_string(maxLocations - 1) +
                               ") uniform vec4 uAtLimit;\nvoid main() { gl_Position = uAtLimit; }\n";
         const GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, source.c_str());
         const GLuint program = LinkVsFs(vs, fs, GL_TRUE);
@@ -3631,8 +3976,7 @@ void main() { fragColor = vec4(1.0); }
             << "the last location in the pool is legal and must come back verbatim";
     }
     {
-        const String source = String("#version 430 core\nlayout(location = ") +
-                              std::to_string(maxLocations - 4) +
+        const String source = String("#version 430 core\nlayout(location = ") + std::to_string(maxLocations - 4) +
                               ") uniform vec4 uSpill[8];\nvoid main() { gl_Position = uSpill[0]; }\n";
         const GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, source.c_str());
         (void)LinkVsFs(vs, fs, GL_FALSE);
@@ -3686,8 +4030,8 @@ void main() {
         GLint arrayStride;
     };
     const Expectation expectations[] = {
-        {"ac_counter0", 1, 0, 0},       {"ac_counter1", 1, 4, 0},  {"ac_counter2", 1, 8, 0},
-        {"ac_counter67[0]", 2, 12, 4},  {"ac_counter3", 1, 20, 0},
+        {"ac_counter0", 1, 0, 0},      {"ac_counter1", 1, 4, 0},  {"ac_counter2", 1, 8, 0},
+        {"ac_counter67[0]", 2, 12, 4}, {"ac_counter3", 1, 20, 0},
     };
 
     for (const auto& expected : expectations) {
@@ -3805,8 +4149,8 @@ TEST_F(ProgramTest, ImplicitLocationStaysInRangeWhenABufferBlockSharesTheProgram
         const GLint location = GetUniformLocation(program, implicitName.c_str());
         EXPECT_EQ(location, holeBase) << "the implicit uniform must take the one free span left";
         EXPECT_LT(location + implicitCount, maxLocations + 1)
-            << "locations " << location << ".." << (location + implicitCount - 1)
-            << " must stay inside 0.." << (maxLocations - 1);
+            << "locations " << location << ".." << (location + implicitCount - 1) << " must stay inside 0.."
+            << (maxLocations - 1);
         EXPECT_EQ(GetUniformLocation(program, "cs_result"), -1);
     };
 
@@ -3882,8 +4226,7 @@ void main() {
     };
 
     const auto atTheLimit = buildWith(maxPatchVertices);
-    EXPECT_EQ(atTheLimit.first, GL_TRUE)
-        << "exactly GL_MAX_PATCH_VERTICES is legal: " << atTheLimit.second;
+    EXPECT_EQ(atTheLimit.first, GL_TRUE) << "exactly GL_MAX_PATCH_VERTICES is legal: " << atTheLimit.second;
 
     const auto pastTheLimit = buildWith(maxPatchVertices + 1);
     EXPECT_EQ(pastTheLimit.first, GL_FALSE) << "one past GL_MAX_PATCH_VERTICES must not link";
@@ -4023,10 +4366,10 @@ void main() { mgColor = vec4(1.0); }
 )";
 } // namespace
 
-// Two fragment outputs on ONE location with DIFFERENT colour indices is not an aliasing error -
+// Two fragment outputs on ONE location with DIFFERENT color indices is not an aliasing error -
 // it is dual-source blending (GL 4.6 core 11.1.3 / ARB_blend_func_extended, core since 3.3), and
 // the GL_SRC1_* blend factors have nothing to read without it. The link-time aliasing check keyed
-// on the colour number alone, so every such program failed to link with "alias color number 0"
+// on the color number alone, so every such program failed to link with "alias color number 0"
 // and the whole feature was unreachable from shader-side GLSL.
 TEST_F(ProgramTest, FragmentOutputsMayShareALocationWhenTheirColorIndexDiffers) {
     constexpr const char* dualSourceFs = R"(#version 460 core
@@ -4042,7 +4385,7 @@ void main() { fragColor0 = vec4(1.0); fragColor1 = vec4(0.5); }
         GetProgramInfoLog(program, sizeof(log), nullptr, log);
         return std::string(log);
     }();
-    // Both outputs are active and both sit on colour number 0 - which is the shape that used to be
+    // Both outputs are active and both sit on color number 0 - which is the shape that used to be
     // refused. (glGetFragDataIndex still answers 0 for the index-1 output: it reports only what
     // glBindFragDataLocationIndexed bound, and reflecting the shader-side qualifier is a separate
     // gap, so it is deliberately not asserted here.)
@@ -4051,7 +4394,7 @@ void main() { fragColor0 = vec4(1.0); fragColor1 = vec4(0.5); }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 
-// The check it must NOT stop making: two outputs on the same colour number AND the same index
+// The check it must NOT stop making: two outputs on the same color number AND the same index
 // really do alias, and that link has to fail. Aliased through glBindFragDataLocation rather than
 // through two `layout(location = 0)` qualifiers on purpose - the qualifier form is caught by
 // glslang at COMPILE time, so it would never reach the link-time rule this pins.
@@ -4083,7 +4426,7 @@ void main() { fragColorA = vec4(1.0); fragColorB = vec4(0.5); }
     GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
     EXPECT_NE(std::string(infoLog).find("alias color number"), std::string::npos) << infoLog;
 
-    // ...and the same pair separated by the colour INDEX links, which is the whole point of the
+    // ...and the same pair separated by the color INDEX links, which is the whole point of the
     // key being a pair.
     BindFragDataLocationIndexed(program, 0, 1, "fragColorB");
     LinkProgram(program);
@@ -4093,11 +4436,10 @@ void main() { fragColorA = vec4(1.0); fragColorB = vec4(0.5); }
         GetProgramInfoLog(program, sizeof(log), nullptr, log);
         return std::string(log);
     }();
-    for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {
-    }
+    for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {}
 }
 
-// An API colour index of ZERO is "no override", not "index 0". glBindFragDataLocation is
+// An API color index of ZERO is "no override", not "index 0". glBindFragDataLocation is
 // glBindFragDataLocationIndexed with index 0 (GL_Program.cpp), so the blanket-bind pattern -
 // portable code that binds every output name it knows about, without caring about dual-source -
 // writes a real 0 into the frag-data index map for an output whose shader qualifier says 1.
@@ -4126,7 +4468,7 @@ void main() { fragColor0 = vec4(1.0); fragColor1 = vec4(0.5); }
     AttachShader(program, fs);
     DeleteShader(fs);
 
-    // The blanket bind: colour number 0, index 0, on the output the shader put at index 1.
+    // The blanket bind: color number 0, index 0, on the output the shader put at index 1.
     BindFragDataLocation(program, 0, "fragColor0");
     BindFragDataLocation(program, 0, "fragColor1");
     LinkProgram(program);
@@ -4144,8 +4486,7 @@ void main() { fragColor0 = vec4(1.0); fragColor1 = vec4(0.5); }
     GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
     EXPECT_EQ(linkStatus, GL_TRUE);
     EXPECT_EQ(GetFragDataIndex(program, "fragColor1"), 1);
-    for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {
-    }
+    for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {}
 }
 
 TEST_F(ProgramTest, GetProgramivReportsTheGeometryStageLinkProperties) {
@@ -4157,8 +4498,8 @@ void main() {
     EndPrimitive();
 }
 )";
-    const GLuint program =
-        LinkStages({{GL_VERTEX_SHADER, kPassthroughVs}, {GL_GEOMETRY_SHADER, gs}, {GL_FRAGMENT_SHADER, kPassthroughFs}});
+    const GLuint program = LinkStages(
+        {{GL_VERTEX_SHADER, kPassthroughVs}, {GL_GEOMETRY_SHADER, gs}, {GL_FRAGMENT_SHADER, kPassthroughFs}});
 
     GLint value = -1;
     GetProgramiv(program, GL_GEOMETRY_INPUT_TYPE, &value);
@@ -4175,8 +4516,8 @@ void main() {
     // says "a linked program object with a geometry shader", which the conformance suite checks
     // from both sides.
     const GLuint noGeometry = LinkStages({{GL_VERTEX_SHADER, kPassthroughVs}, {GL_FRAGMENT_SHADER, kPassthroughFs}});
-    for (const GLenum pname : {GL_GEOMETRY_INPUT_TYPE, GL_GEOMETRY_OUTPUT_TYPE, GL_GEOMETRY_VERTICES_OUT,
-                               GL_GEOMETRY_SHADER_INVOCATIONS}) {
+    for (const GLenum pname :
+         {GL_GEOMETRY_INPUT_TYPE, GL_GEOMETRY_OUTPUT_TYPE, GL_GEOMETRY_VERTICES_OUT, GL_GEOMETRY_SHADER_INVOCATIONS}) {
         GetProgramiv(noGeometry, pname, &value);
         EXPECT_EQ(GetError(), static_cast<GLenum>(GL_INVALID_OPERATION)) << "pname " << pname;
     }
@@ -4247,15 +4588,18 @@ void main() { gl_Position = gl_in[0].gl_Position; }
 TEST_F(ProgramTest, ContextWideTessellationPropertiesAnswerEveryWidth) {
     GLfloat outer[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
     GetFloatv(GL_PATCH_DEFAULT_OUTER_LEVEL, outer);
-    for (const GLfloat level : outer) EXPECT_FLOAT_EQ(level, 1.0f);
+    for (const GLfloat level : outer)
+        EXPECT_FLOAT_EQ(level, 1.0f);
 
     GLfloat inner[2] = {-1.0f, -1.0f};
     GetFloatv(GL_PATCH_DEFAULT_INNER_LEVEL, inner);
-    for (const GLfloat level : inner) EXPECT_FLOAT_EQ(level, 1.0f);
+    for (const GLfloat level : inner)
+        EXPECT_FLOAT_EQ(level, 1.0f);
 
     GLboolean outerBools[4] = {GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE};
     GetBooleanv(GL_PATCH_DEFAULT_OUTER_LEVEL, outerBools);
-    for (const GLboolean level : outerBools) EXPECT_EQ(level, GL_TRUE);
+    for (const GLboolean level : outerBools)
+        EXPECT_EQ(level, GL_TRUE);
 
     GLint restart = -1;
     GetIntegerv(GL_PRIMITIVE_RESTART_FOR_PATCHES_SUPPORTED, &restart);
@@ -4336,16 +4680,16 @@ TEST_F(ProgramTest, AtomicCounterBindingAtTheLimitIsRejected) {
     GetIntegerv(GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, &maxAtomicBindings);
     ASSERT_GT(maxAtomicBindings, 0);
 
-    const String legal = "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " +
-                         std::to_string(maxAtomicBindings - 1) +
-                         ") uniform atomic_uint counter;\nvoid main() { atomicCounterIncrement(counter); }\n";
+    const String legal =
+        "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " + std::to_string(maxAtomicBindings - 1) +
+        ") uniform atomic_uint counter;\nvoid main() { atomicCounterIncrement(counter); }\n";
     EXPECT_EQ(LinkComputeProgramStatus(legal.c_str()), GL_TRUE)
         << "the last counter binding in the range is legal and must still link";
 
     String infoLog;
-    const String overRange = "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " +
-                             std::to_string(maxAtomicBindings) +
-                             ") uniform atomic_uint counter;\nvoid main() { atomicCounterIncrement(counter); }\n";
+    const String overRange =
+        "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " + std::to_string(maxAtomicBindings) +
+        ") uniform atomic_uint counter;\nvoid main() { atomicCounterIncrement(counter); }\n";
     EXPECT_EQ(LinkComputeProgramStatus(overRange.c_str(), &infoLog), GL_FALSE)
         << "an atomic_uint binding at GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS must be rejected";
 
@@ -4388,9 +4732,9 @@ TEST_F(ProgramTest, StorageBlockBindingAtTheLimitIsStillRejected) {
         GTEST_SKIP() << "no storage-buffer binding points advertised in this configuration";
     }
 
-    const String overRange = "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " +
-                             std::to_string(maxStorageBindings) +
-                             ", std430) buffer Blk { vec4 v; } blk;\nvoid main() { blk.v = vec4(0.0); }\n";
+    const String overRange =
+        "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " + std::to_string(maxStorageBindings) +
+        ", std430) buffer Blk { vec4 v; } blk;\nvoid main() { blk.v = vec4(0.0); }\n";
     EXPECT_EQ(LinkComputeProgramStatus(overRange.c_str()), GL_FALSE);
 
     DrainProgramTestErrors();
@@ -4480,8 +4824,7 @@ TEST_F(ProgramTest, UniformEntryPointsRejectAnUnlinkedProgram) {
 
     const GLfloat value = 1.0f;
     ProgramUniform1fv(program, -1, 1, &value);
-    EXPECT_EQ(GetError(), GL_INVALID_OPERATION)
-        << "the link check has to run BEFORE the location == -1 early-out";
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "the link check has to run BEFORE the location == -1 early-out";
 
     ProgramUniform1f(program, 0, 1.0f);
     EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
@@ -4559,41 +4902,41 @@ namespace {
         EXPECT_EQ(GetError(), GL_NO_ERROR) << "the call recorded more than one error";
     }
 
-        // 255 words
-        const unsigned int kVertexModule[] = {
-            0x07230203u, 0x00010000u, 0x0008000bu, 0x00000020u, 0x00000000u, 0x00020011u, 0x00000001u, 0x0006000bu,
-            0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu, 0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u,
-            0x0009000fu, 0x00000000u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x0000000du, 0x00000012u, 0x0000001eu,
-            0x0000001fu, 0x00030003u, 0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u, 0x6e69616du, 0x00000000u,
-            0x00060005u, 0x0000000bu, 0x505f6c67u, 0x65567265u, 0x78657472u, 0x00000000u, 0x00060006u, 0x0000000bu,
-            0x00000000u, 0x505f6c67u, 0x7469736fu, 0x006e6f69u, 0x00070006u, 0x0000000bu, 0x00000001u, 0x505f6c67u,
-            0x746e696fu, 0x657a6953u, 0x00000000u, 0x00070006u, 0x0000000bu, 0x00000002u, 0x435f6c67u, 0x4470696cu,
-            0x61747369u, 0x0065636eu, 0x00070006u, 0x0000000bu, 0x00000003u, 0x435f6c67u, 0x446c6c75u, 0x61747369u,
-            0x0065636eu, 0x00030005u, 0x0000000du, 0x00000000u, 0x00040005u, 0x00000012u, 0x736f5061u, 0x00000000u,
-            0x00040005u, 0x00000014u, 0x61635375u, 0x0000656cu, 0x00050005u, 0x0000001eu, 0x565f6c67u, 0x65747265u,
-            0x00444978u, 0x00060005u, 0x0000001fu, 0x495f6c67u, 0x6174736eu, 0x4965636eu, 0x00000044u, 0x00030047u,
-            0x0000000bu, 0x00000002u, 0x00050048u, 0x0000000bu, 0x00000000u, 0x0000000bu, 0x00000000u, 0x00050048u,
-            0x0000000bu, 0x00000001u, 0x0000000bu, 0x00000001u, 0x00050048u, 0x0000000bu, 0x00000002u, 0x0000000bu,
-            0x00000003u, 0x00050048u, 0x0000000bu, 0x00000003u, 0x0000000bu, 0x00000004u, 0x00040047u, 0x00000012u,
-            0x0000001eu, 0x00000000u, 0x00040047u, 0x00000014u, 0x00000001u, 0x00000003u, 0x00040047u, 0x0000001eu,
-            0x0000000bu, 0x00000005u, 0x00040047u, 0x0000001fu, 0x0000000bu, 0x00000006u, 0x00020013u, 0x00000002u,
-            0x00030021u, 0x00000003u, 0x00000002u, 0x00030016u, 0x00000006u, 0x00000020u, 0x00040017u, 0x00000007u,
-            0x00000006u, 0x00000004u, 0x00040015u, 0x00000008u, 0x00000020u, 0x00000000u, 0x0004002bu, 0x00000008u,
-            0x00000009u, 0x00000001u, 0x0004001cu, 0x0000000au, 0x00000006u, 0x00000009u, 0x0006001eu, 0x0000000bu,
-            0x00000007u, 0x00000006u, 0x0000000au, 0x0000000au, 0x00040020u, 0x0000000cu, 0x00000003u, 0x0000000bu,
-            0x0004003bu, 0x0000000cu, 0x0000000du, 0x00000003u, 0x00040015u, 0x0000000eu, 0x00000020u, 0x00000001u,
-            0x0004002bu, 0x0000000eu, 0x0000000fu, 0x00000000u, 0x00040017u, 0x00000010u, 0x00000006u, 0x00000002u,
-            0x00040020u, 0x00000011u, 0x00000001u, 0x00000010u, 0x0004003bu, 0x00000011u, 0x00000012u, 0x00000001u,
-            0x00040032u, 0x00000006u, 0x00000014u, 0x3f800000u, 0x0004002bu, 0x00000006u, 0x00000016u, 0x00000000u,
-            0x0004002bu, 0x00000006u, 0x00000017u, 0x3f800000u, 0x00040020u, 0x0000001bu, 0x00000003u, 0x00000007u,
-            0x00040020u, 0x0000001du, 0x00000001u, 0x0000000eu, 0x0004003bu, 0x0000001du, 0x0000001eu, 0x00000001u,
-            0x0004003bu, 0x0000001du, 0x0000001fu, 0x00000001u, 0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u,
-            0x00000003u, 0x000200f8u, 0x00000005u, 0x0004003du, 0x00000010u, 0x00000013u, 0x00000012u, 0x0005008eu,
-            0x00000010u, 0x00000015u, 0x00000013u, 0x00000014u, 0x00050051u, 0x00000006u, 0x00000018u, 0x00000015u,
-            0x00000000u, 0x00050051u, 0x00000006u, 0x00000019u, 0x00000015u, 0x00000001u, 0x00070050u, 0x00000007u,
-            0x0000001au, 0x00000018u, 0x00000019u, 0x00000016u, 0x00000017u, 0x00050041u, 0x0000001bu, 0x0000001cu,
-            0x0000000du, 0x0000000fu, 0x0003003eu, 0x0000001cu, 0x0000001au, 0x000100fdu, 0x00010038u,
-        };
+    // 255 words
+    const unsigned int kVertexModule[] = {
+        0x07230203u, 0x00010000u, 0x0008000bu, 0x00000020u, 0x00000000u, 0x00020011u, 0x00000001u, 0x0006000bu,
+        0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu, 0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u,
+        0x0009000fu, 0x00000000u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x0000000du, 0x00000012u, 0x0000001eu,
+        0x0000001fu, 0x00030003u, 0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u, 0x6e69616du, 0x00000000u,
+        0x00060005u, 0x0000000bu, 0x505f6c67u, 0x65567265u, 0x78657472u, 0x00000000u, 0x00060006u, 0x0000000bu,
+        0x00000000u, 0x505f6c67u, 0x7469736fu, 0x006e6f69u, 0x00070006u, 0x0000000bu, 0x00000001u, 0x505f6c67u,
+        0x746e696fu, 0x657a6953u, 0x00000000u, 0x00070006u, 0x0000000bu, 0x00000002u, 0x435f6c67u, 0x4470696cu,
+        0x61747369u, 0x0065636eu, 0x00070006u, 0x0000000bu, 0x00000003u, 0x435f6c67u, 0x446c6c75u, 0x61747369u,
+        0x0065636eu, 0x00030005u, 0x0000000du, 0x00000000u, 0x00040005u, 0x00000012u, 0x736f5061u, 0x00000000u,
+        0x00040005u, 0x00000014u, 0x61635375u, 0x0000656cu, 0x00050005u, 0x0000001eu, 0x565f6c67u, 0x65747265u,
+        0x00444978u, 0x00060005u, 0x0000001fu, 0x495f6c67u, 0x6174736eu, 0x4965636eu, 0x00000044u, 0x00030047u,
+        0x0000000bu, 0x00000002u, 0x00050048u, 0x0000000bu, 0x00000000u, 0x0000000bu, 0x00000000u, 0x00050048u,
+        0x0000000bu, 0x00000001u, 0x0000000bu, 0x00000001u, 0x00050048u, 0x0000000bu, 0x00000002u, 0x0000000bu,
+        0x00000003u, 0x00050048u, 0x0000000bu, 0x00000003u, 0x0000000bu, 0x00000004u, 0x00040047u, 0x00000012u,
+        0x0000001eu, 0x00000000u, 0x00040047u, 0x00000014u, 0x00000001u, 0x00000003u, 0x00040047u, 0x0000001eu,
+        0x0000000bu, 0x00000005u, 0x00040047u, 0x0000001fu, 0x0000000bu, 0x00000006u, 0x00020013u, 0x00000002u,
+        0x00030021u, 0x00000003u, 0x00000002u, 0x00030016u, 0x00000006u, 0x00000020u, 0x00040017u, 0x00000007u,
+        0x00000006u, 0x00000004u, 0x00040015u, 0x00000008u, 0x00000020u, 0x00000000u, 0x0004002bu, 0x00000008u,
+        0x00000009u, 0x00000001u, 0x0004001cu, 0x0000000au, 0x00000006u, 0x00000009u, 0x0006001eu, 0x0000000bu,
+        0x00000007u, 0x00000006u, 0x0000000au, 0x0000000au, 0x00040020u, 0x0000000cu, 0x00000003u, 0x0000000bu,
+        0x0004003bu, 0x0000000cu, 0x0000000du, 0x00000003u, 0x00040015u, 0x0000000eu, 0x00000020u, 0x00000001u,
+        0x0004002bu, 0x0000000eu, 0x0000000fu, 0x00000000u, 0x00040017u, 0x00000010u, 0x00000006u, 0x00000002u,
+        0x00040020u, 0x00000011u, 0x00000001u, 0x00000010u, 0x0004003bu, 0x00000011u, 0x00000012u, 0x00000001u,
+        0x00040032u, 0x00000006u, 0x00000014u, 0x3f800000u, 0x0004002bu, 0x00000006u, 0x00000016u, 0x00000000u,
+        0x0004002bu, 0x00000006u, 0x00000017u, 0x3f800000u, 0x00040020u, 0x0000001bu, 0x00000003u, 0x00000007u,
+        0x00040020u, 0x0000001du, 0x00000001u, 0x0000000eu, 0x0004003bu, 0x0000001du, 0x0000001eu, 0x00000001u,
+        0x0004003bu, 0x0000001du, 0x0000001fu, 0x00000001u, 0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u,
+        0x00000003u, 0x000200f8u, 0x00000005u, 0x0004003du, 0x00000010u, 0x00000013u, 0x00000012u, 0x0005008eu,
+        0x00000010u, 0x00000015u, 0x00000013u, 0x00000014u, 0x00050051u, 0x00000006u, 0x00000018u, 0x00000015u,
+        0x00000000u, 0x00050051u, 0x00000006u, 0x00000019u, 0x00000015u, 0x00000001u, 0x00070050u, 0x00000007u,
+        0x0000001au, 0x00000018u, 0x00000019u, 0x00000016u, 0x00000017u, 0x00050041u, 0x0000001bu, 0x0000001cu,
+        0x0000000du, 0x0000000fu, 0x0003003eu, 0x0000001cu, 0x0000001au, 0x000100fdu, 0x00010038u,
+    };
 } // namespace
 
 TEST_F(ProgramTest, ShaderBinaryStoresASpirvModuleAndTheStateQueryReportsIt) {
@@ -4741,6 +5084,54 @@ TEST_F(ProgramTest, ShaderSourceClearsTheSpecializedLatch) {
     SpecializeShader(shader, "main", 0, nullptr, nullptr);
     EXPECT_EQ(GetError(), GL_NO_ERROR) << "the latch must not survive a round trip through glShaderSource";
 
+    DrainProgramTestErrors();
+}
+
+// GL 4.6 core 7.13: a program with no name reflection - every program linked from SPIR-V - answers
+// the four name-length queries with one (KHR-GL46.gl_spirv.spirv_modules_state_queries_test), while
+// the same interface linked from GLSL keeps reporting its real longest name.
+TEST_F(ProgramTest, ASpirvProgramReportsNoNameReflection) {
+    DrainProgramTestErrors();
+
+    const auto linkWith = [](GLuint shader) {
+        const GLuint program = CreateProgram();
+        AttachShader(program, shader);
+        LinkProgram(program);
+        GLint linked = GL_FALSE;
+        GetProgramiv(program, GL_LINK_STATUS, &linked);
+        EXPECT_EQ(linked, GL_TRUE);
+        return program;
+    };
+
+    const GLuint spirvShader = CreateShader(GL_VERTEX_SHADER);
+    ShaderBinary(1, &spirvShader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    SpecializeShader(spirvShader, "main", 0, nullptr, nullptr);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    const GLuint spirvProgram = linkWith(spirvShader);
+
+    const GLuint glslShader = CreateShader(GL_VERTEX_SHADER);
+    const char* source = "#version 450 core\nlayout(location = 0) in vec2 aPos;\n"
+                         "void main() { gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+    ShaderSource(glslShader, 1, &source, nullptr);
+    CompileShader(glslShader);
+    const GLuint glslProgram = linkWith(glslShader);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    for (const GLenum pname : {GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, GL_ACTIVE_UNIFORM_MAX_LENGTH,
+                               GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH, GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH}) {
+        GLint length = -1;
+        GetProgramiv(spirvProgram, pname, &length);
+        EXPECT_EQ(GetError(), GL_NO_ERROR);
+        EXPECT_EQ(length, 1) << "pname 0x" << std::hex << pname;
+    }
+    GLint glslLength = -1;
+    GetProgramiv(glslProgram, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, &glslLength);
+    EXPECT_EQ(glslLength, static_cast<GLint>(sizeof("aPos")));
+
+    DeleteProgram(spirvProgram);
+    DeleteProgram(glslProgram);
+    DeleteShader(spirvShader);
+    DeleteShader(glslShader);
     DrainProgramTestErrors();
 }
 
@@ -4986,5 +5377,103 @@ TEST_F(ProgramTest, ASpirvModulesXfbDecorationsDoNotSurviveIntoTheTranslatedSour
     GetShaderInfoLog(shader, sizeof(shaderLog), nullptr, shaderLog);
     EXPECT_EQ(compiled, GL_TRUE) << shaderLog;
 
+    DrainProgramTestErrors();
+}
+
+// GL_OES_EGL_image_external. A samplerExternalOES uniform is compiled as a sampler2D (the desktop
+// profile the shader is compiled under has no external overloads; below the frontend an external
+// texture is a 2D one) and reported with its own type, which is what sends its unit to the
+// external binding point.
+namespace {
+    GLuint LinkExternalSamplerProgram(const char* vertexSource, const char* fragmentSource, String& log) {
+        char info[2048] = "";
+        const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+        ShaderSource(vs, 1, &vertexSource, nullptr);
+        CompileShader(vs);
+        const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+        ShaderSource(fs, 1, &fragmentSource, nullptr);
+        CompileShader(fs);
+        GLint compiled = GL_FALSE;
+        GetShaderiv(fs, GL_COMPILE_STATUS, &compiled);
+        GetShaderInfoLog(fs, sizeof(info), nullptr, info);
+        log = info;
+        if (compiled != GL_TRUE) return 0;
+        const GLuint program = CreateProgram();
+        AttachShader(program, vs);
+        AttachShader(program, fs);
+        LinkProgram(program);
+        GLint linked = GL_FALSE;
+        GetProgramiv(program, GL_LINK_STATUS, &linked);
+        GetProgramInfoLog(program, sizeof(info), nullptr, info);
+        log += info;
+        return linked == GL_TRUE ? program : 0;
+    }
+
+    GLenum UniformTypeByName(GLuint program, const char* wanted) {
+        GLint count = 0;
+        GetProgramiv(program, GL_ACTIVE_UNIFORMS, &count);
+        for (GLint i = 0; i < count; ++i) {
+            char name[64] = "";
+            GLsizei length = 0;
+            GLint size = 0;
+            GLenum type = 0;
+            GetActiveUniform(program, static_cast<GLuint>(i), sizeof(name), &length, &size, &type, name);
+            if (String(name) == wanted) return type;
+        }
+        return GL_NONE;
+    }
+
+    const char* kExternalVertexSource = "#version 300 es\n"
+                                        "out vec2 uv;\n"
+                                        "void main() { uv = vec2(0.5); gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }\n";
+} // namespace
+
+TEST_F(ProgramTest, AnEsslExternalSamplerReportsItsOwnType) {
+    DrainProgramTestErrors();
+    const char* fs = "#version 300 es\n"
+                     "#extension GL_OES_EGL_image_external_essl3 : require\n"
+                     "precision mediump float;\n"
+                     "uniform highp samplerExternalOES videoFrame;\n"
+                     "uniform sampler2D overlay;\n"
+                     "in vec2 uv;\n"
+                     "out vec4 color;\n"
+                     "void main() { color = texture(videoFrame, uv) + texture(overlay, uv); }\n";
+    String log;
+    const GLuint program = LinkExternalSamplerProgram(kExternalVertexSource, fs, log);
+    ASSERT_NE(program, 0u) << log;
+    EXPECT_EQ(UniformTypeByName(program, "videoFrame"), static_cast<GLenum>(GL_SAMPLER_EXTERNAL_OES));
+    EXPECT_EQ(UniformTypeByName(program, "overlay"), static_cast<GLenum>(GL_SAMPLER_2D));
+    DrainProgramTestErrors();
+}
+
+// A compositor's shader generator declares one name both ways, picking by #if: only the branch the
+// preprocessor keeps says what the uniform is.
+TEST_F(ProgramTest, AnExternalSamplerInAnInactiveBranchLeavesTheSampler2DAlone) {
+    DrainProgramTestErrors();
+    const char* fsTemplate = "#version 140\n"
+                             "%s"
+                             "#if TRAIT_MAP_TEXTURE\n"
+                             "uniform sampler2D sampler;\n"
+                             "#endif\n"
+                             "#if TRAIT_MAP_EXTERNAL_TEXTURE\n"
+                             "#extension GL_OES_EGL_image_external : require\n"
+                             "uniform samplerExternalOES sampler;\n"
+                             "#endif\n"
+                             "in vec2 uv;\n"
+                             "out vec4 color;\n"
+                             "void main() { color = texture(sampler, uv); }\n";
+    const char* vs = "#version 140\n"
+                     "out vec2 uv;\n"
+                     "void main() { uv = vec2(0.5); gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }\n";
+    for (const auto& [traits, expected] :
+         {std::pair{"#define TRAIT_MAP_TEXTURE 1\n", static_cast<GLenum>(GL_SAMPLER_2D)},
+          std::pair{"#define TRAIT_MAP_EXTERNAL_TEXTURE 1\n", static_cast<GLenum>(GL_SAMPLER_EXTERNAL_OES)}}) {
+        char fs[1024];
+        std::snprintf(fs, sizeof(fs), fsTemplate, traits);
+        String log;
+        const GLuint program = LinkExternalSamplerProgram(vs, fs, log);
+        ASSERT_NE(program, 0u) << traits << log;
+        EXPECT_EQ(UniformTypeByName(program, "sampler"), expected) << traits;
+    }
     DrainProgramTestErrors();
 }

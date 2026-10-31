@@ -21,7 +21,7 @@
 // ProgramUtilTest, LoopDerivedFragmentOutputIndexFoldsToConstantIndices and its
 // genuinely-dynamic sibling) prove the SPIR-V comes out with constant indices, validates, and
 // decompiles to ESSL with only literal indices. What they cannot prove is that a real driver
-// then ACCEPTS and RUNS it - and acceptance is the whole failure mode, because Mesa accepts the
+// then ACCEPTS and RUNS it - and acceptance is the whole failure mode, because the desktop CI drivers accept the
 // illegal form too. Only a live glCompileShader/glLinkProgram followed by a draw can tell the two
 // apart, and only reading the pixels back can tell "linked" from "wrote the right attachment".
 //
@@ -100,13 +100,11 @@ void main() {
                     glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kSize, kSize);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D,
-                                           m_color[i], 0);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D, m_color[i], 0);
                 }
                 const GLenum drawBuffers[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
                 glDrawBuffers(2, drawBuffers);
-                ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER),
-                          static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
+                ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
 
                 const float quad[] = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
                 glGenVertexArrays(1, &m_vao);
@@ -130,7 +128,7 @@ void main() {
                 ScenarioTest::TearDown();
             }
 
-            // Clears both attachments to a colour no shader below writes, so an attachment that
+            // Clears both attachments to a color no shader below writes, so an attachment that
             // was never written reads back as the sentinel rather than as a plausible value.
             void ClearToSentinel() {
                 glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
@@ -141,14 +139,14 @@ void main() {
                 std::vector<unsigned char> bytes(static_cast<std::size_t>(kSize) * kSize * 4, 0);
                 glReadBuffer(GL_COLOR_ATTACHMENT0 + index);
                 glReadPixels(0, 0, kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, bytes.data());
-                std::vector<float> centre(4, -1.0f);
+                std::vector<float> center(4, -1.0f);
                 // The middle pixel: the quad covers the whole target, so every pixel is the same,
                 // and the middle one cannot be a rasterization edge case.
                 const std::size_t offset = (static_cast<std::size_t>(kSize / 2) * kSize + kSize / 2) * 4;
                 for (int i = 0; i < 4; ++i) {
-                    centre[static_cast<std::size_t>(i)] = static_cast<float>(bytes[offset + i]) / 255.0f;
+                    center[static_cast<std::size_t>(i)] = static_cast<float>(bytes[offset + i]) / 255.0f;
                 }
-                return centre;
+                return center;
             }
 
             GLuint m_fbo = 0;
@@ -165,8 +163,7 @@ void main() {
 
             std::string error;
             const GLuint program = CompileProgram(kVS, kLoopIndexedFS, &error);
-            ASSERT_NE(program, 0u) << "a loop-indexed fragment output array must compile and link: "
-                                   << error;
+            ASSERT_NE(program, 0u) << "a loop-indexed fragment output array must compile and link: " << error;
 
             ClearToSentinel();
             glUseProgram(program);
@@ -175,8 +172,7 @@ void main() {
             const std::vector<float> first = ReadAttachment(0);
             EXPECT_NEAR(first[0], 0.0f, 0.02f) << "attachment 0 red";
             EXPECT_NEAR(first[1], 0.1f, 0.02f) << "attachment 0 green";
-            EXPECT_NEAR(first[2], 0.2f, 0.02f)
-                << "attachment 0 blue - a sentinel 1.0 here means the draw never ran";
+            EXPECT_NEAR(first[2], 0.2f, 0.02f) << "attachment 0 blue - a sentinel 1.0 here means the draw never ran";
             EXPECT_NEAR(first[3], 0.3f, 0.02f) << "attachment 0 alpha";
 
             const std::vector<float> second = ReadAttachment(1);
@@ -198,8 +194,7 @@ void main() {
 
             std::string error;
             const GLuint program = CompileProgram(kVS, kUniformIndexedFS, &error);
-            ASSERT_NE(program, 0u) << "a uniform-indexed fragment output array must compile and link: "
-                                   << error;
+            ASSERT_NE(program, 0u) << "a uniform-indexed fragment output array must compile and link: " << error;
             const GLint targetLocation = glGetUniformLocation(program, "uTarget");
             ASSERT_GE(targetLocation, 0);
             glUseProgram(program);
@@ -211,11 +206,9 @@ void main() {
 
                 const std::vector<float> first = ReadAttachment(0);
                 const std::vector<float> second = ReadAttachment(1);
-                EXPECT_NEAR(first[0], target == 0 ? 0.5f : 0.25f, 0.02f)
-                    << "attachment 0 red with uTarget=" << target;
+                EXPECT_NEAR(first[0], target == 0 ? 0.5f : 0.25f, 0.02f) << "attachment 0 red with uTarget=" << target;
                 EXPECT_NEAR(first[1], 0.25f, 0.02f) << "attachment 0 green with uTarget=" << target;
-                EXPECT_NEAR(second[0], target == 1 ? 1.0f : 0.75f, 0.02f)
-                    << "attachment 1 red with uTarget=" << target;
+                EXPECT_NEAR(second[0], target == 1 ? 1.0f : 0.75f, 0.02f) << "attachment 1 red with uTarget=" << target;
                 EXPECT_NEAR(second[1], 0.75f, 0.02f) << "attachment 1 green with uTarget=" << target;
             }
 

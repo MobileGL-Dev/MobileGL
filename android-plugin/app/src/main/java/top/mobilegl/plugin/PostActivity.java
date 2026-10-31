@@ -15,6 +15,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -69,6 +70,7 @@ public final class PostActivity extends Activity {
 
     private LinearLayout contentLayout;
     private TextView statusView;
+    private ProgressBar progressBar;
 
     /**
      * Per-backend bench UI state. Unlike the POST itself (single-flight, latched),
@@ -93,10 +95,19 @@ public final class PostActivity extends Activity {
         scrollView.setBackgroundColor(COLOR_BACKGROUND);
         scrollView.setFillViewport(true);
         scrollView.addView(contentLayout);
-        setContentView(scrollView);
+        setContentView(NavBar.wrap(this, scrollView, NavBar.TAB_POST));
 
         addText("MobileGL Driver POST", 20, COLOR_TEXT, true, 0);
         statusView = addText("Running self-test...", 14, COLOR_INFO, false, dp(8));
+
+        progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progressBar.setIndeterminate(true);
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        progressParams.topMargin = dp(8);
+        contentLayout.addView(progressBar, progressParams);
 
         boolean startWorker = false;
         boolean renderNow = false;
@@ -298,6 +309,7 @@ public final class PostActivity extends Activity {
     }
 
     private void renderCachedResult() {
+        progressBar.setVisibility(View.GONE);
         String json;
         Throwable failure;
         synchronized (POST_LOCK) {

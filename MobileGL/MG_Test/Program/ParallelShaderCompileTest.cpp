@@ -16,7 +16,7 @@
 //   * GL_MAX_SHADER_COMPILER_THREADS_KHR;
 //   * the extension string itself, which must appear if and only if asynchronous
 //     compilation is enabled - the kill switch has to revert the application-visible
-//     behaviour change, not only the threading.
+//     behavior change, not only the threading.
 //
 // Like the other async suites, every case drives the real GL entry points and flips
 // MG_Config::Features.AsyncShaderCompile itself, so the file behaves identically whether or
@@ -412,9 +412,8 @@ TEST_F(ParallelShaderCompileTest, NonzeroCompilerThreadsRestoresAsynchronousComp
     MaxShaderCompilerThreadsKHR(1);
     Vector<String> sources;
     const Vector<GLuint> shaders = EnqueueBacklog(64, 5000, sources);
-    const Bool anyOutstanding = std::any_of(shaders.begin(), shaders.end(), [](const GLuint shader) {
-        return QueryShaderCompletion(shader) == GL_FALSE;
-    });
+    const Bool anyOutstanding = std::any_of(
+        shaders.begin(), shaders.end(), [](const GLuint shader) { return QueryShaderCompletion(shader) == GL_FALSE; });
     if (!anyOutstanding) {
         GTEST_SKIP() << "the pool drained the backlog before the first query; asynchrony not observable here";
     }
@@ -516,15 +515,17 @@ TEST_F(ParallelShaderCompileTest, MaxShaderCompilerThreadsIgnoresTheCurrentBudge
 TEST_F(ParallelShaderCompileTest, BothBackendsAdvertiseTheExtensionIffAsyncIsEnabled) {
     {
         const AsyncModeScope async(true);
-        EXPECT_TRUE(Advertises(MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false),
-                               E_GL_KHR_parallel_shader_compile));
+        EXPECT_TRUE(
+            Advertises(MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false),
+                       E_GL_KHR_parallel_shader_compile));
         EXPECT_TRUE(Advertises(MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false),
                                E_GL_KHR_parallel_shader_compile));
     }
     {
         const AsyncModeScope async(false);
-        EXPECT_FALSE(Advertises(MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false),
-                                E_GL_KHR_parallel_shader_compile))
+        EXPECT_FALSE(
+            Advertises(MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false),
+                       E_GL_KHR_parallel_shader_compile))
             << "MOBILEGL_ASYNC_SHADER_COMPILE=0 must withdraw the extension, not only the threading";
         EXPECT_FALSE(Advertises(MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false),
                                 E_GL_KHR_parallel_shader_compile))

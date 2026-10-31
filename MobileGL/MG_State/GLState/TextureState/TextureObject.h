@@ -13,6 +13,7 @@
 #include "../SamplerState/SamplerObject.h"
 #include <Includes.h>
 #include <MG_Util/Math/VectorTypes.h>
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL::MG_State::GLState {
     // Texture objects are always SharedPtr-owned (TextureState creates every instance via
@@ -46,7 +47,12 @@ namespace MobileGL::MG_State::GLState {
         virtual void SetSwizzleParam(TextureSwizzleParam param, TextureSwizzleParam value) = 0;
         virtual void SetSwizzleParamRGBA(const Vec4<TextureSwizzleParam>& values) = 0;
         virtual const Vec4<TextureSwizzleParam>& GetAllSwizzleParams() const = 0;
+        // The EFFECTIVE [base, max] level range every consumer of the level range samples,
+        // allocates and completes against: on an immutable texture both ends are clamped into
+        // the stored levels (GL 4.6 core 8.17). GetSpecifiedLevelRange() is what the
+        // application set, which is what glGetTexParameter reports.
         virtual const UintVec2& GetLevelRange() const = 0;
+        virtual const UintVec2& GetSpecifiedLevelRange() const = 0;
         virtual void SetBaseLevel(Uint baseLevel) = 0;
         virtual void SetMaxLevel(Uint maxLevel) = 0;
         virtual Bool IsImmutable() const = 0;
@@ -81,10 +87,21 @@ namespace MobileGL::MG_State::GLState {
         virtual Bool HasFixedSampleLocations() const = 0;
         virtual void SetFixedSampleLocations(Bool fixedSampleLocations) = 0;
         virtual Uint64 GetLifetimeId() const = 0;
+        // P15: the pipe client's last handles for this texture, one per kind it is looked up under
+        // (MGPipeSlotAllocator::AcquireHinted). Only hints: checked against the allocator on use.
+        enum class PipeHintKind : Uint8 {
+            Texture = 0,
+            SamplerView = 1,
+            Count = 2
+        };
+        virtual Uint64& PipeHandleHint(PipeHintKind kind) const = 0;
         // Which aspect of a packed depth/stencil texture a sampler reads (GL 4.6 core 8.10).
         // DEPTH_COMPONENT until set, and meaningless for every other format.
         virtual GLenum GetDepthStencilTextureMode() const = 0;
         virtual void SetDepthStencilTextureMode(GLenum mode) = 0;
+        // GENERATE_MIPMAP: level 0 uploads regenerate the chain. Frontend-only, so no version moves.
+        virtual Bool GetAutoGenerateMipmap() const = 0;
+        virtual void SetAutoGenerateMipmap(Bool enabled) = 0;
 
         // ---- Texture views (ARB_texture_view / GL 4.6 core 8.18) ----
         // The texture object whose immutable storage this one's texels actually live in, or
@@ -116,7 +133,11 @@ namespace MobileGL::MG_State::GLState {
     class TextureObjectBase : public ITextureObject {
     public:
         TextureObjectBase(TextureTarget target, Uint externalIndex);
-        virtual ~TextureObjectBase() = default;
+        // P2 step e2. Out of line, and declared only where there is a notice to raise: in a
+        // pull build this stays the implicit `= default` the pre-P2 tree had, which is what
+        // keeps the pull build's symbol set byte-for-byte the pre-P2 one (G1). Declared on the
+        // BASE, so every concrete texture class - 2D, 3D, cube, buffer, view - announces once.
+        virtual ~TextureObjectBase();
 
         TextureInternalFormat GetFormat() const override;
         TextureTarget GetTarget() const override;
@@ -137,6 +158,7 @@ namespace MobileGL::MG_State::GLState {
         void SetSwizzleParam(TextureSwizzleParam param, TextureSwizzleParam value) override;
         void SetSwizzleParamRGBA(const Vec4<TextureSwizzleParam>& values) override;
         const UintVec2& GetLevelRange() const override;
+        const UintVec2& GetSpecifiedLevelRange() const override;
         void SetBaseLevel(Uint baseLevel) override;
         void SetMaxLevel(Uint maxLevel) override;
         Bool IsImmutable() const override;
@@ -159,6 +181,7 @@ namespace MobileGL::MG_State::GLState {
         Bool HasFixedSampleLocations() const override;
         void SetFixedSampleLocations(Bool fixedSampleLocations) override;
         Uint64 GetLifetimeId() const override;
+        Uint64& PipeHandleHint(PipeHintKind kind) const override { return m_pipeHandleHints[static_cast<SizeT>(kind)]; }
         // A plain texture owns its storage; TextureObjectView overrides this.
         const SharedPtr<ITextureObject>& GetViewStorageOwner() const override;
         Uint GetViewMinLevel() const override { return m_viewMinLevel; }
@@ -180,7 +203,14 @@ namespace MobileGL::MG_State::GLState {
             if (m_depthStencilTextureMode == mode) return;
             m_depthStencilTextureMode = mode;
             ++m_textureParamsVersion;
+            MGP_NOTE_AGGREGATE(TextureParams);
+            // D-E3's whole point, at the one site that proves it: the depth-stencil mode of a
+            // texture that is ONLY the READ framebuffer's attachment reaches the driver, because
+            // set_texture_params is addressed by resource and is independent of every binding.
+            PipePublishParams();
         }
+        Bool GetAutoGenerateMipmap() const override { return m_autoGenerateMipmap; }
+        void SetAutoGenerateMipmap(Bool enabled) override { m_autoGenerateMipmap = enabled; }
 
     protected:
         static Uint64 AllocateLifetimeId();
@@ -191,13 +221,57 @@ namespace MobileGL::MG_State::GLState {
         // otherwise invisible to such a memo (no bind moved).
         void BumpShapeVersion();
 
+        // ---- P4a's client emission points (brief D-D1, D-D3, D-E1, D-I1) ----
+        //
+        // NON-VIRTUAL AND PUSH-ONLY, both deliberately: a virtual would grow the vtable and a
+        // member would grow the object, and P4a's admitted-resize set is EMPTY - every edit
+        // that reaches the pull build is inside this guard, so the pull build's symbol set is
+        // byte-for-byte the one it had before the phase.
+        //
+        // DECLARED HERE AND DEFINED IN TextureObject.cpp, which calls the contract's own hooks
+        // in MG_Pipe/PipeMutation.h - the same door BufferObject.cpp uses, and no MG_State
+        // translation unit sees MG_Impl/Pipe/TextureEmit.h at all (c0b, ID-13). They stay
+        // members rather than free calls so the cube's, the view's and the buffer texture's
+        // translation units keep calling an inherited helper.
+        //
+        // resource_respecify, WHOLE-RESOURCE scope: the format setter and the three parameter
+        // setters that move a DESCRIPTOR field without moving the shape (immutable levels,
+        // sample count, fixed sample locations), and a view's creation. The emitter dedupes
+        // this form on the built descriptor, so an over-call costs one 88-byte compare and
+        // never an extra record.
+        void PipePublishDescriptor();
+        // Re-derives m_levelRange from the specified range; true when the effective range moved.
+        Bool UpdateEffectiveLevelRange();
+        // The PER-LEVEL and the CHAIN-CUT forms of the same call (P4a final review C-1). The
+        // applier keeps a pending-upload set per (uploadTarget, level) and drops the entries
+        // against the storage a respecify REPLACES - and the descriptor cannot tell it which:
+        // AllocateStorage is per level and TruncateMipmapLevels removes a tail, while the
+        // descriptor carries the base extent and the level count only. So the storage entry
+        // points state the scope themselves; the whole-resource form above is for the calls
+        // that really redefine the whole store. A per-level form is NOT deduped on the
+        // descriptor: a non-base level redefined at a new size moves no descriptor field, and
+        // the applier's box against the old level has to go regardless.
+        void PipePublishLevelDescriptor(TextureUploadTarget uploadTarget, Uint mipmapLevel);
+        void PipePublishTruncatedDescriptor(TextureUploadTarget uploadTarget, Uint levelCount);
+        // set_texture_params, from every mutator that bumps m_textureParamsVersion.
+        void PipePublishParams();
+        // The sub-data DRAIN LIST's append, on a level's first dirty mark. There is no clean
+        // arm: the contract's hook (MG_Pipe/PipeMutation.h) carries no `dirty` flag, and a
+        // level that goes clean is collected at the next drain, where !IsStorageDirty is the
+        // first test EmitOneLevel makes.
+        void PipeNoteLevelDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel);
+
         const Uint m_externalIndex;
         const Uint64 m_lifetimeId;
+        mutable Uint64 m_pipeHandleHints[static_cast<SizeT>(PipeHintKind::Count)] = {};
         const TextureTarget m_target = TextureTarget::Unknown;
         TextureInternalFormat m_internalFormat = TextureInternalFormat::Unknown;
         SharedPtr<SamplerObject> m_sampler = nullptr;
         Vec4<TextureSwizzleParam> m_swizzleParams = {TextureSwizzleParam::Red, TextureSwizzleParam::Green,
                                                      TextureSwizzleParam::Blue, TextureSwizzleParam::Alpha};
+        // m_specifiedLevelRange is stored as set; m_levelRange is derived from it and the
+        // immutable level count by UpdateEffectiveLevelRange().
+        UintVec2 m_specifiedLevelRange = {0, 1000};
         UintVec2 m_levelRange = {0, 1000};
         Uint m_immutableLevels = 0;
         Uint16 m_textureParamsVersion = 0;
@@ -221,6 +295,7 @@ namespace MobileGL::MG_State::GLState {
         Uint m_viewNumLayers = 0;
         Int m_samples = 0;
         Bool m_fixedSampleLocations = true;
+        Bool m_autoGenerateMipmap = false;
     };
 
     class TextureObjectMipmap : public TextureObjectBase {
@@ -287,8 +362,8 @@ namespace MobileGL::MG_State::GLState {
         // stays uncompressed and correctly sized, so nothing in the backend upload path has to know
         // these exist; only glGetCompressedTexImage, glGetCompressedTextureImage and the
         // GL_TEXTURE_COMPRESSED* level queries read them.
-        virtual void SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
-                                              GLenum internalFormat, const void* data, SizeT size) = 0;
+        virtual void SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel, GLenum internalFormat,
+                                              const void* data, SizeT size) = 0;
         // GL_NONE when this level is not stored compressed.
         virtual GLenum GetMipmapCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
         virtual SizeT GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
@@ -300,8 +375,7 @@ namespace MobileGL::MG_State::GLState {
         virtual void SetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                         GLenum internalFormat) = 0;
         // GL_NONE when the level was not requested with a compressed internalformat.
-        virtual GLenum GetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget,
-                                                          Uint mipmapLevel) const = 0;
+        virtual GLenum GetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
     };
 
     // Cheap replacement for dynamic_cast on the hot path: TextureObjectMipmap is the

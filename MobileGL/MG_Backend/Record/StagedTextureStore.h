@@ -1,0 +1,1047 @@
+// MobileGL - MobileGL/MG_Backend/Record/StagedTextureStore.h
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// P5c tx - THE SERVER'S OWN COPY OF THE STAGED TEXTURE LEVELS. The texture twin of
+// StagedShadow.h (R-11), held to its four rulings (CONTRACT-P5C.md §2.1).
+//
+// THE DEFECT THIS ENDS (T1/T5). resource_subdata's texture half stages the level bytes into
+// SEG_STAGE and ApplyTextureUpload (PipeApply.cpp) drops the pointer after the gate,
+// the accumulation and the serial. Espryt then re-reads the client's MipmapStorage at sync
+// time (ManagersTextureSync.cpp's SyncMipmapsToBackend), reads per-level shape off the client object
+// (the same function, and the depth and color Texture2D mipmap chains in DirectGLESCopy.cpp), and Magma writes the
+// client's level storage outright (VulkanRenderer's AllocateStorage +
+// MarkStorageDirty). In monolith every one of those is correct - the bytes belong to a
+// frontend object that outlives the call. Under split the pointer names SEG_STAGE, valid
+// only until retiredSeq passes the record, and w1's MOBILEGL_IPC_AUDIT=1 fills retired
+// staging with 0xDD precisely so an implementation that kept the pointer is DISTINGUISHABLE
+// from one that copied. So this copies, at apply time, into server-owned storage, and the
+// sync reads nothing but this store and the descriptor.
+//
+// WHAT A KEY IS, AND WHY IT IS NOT THE TWIN ADDRESS THE CONTRACT'S FIRST DRAFT SAID.
+// CONTRACT-P5C §2.1 rules "keyed by the texture resource twin's address". The buffer half
+// keys by twin address because the twin is minted at sub-data time under split
+// (Ops_H_SubData in ManagersBuffers.cpp) and GLESBufferResource's constructor is GL-free. The texture
+// twin's constructor is not: BackendTextureObject() in ManagersTextures.cpp calls glGenTextures,
+// so minting it at sub-data time would allocate a driver name for every texture that is
+// written and never drawn, and would put a GL call into a unit test that has no context
+// (R-16's unit case, StagedTextureStoreTest, exercises the REAL ops table headless). The
+// wire HANDLE the record carried serves the same purpose the address served - stable for
+// the object's life, liveness-exact through the generation, already in every caller's hand
+// (rule E: the apply thread resolves every object from a handle the record carried) - so
+// KeyForHandle is the primary key. KeyForTwinAddress exists for the one caller that has a
+// server-side twin and no handle: Magma's T5 shadow writes key by the TextureResource. The
+// two namespaces cannot collide (handle keys carry the top bit; user-space heap addresses
+// never do). Every event that ends a key's life has a call site: a named-level respecify
+// re-defines the level (NoteLevelDefined), a whole-resource respecify drops every level
+// (ResetLevels), resource_destroy drops the key (Ops_H_TextureDestroy), context death drops
+// all (OnBackendContextDestroyed, beside MGL_SERVER_STAGED_DROP_ALL).
+//
+// COVERAGE IS EXACTLY THE STAGED RUNS, NEVER WIDENED AND NEVER NARROWER. One resource_subdata
+// stages one RUN of the level shadow - the whole level for a level that fits one record's chunk
+// budget (TextureEmit.h: "the bytes this record declares ARE the level shadow", Blob.Size = the
+// level's byte count), a whole-width slab of it for one that does not
+// (TextureEmit.h's MGPipeForEachTextureSlab) - and what this store covers is the union of the
+// runs it has adopted, in the level's own byte coordinates. The record's region set is
+// deliberately NOT the coverage unit: it declares which texels CHANGED (the upload planner's
+// shape, which the applier's pending set already carries), while the full-level upload paths -
+// every conversion fallback, and the immutable/mutable regeneration arms - read the whole level
+// including texels no region named. Those texels crossed in the staged run; treating them as
+// uncovered would Fatal a legal glTexStorage-then-small-glTexSubImage sequence whose first (and
+// only) record names a small box, and moving them into the store is not the buffer half's
+// silent-zero case because they are the client's own shadow bytes, delivered and declared.
+//
+// SO A FULL-LEVEL READ ASKS FOR THE WHOLE LEVEL TO BE COVERED, which is where the texture half
+// parts company with the buffer half's one-range shape: the runs of a split level arrive as
+// several records of ONE apply batch - the same verb, so all of them land before the barrier
+// that lets the sync read - the set is complete exactly when every piece has landed, and a level
+// with a hole in it is Fatal{StageSnapshotTooNarrow}: the same words as the buffer half, for the
+// same reason, because those bytes have never existed on this side and inventing them is silent
+// data loss rather than a missing optimization. THE QUESTION IS "IS THE RANGE THE READER ASKS
+// FOR COVERED", not "is the level the size the client meant": no format crosses the wire, so a
+// leading run that already reaches the image's high-water mark reads as complete when later
+// pieces are still missing - unreachable, because nothing reads between the pieces of one verb,
+// and written down here because it is the one place this check is looser than it looks.
+//
+// DEFINED-NESS IS TRACKED, NOT DERIVED ALONE. §1's per-level extent derivation (max(1,
+// base >> level), layer axes fixed) computes the extent of a level that EXISTS; it cannot
+// say whether the level was ever defined, and the mutable regen arms skip undefined levels
+// (a sparse chain stays sparse on the driver). The client does not emit per-level extents,
+// but every storage-defining call DOES cross as a respecify, so defined-ness reaches this
+// store through the ops table's TextureRespecify hook: a named level marks that (uploadTarget,
+// level), an immutable whole-resource respecify (glTexStorage*) marks every level of every
+// upload target. Levels the store has never heard of answer extent {0,0,0}, which is the
+// exact answer the frontend's GetMipmapTexelSize gives for them - FBO completeness over a
+// null-data level and the sparse-chain skip both reproduce the monolith arm.
+//
+// GPU-GENERATED LEVELS (T5) ARE DEFINED HERE WITH NO BYTES AND A DIRTY MARK. A GPU-side
+// generation (Magma's GenerateMipmap) dirties the SERVER's shadow, not the client's: the
+// level is NoteLevelDefined + MarkLevelGpuDirty(true), it holds no bytes (they were made on
+// the GPU and never crossed), and the mark is the "dirty region, level has NO pending
+// upload" answer of §2.2's table. A texel read of such a level is the
+// Fatal{StageSnapshotTooNarrow} case above, which is correct: the two readers that could
+// ask are both named refusals under split (§2.3).
+//
+// WHY IT IS A HEADER AND NOT A BLOCK INSIDE Managers.cpp - StagedShadow.h's reason, and it
+// is the one that matters here too: a block inside Managers.cpp could only ever be exercised
+// by a test that also has a GL context, a resource twin and a live session, which is exactly
+// how a rule ends up with no check that can fail for its own reason (R-16). Here `copies` is
+// a constructor parameter rather than a read of MG_Config::Transport, so a unit case builds
+// one store of each kind and asserts the DIFFERENCE between them; the production wiring is
+// asserted separately, through the real ops table, in StagedTextureStoreTest.
+
+#pragma once
+#include <Includes.h>
+
+#include <MG_Pipe/MGPipeTypes.h>
+// StagedShadowStore::CoverageAdd / CoverageHas: ONE spelling of the covered set, so the texture
+// half's runs and the buffer half's ranges cannot drift apart on what "covered" means.
+#include <MG_Backend/Record/StagedShadow.h>
+// P7 wave 0 / Ph slice (2): RequireLevelBytes' death goes through Session::Fail. Named here
+// rather than left to StagedShadow.h's copy of the same include.
+#include <MG_Pipe/PipeSessionFail.h>
+#include <MG_Util/Debug/Log.h>
+#include <MG_Util/Metrics/TextureMetrics.h>
+#include <MG_Util/Math/VectorTypes.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <mutex>
+#include <limits>
+
+#include <Config.h>
+
+namespace MobileGL::MG_Record {
+
+    // §1's server-side per-level extent (CONTRACT-P5C table 0): max(1, base_extent >> level)
+    // per SHRINKING axis, with an array texture's layer count fixed - it is not a dimension of
+    // the image (GL 4.6 core 8.14.3), and GetMipmapTexelSize parks it in the slot after the
+    // image's own dimensions. Texture1DArray shrinks x only; Texture2DArray and
+    // TextureCubeMapArray shrink x and y; every other target shrinks all three. This is the
+    // mip chain's definition (MG_State's IsMipmapCompleteForFilter applies the same split,
+    // via ComputeMipmapCompleteForFilter in TextureObject.cpp), so two honest ends compute the same number.
+    struct StagedTextureDeviceLimits {
+        Int MaxTextureSize = 16384;
+        Int MaxRectangleTextureSize = 16384;
+        Int Max3DTextureSize = 2048;
+        Int MaxCubeMapTextureSize = 16384;
+        Int MaxArrayTextureLayers = 2048;
+        Int MaxTextureBufferSize = 65536;
+    };
+
+    // Multisample and buffer textures have no legal glTexSubImage producer. Keep their
+    // definedness in the store, but never accept a byte-backed staged level for them.
+    inline Bool StagedTextureTargetSupportsSubData(Uint8 resourceTarget) {
+        switch (static_cast<MG_Pipe::MGPipeResourceTarget>(resourceTarget)) {
+        case MG_Pipe::MGPipeResourceTarget::Tex1D:
+        case MG_Pipe::MGPipeResourceTarget::Tex2D:
+        case MG_Pipe::MGPipeResourceTarget::Tex3D:
+        case MG_Pipe::MGPipeResourceTarget::Tex1DArray:
+        case MG_Pipe::MGPipeResourceTarget::Tex2DArray:
+        case MG_Pipe::MGPipeResourceTarget::TexCube:
+        case MG_Pipe::MGPipeResourceTarget::TexCubeArray:
+        case MG_Pipe::MGPipeResourceTarget::TexRect:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    inline Bool StagedTextureExtentWithinDeviceLimits(Uint8 resourceTarget, const IntVec3& extent,
+                                                      const StagedTextureDeviceLimits& limits) {
+        if (extent.x() <= 0 || extent.y() <= 0 || extent.z() <= 0) return false;
+        const auto target = static_cast<MG_Pipe::MGPipeResourceTarget>(resourceTarget);
+        switch (target) {
+        case MG_Pipe::MGPipeResourceTarget::Tex1D:
+            return extent.x() <= limits.MaxTextureSize && extent.y() == 1 && extent.z() == 1;
+        case MG_Pipe::MGPipeResourceTarget::Tex2D:
+            return extent.x() <= limits.MaxTextureSize && extent.y() <= limits.MaxTextureSize && extent.z() == 1;
+        case MG_Pipe::MGPipeResourceTarget::TexRect:
+            return extent.x() <= limits.MaxRectangleTextureSize && extent.y() <= limits.MaxRectangleTextureSize &&
+                   extent.z() == 1;
+        case MG_Pipe::MGPipeResourceTarget::Tex3D:
+            return extent.x() <= limits.Max3DTextureSize && extent.y() <= limits.Max3DTextureSize &&
+                   extent.z() <= limits.Max3DTextureSize;
+        case MG_Pipe::MGPipeResourceTarget::Tex1DArray:
+            return extent.x() <= limits.MaxTextureSize && extent.y() <= limits.MaxArrayTextureLayers && extent.z() == 1;
+        case MG_Pipe::MGPipeResourceTarget::Tex2DArray:
+            return extent.x() <= limits.MaxTextureSize && extent.y() <= limits.MaxTextureSize &&
+                   extent.z() <= limits.MaxArrayTextureLayers;
+        case MG_Pipe::MGPipeResourceTarget::Tex2DMSArray:
+            return false; // defined levels only; multisample subimage records are never legal
+        case MG_Pipe::MGPipeResourceTarget::TexCube:
+            return extent.x() <= limits.MaxCubeMapTextureSize && extent.y() <= limits.MaxCubeMapTextureSize &&
+                   extent.z() == 1;
+        case MG_Pipe::MGPipeResourceTarget::TexCubeArray:
+            return extent.x() <= limits.MaxCubeMapTextureSize && extent.y() <= limits.MaxCubeMapTextureSize &&
+                   extent.z() <= limits.MaxArrayTextureLayers;
+        case MG_Pipe::MGPipeResourceTarget::TexBuffer:
+            return false; // texture buffers have no glTexSubImage entry point
+        default:
+            return false;
+        }
+    }
+
+    // The descriptor's InternalFormat is already the server's uncompressed storage fallback.
+    // Compute the maximum byte coordinate of one declared level without trusting upload bytes.
+    inline Bool StagedTextureDeclaredLevelByteBound(Uint8 resourceTarget, Uint32 internalFormat, const IntVec3& extent,
+                                                    const StagedTextureDeviceLimits& limits, Uint64* outBound) {
+        if (outBound == nullptr || !StagedTextureTargetSupportsSubData(resourceTarget) ||
+            !StagedTextureExtentWithinDeviceLimits(resourceTarget, extent, limits))
+            return false;
+        const SizeT bytesPerTexel =
+            MG_Util::GetSizedInternalFormatSizeInBytes(static_cast<TextureInternalFormat>(internalFormat));
+        if (bytesPerTexel == 0) return false;
+        const Uint64 x = static_cast<Uint64>(extent.x());
+        const Uint64 y = static_cast<Uint64>(extent.y());
+        const Uint64 z = static_cast<Uint64>(extent.z());
+        const Uint64 bpp = static_cast<Uint64>(bytesPerTexel);
+        constexpr Uint64 max = std::numeric_limits<Uint64>::max();
+        if (x > max / y) return false;
+        const Uint64 xy = x * y;
+        if (xy > max / z) return false;
+        const Uint64 texels = xy * z;
+        if (texels > max / bpp) return false;
+        const Uint64 bytes = texels * bpp;
+        if (bytes > static_cast<Uint64>(std::numeric_limits<SizeT>::max())) return false;
+        *outBound = bytes;
+        return true;
+    }
+
+    inline Int StagedTextureShrinkingAxisCount(Uint8 pipeResourceTarget) {
+        switch (static_cast<MG_Pipe::MGPipeResourceTarget>(pipeResourceTarget)) {
+        case MG_Pipe::MGPipeResourceTarget::Tex1DArray:
+            return 1;
+        case MG_Pipe::MGPipeResourceTarget::Tex2DArray:
+        case MG_Pipe::MGPipeResourceTarget::TexCubeArray:
+            return 2;
+        default:
+            return 3;
+        }
+    }
+
+    inline IntVec3 StagedTextureMipExtent(Uint8 pipeResourceTarget, Uint32 baseWidth, Uint32 baseHeight,
+                                          Uint32 baseDepth, Uint32 level) {
+        const Int shrinking = StagedTextureShrinkingAxisCount(pipeResourceTarget);
+        const Int shift = static_cast<Int>(level);
+        IntVec3 extent{static_cast<Int>(baseWidth), static_cast<Int>(baseHeight), static_cast<Int>(baseDepth)};
+        for (Int axis = 0; axis < shrinking && axis < 3; ++axis) {
+            extent[axis] = std::max<Int>(extent[axis] >> shift, 1);
+        }
+        return extent;
+    }
+
+    inline IntVec3 StagedTextureUploadExtent(const MG_Pipe::MGPResourceDesc& desc, const MG_Pipe::MGPSubData& upload) {
+        if (upload.LevelWidth && upload.LevelHeight && upload.LevelDepth)
+            return {static_cast<Int>(upload.LevelWidth), static_cast<Int>(upload.LevelHeight),
+                    static_cast<Int>(upload.LevelDepth)};
+        return StagedTextureMipExtent(desc.Target, desc.Width, desc.Height, desc.Depth, upload.Level);
+    }
+
+    // WHERE A RECORD'S STAGED RUN BEGINS IN THE SERVER-OWNED LEVEL IMAGE. The record itself says
+    // so, and the two shapes that reach AdoptRun are told apart by the run's own LENGTH - the one
+    // field of MGPSubData that differs between them:
+    //
+    //   * THE WHOLE-LEVEL RUN, which is what resource_subdata's texture half has always staged:
+    //     TextureEmit.h's "the bytes this record declares ARE the level shadow", so Blob.Size is
+    //     the level's byte count and the run begins at the level's FIRST byte whatever the record's
+    //     box says - the box describes the dirty texels, not the run. Answer: 0. That is also the
+    //     answer for the whole-level spelling that carries no regions at all (RegionCount == 0,
+    //     strides 0 = tightly packed).
+    //
+    //   * A SLAB of a level too large to stage whole (TextureEmit.h's MGPipeForEachTextureSlab),
+    //     whose run is exactly the byte extent of its own box and therefore begins at that box's
+    //     first byte: z0 * sliceStride + y0 * rowStride + x0 * bpp, every one of them carried in
+    //     the record's own regions. So the box names the placement, and the far side still needs no
+    //     knowledge of the level's format: the texel's byte size falls out of the carried row
+    //     stride and the carried level width - the two numbers the region and the record both
+    //     state.
+    //
+    // A run SHORTER than its box's byte extent is neither shape and answers 0 - not silently
+    // placed: no emitter produces one, and the whole-level reading is the only one that cannot
+    // lose texels the record did carry.
+    inline Uint64 StagedTextureRunImageOffset(const MG_Pipe::MGPSubData& upload, const MG_Pipe::MGPSubRegion* regions) {
+        const MG_Pipe::MGPBox& box = upload.UnionBox;
+        if (regions == nullptr || upload.RegionCount == 0) return 0;
+        const Uint64 rowStride = regions[0].SrcRowStride;
+        const Uint64 sliceStride = regions[0].SrcSliceStride;
+        if (rowStride == 0 || sliceStride == 0 || upload.LevelWidth == 0) return 0;
+        const Uint64 texelBytes = rowStride / upload.LevelWidth;
+        if (texelBytes == 0 || box.W == 0 || box.H == 0 || box.D == 0) return 0;
+        const Uint64 boxBytes = static_cast<Uint64>(box.D - 1) * sliceStride +
+                                static_cast<Uint64>(box.H - 1) * rowStride + static_cast<Uint64>(box.W) * texelBytes;
+        if (upload.Blob.Size != boxBytes) return 0;
+        return static_cast<Uint64>(box.Z) * sliceStride + static_cast<Uint64>(box.Y) * rowStride +
+               static_cast<Uint64>(box.X) * texelBytes;
+    }
+
+    class StagedTextureStore {
+    public:
+        // `copies` is "this process is really split". False reproduces the monolith expression
+        // character for character: the client shadow answers every question (the sync's macros
+        // never consult this store when CopiesIntoServerStorage() is false), nothing is
+        // allocated, and every push and verify lane stays byte-identical to what it was
+        // before tx.
+        explicit StagedTextureStore(Bool copies) : m_copies(copies) {}
+
+        Bool CopiesIntoServerStorage() const { return m_copies; }
+        // P13 W4b: THE ALIASING MODE - monolith's record arm. The store keeps every piece of
+        // bookkeeping it keeps under split (definitions, extents, the exact covered runs, the
+        // driver-written and GPU-dirty marks), but a level's bytes are the FRONTEND's level shadow
+        // in place: a run records the address it arrived at (minus its offset in the level) and
+        // nothing is copied. The readers then ask exactly what they ask under split - is the
+        // level covered, what are its bytes - and get the same answers from memory that is
+        // already there. This store never writes frontend memory: a copy it follows
+        // (FollowCopy) first takes the destination level into a server-owned copy, which is then
+        // what AdoptClientBoxes lands the client's later boxes on - exactly the split store's
+        // shape for that level - and a copy it cannot follow marks the destination
+        // driver-written, which sends its readers to the driver.
+        Bool Aliases() const { return !m_copies && MG_Config::RecordArmAliasesFrontend(); }
+        // Does this store answer at all: a copying store, or an aliasing one.
+        Bool Holds() const { return m_copies || Aliases(); }
+        void SetDeviceLimits(Int maxTextureSize, Int max3DTextureSize, Int maxCubeMapTextureSize,
+                             Int maxArrayTextureLayers, Int maxTextureBufferSize) {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            m_deviceLimits = {maxTextureSize,        std::min<Int>(16384, maxTextureSize),
+                              max3DTextureSize,      maxCubeMapTextureSize,
+                              maxArrayTextureLayers, maxTextureBufferSize};
+        }
+
+        // The wire handle the record carried, tagged so it can never alias a twin address.
+        // Slot and Gen are the client allocator's identity for one live object, so a recycled
+        // slot's new owner keys a different entry than its predecessor's stale one.
+        static Uint64 KeyForHandle(MG_Pipe::MGPipeHandle handle) {
+            return (Uint64{1} << 63) | (static_cast<Uint64>(handle.Slot) << 32) | static_cast<Uint64>(handle.Gen);
+        }
+        // For the caller whose server-side twin has no wire handle (Magma's TextureResource,
+        // T5). Node-stable by that table's own ruling (std::unordered_map nodes).
+        static Uint64 KeyForTwinAddress(const void* twin) {
+            return static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(twin));
+        }
+
+        // THE ADOPTION OF ONE RUN OF A LEVEL. `imageOffset` is where the run's first byte belongs
+        // in the server-owned level image and `byteSize` (MGPSubData::Blob.Size under split) is
+        // its length; the covered set grows by exactly [imageOffset, imageOffset + byteSize), so
+        // coverage stays EXACTLY the staged runs and a hole between them is what RequireLevelBytes
+        // refuses on. The caller gets the offset from the record itself
+        // (StagedTextureRunImageOffset below). Runs may arrive in any order: coverage is a set,
+        // and the level's extent comes from the record either way.
+        //
+        // THE RETURNED BASE IS ONLY VALID UNTIL THE NEXT RUN OF THE SAME LEVEL: growing the image
+        // reallocates it, which is StagedShadowStore::Adopt's note one level down. Nothing needs
+        // the base while a level is still being assembled - the readers run at the barrier, after
+        // the last piece - so callers here ignore it.
+        // `frontendShadow`: the bytes ARE the frontend's level shadow (a client record's run) - the
+        // one source an aliasing store may keep by address. Every other adoption (the server's own
+        // readbacks, regenerations and promotions) is server memory that dies with the call, and is
+        // copied even by an aliasing store.
+        const Uint8* AdoptRun(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent, Uint64 imageOffset,
+                              const void* bytes, SizeT byteSize, Bool frontendShadow = false) {
+            if (!Holds()) return nullptr;
+            const ShadowKey bucketed = Bucketed(key);
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            LevelShadow& shadow = m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)];
+            RequireDeclaredLevel(shadow, key, uploadTarget, level, extent);
+            // A run can be the first piece of a redefined level. Old coverage
+            // belongs to the previous coordinate system even when the new run
+            // happens to touch its old range; retaining it invents bytes that
+            // the current definition never supplied (B4). The redefinition itself
+            // is NoteLevelDefined's, which drops the old bytes and coverage on an
+            // extent move, and RequireDeclaredLevel above refuses a run whose
+            // extent disagrees with that declaration (PH-4) - so this reset is the
+            // belt that keeps B4's rule if that refusal is ever relaxed.
+            if (!shadow.Defined || shadow.Extent != extent) {
+                shadow.Bytes.clear();
+                shadow.Alias = nullptr;
+                shadow.Covered.clear();
+            }
+            if (shadow.HoldsFollowedCopy) {
+                // P8-E: a run landed whole over a followed copy (AdoptClientBoxes is the spelling
+                // that keeps it), so the bytes no longer hold what the driver does.
+                shadow.HoldsFollowedCopy = false;
+                m_driverWritten[bucketed] = true;
+            }
+            shadow.GpuDirty = false;
+            m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
+            return CopyRunInto(shadow, key, uploadTarget, level, imageOffset, bytes, byteSize, frontendShadow);
+        }
+
+        // THE WHOLE-LEVEL SPELLING: the run is the level's COMPLETE current content, beginning at
+        // the level's first byte, so nothing of a previous run survives it - which is what makes a
+        // re-adoption the right answer for the image-promotion readback and for every
+        // monolith-shaped caller. AdoptRun(offset = 0) with the entry replaced rather than grown
+        // into; under monolith both do nothing and return nullptr, and the caller
+        // (Ops_H_TextureSubData) has already returned before reaching either.
+        const Uint8* Adopt(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent, const void* bytes,
+                           SizeT byteSize, Bool frontendShadow = false) {
+            if (!Holds()) return nullptr;
+            const ShadowKey bucketed = Bucketed(key);
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            LevelShadow& shadow = m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)];
+            RequireDeclaredLevel(shadow, key, uploadTarget, level, extent);
+            shadow.GpuDirty = false;
+            m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
+            // P8-E: the caller states these bytes ARE the level, which a followed copy is part of.
+            shadow.HoldsFollowedCopy = false;
+            shadow.Bytes.clear();
+            shadow.Alias = nullptr;
+            shadow.Covered.clear();
+            return CopyRunInto(shadow, key, uploadTarget, level, 0, bytes, byteSize, frontendShadow);
+        }
+
+        // A storage-defining respecify named this level: it EXISTS from here on, at the exact
+        // extent carried by that accepted operation (including noncanonical mutable mips and
+        // null-data glTexImage*D). Its byte bound is established here, before any upload arrives.
+        // An extent move replaces the coordinate system, so old bytes and coverage go with it.
+        //
+        // AN EMPTY LEVEL IS A DEFINITION TOO. A zero width, height or depth is legal GL
+        // (glTexImage1D(width 0) is how dEQP's resetStateGLCore resets every texture target after
+        // every case) and it replaces the level's coordinate system like any other: the old bytes
+        // go, the level is defined at its exact empty extent - which is what the frontend's
+        // GetMipmapTexelSize answers for it, so both roles agree - and it gets NO byte bound, so
+        // a resource_subdata against it is RequireDeclaredLevel's refusal rather than a write
+        // into storage that has no texels. Only a NEGATIVE component (a 32-bit carrier word past
+        // INT_MAX) is malformed.
+        //
+        // SO IS A LEVEL WHOSE FORMAT HAS NO UNCOMPRESSED SIZE HERE (F2 lane repair). A declared
+        // TextureInternalFormat::Unknown level - the TextureView, TextureViewAlias and
+        // TextureUploadShape split lanes all declare one, a 1x1x1 level of an Unknown-format
+        // texture, before any upload - is legal and byteless in exactly the empty level's sense:
+        // declared with a zero byte bound, so any run into it is refused by name
+        // (StagedTextureStore.LevelBound) and the declaration itself is not a session Fatal. What
+        // stays a named refusal here is a declaration this server cannot bound: a negative
+        // component, or a known-format level past the server's own device limits (or whose byte
+        // count overflows).
+        void NoteLevelDefined(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
+                              Uint8 resourceTarget = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D),
+                              Uint32 internalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8)) {
+            if (!Holds()) return;
+            const ShadowKey bucketed = Bucketed(key);
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            Uint64 byteBound = 0;
+            const Bool supportsSubData = StagedTextureTargetSupportsSubData(resourceTarget);
+            const Bool validExtent = extent.x() >= 0 && extent.y() >= 0 && extent.z() >= 0;
+            const Bool emptyExtent = validExtent && (extent.x() == 0 || extent.y() == 0 || extent.z() == 0);
+            const Bool sizedFormat =
+                MG_Util::GetSizedInternalFormatSizeInBytes(static_cast<TextureInternalFormat>(internalFormat)) != 0;
+            if (!validExtent || (supportsSubData && sizedFormat && !emptyExtent &&
+                                 !StagedTextureDeclaredLevelByteBound(resourceTarget, internalFormat, extent,
+                                                                      m_deviceLimits, &byteBound))) {
+                MG_Pipe::MGPipeRecordFail(
+                    MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.NoteLevelDefined\"} - "
+                    "the accepted respecify has no valid server-bounded texture level "
+                    "(key=%llu, target=%u, level=%u, extent=%d,%d,%d, internalFormat=%u)",
+                    static_cast<unsigned long long>(key), uploadTarget, level, extent.x(), extent.y(), extent.z(),
+                    internalFormat);
+            }
+            LevelShadow& shadow = m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)];
+            if (!shadow.Defined || shadow.Extent != extent || shadow.InternalFormat != internalFormat ||
+                shadow.ResourceTarget != resourceTarget || shadow.DeclaredByteBound != byteBound) {
+                shadow.Bytes.clear();
+                // An aliased level's base is the frontend allocation this redefinition replaced.
+                shadow.Alias = nullptr;
+                // The covered set is a statement about THIS coordinate system, so it goes with
+                // the bytes it described.
+                shadow.Covered.clear();
+                shadow.GpuDirty = false;
+                shadow.HoldsFollowedCopy = false;
+                m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
+            }
+            shadow.Extent = extent;
+            shadow.InternalFormat = internalFormat;
+            shadow.ResourceTarget = resourceTarget;
+            shadow.DeclaredByteBound = byteBound; // zero for targets without glTexSubImage and for an empty level
+            shadow.Defined = true;
+            m_any.store(true, std::memory_order_release);
+        }
+
+        // A whole-resource redefinition (glTexStorage*, a texture view): every level's old
+        // coordinate system is gone, so every level entry goes. The caller marks the new
+        // chain defined level by level afterwards where the call defines one.
+        void ResetLevels(Uint64 key) {
+            if (!m_any.load(std::memory_order_acquire)) return;
+            const ShadowKey bucketed = Bucketed(key);
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            m_shadows.erase(bucketed);
+            m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        // T5's dirty mark: a GPU-side generation made this level's texels newer than any
+        // shadow. The level typically holds NO bytes - they were generated on the GPU and
+        // never crossed - and the mark is what answers "dirty region, level has no pending
+        // upload" without asking the client (§2.2's last row).
+        void MarkLevelGpuDirty(Uint64 key, Uint16 uploadTarget, Uint16 level, Bool dirty) {
+            if (!Holds()) return;
+            const ShadowKey bucketed = Bucketed(key);
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)].GpuDirty = dirty;
+            if (!dirty) m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
+            m_any.store(true, std::memory_order_release);
+        }
+
+        // P14: moves whenever a level's GPU-dirty mark may have gone false - a CPU run or adoption
+        // over it, a redefinition, an explicit clear, or a level/shadow dropped. A caller that
+        // re-marks the same levels every draw (Magma's attachments) may skip the repeat while it
+        // has not moved: marking is idempotent until something clears it.
+        Uint64 GpuDirtyClearGeneration() const { return m_gpuDirtyClears.load(std::memory_order_relaxed); }
+
+        void Drop(Uint64 key) {
+            if (!m_any.load(std::memory_order_acquire)) return;
+            const ShadowKey bucketed = Bucketed(key);
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            m_shadows.erase(bucketed);
+            m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
+            m_driverWritten.erase(bucketed);
+        }
+
+        // The calling thread's SESSION's levels (every group of it - the callers are a session's
+        // context teardown and its applier release), or every level on a thread that is no
+        // session's. A live neighbor session's declared levels are not this caller's to drop:
+        // that is the P14 Fatal StagedShadow.h's StagedBucket describes.
+        void DropAll() {
+            if (!m_any.load(std::memory_order_acquire)) return;
+            const Uint64 session = CurrentStagedBucket().SessionKey;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            if (session == 0) {
+                m_shadows.clear();
+                m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
+                m_driverWritten.clear();
+                return;
+            }
+            EraseSession(m_shadows, session);
+            m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
+            EraseSession(m_driverWritten, session);
+        }
+
+        // ---- P8-E: WHEN THESE BYTES ARE THE LEVEL'S CONTENT ----
+        //
+        // The store holds what the client uploaded. It is also the only CPU copy of a level the
+        // server has, so a readback the driver refuses (a format the ES driver will not attach -
+        // RGB16 and 16-bit SNORM on Adreno) can be answered from it - but only while the driver
+        // holds nothing the store has not seen. Two facts decide that:
+        //
+        //   * THE DRIVER-WRITTEN MARK, per texture and sticky: a framebuffer attachment, a writable
+        //     image unit, a glCopyTexSubImage, a generated mip chain, a copy this store could not
+        //     follow. The writers know the texture, not the level, and an attachment keeps writing
+        //     for as long as it stays attached, so only the key's death (Drop / DropAll) clears it -
+        //     a whole-resource respecify (ResetLevels) does not.
+        //   * A COPY THE STORE FOLLOWED (FollowCopy): glCopyImageSubData between two levels whose
+        //     bytes this store holds is a raw texel-block move, so the store makes the same move and
+        //     the destination stays readable from here. Its level is flagged, because the client's
+        //     next run for it is the CLIENT's shadow, which never saw the copy: AdoptClientBoxes
+        //     lands only the texels that run says the client wrote.
+        void MarkDriverWritten(Uint64 key) {
+            if (!Holds()) return;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            m_driverWritten[Bucketed(key)] = true;
+            m_any.store(true, std::memory_order_release);
+        }
+        Bool IsDriverWritten(Uint64 key) const {
+            if (!m_any.load(std::memory_order_acquire)) return false;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            return m_driverWritten.find(Bucketed(key)) != m_driverWritten.end();
+        }
+        Bool LevelHoldsFollowedCopy(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
+            if (!m_any.load(std::memory_order_acquire)) return false;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            return shadow != nullptr && shadow->HoldsFollowedCopy;
+        }
+
+        // The copy, in the level images' own texel grid (x, y, z = texel, row, slice/layer). True
+        // when the destination's bytes now hold it. False - and neither level touched - unless the
+        // source level is complete and its texture was never written by the driver, the destination
+        // level is complete (or the copy covers all of it), both levels' stored texels are one size,
+        // and the box lies inside both. The caller marks the destination driver-written on false.
+        Bool FollowCopy(Uint64 srcKey, Uint16 srcTarget, Uint16 srcLevel, const IntVec3& srcOrigin, Uint64 dstKey,
+                        Uint16 dstTarget, Uint16 dstLevel, const IntVec3& dstOrigin, const IntVec3& size) {
+            if (!Holds()) return false;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_driverWritten.find(Bucketed(srcKey)) != m_driverWritten.end()) return false;
+            const LevelShadow* src = FindLevel(srcKey, srcTarget, srcLevel);
+            LevelShadow* dst = FindLevelMutable(dstKey, dstTarget, dstLevel);
+            if (src == nullptr || dst == nullptr || !LevelComplete(*src)) return false;
+            const SizeT texel = LevelTexelBytes(*src);
+            if (texel == 0 || !dst->Defined || dst->DeclaredByteBound == 0 || LevelTexelBytes(*dst) != texel)
+                return false;
+            if (!BoxInside(srcOrigin, size, src->Extent) || !BoxInside(dstOrigin, size, dst->Extent)) return false;
+            const Bool wholeDestination = dstOrigin == IntVec3{0, 0, 0} && size == dst->Extent;
+            if (!LevelComplete(*dst) && !wholeDestination) return false;
+            // Gathered first, so a copy within one level cannot read rows it has already written.
+            const SizeT rowBytes = static_cast<SizeT>(size.x()) * texel;
+            Vector<Uint8> rows(rowBytes * static_cast<SizeT>(size.y()) * static_cast<SizeT>(size.z()));
+            const Uint8* srcBytes = LevelData(*src);
+            for (Int z = 0; z < size.z(); ++z) {
+                for (Int y = 0; y < size.y(); ++y) {
+                    std::memcpy(
+                        rows.data() + (static_cast<SizeT>(z) * size.y() + y) * rowBytes,
+                        srcBytes + TexelOffset(src->Extent, srcOrigin.x(), srcOrigin.y() + y, srcOrigin.z() + z, texel),
+                        rowBytes);
+                }
+            }
+            if (dst->Alias != nullptr) {
+                // P13 W4b, the aliasing mode: the destination's bytes are the frontend's level
+                // shadow, which never sees the copy and which this store does not write. The level
+                // becomes server-owned here, from the bytes it stood for, as under split.
+                dst->Bytes.assign(dst->Alias, dst->Alias + static_cast<SizeT>(dst->DeclaredByteBound));
+                dst->Alias = nullptr;
+            }
+            if (!LevelComplete(*dst)) {
+                dst->Bytes.assign(static_cast<SizeT>(dst->DeclaredByteBound), Uint8{0});
+                dst->Covered.clear();
+                StagedShadowStore::CoverageAdd(dst->Covered, 0, static_cast<SizeT>(dst->DeclaredByteBound));
+            }
+            for (Int z = 0; z < size.z(); ++z) {
+                for (Int y = 0; y < size.y(); ++y) {
+                    std::memcpy(dst->Bytes.data() + TexelOffset(dst->Extent, dstOrigin.x(), dstOrigin.y() + y,
+                                                                dstOrigin.z() + z, texel),
+                                rows.data() + (static_cast<SizeT>(z) * size.y() + y) * rowBytes, rowBytes);
+                }
+            }
+            dst->HoldsFollowedCopy = true;
+            m_any.store(true, std::memory_order_release);
+            return true;
+        }
+
+        // One box of texels, in the level image's grid, that a client record says it wrote.
+        struct ClientTexelBox {
+            Int32 X, Y, Z;
+            Uint32 W, H, D;
+        };
+
+        // A client run for a level that holds a followed copy. The run is the client's level shadow
+        // (or one slab of it) and is stale everywhere the client did not write, so only `boxes` land,
+        // each texel read from where it sits in the run (the run begins at `imageOffset` of the
+        // level image) - the rest of the level keeps the copy. False, touching nothing, when a box
+        // is outside the level or a row of it is outside the run: the caller then adopts the run as
+        // usual and marks the texture driver-written.
+        Bool AdoptClientBoxes(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent, Uint64 imageOffset,
+                              const void* bytes, SizeT byteSize, const ClientTexelBox* boxes, SizeT boxCount) {
+            if (!Holds() || bytes == nullptr || (boxCount != 0 && boxes == nullptr)) return false;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            LevelShadow* shadow = FindLevelMutable(key, uploadTarget, level);
+            // Alias is null on a level holding a followed copy (FollowCopy took it server-owned);
+            // checked anyway, because the boxes below are written into Bytes.
+            if (shadow == nullptr || !shadow->HoldsFollowedCopy || shadow->Alias != nullptr ||
+                !LevelComplete(*shadow) || shadow->Extent != extent) {
+                return false;
+            }
+            const SizeT texel = LevelTexelBytes(*shadow);
+            if (texel == 0) return false;
+            const auto rowInRun = [&](const ClientTexelBox& box, Uint32 row, Uint32 slice, SizeT& offset) {
+                offset = TexelOffset(shadow->Extent, box.X, box.Y + static_cast<Int>(row),
+                                     box.Z + static_cast<Int>(slice), texel);
+                const Uint64 begin = static_cast<Uint64>(offset);
+                const Uint64 end = begin + static_cast<Uint64>(box.W) * texel;
+                return begin >= imageOffset && end <= imageOffset + byteSize;
+            };
+            for (SizeT i = 0; i < boxCount; ++i) {
+                const ClientTexelBox& box = boxes[i];
+                if (!BoxInside(IntVec3{box.X, box.Y, box.Z},
+                               IntVec3{static_cast<Int>(box.W), static_cast<Int>(box.H), static_cast<Int>(box.D)},
+                               shadow->Extent)) {
+                    return false;
+                }
+                for (Uint32 slice = 0; slice < box.D; ++slice) {
+                    for (Uint32 row = 0; row < box.H; ++row) {
+                        SizeT offset = 0;
+                        if (!rowInRun(box, row, slice, offset)) return false;
+                    }
+                }
+            }
+            const auto* run = static_cast<const Uint8*>(bytes);
+            for (SizeT i = 0; i < boxCount; ++i) {
+                const ClientTexelBox& box = boxes[i];
+                for (Uint32 slice = 0; slice < box.D; ++slice) {
+                    for (Uint32 row = 0; row < box.H; ++row) {
+                        SizeT offset = 0;
+                        rowInRun(box, row, slice, offset);
+                        std::memcpy(shadow->Bytes.data() + offset, run + (offset - static_cast<SizeT>(imageOffset)),
+                                    static_cast<SizeT>(box.W) * texel);
+                    }
+                }
+            }
+            return true;
+        }
+
+        // Fatal when a sync wants texels this store has no covered run for. This is THE data
+        // -correctness refusal of the texture half: a pending upload with no adoption behind
+        // it, a GPU-generated level (no bytes by construction), a level the client never
+        // defined, a level whose pieces did not all arrive, and a monolith-arm misuse all land
+        // here, because in every one of them the bytes have never existed on this side and
+        // re-reading the client's shadow for them is the cross-role access tx exists to end.
+        //
+        // THE QUESTION IS "IS THE WHOLE LEVEL COVERED", not "are there any bytes": a split
+        // level's pieces arrive as separate records of the same apply batch, and this caller
+        // reads the level image WHOLE (LevelByteSize / the sync's texel base), so a level with
+        // one piece missing is as unreadable as one with none.
+        const Uint8* RequireLevelBytes(Uint64 key, Uint16 uploadTarget, Uint16 level, const char* site) const {
+            if (!Holds()) return nullptr;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            if (shadow != nullptr && LevelComplete(*shadow)) return LevelData(*shadow);
+            // Verbatim what the MGLOG_F said, through the funnel that publishes it (P7 wave 0).
+            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::StageSnapshotTooNarrow,
+                                      "MGPipe: Fatal{StageSnapshotTooNarrow, \"%s\"} - the texture sync wants the "
+                                      "bytes of (uploadTarget=%u, level=%u) and the server's staged shadow has no "
+                                      "COMPLETE covered run for it. Under split the authoritative shadow is "
+                                      "SERVER-OWNED (rule C) and resource_subdata is the only way bytes reach it, "
+                                      "so these texels have never existed on this side: the record that should "
+                                      "have carried them is missing, a piece of a level cut into stage-chunk runs "
+                                      "has not arrived, or the level's texels were generated on the GPU and no "
+                                      "byte answer exists at all. Re-reading the client's shadow would be the "
+                                      "cross-role access this store exists to end",
+                                      site, static_cast<Uint32>(uploadTarget), static_cast<Uint32>(level));
+        }
+
+        // A box of a level for a replay into storage that is not this store's - a shared image,
+        // whose level was defined with no data and is written in pieces (an X server uploading a
+        // client's pixels into a window pixmap). The level image and its row length in texels when
+        // every row of the box is covered; null otherwise. Unlike RequireLevelBytes a partially
+        // covered level answers, and nothing is fatal: an uncovered box is the caller's to skip.
+        const Uint8* CoveredBoxBytes(Uint64 key, Uint16 uploadTarget, Uint16 level, Int x, Int y, Uint32 w, Uint32 h,
+                                     SizeT texel, Int* rowTexels) const {
+            if (!Holds()) return nullptr;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            if (shadow == nullptr || !shadow->Defined || x < 0 || y < 0 || w == 0 || h == 0 ||
+                x + static_cast<Int>(w) > shadow->Extent.x() || y + static_cast<Int>(h) > shadow->Extent.y())
+                return nullptr;
+            for (Uint32 row = 0; row < h; ++row) {
+                const SizeT begin = TexelOffset(shadow->Extent, x, y + static_cast<Int>(row), 0, texel);
+                const SizeT end = begin + static_cast<SizeT>(w) * texel;
+                if (end > LevelBytesHeld(*shadow) || !StagedShadowStore::CoverageHas(shadow->Covered, begin, end))
+                    return nullptr;
+            }
+            *rowTexels = shadow->Extent.x();
+            return LevelData(*shadow);
+        }
+
+        // Diagnostics the sync path and the unit cases read, so that a check can assert WHAT
+        // HAPPENED rather than that nothing blew up.
+        Bool IsCovered(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            if (shadow == nullptr || !shadow->Defined || shadow->DeclaredByteBound == 0 ||
+                LevelBytesHeld(*shadow) != shadow->DeclaredByteBound)
+                return false;
+            // THE WHOLE LEVEL, not merely the currently assembled prefix: all runs must cover
+            // the server-derived bound before a reader can treat the level as complete.
+            return StagedShadowStore::CoverageHas(shadow->Covered, 0, static_cast<SizeT>(shadow->DeclaredByteBound));
+        }
+        // How many runs this level's coverage is made of: 1 for a whole-level adoption, one per
+        // piece for a level cut into stage-chunk slabs. Diagnostics for the unit cases, so a
+        // check can assert WHAT happened rather than that nothing blew up.
+        SizeT LevelCoveredRunCount(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            return shadow == nullptr ? 0 : shadow->Covered.size();
+        }
+        Bool IsLevelDefined(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            return shadow != nullptr && shadow->Defined;
+        }
+        Bool IsLevelGpuDirty(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
+            if (!m_any.load(std::memory_order_acquire)) return false;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            return shadow != nullptr && shadow->GpuDirty;
+        }
+        // {0,0,0} for a level this store has never heard of - the exact answer the frontend's
+        // GetMipmapTexelSize gives for an undefined level, which is what keeps the regen
+        // arms' sparse-chain skip intact.
+        IntVec3 LevelExtentOrUndefined(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
+            if (!m_any.load(std::memory_order_acquire)) return IntVec3{0, 0, 0};
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            if (shadow == nullptr || !shadow->Defined) return IntVec3{0, 0, 0};
+            return shadow->Extent;
+        }
+        SizeT LevelByteSize(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
+            if (!m_any.load(std::memory_order_acquire)) return 0;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            if (shadow == nullptr || !shadow->Defined) return 0;
+            return LevelBytesHeld(*shadow);
+        }
+        Uint64 LevelDeclaredByteBound(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
+            if (!m_any.load(std::memory_order_acquire)) return 0;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            return shadow == nullptr || !shadow->Defined ? 0 : shadow->DeclaredByteBound;
+        }
+        Bool HasShadow(Uint64 key) const {
+            if (!m_any.load(std::memory_order_acquire)) return false;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            return m_shadows.find(Bucketed(key)) != m_shadows.end();
+        }
+        SizeT TrackedResources() const {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            return m_shadows.size();
+        }
+        SizeT TrackedLevelCount(Uint64 key) const {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const auto it = m_shadows.find(Bucketed(key));
+            return it == m_shadows.end() ? 0 : it->second.Levels.size();
+        }
+
+        // THE ENTRY KEY: the caller's key filed under the calling thread's {session, share group}
+        // (StagedShadow.h's StagedBucket). Two clients' {slot, gen} - or two non-shared groups'
+        // of one client - are two textures and must be two entries; with no probe the bucket is
+        // {0, 0} and this is the bare key the store always used.
+        struct ShadowKey {
+            Uint64 SessionKey = 0;
+            Uint64 ShareGroupKey = 0;
+            Uint64 Key = 0;
+            Bool operator==(const ShadowKey& other) const {
+                return SessionKey == other.SessionKey && ShareGroupKey == other.ShareGroupKey && Key == other.Key;
+            }
+        };
+        struct ShadowKeyHash {
+            SizeT operator()(const ShadowKey& key) const {
+                Uint64 mixed = key.Key ^ (key.ShareGroupKey + 0x9E3779B97F4A7C15ull + (key.Key << 6) + (key.Key >> 2));
+                mixed ^= key.SessionKey + 0x9E3779B97F4A7C15ull + (mixed << 6) + (mixed >> 2);
+                mixed ^= mixed >> 33;
+                mixed *= 0xFF51AFD7ED558CCDull;
+                mixed ^= mixed >> 33;
+                return static_cast<SizeT>(mixed);
+            }
+        };
+        static ShadowKey Bucketed(Uint64 key) {
+            const StagedBucket bucket = CurrentStagedBucket();
+            return ShadowKey{bucket.SessionKey, bucket.ShareGroupKey, key};
+        }
+        template <typename Map>
+        static void EraseSession(Map& map, Uint64 session) {
+            for (auto it = map.begin(); it != map.end();) {
+                if (it->first.SessionKey == session) {
+                    it = map.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
+        static Uint32 PackLevel(Uint16 uploadTarget, Uint16 level) {
+            return (static_cast<Uint32>(uploadTarget) << 16) | static_cast<Uint32>(level);
+        }
+
+        struct LevelShadow {
+            IntVec3 Extent{0, 0, 0};
+            // The level's whole staged run. EMPTY for a defined-but-byteless level (null-data
+            // definition, GPU-generated) - emptiness is the coverage answer, not an error. For a
+            // level adopted in pieces it is the assembled image, grown to the high-water mark of
+            // the runs.
+            Vector<Uint8> Bytes;
+            // Sorted, disjoint, in the level image's byte coordinates, and EXACTLY the runs
+            // adopted for this level: a gap in it is a piece that never arrived, which is the
+            // Fatal below (StagedShadowStore's coverage rules, same helpers).
+            Vector<Range1D> Covered;
+            Uint32 InternalFormat = 0;
+            Uint8 ResourceTarget = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Count);
+            Uint64 DeclaredByteBound = 0;
+            Bool Defined = false;
+            Bool GpuDirty = false;
+            // P8-E: FollowCopy wrote server-side texels into Bytes that the client's shadow lacks.
+            Bool HoldsFollowedCopy = false;
+            // P13 W4b, the aliasing mode: the level's first byte in the FRONTEND's level shadow,
+            // learned from the first run that arrived (its address minus its offset in the level).
+            // Null until then, and nulled with the coordinate system it belongs to. Bytes stays
+            // empty in this mode; LevelData / LevelBytesHeld are the two readers' spellings.
+            const Uint8* Alias = nullptr;
+        };
+        static const Uint8* LevelData(const LevelShadow& shadow) {
+            return shadow.Alias != nullptr ? shadow.Alias : shadow.Bytes.data();
+        }
+        // How many bytes of the level image this store can hand out: an aliased level is the
+        // frontend's whole level allocation, which is exactly its declared bound.
+        static SizeT LevelBytesHeld(const LevelShadow& shadow) {
+            return shadow.Alias != nullptr ? static_cast<SizeT>(shadow.DeclaredByteBound) : shadow.Bytes.size();
+        }
+        struct TextureShadow {
+            ska::flat_hash_map<Uint32, LevelShadow> Levels;
+        };
+
+        // The copy both adoption spellings share, with the lock already held: grow the image to
+        // hold the run, place it, and widen the covered set by exactly its range. An empty run
+        // (a level defined with no bytes, or a null pointer) covers nothing - emptiness is the
+        // coverage answer for such a level, not an error.
+        void RequireDeclaredLevel(LevelShadow& shadow, Uint64 key, Uint16 uploadTarget, Uint16 level,
+                                  const IntVec3& extent) {
+            // `Defined` alone, which only NoteLevelDefined sets. The first draft also refused
+            // `InternalFormat == 0`, but 0 is TextureInternalFormat::R8, so every R8 upload read
+            // as "arrived before the level was declared".
+            if (!shadow.Defined) {
+                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                                          "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.LevelExtent\"} - "
+                                          "resource_subdata arrived before the server declared texture level "
+                                          "(key=%llu, uploadTarget=%u, level=%u)",
+                                          static_cast<unsigned long long>(key), uploadTarget, level);
+            }
+            if (!StagedTextureTargetSupportsSubData(shadow.ResourceTarget)) {
+                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                                          "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.Target\"} - "
+                                          "resource_subdata is not legal for the server-declared texture target "
+                                          "(key=%llu, uploadTarget=%u, level=%u, target=%u)",
+                                          static_cast<unsigned long long>(key), uploadTarget, level,
+                                          static_cast<Uint32>(shadow.ResourceTarget));
+            }
+            if (shadow.DeclaredByteBound == 0) {
+                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                                          "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.LevelBound\"} - "
+                                          "resource_subdata into a byteless declared level: its extent is empty or "
+                                          "its format has no uncompressed size on this server "
+                                          "(key=%llu, uploadTarget=%u, level=%u, extent=%d,%d,%d, internalFormat=%u)",
+                                          static_cast<unsigned long long>(key), uploadTarget, level, shadow.Extent.x(),
+                                          shadow.Extent.y(), shadow.Extent.z(), shadow.InternalFormat);
+            }
+            if (shadow.Extent == extent) return;
+            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                                      "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.LevelExtent\"} - "
+                                      "resource_subdata extent disagrees with the server-declared texture level "
+                                      "(key=%llu, uploadTarget=%u, level=%u, declared=%d,%d,%d, record=%d,%d,%d)",
+                                      static_cast<unsigned long long>(key), uploadTarget, level, shadow.Extent.x(),
+                                      shadow.Extent.y(), shadow.Extent.z(), extent.x(), extent.y(), extent.z());
+        }
+
+        // Check the run's exclusive end against the extent recorded by the server's prior
+        // resource_respecify before any cast, coverage edit, or vector growth.
+        const Uint8* CopyRunInto(LevelShadow& shadow, Uint64 key, Uint16 uploadTarget, Uint16 level, Uint64 imageOffset,
+                                 const void* bytes, SizeT byteSize, Bool frontendShadow) {
+            if (bytes != nullptr && byteSize != 0) {
+                constexpr Uint64 max = std::numeric_limits<Uint64>::max();
+                const Uint64 runBytes = static_cast<Uint64>(byteSize);
+                if (imageOffset > max - runBytes) {
+                    MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                                              "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.CopyRunInto\"} - "
+                                              "texture run end overflows (handle=%llu, uploadTarget=%u, level=%u, "
+                                              "offset=%llu, size=%llu)",
+                                              static_cast<unsigned long long>(key), uploadTarget, level,
+                                              static_cast<unsigned long long>(imageOffset),
+                                              static_cast<unsigned long long>(runBytes));
+                }
+                const Uint64 end = imageOffset + runBytes;
+                if (end > shadow.DeclaredByteBound || end > static_cast<Uint64>(std::numeric_limits<SizeT>::max())) {
+                    MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                                              "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.CopyRunInto\"} - "
+                                              "texture run exceeds the server-declared level byte bound "
+                                              "(handle=%llu, uploadTarget=%u, level=%u, offset=%llu, size=%llu, "
+                                              "bound=%llu)",
+                                              static_cast<unsigned long long>(key), uploadTarget, level,
+                                              static_cast<unsigned long long>(imageOffset),
+                                              static_cast<unsigned long long>(runBytes),
+                                              static_cast<unsigned long long>(shadow.DeclaredByteBound));
+                }
+                const auto* raw = static_cast<const Uint8*>(bytes);
+                const SizeT begin = static_cast<SizeT>(imageOffset);
+                const SizeT needed = static_cast<SizeT>(end);
+                if (!m_copies && frontendShadow) {
+                    // The aliasing mode: the run IS the frontend level shadow at `begin`, so the
+                    // level's base is one subtraction away and nothing is copied. Every run of one
+                    // level comes from one allocation; a run from another is a level redefined
+                    // without a respecify (or one the server had been holding a copy of), which
+                    // would leave earlier coverage describing other memory - so it starts the
+                    // coverage over.
+                    const Uint8* base = raw - begin;
+                    if (shadow.Alias != base) {
+                        shadow.Covered.clear();
+                        shadow.Bytes.clear();
+                        shadow.Alias = base;
+                    }
+                    StagedShadowStore::CoverageAdd(shadow.Covered, begin, needed);
+                    m_any.store(true, std::memory_order_release);
+                    return shadow.Alias;
+                }
+                if (shadow.Alias != nullptr) {
+                    // A server copy landing on an aliased level: the level becomes server-owned, so
+                    // the bytes it already stands for are taken into it first.
+                    shadow.Bytes.assign(shadow.Alias, shadow.Alias + static_cast<SizeT>(shadow.DeclaredByteBound));
+                    shadow.Alias = nullptr;
+                }
+                if (shadow.Bytes.size() < needed) shadow.Bytes.resize(needed, 0);
+                std::memcpy(shadow.Bytes.data() + begin, raw, byteSize);
+                StagedShadowStore::CoverageAdd(shadow.Covered, begin, needed);
+            }
+            m_any.store(true, std::memory_order_release);
+            if (shadow.Alias != nullptr) return shadow.Alias;
+            return shadow.Bytes.empty() ? nullptr : shadow.Bytes.data();
+        }
+
+        const LevelShadow* FindLevel(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
+            const auto textureIt = m_shadows.find(Bucketed(key));
+            if (textureIt == m_shadows.end()) return nullptr;
+            const auto levelIt = textureIt->second.Levels.find(PackLevel(uploadTarget, level));
+            return levelIt == textureIt->second.Levels.end() ? nullptr : &levelIt->second;
+        }
+        LevelShadow* FindLevelMutable(Uint64 key, Uint16 uploadTarget, Uint16 level) {
+            const auto textureIt = m_shadows.find(Bucketed(key));
+            if (textureIt == m_shadows.end()) return nullptr;
+            const auto levelIt = textureIt->second.Levels.find(PackLevel(uploadTarget, level));
+            return levelIt == textureIt->second.Levels.end() ? nullptr : &levelIt->second;
+        }
+
+        // P8-E helpers, with the lock held. A level is COMPLETE when every declared byte crossed
+        // (IsCovered's test); its texel size is the declared bound over the texel count, and a bound
+        // that does not divide evenly is a level this cannot address texel by texel.
+        static Bool LevelComplete(const LevelShadow& shadow) {
+            return shadow.Defined && shadow.DeclaredByteBound != 0 &&
+                   LevelBytesHeld(shadow) == shadow.DeclaredByteBound &&
+                   StagedShadowStore::CoverageHas(shadow.Covered, 0, static_cast<SizeT>(shadow.DeclaredByteBound));
+        }
+        static SizeT LevelTexelBytes(const LevelShadow& shadow) {
+            if (shadow.Extent.x() <= 0 || shadow.Extent.y() <= 0 || shadow.Extent.z() <= 0) return 0;
+            const Uint64 texels = static_cast<Uint64>(shadow.Extent.x()) * static_cast<Uint64>(shadow.Extent.y()) *
+                                  static_cast<Uint64>(shadow.Extent.z());
+            if (shadow.DeclaredByteBound == 0 || shadow.DeclaredByteBound % texels != 0) return 0;
+            return static_cast<SizeT>(shadow.DeclaredByteBound / texels);
+        }
+        static Bool BoxInside(const IntVec3& origin, const IntVec3& size, const IntVec3& extent) {
+            for (Int axis = 0; axis < 3; ++axis) {
+                if (origin[axis] < 0 || size[axis] <= 0 ||
+                    static_cast<Int64>(origin[axis]) + size[axis] > static_cast<Int64>(extent[axis])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        static SizeT TexelOffset(const IntVec3& extent, Int x, Int y, Int z, SizeT texel) {
+            return ((static_cast<SizeT>(z) * static_cast<SizeT>(extent.y()) + static_cast<SizeT>(y)) *
+                        static_cast<SizeT>(extent.x()) +
+                    static_cast<SizeT>(x)) *
+                   texel;
+        }
+
+        const Bool m_copies;
+        mutable std::mutex m_mutex;
+        StagedTextureDeviceLimits m_deviceLimits{};
+        ska::flat_hash_map<ShadowKey, TextureShadow, ShadowKeyHash> m_shadows;
+        // P8-E: MarkDriverWritten's keys (the value is always true). Apart from m_shadows on purpose,
+        // because ResetLevels erases a key's levels and must not forget this.
+        ska::flat_hash_map<ShadowKey, Bool, ShadowKeyHash> m_driverWritten;
+        // Read on every IsLevelGpuDirty / LevelExtentOrUndefined, so the monolith cost is one
+        // acquire load of a never-written flag rather than a mutex and two hash lookups.
+        std::atomic<Bool> m_any{false};
+        std::atomic<Uint64> m_gpuDirtyClears{0};
+    };
+
+    // ONE PER PROCESS, and its copying arm is decided ONCE at first use - StagedShadow's
+    // ServerStaged() ruling verbatim: the two arms hold the authoritative bytes in DIFFERENT
+    // places, so an answer that changed mid-run would strand every level already staged.
+    // Leaked at exit like every other MG_Remote singleton (ID-8). In a header rather than in
+    // Managers.cpp because TWO backends consume it: Espryt's adoption and sync
+    // (Managers.cpp) and Magma's T5 shadow writes (VulkanRenderer.cpp) must name the same
+    // store, and an inline function's one static gives them exactly that.
+    inline StagedTextureStore& ServerStagedTexture() {
+        static StagedTextureStore& store =
+            *new StagedTextureStore(MG_Config::Transport != MG_Config::TransportMode::Monolith);
+        return store;
+    }
+
+} // namespace MobileGL::MG_Record

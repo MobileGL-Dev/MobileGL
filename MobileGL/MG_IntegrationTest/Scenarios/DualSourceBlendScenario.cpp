@@ -26,7 +26,7 @@
 //   capability absent  - src0, written straight through
 //
 // What each CI lane actually reaches: lavapipe has dualSrcBlend, so the DirectVulkan lane runs the
-// whole sequence and measures the blend. Mesa's GLES front end on llvmpipe has no
+// whole sequence and measures the blend. The GLES front end on llvmpipe has no
 // GL_EXT_blend_func_extended, so the ESSL stage carrying `layout(index = 1)` never compiles and the
 // program renders nothing - the DirectGLES lane therefore SKIPS on the capability probe in SetUp
 // rather than measuring a picture the driver never produced. The DECLINE arm itself - the path this
@@ -121,11 +121,9 @@ void main()
                     Draw(/*src0=*/1.0f, /*src1=*/1.0f);
                     glFinish();
                     const Image probe = ReadPixels(kExtent, kExtent);
-                    m_programRenders =
-                        !probe.Empty() && static_cast<int>(probe.At(kExtent / 2, kExtent / 2).r) > 245;
+                    m_programRenders = !probe.Empty() && static_cast<int>(probe.At(kExtent / 2, kExtent / 2).r) > 245;
                 }
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             void TearDown() override {
@@ -178,10 +176,10 @@ void main()
     // The whole point of the scenario: this sequence used to be a process kill on any device
     // without the capability, and it has to be a picture either way.
     //
-    // dst is black, src0 is white and src1 is mid-grey, with SRC1_COLOR / ONE_MINUS_SRC1_COLOR.
+    // dst is black, src0 is white and src1 is mid-gray, with SRC1_COLOR / ONE_MINUS_SRC1_COLOR.
     //   blended  = 1.0 * 0.5 + 0.0 * 0.5 = 0.5  -> ~128
     //   declined = 1.0                          ->  255
-    // Anything else means the factors were mistranslated rather than either honoured or declined.
+    // Anything else means the factors were mistranslated rather than either honored or declined.
     TEST_F(DualSourceBlendScenario, DualSourceBlendDrawProducesOneOfTheTwoDefinedResults) {
         if (!Ready()) GTEST_SKIP();
         if (const std::string reason = WhyTheProgramCannotRun(); !reason.empty()) GTEST_SKIP() << reason;
@@ -200,13 +198,13 @@ void main()
 
         const Image image = ReadPixels(kExtent, kExtent);
         ASSERT_FALSE(image.Empty());
-        const Rgba8 centre = image.At(kExtent / 2, kExtent / 2);
-        const int red = static_cast<int>(centre.r);
+        const Rgba8 center = image.At(kExtent / 2, kExtent / 2);
+        const int red = static_cast<int>(center.r);
         const bool blended = red > 100 && red < 160;
         const bool declined = red > 245;
-        EXPECT_TRUE(blended || declined)
-            << "got " << centre << ", which is neither the dual-source blend (~128) nor the declined "
-            << "straight-through source (255) - the SRC1 factors were mistranslated";
+        EXPECT_TRUE(blended || declined) << "got " << center
+                                         << ", which is neither the dual-source blend (~128) nor the declined "
+                                         << "straight-through source (255) - the SRC1 factors were mistranslated";
         Gl().EndFrame();
     }
 
@@ -229,9 +227,9 @@ void main()
 
         const Image image = ReadPixels(kExtent, kExtent);
         ASSERT_FALSE(image.Empty());
-        const Rgba8 centre = image.At(kExtent / 2, kExtent / 2);
-        EXPECT_GT(static_cast<int>(centre.r), 245)
-            << "got " << centre << ": blending is disabled, so the source has to be written straight through";
+        const Rgba8 center = image.At(kExtent / 2, kExtent / 2);
+        EXPECT_GT(static_cast<int>(center.r), 245)
+            << "got " << center << ": blending is disabled, so the source has to be written straight through";
         Gl().EndFrame();
     }
 

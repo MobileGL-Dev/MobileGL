@@ -23,8 +23,8 @@ namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
             namespace {
-                using spvtools::opt::IRContext;
                 using spvtools::opt::Instruction;
+                using spvtools::opt::IRContext;
                 using spvtools::opt::Operand;
                 namespace analysis = spvtools::opt::analysis;
 
@@ -69,8 +69,7 @@ namespace MobileGL {
 
                 for (Instruction& inst : irContext->types_values()) {
                     if (inst.opcode() != spv::Op::OpVariable) continue;
-                    if (static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0)) !=
-                        spv::StorageClass::Input) {
+                    if (static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0)) != spv::StorageClass::Input) {
                         continue;
                     }
                     Instruction* pointerType = defUseMgr->GetDef(inst.type_id());
@@ -83,8 +82,8 @@ namespace MobileGL {
                         // an input over two attribute locations. Left alone; the vertex-input
                         // factory declines the matching attribute for the same reason.
                         MGLOG_E_ONCE("PackDoubleVertexInputsPass: vertex input %%%u is a %u-component 64-bit "
-                                "float; only double and dvec2 inputs can be packed",
-                                inst.result_id(), components);
+                                     "float; only double and dvec2 inputs can be packed",
+                                     inst.result_id(), components);
                         continue;
                     }
                     targets.push_back({&inst, pointeeTypeId, components});
@@ -138,18 +137,15 @@ namespace MobileGL {
                     irContext->AddGlobalValue(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpVariable, packedPointerTypeId, packedVariableId,
                         std::initializer_list<Operand>{
-                            {SPV_OPERAND_TYPE_STORAGE_CLASS,
-                             {static_cast<Uint32>(spv::StorageClass::Input)}}}));
+                            {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<Uint32>(spv::StorageClass::Input)}}}));
 
                     // The interface decorations belong to whatever is actually the Input now.
                     std::vector<Instruction*> deadDecorations;
                     for (auto& annotation : irContext->annotations()) {
                         if (annotation.opcode() != spv::Op::OpDecorate) continue;
                         if (annotation.GetSingleWordInOperand(0) != oldVariableId) continue;
-                        const auto decoration =
-                            static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(1));
-                        if (decoration == spv::Decoration::Location ||
-                            decoration == spv::Decoration::Component ||
+                        const auto decoration = static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(1));
+                        if (decoration == spv::Decoration::Location || decoration == spv::Decoration::Component ||
                             decoration == spv::Decoration::RelaxedPrecision) {
                             annotation.SetInOperand(0, {packedVariableId});
                         } else {

@@ -9,17 +9,17 @@
 // Scenario - AN INTEGER GL_TEXTURE_BORDER_COLOR REACHES AN isampler2D AS AN INTEGER.
 //
 // KHR-GL46.texture_border_clamp.Texture2D{R32I,R32UI} (and the 2DArray/3D siblings) set the border
-// colour with glSamplerParameterIiv/Iuiv, sample outside the texture through an integer sampler and
+// color with glSamplerParameterIiv/Iuiv, sample outside the texture through an integer sampler and
 // expect the value back. MobileGL returned 1132396544 on Espryt - which is 0x437F0000, the IEEE-754
-// bits of 255.0f, i.e. the float border-colour register read through an integer sampler - and 0 on
+// bits of 255.0f, i.e. the float border-color register read through an integer sampler - and 0 on
 // Magma, where the border fell through to VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK.
 //
 // Two independent halves, and this scenario covers both because it goes through the frontend:
 //
-//   * the STATE had no record of which entry point wrote the border colour. All three
+//   * the STATE had no record of which entry point wrote the border color. All three
 //     representations are kept numerically in step, so the value alone cannot say whether the
 //     application called glTexParameterfv or glTexParameterIiv.
-//   * each backend then had exactly one border-colour call site: glTexParameterfv /
+//   * each backend then had exactly one border-color call site: glTexParameterfv /
 //     glSamplerParameterfv on DirectGLES, and a snap-to-one-of-four-predefined-values on
 //     DirectVulkan that never emitted the VK_BORDER_COLOR_INT_* family at all.
 //
@@ -28,8 +28,8 @@
 // nor opaque white, so on DirectVulkan it can only be delivered through VK_EXT_custom_border_color.
 // That makes the scenario a real test of the extension path on lavapipe rather than a palette hit.
 //
-// Both an integer image view and an integer border colour are involved, which is the other half of
-// the Vulkan rule: VK_BORDER_COLOR_FLOAT_* on an integer image view is undefined behaviour
+// Both an integer image view and an integer border color are involved, which is the other half of
+// the Vulkan rule: VK_BORDER_COLOR_FLOAT_* on an integer image view is undefined behavior
 // regardless of the value, so even a border of (0,0,0,1) has to resolve to INT_OPAQUE_BLACK.
 // InsideTexelsAreUnaffected is what keeps that from being asserted vacuously.
 
@@ -90,10 +90,11 @@ void main()
                 if (!Ready()) return;
 
                 // 2x2 RGBA32I. Integer textures are not filterable, so NEAREST is mandatory.
-                const std::int32_t texels[4][4] = {{kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]},
-                                                  {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]},
-                                                  {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]},
-                                                  {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]}};
+                const std::int32_t texels[4][4] = {
+                    {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]},
+                    {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]},
+                    {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]},
+                    {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]}};
                 glGenTextures(1, &m_sourceTexture);
                 glBindTexture(GL_TEXTURE_2D, m_sourceTexture);
                 glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32I, 2, 2);
@@ -189,7 +190,7 @@ void main()
             void ExpectBorderIsDelivered(const char* what) {
                 for (int channel = 0; channel < 4; ++channel) {
                     // (-0.5, -0.5) is a full texture width outside the image on both axes, so
-                    // CLAMP_TO_BORDER can only answer with the border colour.
+                    // CLAMP_TO_BORDER can only answer with the border color.
                     const std::vector<std::int32_t> texels = RenderChannel(channel, -0.5f, -0.5f);
                     EXPECT_EQ(FirstGLError(), 0u) << what << ": the border draw left a GL error behind";
                     ExpectAllTexels(what, channel, kBorderColor[channel], texels);
@@ -198,8 +199,8 @@ void main()
 
             // A narrow-format source built on demand, for the clamp cases. Returns the texture, which
             // the caller owns until TearDown deletes it through m_narrowTexture.
-            void MakeNarrowSource(GLenum internalFormat, GLenum clientFormat, const void* texels,
-                                  const GLint* border, bool borderIsUnsigned) {
+            void MakeNarrowSource(GLenum internalFormat, GLenum clientFormat, const void* texels, const GLint* border,
+                                  bool borderIsUnsigned) {
                 glGenTextures(1, &m_narrowTexture);
                 glBindTexture(GL_TEXTURE_2D, m_narrowTexture);
                 glTexStorage2D(GL_TEXTURE_2D, 1, internalFormat, 2, 2);
@@ -222,10 +223,10 @@ void main()
             // The narrow sources are single-channel, so only component 0 carries anything, and the
             // sampler declaration has to match the format's signedness.
             std::vector<std::int32_t> RenderNarrowBorder(bool isUnsignedSampler) {
-                const std::string fragment =
-                    std::string("#version 330 core\n\nuniform ") + (isUnsignedSampler ? "usampler2D" : "isampler2D") +
-                    " smp;\nuniform vec2 uCoord;\n\nout int out_color;\n\nvoid main()\n{\n"
-                    "    out_color = int(texture(smp, uCoord).x);\n}\n";
+                const std::string fragment = std::string("#version 330 core\n\nuniform ") +
+                                             (isUnsignedSampler ? "usampler2D" : "isampler2D") +
+                                             " smp;\nuniform vec2 uCoord;\n\nout int out_color;\n\nvoid main()\n{\n"
+                                             "    out_color = int(texture(smp, uCoord).x);\n}\n";
                 std::string error;
                 const unsigned int program = CompileProgram(kVertexSource, fragment.c_str(), &error);
                 if (program == 0) {
@@ -265,8 +266,8 @@ void main()
 
     // The floor, and the control that keeps the two tests below from passing vacuously: an INSIDE
     // sample has to fetch the texture's own texel. If this fails the sampler, the shader or the
-    // integer readback is broken and nothing about the border colour has been measured.
-    TEST_F(IntegerBorderColorScenario, InsideTexelsAreUnaffectedByTheBorderColour) {
+    // integer readback is broken and nothing about the border color has been measured.
+    TEST_F(IntegerBorderColorScenario, InsideTexelsAreUnaffectedByTheBorderColor) {
         if (!Ready()) GTEST_SKIP();
 
         glBindTexture(GL_TEXTURE_2D, m_sourceTexture);
@@ -283,7 +284,7 @@ void main()
 
     // The regression, texture-object spelling. glTexParameterIiv is the entry point the frontend
     // already accepted and then flattened into the same FloatVec4 every other spelling wrote.
-    TEST_F(IntegerBorderColorScenario, TexParameterIivBorderColourSurvivesToAnIntegerSampler) {
+    TEST_F(IntegerBorderColorScenario, TexParameterIivBorderColorSurvivesToAnIntegerSampler) {
         if (!Ready()) GTEST_SKIP();
 
         glBindTexture(GL_TEXTURE_2D, m_sourceTexture);
@@ -296,9 +297,9 @@ void main()
 
     // The regression, sampler-object spelling - which is the one the conformance cases actually use,
     // and a separate code path in both backends (BackendSamplerObject::Sync on DirectGLES, and the
-    // sampler cache key on DirectVulkan, where a border colour that is not part of the key would
+    // sampler cache key on DirectVulkan, where a border color that is not part of the key would
     // alias two samplers that differ only in it).
-    TEST_F(IntegerBorderColorScenario, SamplerParameterIivBorderColourSurvivesToAnIntegerSampler) {
+    TEST_F(IntegerBorderColorScenario, SamplerParameterIivBorderColorSurvivesToAnIntegerSampler) {
         if (!Ready()) GTEST_SKIP();
 
         glGenSamplers(1, &m_sampler);
@@ -310,7 +311,7 @@ void main()
         glSamplerParameterIiv(m_sampler, GL_TEXTURE_BORDER_COLOR, kBorderColor);
         ASSERT_EQ(FirstGLError(), 0u) << "sampler-object setup was rejected";
 
-        // The texture object carries a DIFFERENT border colour, so a pass here cannot come from the
+        // The texture object carries a DIFFERENT border color, so a pass here cannot come from the
         // texture's own state leaking through: GL 4.6 core 8.10 says a bound sampler object's state
         // wins over the texture's for every sampling parameter.
         const std::int32_t decoyBorder[4] = {0, 0, 0, 0};
@@ -353,7 +354,7 @@ void main()
     // clamping to 0 is an equally defensible reading of the same paragraph, and DirectVulkan can be
     // made to produce either - but DirectGLES forwards the value to the ES driver verbatim and cannot
     // deviate, so choosing 0 would mean the same program sampling 0 on Magma and 255 on Espryt. The
-    // whole point of carrying the border colour's form is to stop that class of divergence, so the
+    // whole point of carrying the border color's form is to stop that class of divergence, so the
     // backends agree on the driver's answer.
     //
     // The clamp itself is still doing the work: without it the value reaches the driver as

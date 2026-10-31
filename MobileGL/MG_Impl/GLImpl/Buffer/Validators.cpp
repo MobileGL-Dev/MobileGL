@@ -82,8 +82,8 @@ namespace MobileGL::MG_Impl::GLImpl::BufferImpl {
     Bool ValidateBufferBindingPointRange(BufferTarget target, Uint first, GLsizei count, const char* funcName) {
         if (count < 0) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/BufferImpl", funcName,
-                                                                      "count must be non-negative."));
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/BufferImpl", funcName, "count must be non-negative."));
             return false;
         }
         const SizeT pointCount = GetBufferBindingPointLimit(target);

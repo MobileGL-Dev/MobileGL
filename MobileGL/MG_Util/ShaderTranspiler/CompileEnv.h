@@ -9,7 +9,7 @@
 #pragma once
 #include <Includes.h>
 #include <Config.h>
-#include <MG_Backend/BackendObject.h>
+#include <BackendCaps.h>
 
 namespace MobileGL::MG_Util::ShaderTranspiler {
     // GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE core minimums (GL 4.6 core table 23.45), in ONE
@@ -61,10 +61,10 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // exact no-backend fallback it had before: extensions read as advertised, limits
         // read as the frontend defaults.
         BackendType backend = BackendType::Unknown;
-        MG_Backend::DynamicBackendParameters params{};   // by value, never by reference
+        MG_Backend::DynamicBackendParameters params{}; // by value, never by reference
         Vector<GLExtension> advertisedExtensions;
 
-        Uint64 fingerprint = 0;   // set by CaptureCompileEnv()
+        Uint64 fingerprint = 0; // set by CaptureCompileEnv()
 
         // The FRONT-END half of the environment: the subset of the fields above that can
         // change what glslang PRODUCES - the SPIR-V or the reflection - as opposed to what a
@@ -115,10 +115,11 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         //     GlslangToSpv branches on which backend is active - ShaderAttrib::flags is 0 on
         //     both production parse paths (ShaderCompileTask::RunCompilePipeline and
         //     ClaimParsedShader). Backend identity steers the TRANSPILE, which is L2's key.
-        //   * `advertisedExtensions`. Its only front-end consumer is ShaderSourceProcessor's
-        //     FilterUnsupportedGpuShaderInt64, which REWRITES THE SOURCE TEXT - and the
+        //   * `advertisedExtensions`, and params.SubgroupSupportedStages / SubgroupSupportedFeatures.
+        //     Their only front-end consumer is ShaderSourceProcessor's
+        //     FilterUnavailableShaderExtensions, which REWRITES THE SOURCE TEXT - and the
         //     preprocessed text is in the L1 key verbatim, a strictly finer discriminator
-        //     than the extension list. (E_GL_ARB_gpu_shader_fp64 is never read by the front
+        //     than the extension list or the masks. (E_GL_ARB_gpu_shader_fp64 is never read by the front
         //     end at all: MOBILEGL_ADVERTISE_FP64 only adds it to the extension STRING the
         //     application queries, and glslang parses `double` the same way either way.)
         //   * params.SupportsShaderFloat64, i.e. ConsumesFloat64Natively(). glslang produces
@@ -141,7 +142,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         //     only such argument left in this classification. The moment anything hands this
         //     value to glslang - a TBuiltInResource field, a built-in constant - it MUST move
         //     into the fingerprint, exactly as its companions just did.
-        Uint64 frontendFingerprint = 0;   // set by CaptureCompileEnv()
+        Uint64 frontendFingerprint = 0; // set by CaptureCompileEnv()
 
         Bool HasBackend() const { return backend != BackendType::Unknown; }
         // Whether the backend this env was captured against can CONSUME a module that still
@@ -162,12 +163,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // compiles, unit tests) is the untouched module. Like nativeFloat64, each bit is L1
         // key material of its own (SpirvTranslationKeyInputs), never part of the frontend
         // fingerprint: glslang produces the same thing either way.
-        Bool DemotesTessellationPointSize() const {
-            return HasBackend() && !params.SupportsTessellationPointSize;
-        }
-        Bool DemotesGeometryPointSize() const {
-            return HasBackend() && !params.SupportsGeometryPointSize;
-        }
+        Bool DemotesTessellationPointSize() const { return HasBackend() && !params.SupportsTessellationPointSize; }
+        Bool DemotesGeometryPointSize() const { return HasBackend() && !params.SupportsGeometryPointSize; }
         // Matches the historical rule exactly: with no active backend every extension counts
         // as advertised, because the frontend then has nothing to gate against.
         Bool IsExtensionAdvertised(GLExtension extension) const {

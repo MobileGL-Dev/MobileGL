@@ -1,0 +1,5 @@
+# Layout-only commits for `git blame` to look past:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# clang-format every C and C++ source
+f4994ee36e3aa2d53c22370e471c976a3fae719f

@@ -86,8 +86,7 @@ namespace {
         ComputeLocalSize localSize;
         const MobileGL::String uncommentedSource = StripGlslComments(source);
 
-        for (std::sregex_iterator it(uncommentedSource.begin(), uncommentedSource.end(), kComputeLocalSizePattern),
-             end;
+        for (std::sregex_iterator it(uncommentedSource.begin(), uncommentedSource.end(), kComputeLocalSizePattern), end;
              it != end; ++it) {
             const char axis = (*it)[1].str()[0];
             // The [0-9]+ capture is unbounded, so `local_size_x = 99999999999999999999999`
@@ -97,11 +96,9 @@ namespace {
             // below rejects anyway - the same verdict a non-overflowing huge value gets.
             const MobileGL::String digits = (*it)[2].str();
             unsigned long long value = 0;
-            const std::from_chars_result parsed =
-                std::from_chars(digits.data(), digits.data() + digits.size(), value);
-            const MobileGL::Uint clampedValue = (parsed.ec != std::errc() || value > UINT_MAX)
-                                                    ? UINT_MAX
-                                                    : static_cast<MobileGL::Uint>(value);
+            const std::from_chars_result parsed = std::from_chars(digits.data(), digits.data() + digits.size(), value);
+            const MobileGL::Uint clampedValue =
+                (parsed.ec != std::errc() || value > UINT_MAX) ? UINT_MAX : static_cast<MobileGL::Uint>(value);
 
             // TODO: Replace this literal layout scanner with parser/AST-backed validation so expressions and
             // specialization-id layouts are handled consistently with glslang.
@@ -152,8 +149,7 @@ namespace {
     // only survives inside a synthesized block NAME) and re-covers storage blocks as a backstop.
     // The conformance predicate is compile AND link, so either site satisfies it; the split is
     // about WHICH error GL reports, not about whether the shader is rejected.
-    static MobileGL::Int MaxShaderStorageBufferBindings(
-        const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
+    static MobileGL::Int MaxShaderStorageBufferBindings(const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
         return MobileGL::MG_State::GLState::ResolveResourceBindingLimits(env).MaxShaderStorageBufferBindings;
     }
 
@@ -198,8 +194,8 @@ namespace {
             return result;
         }
 
-        if (const std::optional<String> bindingError = FindShaderStorageBindingViolation(
-                result.preprocessedSource, MaxShaderStorageBufferBindings(env))) {
+        if (const std::optional<String> bindingError =
+                FindShaderStorageBindingViolation(result.preprocessedSource, MaxShaderStorageBufferBindings(env))) {
             result.outcome = ShaderPreprocessOutcome::ResourceBindingRejected;
             result.infoLog = *bindingError;
             return result;
@@ -232,7 +228,9 @@ namespace MobileGL::MG_State::GLState {
     // thread_local state, and glslang::InitializeProcess() is process-wide, refcounted and
     // mutex-guarded, so it needs no per-worker counterpart). The pool allocator is the part
     // that needs undoing; see the declaration in ShaderCompileTask.h.
-    GlslangThreadAllocatorGuard::~GlslangThreadAllocatorGuard() { glslang::SetThreadPoolAllocator(nullptr); }
+    GlslangThreadAllocatorGuard::~GlslangThreadAllocatorGuard() {
+        glslang::SetThreadPoolAllocator(nullptr);
+    }
 
     // Pure CPU work only. Everything this reads is either an input the node owns or a
     // process-wide constant; everything it writes is `artifacts`. Do not add a GL/EGL call,
@@ -241,19 +239,21 @@ namespace MobileGL::MG_State::GLState {
     // deferral mechanism (and JobNode's debug assert on it) exists.
     void ShaderCompileTask::RunBody() {
         // Own the failure rather than letting JobNode's backstop settle the node as
-        // Cancelled: an abandoned node publishes nothing, so the shader would report
+        // Canceled: an abandoned node publishes nothing, so the shader would report
         // COMPILE_STATUS false with an EMPTY info log. GL models a failed compile as
         // status + log, so turn a throw into exactly that - a completed job whose result
         // is "this shader did not compile", with a log the application can read.
         // (JobNode still catches: it is the last resort for anything below.)
         try {
             RunCompilePipeline();
-        } catch (const std::exception& e) {
+        }
+        catch (const std::exception& e) {
             artifacts = {};
             artifacts.env = env;
             artifacts.compileStatus = false;
             artifacts.infoLog = std::format("Error: shader compilation failed: {}", e.what());
-        } catch (...) {
+        }
+        catch (...) {
             artifacts = {};
             artifacts.env = env;
             artifacts.compileStatus = false;
@@ -304,16 +304,14 @@ namespace MobileGL::MG_State::GLState {
         // when a link finds no stored parse. A link that hits L1 never asks, so the parse
         // never happens at all; a link that misses pays exactly one parse, where the CAS
         // loser has always paid it. See TranslationCache.h's L1c section.
-        const TranslationCacheKey parseKey =
-            ShaderTranslationCacheEnabled()
-                ? BuildShaderParseVerdictKey(ShaderParseVerdictKeyInputs{
-                      .frontendFingerprint = compileEnv.frontendFingerprint,
-                      .shaderType = glShaderType,
-                      .preprocessedSource = StringView(shared.preprocessedSource),
-                      .shaderCompileFlags = kShaderCompileFlags})
-                : TranslationCacheKey{};
-        const ShaderParseVerdictPtr verdict =
-            parseKey.Valid() ? GetShaderParseVerdictCache().Find(parseKey) : nullptr;
+        const TranslationCacheKey parseKey = ShaderTranslationCacheEnabled()
+                                                 ? BuildShaderParseVerdictKey(ShaderParseVerdictKeyInputs{
+                                                       .frontendFingerprint = compileEnv.frontendFingerprint,
+                                                       .shaderType = glShaderType,
+                                                       .preprocessedSource = StringView(shared.preprocessedSource),
+                                                       .shaderCompileFlags = kShaderCompileFlags})
+                                                 : TranslationCacheKey{};
+        const ShaderParseVerdictPtr verdict = parseKey.Valid() ? GetShaderParseVerdictCache().Find(parseKey) : nullptr;
 
         // The two branches produce exactly one thing between them - a verdict, plus a TShader
         // only when this task actually parsed - and converge on one publish below. Keeping the
@@ -354,8 +352,7 @@ namespace MobileGL::MG_State::GLState {
                 freshVerdict->infoLog = parseLog;
                 freshVerdict->explicitUniformLocations = explicitUniformLocations;
                 const SizeT verdictBytes = ShaderParseVerdictBytes(*freshVerdict);
-                GetShaderParseVerdictCache().Insert(parseKey, ShaderParseVerdictPtr(Move(freshVerdict)),
-                                                    verdictBytes);
+                GetShaderParseVerdictCache().Insert(parseKey, ShaderParseVerdictPtr(Move(freshVerdict)), verdictBytes);
             }
         }
 
@@ -386,13 +383,11 @@ namespace MobileGL::MG_State::GLState {
             const SizeT firstLineEnd = artifacts.infoLog.find('\n');
             diagnostics.logLines.push_back(
                 {MOBILEGL_LOG_LEVEL_DEBUG,
-                 std::format(
-                     "ShaderCompileTask: shader {} (stage {}) failed to compile; compileStatus = false. "
-                     "Preprocessed source: {} bytes. First log line: {}",
-                     externalIndex, static_cast<Int>(stage), shared.preprocessedSource.length(),
-                     artifacts.infoLog.substr(0, firstLineEnd == String::npos
-                                                     ? artifacts.infoLog.length()
-                                                     : firstLineEnd))});
+                 std::format("ShaderCompileTask: shader {} (stage {}) failed to compile; compileStatus = false. "
+                             "Preprocessed source: {} bytes. First log line: {}",
+                             externalIndex, static_cast<Int>(stage), shared.preprocessedSource.length(),
+                             artifacts.infoLog.substr(0, firstLineEnd == String::npos ? artifacts.infoLog.length()
+                                                                                      : firstLineEnd))});
             if (shouldPopulateCache) {
                 fresh->outcome = ShaderPreprocessOutcome::ParseFailed;
                 fresh->infoLog = artifacts.infoLog;

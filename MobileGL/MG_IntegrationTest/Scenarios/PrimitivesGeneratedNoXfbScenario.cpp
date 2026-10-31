@@ -18,7 +18,7 @@
 //
 // DirectVulkan serves the query from the transform-feedback stream query's
 // primitivesNeeded, which VK_EXT_transform_feedback defines to count whether or
-// not a capture span is open. Both the Mali-G1-Ultra driver AND Mesa lavapipe
+// not a capture span is open. Both the Mali-G1-Ultra driver AND lavapipe
 // disagree with that definition: with no vkCmdBeginTransformFeedbackEXT recorded,
 // the pair reads back 0. Where the bring-up probe measures that defect with a
 // working control - or MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE=1 pins it on - the
@@ -44,6 +44,7 @@
 #include <utility>
 #include <vector>
 
+#include "../Harness/PipeStatsWindow.h"
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
 
@@ -131,8 +132,7 @@ void main() {
                 ScenarioTest::SetUp();
                 if (!Ready()) return;
                 if (Gl().BackendName() != std::string("DirectVulkan")) {
-                    GTEST_SKIP() << "the stream-query defect and its reroute are DirectVulkan's; "
-                                 << Gl().BackendName()
+                    GTEST_SKIP() << "the stream-query defect and its reroute are DirectVulkan's; " << Gl().BackendName()
                                  << " answers this query from a different mechanism";
                 }
                 glGenVertexArrays(1, &m_vao);
@@ -165,18 +165,21 @@ void main() {
                 for (const auto& [type, source] : stages) {
                     const GLuint shader = CompileShaderStage(type, source, &m_buildLog);
                     if (shader == 0) {
-                        for (const GLuint built : shaders) glDeleteShader(built);
+                        for (const GLuint built : shaders)
+                            glDeleteShader(built);
                         return 0;
                     }
                     shaders.push_back(shader);
                 }
                 const GLuint program = glCreateProgram();
-                for (const GLuint shader : shaders) glAttachShader(program, shader);
+                for (const GLuint shader : shaders)
+                    glAttachShader(program, shader);
                 if (captureVarying != nullptr) {
                     glTransformFeedbackVaryings(program, 1, &captureVarying, GL_INTERLEAVED_ATTRIBS);
                 }
                 glLinkProgram(program);
-                for (const GLuint shader : shaders) glDeleteShader(shader);
+                for (const GLuint shader : shaders)
+                    glDeleteShader(shader);
                 GLint status = GL_FALSE;
                 glGetProgramiv(program, GL_LINK_STATUS, &status);
                 if (status == GL_FALSE) {
@@ -192,21 +195,17 @@ void main() {
                 return program;
             }
 
-            GLuint BuildCaptureProgram() {
-                return BuildProgram({{GL_VERTEX_SHADER, kVertexSource}}, "vs_out_value");
-            }
+            GLuint BuildCaptureProgram() { return BuildProgram({{GL_VERTEX_SHADER, kVertexSource}}, "vs_out_value"); }
 
             GLuint BuildTessellationProgram(bool withCaptureVarying = false) {
                 GLint maxTessGenLevel = 0;
                 glGetIntegerv(GL_MAX_TESS_GEN_LEVEL, &maxTessGenLevel);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 if (maxTessGenLevel < 1) return 0;
                 return BuildProgram(
                     {{GL_VERTEX_SHADER, kTessVertexSource},
                      {GL_TESS_CONTROL_SHADER, kTessControlSource},
-                     {GL_TESS_EVALUATION_SHADER,
-                      withCaptureVarying ? kTessEvalCaptureSource : kTessEvalSource}},
+                     {GL_TESS_EVALUATION_SHADER, withCaptureVarying ? kTessEvalCaptureSource : kTessEvalSource}},
                     withCaptureVarying ? "te_out_value" : nullptr);
             }
 
@@ -242,35 +241,32 @@ void main() {
 
             static GLenum DrainGLErrors() {
                 const GLenum first = glGetError();
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return first;
             }
 
             const std::string& BuildLog() const { return m_buildLog; }
 
             static std::filesystem::path LibraryLogPath() {
-                const char* path = std::getenv("MOBILEGL_LOG_FILE_PATH");
-                return (path != nullptr && *path != '\0') ? std::filesystem::path(path)
-                                                          : std::filesystem::path();
+                // P6: the path is a BASE NAME and the library writes one log per role; PipeStatsWindow
+                // derives the suffix, so the rule lives in one place.
+                return std::filesystem::path(MGITest::PipeStatsWindow::LibraryLogPath());
             }
 
-            static std::uintmax_t LibraryLogSize() {
-                std::error_code ec;
-                const std::filesystem::path path = LibraryLogPath();
-                if (path.empty()) return 0;
-                const std::uintmax_t size = std::filesystem::file_size(path, ec);
-                return ec ? 0 : size;
+            // ONE MARK PER ROLE. The library writes a log per role, so "how long is the log
+            // right now" is two numbers; a single scalar applied to the concatenation would slide
+            // by whatever the other role wrote in between and start the read mid-line.
+            static MGITest::PipeStatsWindow::LogMark LibraryLogMark() {
+                return MGITest::PipeStatsWindow::MarkLaneLog();
             }
 
-            static std::string LibraryLogSince(std::uintmax_t offset) {
-                const std::filesystem::path path = LibraryLogPath();
-                if (path.empty()) return {};
-                std::ifstream file(path, std::ios::binary);
-                if (!file.good()) return {};
-                file.seekg(static_cast<std::streamoff>(offset));
-                return std::string((std::istreambuf_iterator<char>(file)),
-                                   std::istreambuf_iterator<char>());
+            // BOTH ROLES. The arming diagnostics this case looks for are emitted by the
+            // BACKEND, and under inproc the backend runs on the apply thread - the server role -
+            // so the line lands in the server's log. Reading only the client's found nothing and
+            // reported the emulation unarmed, which accused the product of a defect the reader
+            // had invented.
+            static std::string LibraryLogSince(const MGITest::PipeStatsWindow::LogMark& mark) {
+                return MGITest::PipeStatsWindow::ReadLaneLogSince(mark);
             }
 
             GLuint m_vao = 0;
@@ -292,9 +288,8 @@ void main() {
 
             const GLuint generated = QueryGenerated([]() { glDrawArrays(GL_TRIANGLES, 0, 6); });
             EXPECT_EQ(DrainGLErrors(), 0u);
-            EXPECT_EQ(generated, 2u)
-                << "GL_PRIMITIVES_GENERATED must count a draw made while transform feedback is "
-                   "inactive (GL 4.6 core 13.4)";
+            EXPECT_EQ(generated, 2u) << "GL_PRIMITIVES_GENERATED must count a draw made while transform feedback is "
+                                        "inactive (GL 4.6 core 13.4)";
         }
 
         // THE CTS SHAPE (esextcTessellationShaderUtils.cpp, captureTessellationData):
@@ -353,9 +348,8 @@ void main() {
 
             const GLuint generated = QueryGenerated([]() { glDrawArrays(GL_PATCHES, 0, 1); });
             EXPECT_EQ(DrainGLErrors(), 0u);
-            EXPECT_EQ(generated, 1u)
-                << "a triangles-domain patch with every level 1 tessellates to exactly one "
-                   "triangle, and GL_PRIMITIVES_GENERATED must say so with no capture active";
+            EXPECT_EQ(generated, 1u) << "a triangles-domain patch with every level 1 tessellates to exactly one "
+                                        "triangle, and GL_PRIMITIVES_GENERATED must say so with no capture active";
         }
 
         // One query span holding BOTH kinds of draw: an XFB-inactive draw, then a
@@ -469,9 +463,8 @@ void main() {
                                 "on this stack, so the paused half proves nothing; the bring-up probe "
                                 "measures the same hole and the POST row reports it";
             }
-            EXPECT_EQ(unpaused, 1u)
-                << "the control itself: a triangles-domain patch with every level 1 tessellates to "
-                   "exactly one triangle";
+            EXPECT_EQ(unpaused, 1u) << "the control itself: a triangles-domain patch with every level 1 tessellates to "
+                                       "exactly one triangle";
             EXPECT_EQ(paused, unpaused)
                 << "pausing the capture does not stop the tessellator from generating that triangle, "
                    "and the frontend's CPU paused counter answers 0 for GL_PATCHES - so a paused "
@@ -487,8 +480,7 @@ void main() {
             ASSERT_NE(program, 0u) << BuildLog();
             glUseProgram(program);
 
-            const GLuint unpaused =
-                QueryGenerated([]() { glDrawArraysInstanced(GL_TRIANGLES, 0, 3, 4); });
+            const GLuint unpaused = QueryGenerated([]() { glDrawArraysInstanced(GL_TRIANGLES, 0, 3, 4); });
             BeginPausedSpan();
             const GLuint paused = QueryGenerated([]() { glDrawArraysInstanced(GL_TRIANGLES, 0, 3, 4); });
             EndPausedSpan();
@@ -535,7 +527,7 @@ void main() {
             // Taken BEFORE the draw, so the line this looks for can only be one this
             // process wrote for this span. The latch fires on the FIRST rerouted
             // draw, which is inside the query below.
-            const std::uintmax_t before = LibraryLogSize();
+            const MGITest::PipeStatsWindow::LogMark before = LibraryLogMark();
             const GLuint generated = QueryGenerated([]() { glDrawArrays(GL_TRIANGLES, 0, 3); });
             EXPECT_EQ(DrainGLErrors(), 0u);
             EXPECT_EQ(generated, 1u) << "the pinned-on lane did not even count correctly";

@@ -5,18 +5,90 @@ def mobileGlLogActiveLevel = {
 }
 def standalonePluginBuild = rootProject.name == 'MobileGLPlugin'
 
+// Match the standalone app's declared ABI set. The library module otherwise
+// configures unrelated NDK ABIs even when the app only packages these two.
+// Embedded FCL builds retain their own ABI policy.
+def mobileGlAbiFilters = {
+    def value = (rootProject.findProperty('mobilegl.abis') ?: System.getenv('MOBILEGL_ABIS') ?: 'arm64-v8a') as String
+    value.equalsIgnoreCase('all') ? ['arm64-v8a', 'x86_64'] : value.split(',').collect { it.trim() }.findAll { it }
+}
+
+// P0 spike A opt-in. OFF by default: the spike binary is dead weight in every trace APK
+// that is not running the spike, and a flavour that silently carries an extra executable
+// is exactly the kind of thing nobody notices until it ships. Turn it on for the spike
+// build only, with either
+//   ./gradlew :app:assembleTraceDebug -Pmobilegl.buildServerSpike=ON
+// or MOBILEGL_BUILD_SERVER_SPIKE=ON in the environment.
+def mobileGlBuildServerSpike = {
+    (rootProject.findProperty('mobilegl.buildServerSpike') ?: System.getenv('MOBILEGL_BUILD_SERVER_SPIKE') ?: 'OFF') as String
+}
+// P11 A3 opt-in, same rules as the spike above: -Pmobilegl.buildExtmemProbe=ON packages
+// tools/spikes/extmem_probe as libMobileGLExtmemProbe.so into the trace flavour only.
+def mobileGlBuildExtmemProbe = {
+    (rootProject.findProperty('mobilegl.buildExtmemProbe') ?: System.getenv('MOBILEGL_BUILD_EXTMEM_PROBE') ?: 'OFF') as String
+}
+// P11 B2 step 1, spike only: -Pmobilegl.extmemProbeAsServer=ON also packages the probe AS
+// libMobileGLServer.so (the real server becomes libMobileGLServerReal.so), so the render server's
+// service and B1's broker run the AHB route probe in the server's place. Never for a real APK.
+def mobileGlExtmemProbeAsServer = {
+    (rootProject.findProperty('mobilegl.extmemProbeAsServer') ?: 'OFF') as String
+}
+
+// Shared native shape for BOTH plugin and trace APKs. The render server (libMobileGLServer.so and
+// the display server's JNI) is part of the split shape, and both flavors of a standalone plugin
+// build ship it, so there the split shape is ON unless a build opts out with
+// -Pmobilegl.buildDisaggregated=OFF. The runtime transport is unaffected: the app's
+// MOBILEGL_TRANSPORT env stays opt-in (app/build.gradle.kts), so the monolith path is still the
+// default. The FCL-embedded library is the push monolith without MG_Remote (P13 W2, ID-P13-1):
+// FCL packages neither the server nor its screen. The pipe is always pushed, so there is no
+// pipePush switch any more; disaggregated CI selects the two transport switches.
+def mobileGlBuildDisaggregated = {
+    (rootProject.findProperty('mobilegl.buildDisaggregated') ?: System.getenv('MOBILEGL_BUILD_DISAGGREGATED') ?: (standalonePluginBuild ? 'ON' : 'OFF')) as String
+}
+// ThinLTO plus the release optimization flags (CMakeLists.txt, MOBILEGL_ENABLE_LTO). Passed
+// explicitly so an existing .cxx tree that cached the old OFF default picks it up too;
+// -Pmobilegl.enableLto=OFF builds without it.
+def mobileGlEnableLto = {
+    (rootProject.findProperty('mobilegl.enableLto') ?: System.getenv('MOBILEGL_ENABLE_LTO') ?: 'ON') as String
+}
+// The Android API level the library is built for: minSdk, and with it the NDK's ANDROID_PLATFORM.
+// 26 is the shipped build. 29 is a SEPARATE artifact (its own library, plugin APK and FCL-embedded
+// copy, never selected at load time): at 29 the NDK uses native ELF TLS instead of emulated TLS.
+// -Pmobilegl.androidApi=29 (or MOBILEGL_ANDROID_API=29) selects it; the source is the same.
+def mobileGlAndroidApi = {
+    (rootProject.findProperty('mobilegl.androidApi') ?: System.getenv('MOBILEGL_ANDROID_API') ?: '26') as String
+}
+def mobileGlBuildDisaggregatedInproc = {
+    (rootProject.findProperty('mobilegl.buildDisaggregatedInproc') ?: System.getenv('MOBILEGL_BUILD_DISAGGREGATED_INPROC') ?: mobileGlBuildDisaggregated()) as String
+}
+
 android {
     namespace 'top.mobilegl.mobilegl'
     compileSdk 34
 
     defaultConfig {
-        minSdk 26
+        minSdk Integer.parseInt(mobileGlAndroidApi())
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        // One ndk block for both shapes: a standalone plugin build follows the caller's
+        // ABI set, while the FCL-embedded library pins arm64-v8a - FCL packages that ABI
+        // alone, so the wider default set would only build libraries nothing loads.
+        ndk {
+            if (standalonePluginBuild) {
+                abiFilters.addAll(mobileGlAbiFilters())
+            } else {
+                abiFilters.add('arm64-v8a')
+            }
+        }
 
         externalNativeBuild {
             cmake {
                 arguments "-DMOBILEGL_LOG_ACTIVE_LEVEL=${mobileGlLogActiveLevel()}"
+                arguments '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'
+                arguments "-DMOBILEGL_BUILD_DISAGGREGATED=${mobileGlBuildDisaggregated()}"
+                arguments "-DMOBILEGL_BUILD_DISAGGREGATED_INPROC=${mobileGlBuildDisaggregatedInproc()}"
+                arguments "-DMOBILEGL_ENABLE_LTO=${mobileGlEnableLto()}"
             }
         }
     }
@@ -53,6 +125,15 @@ android {
                 externalNativeBuild {
                     cmake {
                         arguments '-DMOBILEGL_TRACE_ANGLE_VARIANTS=ON'
+                        // P0 spike A: the second native executable that proves an APK
+                        // can ship one and exec it from nativeLibraryDir. Off unless
+                        // asked for, and only offered here - the shipping plugin
+                        // flavour cannot turn it on at all, so no released artifact can
+                        // grow a binary nothing loads. See mobileGlBuildServerSpike
+                        // above for the two ways to enable it.
+                        arguments "-DMOBILEGL_BUILD_SERVER_SPIKE=${mobileGlBuildServerSpike()}"
+                        arguments "-DMOBILEGL_BUILD_EXTMEM_PROBE=${mobileGlBuildExtmemProbe()}"
+                        arguments "-DMOBILEGL_EXTMEM_PROBE_AS_SERVER=${mobileGlExtmemProbeAsServer()}"
                     }
                 }
             }

@@ -21,27 +21,41 @@ namespace MobileGL {
                 auto signedness = member.numeric.scalar.signedness;
                 if (flags & SPV_REFLECT_TYPE_FLAG_FLOAT) {
                     switch (width) {
-                    case 16: return SPVC_BASETYPE_FP16;
-                    case 32: return SPVC_BASETYPE_FP32;
-                    case 64: return SPVC_BASETYPE_FP64;
-                    default: return SPVC_BASETYPE_UNKNOWN;
+                    case 16:
+                        return SPVC_BASETYPE_FP16;
+                    case 32:
+                        return SPVC_BASETYPE_FP32;
+                    case 64:
+                        return SPVC_BASETYPE_FP64;
+                    default:
+                        return SPVC_BASETYPE_UNKNOWN;
                     }
                 } else if (flags & SPV_REFLECT_TYPE_FLAG_INT) {
                     if (signedness) {
                         switch (width) {
-                        case 8: return SPVC_BASETYPE_INT8;
-                        case 16: return SPVC_BASETYPE_INT16;
-                        case 32: return SPVC_BASETYPE_INT32;
-                        case 64: return SPVC_BASETYPE_INT64;
-                        default: return SPVC_BASETYPE_UNKNOWN;
+                        case 8:
+                            return SPVC_BASETYPE_INT8;
+                        case 16:
+                            return SPVC_BASETYPE_INT16;
+                        case 32:
+                            return SPVC_BASETYPE_INT32;
+                        case 64:
+                            return SPVC_BASETYPE_INT64;
+                        default:
+                            return SPVC_BASETYPE_UNKNOWN;
                         }
                     } else {
                         switch (width) {
-                        case 8: return SPVC_BASETYPE_UINT8;
-                        case 16: return SPVC_BASETYPE_UINT16;
-                        case 32: return SPVC_BASETYPE_UINT32;
-                        case 64: return SPVC_BASETYPE_UINT64;
-                        default: return SPVC_BASETYPE_UNKNOWN;
+                        case 8:
+                            return SPVC_BASETYPE_UINT8;
+                        case 16:
+                            return SPVC_BASETYPE_UINT16;
+                        case 32:
+                            return SPVC_BASETYPE_UINT32;
+                        case 64:
+                            return SPVC_BASETYPE_UINT64;
+                        default:
+                            return SPVC_BASETYPE_UNKNOWN;
                         }
                     }
                 } else if (flags & SPV_REFLECT_TYPE_FLAG_BOOL) {
@@ -107,8 +121,8 @@ namespace MobileGL {
                     const Uint32 extent = member.array.dims[dim];
                     if (extent == 0) {
                         MGLOG_W_ONCE("RecordGlobalUboLeaf: multi-dimensional uniform '%s' has a non-constant "
-                                "dimension, recording the base entry only",
-                                name.c_str());
+                                     "dimension, recording the base entry only",
+                                     name.c_str());
                         RecordGlobalUboLeafEntry(member, name, offsetInUBO, arrayStride, member.size, metadata);
                         return;
                     }
@@ -127,8 +141,8 @@ namespace MobileGL {
                     for (const Uint32 index : indices) {
                         elementName += "[" + std::to_string(index) + "]";
                     }
-                    RecordGlobalUboLeafEntry(member, elementName, offsetInUBO + subArray * subArrayStride,
-                                             arrayStride, subArrayStride, metadata);
+                    RecordGlobalUboLeafEntry(member, elementName, offsetInUBO + subArray * subArrayStride, arrayStride,
+                                             subArrayStride, metadata);
                     for (SizeT dim = indices.size(); dim-- > 0;) {
                         if (++indices[dim] < member.array.dims[dim]) break;
                         indices[dim] = 0;
@@ -165,8 +179,8 @@ namespace MobileGL {
                     // Arrays of arrays of structs cannot be declared in the GL 3.3-era GLSL
                     // MobileGL ingests; record the base so at least element 0 resolves.
                     MGLOG_W_ONCE("FlattenGlobalUboMember: multi-dimensional struct array '%s' is not supported, "
-                            "flattening element 0 only",
-                            name.c_str());
+                                 "flattening element 0 only",
+                                 name.c_str());
                 }
 
                 const Uint32 elementCount = member.array.dims[0] > 0 ? member.array.dims[0] : 1;
@@ -180,8 +194,7 @@ namespace MobileGL {
                 }
             }
 
-            SpvcSession::SpvcSession(const Vector<unsigned int>& spirv, Flags<SessionUsageBit> usage)
-                : usage(usage) {
+            SpvcSession::SpvcSession(const Vector<unsigned int>& spirv, Flags<SessionUsageBit> usage) : usage(usage) {
                 if (usage & SessionUsageBit::Transpile) {
                     const SpvId* p_spirv = spirv.data();
                     size_t word_count = spirv.size();
@@ -200,8 +213,8 @@ namespace MobileGL {
                         ir = nullptr;
                         return;
                     }
-                    if (spvc_context_create_compiler(context, SPVC_BACKEND_GLSL, ir,
-                                                     SPVC_CAPTURE_MODE_TAKE_OWNERSHIP, &compiler) != SPVC_SUCCESS) {
+                    if (spvc_context_create_compiler(context, SPVC_BACKEND_GLSL, ir, SPVC_CAPTURE_MODE_TAKE_OWNERSHIP,
+                                                     &compiler) != SPVC_SUCCESS) {
                         compiler = nullptr;
                         return;
                     }
@@ -210,8 +223,8 @@ namespace MobileGL {
                         return;
                     }
                 } else if (usage & SessionUsageBit::Reflection) {
-                    SpvReflectResult result = spvReflectCreateShaderModule(
-                        spirv.size() * sizeof(uint32_t), spirv.data(), &reflectModule);
+                    SpvReflectResult result =
+                        spvReflectCreateShaderModule(spirv.size() * sizeof(uint32_t), spirv.data(), &reflectModule);
                     reflectModuleValid = (result == SPV_REFLECT_RESULT_SUCCESS);
                 }
             }
@@ -382,8 +395,8 @@ namespace MobileGL {
                 SPVC_CHK_INIT
                 const spvc_reflected_resource* list = nullptr;
                 size_t count = 0;
-                SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(
-                    resources, SPVC_RESOURCE_TYPE_STORAGE_BUFFER, &list, &count));
+                SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(resources, SPVC_RESOURCE_TYPE_STORAGE_BUFFER,
+                                                                          &list, &count));
                 for (size_t i = 0; i < count; ++i) {
                     auto& resource = list[i];
                     // Two spellings, because neither one alone identifies the block the GL
@@ -438,15 +451,15 @@ namespace MobileGL {
                 SPVC_CHK_INIT
                 const spvc_reflected_resource* list = nullptr;
                 size_t count = 0;
-                SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(
-                    resources, SPVC_RESOURCE_TYPE_STORAGE_BUFFER, &list, &count));
+                SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(resources, SPVC_RESOURCE_TYPE_STORAGE_BUFFER,
+                                                                          &list, &count));
                 for (size_t i = 0; i < count; ++i) {
                     auto& resource = list[i];
                     // The block TYPE name: glslang gives the synthesized block an EMPTY instance
                     // name, so resource.name carries nothing to match on. Read before Compile(),
                     // which is where SPIRV-Cross renames the reserved "gl_" prefix away.
-                    const Int glBinding = AtomicCounterBlockBinding(
-                        spvc_compiler_get_name(compiler, resource.base_type_id));
+                    const Int glBinding =
+                        AtomicCounterBlockBinding(spvc_compiler_get_name(compiler, resource.base_type_id));
                     if (glBinding < 0) continue;
                     const Int esslBinding = topBinding - glBinding;
                     if (esslBinding < 0) {
@@ -468,13 +481,23 @@ namespace MobileGL {
                 SPVC_CHK_INIT
                 const spvc_reflected_resource* list = nullptr;
                 size_t count = 0;
-                SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(
-                    resources, SPVC_RESOURCE_TYPE_STAGE_OUTPUT, &list, &count));
+                SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(resources, SPVC_RESOURCE_TYPE_STAGE_OUTPUT,
+                                                                          &list, &count));
+                Bool dualSourceIndex = false;
                 for (size_t i = 0; i < count; ++i) {
                     const spvc_reflected_resource& resource = list[i];
                     if (!spvc_compiler_has_decoration(compiler, resource.id, SpvDecorationIndex)) continue;
-                    if (spvc_compiler_get_decoration(compiler, resource.id, SpvDecorationIndex) != 0u) continue;
+                    if (spvc_compiler_get_decoration(compiler, resource.id, SpvDecorationIndex) != 0u) {
+                        dualSourceIndex = true;
+                        continue;
+                    }
                     spvc_compiler_unset_decoration(compiler, resource.id, SpvDecorationIndex);
+                }
+                // The index that stays is printed as `layout(index = 1)`, which ESSL accepts only
+                // with the extension enabled in the shader itself: the driver having it is not
+                // enough, and without the directive the stage is refused exactly as above.
+                if (dualSourceIndex) {
+                    SPVC_CHK_RESULT(spvc_compiler_require_extension(compiler, "GL_EXT_blend_func_extended"));
                 }
                 SPVC_CHK_RETURN
             }
@@ -485,8 +508,8 @@ namespace MobileGL {
                 SPVC_CHK_INIT
                 const spvc_reflected_resource* list = nullptr;
                 size_t count = 0;
-                SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(
-                    resources, SPVC_RESOURCE_TYPE_STORAGE_BUFFER, &list, &count));
+                SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(resources, SPVC_RESOURCE_TYPE_STORAGE_BUFFER,
+                                                                          &list, &count));
                 for (size_t i = 0; i < count; ++i) {
                     const spvc_reflected_resource& resource = list[i];
                     // The variable itself, for a block the application qualified as a whole.
@@ -530,8 +553,7 @@ namespace MobileGL {
                     }
                     // A double occupies two component slots per scalar (GL 4.6 core 11.1.2.1).
                     const spvc_basetype base = spvc_type_get_basetype(type);
-                    if (base == SPVC_BASETYPE_FP64 || base == SPVC_BASETYPE_INT64 ||
-                        base == SPVC_BASETYPE_UINT64) {
+                    if (base == SPVC_BASETYPE_FP64 || base == SPVC_BASETYPE_INT64 || base == SPVC_BASETYPE_UINT64) {
                         components *= 2;
                     }
                     return components;
@@ -617,12 +639,12 @@ namespace MobileGL {
                             // GL's capture interface spells an application block's member
                             // "Block.member"; a redeclared built-in block contributes its members
                             // by their own names, which the built-in walk below handles.
-                            capture.name = blockName.empty() ? String(memberName)
-                                                             : blockName + "." + String(memberName);
+                            capture.name =
+                                blockName.empty() ? String(memberName) : blockName + "." + String(memberName);
                             capture.buffer = buffer;
                             capture.stride = stride;
-                            capture.offset = spvc_compiler_get_member_decoration(compiler, output.base_type_id,
-                                                                                member, SpvDecorationOffset);
+                            capture.offset = spvc_compiler_get_member_decoration(compiler, output.base_type_id, member,
+                                                                                 SpvDecorationOffset);
                             capture.componentCount =
                                 XfbComponentCount(compiler, spvc_type_get_member_type(type, member));
                             captures.push_back(Move(capture));
@@ -638,8 +660,7 @@ namespace MobileGL {
                 const spvc_reflected_builtin_resource* builtins = nullptr;
                 SizeT builtinCount = 0;
                 if (spvc_resources_get_builtin_resource_list_for_type(
-                        resources, SPVC_BUILTIN_RESOURCE_TYPE_STAGE_OUTPUT, &builtins, &builtinCount) ==
-                    SPVC_SUCCESS) {
+                        resources, SPVC_BUILTIN_RESOURCE_TYPE_STAGE_OUTPUT, &builtins, &builtinCount) == SPVC_SUCCESS) {
                     for (SizeT i = 0; i < builtinCount; ++i) {
                         const spvc_reflected_builtin_resource& entry = builtins[i];
                         const char* name = XfbBuiltInName(entry.builtin);
@@ -651,8 +672,7 @@ namespace MobileGL {
 
                         const spvc_type blockType =
                             spvc_compiler_get_type_handle(compiler, entry.resource.base_type_id);
-                        if (blockType == nullptr ||
-                            spvc_type_get_basetype(blockType) != SPVC_BASETYPE_STRUCT) {
+                        if (blockType == nullptr || spvc_type_get_basetype(blockType) != SPVC_BASETYPE_STRUCT) {
                             continue;
                         }
                         // The member index is not in the reflection entry, so it is recovered by
@@ -670,14 +690,14 @@ namespace MobileGL {
                             }
                             if (spvc_compiler_has_member_decoration(compiler, entry.resource.base_type_id, member,
                                                                     SpvDecorationOffset) != SPVC_TRUE) {
-                                break;   // this built-in is present but not captured
+                                break; // this built-in is present but not captured
                             }
                             SpirvXfbCapture capture;
                             capture.name = name;
                             capture.buffer = buffer;
                             capture.stride = stride;
-                            capture.offset = spvc_compiler_get_member_decoration(
-                                compiler, entry.resource.base_type_id, member, SpvDecorationOffset);
+                            capture.offset = spvc_compiler_get_member_decoration(compiler, entry.resource.base_type_id,
+                                                                                 member, SpvDecorationOffset);
                             capture.componentCount =
                                 XfbComponentCount(compiler, spvc_type_get_member_type(blockType, member));
                             captures.push_back(Move(capture));
@@ -726,8 +746,7 @@ namespace MobileGL {
                 const spvc_reflected_builtin_resource* builtins = nullptr;
                 SizeT builtinCount = 0;
                 if (spvc_resources_get_builtin_resource_list_for_type(
-                        resources, SPVC_BUILTIN_RESOURCE_TYPE_STAGE_OUTPUT, &builtins, &builtinCount) ==
-                    SPVC_SUCCESS) {
+                        resources, SPVC_BUILTIN_RESOURCE_TYPE_STAGE_OUTPUT, &builtins, &builtinCount) == SPVC_SUCCESS) {
                     for (SizeT i = 0; i < builtinCount; ++i) {
                         stripVariable(builtins[i].resource.id, builtins[i].resource.base_type_id);
                     }
@@ -781,6 +800,128 @@ namespace MobileGL {
                 return true;
             }
 
+            namespace {
+                struct ShadingRateBuiltinSpelling {
+                    SpvBuiltIn builtin;
+                    const char* sentinel;
+                    const char* essl;
+                };
+                // The sentinels only have to survive SPIRV-Cross's renaming untouched (no "gl_"
+                // prefix, no double underscore) and be names no application spells.
+                constexpr ShadingRateBuiltinSpelling kShadingRateBuiltins[] = {
+                    {SpvBuiltInShadingRateKHR, "mgl_sentinel_ShadingRateEXT", "gl_ShadingRateEXT"},
+                    {SpvBuiltInPrimitiveShadingRateKHR, "mgl_sentinel_PrimitiveShadingRateEXT",
+                     "gl_PrimitiveShadingRateEXT"},
+                };
+
+                Bool IsIdentifierChar(char c) {
+                    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+                }
+
+                // Whether `line` declares `name` as a plain interface variable - the one statement
+                // SPIRV-Cross prints for an undecorated in/out: optional layout(...), interpolation
+                // and precision qualifiers, `in`/`out`, a type, the name and the semicolon. No '=',
+                // no call, nothing after the name: every USE of the variable is an expression.
+                Bool IsInterfaceDeclarationOf(const String& line, const String& name) {
+                    const SizeT end = line.find_last_not_of(" \t\r");
+                    if (end == String::npos || end == 0 || line[end] != ';') return false;
+                    SizeT nameEnd = line.find_last_not_of(" \t", end - 1);
+                    if (nameEnd == String::npos || nameEnd + 1 < name.size()) return false;
+                    const SizeT nameBegin = nameEnd + 1 - name.size();
+                    if (line.compare(nameBegin, name.size(), name) != 0) return false;
+                    if (nameBegin > 0 && IsIdentifierChar(line[nameBegin - 1])) return false;
+                    String head = line.substr(0, nameBegin);
+                    // Drop a leading layout(...) block, then require the storage keyword as a word.
+                    const SizeT layout = head.find("layout");
+                    if (layout != String::npos) {
+                        const SizeT close = head.find(')', layout);
+                        if (close == String::npos) return false;
+                        head.erase(layout, close + 1 - layout);
+                    }
+                    if (head.find('(') != String::npos || head.find('=') != String::npos) return false;
+                    for (const char* keyword : {"in", "out"}) {
+                        const String word(keyword);
+                        for (SizeT at = head.find(word); at != String::npos; at = head.find(word, at + 1)) {
+                            const Bool startOk = at == 0 || !IsIdentifierChar(head[at - 1]);
+                            const Bool endOk =
+                                at + word.size() >= head.size() || !IsIdentifierChar(head[at + word.size()]);
+                            if (startOk && endOk) return true;
+                        }
+                    }
+                    return false;
+                }
+            } // namespace
+
+            Bool SpvcSession::PrepareShadingRateBuiltinsForEssl() {
+                if (!(usage & SessionUsageBit::Transpile) || !IsTranspileReady()) return false;
+
+                Bool renamed = false;
+                for (const spvc_builtin_resource_type type :
+                     {SPVC_BUILTIN_RESOURCE_TYPE_STAGE_INPUT, SPVC_BUILTIN_RESOURCE_TYPE_STAGE_OUTPUT}) {
+                    const spvc_reflected_builtin_resource* list = nullptr;
+                    size_t count = 0;
+                    if (spvc_resources_get_builtin_resource_list_for_type(resources, type, &list, &count) !=
+                        SPVC_SUCCESS) {
+                        continue;
+                    }
+                    for (size_t i = 0; i < count; ++i) {
+                        const SpvId variable = list[i].resource.id;
+                        // A member of a built-in block is reported here too; only a standalone
+                        // variable carries the decoration itself, and that is how both of these
+                        // are declared in every stage that has them.
+                        if (!spvc_compiler_has_decoration(compiler, variable, SpvDecorationBuiltIn)) continue;
+                        for (const auto& spelling : kShadingRateBuiltins) {
+                            if (list[i].builtin != spelling.builtin) continue;
+                            spvc_compiler_unset_decoration(compiler, variable, SpvDecorationBuiltIn);
+                            spvc_compiler_set_name(compiler, variable, spelling.sentinel);
+                            renamed = true;
+                        }
+                    }
+                }
+                if (renamed) {
+                    spvc_compiler_require_extension(compiler, "GL_EXT_fragment_shading_rate");
+                }
+                return renamed;
+            }
+
+            void SpvcSession::FinishShadingRateBuiltinsForEssl(String& essl) {
+                for (const auto& spelling : kShadingRateBuiltins) {
+                    const String sentinel = spelling.sentinel;
+                    if (essl.find(sentinel) == String::npos) continue;
+
+                    String rewritten;
+                    rewritten.reserve(essl.size());
+                    SizeT lineBegin = 0;
+                    while (lineBegin < essl.size()) {
+                        SizeT lineEnd = essl.find('\n', lineBegin);
+                        const SizeT next = lineEnd == String::npos ? essl.size() : lineEnd + 1;
+                        const String line =
+                            essl.substr(lineBegin, (lineEnd == String::npos ? essl.size() : lineEnd) - lineBegin);
+                        if (!IsInterfaceDeclarationOf(line, sentinel)) {
+                            rewritten.append(essl, lineBegin, next - lineBegin);
+                        }
+                        lineBegin = next;
+                    }
+
+                    // Every remaining occurrence is a use; rename it, as a whole identifier only.
+                    String result;
+                    result.reserve(rewritten.size());
+                    SizeT cursor = 0;
+                    for (SizeT at = rewritten.find(sentinel); at != String::npos;
+                         at = rewritten.find(sentinel, at + sentinel.size())) {
+                        const Bool startOk = at == 0 || !IsIdentifierChar(rewritten[at - 1]);
+                        const SizeT after = at + sentinel.size();
+                        const Bool endOk = after >= rewritten.size() || !IsIdentifierChar(rewritten[after]);
+                        if (!startOk || !endOk) continue;
+                        result.append(rewritten, cursor, at - cursor);
+                        result.append(spelling.essl);
+                        cursor = after;
+                    }
+                    result.append(rewritten, cursor, String::npos);
+                    essl = Move(result);
+                }
+            }
+
             spvc_result SpvcSession::Compile(const char** result) {
                 if (!(usage & SessionUsageBit::Transpile)) return SPVC_ERROR_INVALID_ARGUMENT;
                 SPVC_CHK_INIT
@@ -799,7 +940,7 @@ namespace MobileGL {
                     size_t count = 0;
 
                     SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(
-                        resources, SPVC_RESOURCE_TYPE_UNIFORM_BUFFER, &list, &count);)
+                                        resources, SPVC_RESOURCE_TYPE_UNIFORM_BUFFER, &list, &count);)
                     for (size_t i = 0; i < count; ++i) {
                         if (spvc_compiler_has_decoration(compiler, list[i].id, SpvDecorationBuiltIn)) {
                             continue;

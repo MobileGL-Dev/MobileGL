@@ -137,7 +137,7 @@ framebuffer** returns all zeros, with no GL error, both before and after
 `eglSwapBuffers`. `DirectGLES` on the identical window is correct, and readback
 from a **user FBO is correct on both backends**.
 
-Verified on two SoCs and two drivers, so this is MobileGL's behaviour rather than
+Verified on two SoCs and two drivers, so this is MobileGL's behavior rather than
 a driver quirk:
 
 | device | GPU | driver | default-FB | user FBO |

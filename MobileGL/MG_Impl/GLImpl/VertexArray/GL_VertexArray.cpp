@@ -26,19 +26,19 @@ namespace MobileGL::MG_Impl::GLImpl {
         // form here -- it is not GL 3.3 Core. Unsigned normalization (f = c/(2^b-1)) is unchanged.
         // The bit width fixes the arithmetic type: 8/16-bit stay exact in int/float, but the 32-bit forms
         // must use double because 2*INT_MAX overflows int32 and neither 2^32-1 nor 2^31-1 is float-exact.
-        constexpr GLfloat NormalizeSignedByte(GLbyte c) {   // b = 8,  divisor 2^8 - 1  = 255
+        constexpr GLfloat NormalizeSignedByte(GLbyte c) { // b = 8,  divisor 2^8 - 1  = 255
             return (2 * static_cast<int>(c) + 1) / 255.0f;
         }
         constexpr GLfloat NormalizeSignedShort(GLshort c) { // b = 16, divisor 2^16 - 1 = 65535
             return (2 * static_cast<int>(c) + 1) / 65535.0f;
         }
-        constexpr GLfloat NormalizeSignedInt(GLint c) {     // b = 32, divisor 2^32 - 1 (double!)
+        constexpr GLfloat NormalizeSignedInt(GLint c) { // b = 32, divisor 2^32 - 1 (double!)
             return static_cast<GLfloat>((2.0 * static_cast<double>(c) + 1.0) / 4294967295.0);
         }
         constexpr GLfloat NormalizeUnsignedShort(GLushort c) { // b = 16
             return static_cast<GLfloat>(c) / 65535.0f;
         }
-        constexpr GLfloat NormalizeUnsignedInt(GLuint c) {     // b = 32 (double!)
+        constexpr GLfloat NormalizeUnsignedInt(GLuint c) { // b = 32 (double!)
             return static_cast<GLfloat>(static_cast<double>(c) / 4294967295.0);
         }
         // (b = 8 unsigned normalization is VertexAttrib4Nub's  x * (1/255).)
@@ -232,8 +232,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     } // namespace
 
-    SharedPtr<MG_State::GLState::VertexArrayObject> GetNamedVertexArrayObject_State(GLuint vaobj,
-                                                                                   const char* caller) {
+    SharedPtr<MG_State::GLState::VertexArrayObject> GetNamedVertexArrayObject_State(GLuint vaobj, const char* caller) {
         // Name zero is not a vertex array object in a core profile: it names the default vertex
         // array, which the by-name (direct state access) entry points never accept. MobileGL keeps a
         // real object at index 0 for the compatibility paths, so the generic name validation below
@@ -326,7 +325,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return;
 
         DataType dataType = MG_Util::ConvertGLEnumToDataType(type);
-        if (!VertexArrayImpl::ValidateVertexAttribFormat(index, size, type, dataType, normalized == GL_TRUE, stride, false))
+        if (!VertexArrayImpl::ValidateVertexAttribFormat(index, size, type, dataType, normalized == GL_TRUE, stride,
+                                                         false))
             return;
 
         auto& vao = MG_State::pGLContext->GetBoundVertexArray();
@@ -457,8 +457,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (static_cast<Uint>(stride) > VertexArrayImpl::GetMaxVertexAttribStride()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "stride exceeds GL_MAX_VERTEX_ATTRIB_STRIDE."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "stride exceeds GL_MAX_VERTEX_ATTRIB_STRIDE."));
             return;
         }
         auto bufferObject = GetVertexArrayBufferObject_State(buffer, caller);
@@ -505,8 +504,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!VertexArrayImpl::ValidateVertexAttribRelativeOffset(relativeoffset)) return;
 
         const Bool isBgra = (size == static_cast<GLint>(GL_BGRA));
-        vao->SetAttributeFormatSeparate(attribindex, isBgra ? 4 : size, dataType, normalized, isInteger,
-                                        relativeoffset, isBgra);
+        vao->SetAttributeFormatSeparate(attribindex, isBgra ? 4 : size, dataType, normalized, isInteger, relativeoffset,
+                                        isBgra);
     }
 
     // The long (64-bit) attribute format: the values reach the shader as doubles, unconverted
@@ -526,8 +525,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // MG_Util/SelfTest/DriverPost.cpp; the draw-side narrowing is DirectGLES/Managers.cpp and, on
     // DirectVulkan, VertexInputStateFactory's Float64 case.
     static void VertexAttribLFormatSeparate_State(const SharedPtr<MG_State::GLState::VertexArrayObject>& vao,
-                                                  GLuint attribindex, GLint size, GLenum type,
-                                                  GLuint relativeoffset) {
+                                                  GLuint attribindex, GLint size, GLenum type, GLuint relativeoffset) {
         if (!VertexArrayImpl::ValidateVertexAttributeIndex(attribindex)) return;
         if (!VertexArrayImpl::ValidateVertexAttribLFormat(attribindex, size, type)) return;
         if (!VertexArrayImpl::ValidateVertexAttribRelativeOffset(relativeoffset)) return;
@@ -535,11 +533,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!MG_Backend::pActiveBackendObject ||
             !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes) {
             MGLOG_W_ONCE("VertexAttribLFormat: attribute %u asked for a 64-bit (GL_DOUBLE) format, but this "
-                    "backend has no double-precision vertex attribute support - the format is recorded "
-                    "and queryable, and the array is FETCHED AT FLOAT32 PRECISION at draw (the same "
-                    "narrowing the shader's dvec inputs already get); see the \"64-bit vertex "
-                    "attributes\" / \"shaderFloat64\" POST row for what that costs",
-                    attribindex);
+                         "backend has no double-precision vertex attribute support - the format is recorded "
+                         "and queryable, and the array is FETCHED AT FLOAT32 PRECISION at draw (the same "
+                         "narrowing the shader's dvec inputs already get); see the \"64-bit vertex "
+                         "attributes\" / \"shaderFloat64\" POST row for what that costs",
+                         attribindex);
         }
 
         vao->SetAttributeFormatSeparate(attribindex, size, MG_Util::ConvertGLEnumToDataType(type),
@@ -547,8 +545,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                         /*isBgra: */ false, /*isLong: */ true);
     }
 
-    void VertexArrayAttribFormat_State(GLuint vaobj, GLuint attribindex, GLint size, GLenum type,
-                                       GLboolean normalized, GLuint relativeoffset) {
+    void VertexArrayAttribFormat_State(GLuint vaobj, GLuint attribindex, GLint size, GLenum type, GLboolean normalized,
+                                       GLuint relativeoffset) {
         auto vao = GetNamedVertexArrayObject_State(vaobj, "VertexArrayAttribFormat_State");
         if (!vao) return;
         VertexAttribFormatSeparate_State(vao, attribindex, size, type, normalized, relativeoffset, false,
@@ -693,8 +691,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     // path), so they take the float current-value funnel. The single packed word is always fully
     // decoded, but only the first `componentCount` components are written; the rest keep the generic
     // attribute defaults (0, 0, 0, 1). type must be one of the two 2_10_10_10_REV packed enums.
-    static void VertexAttribP_Common(GLuint index, GLenum type, GLboolean normalized, GLuint value,
-                                     int componentCount, const char* funcName) {
+    static void VertexAttribP_Common(GLuint index, GLenum type, GLboolean normalized, GLuint value, int componentCount,
+                                     const char* funcName) {
         if (!ValidateCurrentVertexAttribIndex(index, funcName)) return;
 
         bool signedType;
@@ -714,7 +712,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         const Array<GLfloat, 4> decoded = DecodePacked2101010(value, signedType, normalized == GL_TRUE);
         Array<GLfloat, 4> out = {0.0f, 0.0f, 0.0f, 1.0f};
-        for (int i = 0; i < componentCount; ++i) out[i] = decoded[i];
+        for (int i = 0; i < componentCount; ++i)
+            out[i] = decoded[i];
         MG_State::pGLContext->SetCurrentVertexAttributeFloat(index, out);
     }
 
@@ -802,14 +801,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     // components are 0, unspecified w is 1 (integer 1 for the I* forms).
 #define MG_ATTRIB_NULL_GUARD(ptr)                                                                                      \
     if (!(ptr)) {                                                                                                      \
-        MG_State::pGLContext->RecordError(                                                                            \
+        MG_State::pGLContext->RecordError(                                                                             \
             ErrorCode::InvalidValue,                                                                                   \
-            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "value pointer cannot be null."));               \
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "value pointer cannot be null."));                \
         return;                                                                                                        \
     }
 
     // Family A -- GLdouble, value-preserving narrowing to float.
-    void VertexAttrib1d(GLuint index, GLdouble x) { VertexAttrib4f(index, static_cast<GLfloat>(x), 0.0f, 0.0f, 1.0f); }
+    void VertexAttrib1d(GLuint index, GLdouble x) {
+        VertexAttrib4f(index, static_cast<GLfloat>(x), 0.0f, 0.0f, 1.0f);
+    }
     void VertexAttrib2d(GLuint index, GLdouble x, GLdouble y) {
         VertexAttrib4f(index, static_cast<GLfloat>(x), static_cast<GLfloat>(y), 0.0f, 1.0f);
     }
@@ -820,8 +821,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         VertexAttrib4f(index, static_cast<GLfloat>(x), static_cast<GLfloat>(y), static_cast<GLfloat>(z),
                        static_cast<GLfloat>(w));
     }
-    void VertexAttrib1dv(GLuint index, const GLdouble* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttrib1d(index, v[0]); }
-    void VertexAttrib2dv(GLuint index, const GLdouble* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttrib2d(index, v[0], v[1]); }
+    void VertexAttrib1dv(GLuint index, const GLdouble* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttrib1d(index, v[0]);
+    }
+    void VertexAttrib2dv(GLuint index, const GLdouble* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttrib2d(index, v[0], v[1]);
+    }
     void VertexAttrib3dv(GLuint index, const GLdouble* v) {
         MG_ATTRIB_NULL_GUARD(v) VertexAttrib3d(index, v[0], v[1], v[2]);
     }
@@ -830,7 +835,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     // Family A -- GLshort, value-preserving (sign kept), NOT normalized.
-    void VertexAttrib1s(GLuint index, GLshort x) { VertexAttrib4f(index, static_cast<GLfloat>(x), 0.0f, 0.0f, 1.0f); }
+    void VertexAttrib1s(GLuint index, GLshort x) {
+        VertexAttrib4f(index, static_cast<GLfloat>(x), 0.0f, 0.0f, 1.0f);
+    }
     void VertexAttrib2s(GLuint index, GLshort x, GLshort y) {
         VertexAttrib4f(index, static_cast<GLfloat>(x), static_cast<GLfloat>(y), 0.0f, 1.0f);
     }
@@ -841,8 +848,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         VertexAttrib4f(index, static_cast<GLfloat>(x), static_cast<GLfloat>(y), static_cast<GLfloat>(z),
                        static_cast<GLfloat>(w));
     }
-    void VertexAttrib1sv(GLuint index, const GLshort* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttrib1s(index, v[0]); }
-    void VertexAttrib2sv(GLuint index, const GLshort* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttrib2s(index, v[0], v[1]); }
+    void VertexAttrib1sv(GLuint index, const GLshort* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttrib1s(index, v[0]);
+    }
+    void VertexAttrib2sv(GLuint index, const GLshort* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttrib2s(index, v[0], v[1]);
+    }
     void VertexAttrib3sv(GLuint index, const GLshort* v) {
         MG_ATTRIB_NULL_GUARD(v) VertexAttrib3s(index, v[0], v[1], v[2]);
     }
@@ -890,8 +901,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
     void VertexAttrib4Nusv(GLuint index, const GLushort* v) {
         MG_ATTRIB_NULL_GUARD(v)
-        VertexAttrib4f(index, NormalizeUnsignedShort(v[0]), NormalizeUnsignedShort(v[1]),
-                       NormalizeUnsignedShort(v[2]), NormalizeUnsignedShort(v[3]));
+        VertexAttrib4f(index, NormalizeUnsignedShort(v[0]), NormalizeUnsignedShort(v[1]), NormalizeUnsignedShort(v[2]),
+                       NormalizeUnsignedShort(v[3]));
     }
     void VertexAttrib4Nuiv(GLuint index, const GLuint* v) {
         MG_ATTRIB_NULL_GUARD(v)
@@ -901,18 +912,36 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     // Family C -- pure integer forms. Signed -> VertexAttribI4i (sign-extend), unsigned ->
     // VertexAttribI4ui (zero-extend). w defaults to the integer 1 / 1u. Never touches the float view.
-    void VertexAttribI1i(GLuint index, GLint x) { VertexAttribI4i(index, x, 0, 0, 1); }
-    void VertexAttribI2i(GLuint index, GLint x, GLint y) { VertexAttribI4i(index, x, y, 0, 1); }
-    void VertexAttribI3i(GLuint index, GLint x, GLint y, GLint z) { VertexAttribI4i(index, x, y, z, 1); }
-    void VertexAttribI1ui(GLuint index, GLuint x) { VertexAttribI4ui(index, x, 0u, 0u, 1u); }
-    void VertexAttribI2ui(GLuint index, GLuint x, GLuint y) { VertexAttribI4ui(index, x, y, 0u, 1u); }
-    void VertexAttribI3ui(GLuint index, GLuint x, GLuint y, GLuint z) { VertexAttribI4ui(index, x, y, z, 1u); }
-    void VertexAttribI1iv(GLuint index, const GLint* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttribI1i(index, v[0]); }
-    void VertexAttribI2iv(GLuint index, const GLint* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttribI2i(index, v[0], v[1]); }
+    void VertexAttribI1i(GLuint index, GLint x) {
+        VertexAttribI4i(index, x, 0, 0, 1);
+    }
+    void VertexAttribI2i(GLuint index, GLint x, GLint y) {
+        VertexAttribI4i(index, x, y, 0, 1);
+    }
+    void VertexAttribI3i(GLuint index, GLint x, GLint y, GLint z) {
+        VertexAttribI4i(index, x, y, z, 1);
+    }
+    void VertexAttribI1ui(GLuint index, GLuint x) {
+        VertexAttribI4ui(index, x, 0u, 0u, 1u);
+    }
+    void VertexAttribI2ui(GLuint index, GLuint x, GLuint y) {
+        VertexAttribI4ui(index, x, y, 0u, 1u);
+    }
+    void VertexAttribI3ui(GLuint index, GLuint x, GLuint y, GLuint z) {
+        VertexAttribI4ui(index, x, y, z, 1u);
+    }
+    void VertexAttribI1iv(GLuint index, const GLint* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttribI1i(index, v[0]);
+    }
+    void VertexAttribI2iv(GLuint index, const GLint* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttribI2i(index, v[0], v[1]);
+    }
     void VertexAttribI3iv(GLuint index, const GLint* v) {
         MG_ATTRIB_NULL_GUARD(v) VertexAttribI3i(index, v[0], v[1], v[2]);
     }
-    void VertexAttribI1uiv(GLuint index, const GLuint* v) { MG_ATTRIB_NULL_GUARD(v) VertexAttribI1ui(index, v[0]); }
+    void VertexAttribI1uiv(GLuint index, const GLuint* v) {
+        MG_ATTRIB_NULL_GUARD(v) VertexAttribI1ui(index, v[0]);
+    }
     void VertexAttribI2uiv(GLuint index, const GLuint* v) {
         MG_ATTRIB_NULL_GUARD(v) VertexAttribI2ui(index, v[0], v[1]);
     }
@@ -1155,9 +1184,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!VertexArrayImpl::ValidateVertexAttributeIndex(index)) return;
         if (pname != GL_VERTEX_ATTRIB_ARRAY_POINTER) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "pname must be GL_VERTEX_ATTRIB_ARRAY_POINTER."));
+                ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                                     "pname must be GL_VERTEX_ATTRIB_ARRAY_POINTER."));
             return;
         }
 
@@ -1232,9 +1260,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!vao || !param) return;
         if (pname != GL_ELEMENT_ARRAY_BUFFER_BINDING) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "pname must be GL_ELEMENT_ARRAY_BUFFER_BINDING."));
+                ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                                     "pname must be GL_ELEMENT_ARRAY_BUFFER_BINDING."));
             return;
         }
         const auto& indexBuffer = vao->GetIndexBufferBindingSlot().GetBoundObject();

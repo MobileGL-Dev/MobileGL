@@ -10,6 +10,9 @@
 #include "Utils.h"
 #include "Managers.h"
 #include "MG_Backend/BackendObjects.h"
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Remote/Server/ServerLoop.h>
+#endif
 #include "MG_Util/Converters/GLToMG/FramebufferEnumConverter.h"
 #include "MG_Util/SelfTest/DriverBugProbes.h"
 #include "MG_Util/Texture/TextureFormatProcessor.h"
@@ -17,6 +20,7 @@
 #include <Config.h>
 
 #include <MG_State/GLState/Core.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
@@ -27,11 +31,36 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <regex>
 
 namespace MobileGL::MG_Backend::DirectGLES {
+    const FormatCapabilityCache* ActiveBackendFormatCaps() {
+        // Under a live split session the SERVER's private backend is what owns the context on the
+        // apply thread (and these reads all run there), so its cache is the authoritative one.
+        // Before the session lands, or under monolith transport in a disaggregated build, fall
+        // back to the process global exactly as the monolith path always has.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Backend::BackendObject* server = MG_Remote::Server::ServerLoopInstance().Backend()) {
+                return &server->GetFormatCapabilities();
+            }
+            // P5c (hd, CONTRACT-P5C §3.7): the mirror fallback is REFUSED with an active
+            // transport. The server's backend exists whenever the session does, so reaching
+            // here is a bring-up ordering defect, and a silent read of the client caps mirror
+            // (pActiveBackendObject is client memory, rule E) would hide it.
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"caps-mirror\"} - the format-capability "
+                    "fallback to the client caps mirror was reached with an active transport "
+                    "but no server backend; the server's own backend is the only legal source "
+                    "on the apply thread");
+            std::abort();
+        }
+#endif
+        return pActiveBackendObject ? &pActiveBackendObject->GetFormatCapabilities() : nullptr;
+    }
+
     namespace {
         Flags<PixelFormatNormalizeOptionBit> GetForcedPixelFormatNormalizeOptions() {
             Flags<PixelFormatNormalizeOptionBit> options;
@@ -53,24 +82,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return options;
         }
 
-        Flags<PixelFormatNormalizeOptionBit>
-        GetRuntimeFallbackNormalizeOptions(GLenum requestedInternalFormat,
-                                           Flags<PixelFormatNormalizeOptionBit> extraOptions) {
+        Flags<PixelFormatNormalizeOptionBit> GetRuntimeFallbackNormalizeOptions(
+            GLenum requestedInternalFormat, Flags<PixelFormatNormalizeOptionBit> extraOptions) {
             using namespace MG_Util::TextureFormatProcessor;
             const Flags<PixelFormatNormalizeOptionBit> forcedOptions = GetApplicablePixelFormatNormalizeOptions(
                 requestedInternalFormat, GetForcedPixelFormatNormalizeOptions() | extraOptions);
             if (forcedOptions) {
                 return forcedOptions;
             }
-            return GetApplicablePixelFormatNormalizeOptions(
-                requestedInternalFormat, GetDriverPixelFormatNormalizeOptions() | extraOptions);
+            return GetApplicablePixelFormatNormalizeOptions(requestedInternalFormat,
+                                                            GetDriverPixelFormatNormalizeOptions() | extraOptions);
         }
 
-        Bool HasCachedFormatCapability(TextureInternalFormat internalFormat,
-                                       SizeT targetIndex,
-                                       Bool caveat,
+        Bool HasCachedFormatCapability(TextureInternalFormat internalFormat, SizeT targetIndex, Bool caveat,
                                        FormatCapability capability) {
-            if (!pActiveBackendObject || targetIndex >= kFormatCapabilityTargetCount) {
+            const FormatCapabilityCache* activeCaps = ActiveBackendFormatCaps();
+            if (activeCaps == nullptr || targetIndex >= kFormatCapabilityTargetCount) {
                 return false;
             }
             const SizeT formatIndex = static_cast<SizeT>(internalFormat);
@@ -78,14 +105,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return false;
             }
 
-            const FormatCapabilityCache& cache = pActiveBackendObject->GetFormatCapabilities();
+            const FormatCapabilityCache& cache = *activeCaps;
             const FormatCapabilityFlags caps =
                 caveat ? cache.CaveatCaps[targetIndex][formatIndex] : cache.FullCaps[targetIndex][formatIndex];
             return HasFormatCapability(caps, capability);
         }
 
-        Bool HasAnyCachedFormatCapability(TextureInternalFormat internalFormat,
-                                          Bool caveat,
+        Bool HasAnyCachedFormatCapability(TextureInternalFormat internalFormat, Bool caveat,
                                           FormatCapability capability) {
             for (SizeT targetIndex = 0; targetIndex < kFormatCapabilityTargetCount; ++targetIndex) {
                 if (HasCachedFormatCapability(internalFormat, targetIndex, caveat, capability)) {
@@ -101,10 +127,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     HasCachedFormatCapability(internalFormat, targetIndex, false, FormatCapability::Creatable);
                 const Bool caveatCreatable =
                     HasCachedFormatCapability(internalFormat, targetIndex, true, FormatCapability::Creatable);
-                const Bool fullRenderable =
-                    HasCachedFormatCapability(internalFormat, targetIndex, false, FormatCapability::FramebufferRenderable);
-                const Bool caveatRenderable =
-                    HasCachedFormatCapability(internalFormat, targetIndex, true, FormatCapability::FramebufferRenderable);
+                const Bool fullRenderable = HasCachedFormatCapability(internalFormat, targetIndex, false,
+                                                                      FormatCapability::FramebufferRenderable);
+                const Bool caveatRenderable = HasCachedFormatCapability(internalFormat, targetIndex, true,
+                                                                        FormatCapability::FramebufferRenderable);
                 return (!fullCreatable && caveatCreatable) || (!fullRenderable && caveatRenderable);
             }
 
@@ -114,15 +140,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return HasAnyCachedFormatCapability(internalFormat, true, FormatCapability::Creatable);
         }
 
-        void GenerateFormatInfo(TextureInternalFormat internalFormat,
-                                SizeT targetIndex,
-                                GLenum* outInternalFormat,
-                                GLenum* outFormat,
-                                GLenum* outType) {
+        void GenerateFormatInfo(TextureInternalFormat internalFormat, SizeT targetIndex, GLenum* outInternalFormat,
+                                GLenum* outFormat, GLenum* outType) {
             using namespace MobileGL::MG_Util::TextureFormatProcessor;
             const GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
             Flags<PixelFormatNormalizeOptionBit> options;
-            if (!pActiveBackendObject || ShouldUseCaveatFormat(internalFormat, targetIndex)) {
+            if (ActiveBackendFormatCaps() == nullptr || ShouldUseCaveatFormat(internalFormat, targetIndex)) {
                 options = GetRuntimeFallbackNormalizeOptions(
                     requestedInternalFormat,
                     TextureImpl::GetRenderTargetNormalizeOptions(g_GLESCapabilities, targetIndex));
@@ -140,7 +163,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace
 
     namespace TextureImpl {
-        // Every image that can back a colour attachment needs a colour-renderable storage format,
+        // Every image that can back a color attachment needs a color-renderable storage format,
         // and ES has no renderable three-channel format at all: a three-channel float fallback is
         // a legal ES texture but neither legal multisample storage nor a legal attachment, so
         // GL_RGB8_SNORM / GL_RGB16F / ... have to be widened to four channels for any of them.
@@ -154,8 +177,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // behind the native probe), so a driver that does render to a three-channel image keeps
         // allocating it byte for byte.
         //
-        // Do NOT read that as "nothing changes off-device". Measured on Mesa 26.1.6 llvmpipe
-        // (the headless CI driver), an ES 3.2 GL_TEXTURE_2D colour attachment is COMPLETE for
+        // Do NOT read that as "nothing changes off-device". Measured on llvmpipe 26.1.6
+        // (the headless CI driver), an ES 3.2 GL_TEXTURE_2D color attachment is COMPLETE for
         // GL_RGB8 and GL_RGB16F but INCOMPLETE_ATTACHMENT for GL_RGB8_SNORM, GL_SRGB8 and every
         // RGB integer format, and UNSUPPORTED for GL_RGB32F. Those eight formats therefore DO
         // take the widened path on llvmpipe, which is where the retrace fixtures and the glcts
@@ -216,7 +239,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // not be resolved yet - a probe run then would latch "cannot tell" as "clean"
             // forever. Once the backend exists, the first narrow-format image this process
             // creates runs the probe on a live context.
-            if (pActiveBackendObject == nullptr) {
+            if (ActiveBackendFormatCaps() == nullptr) {
                 return false;
             }
             return MG_Util::SelfTest::CopyImageMirrorsPacked16FieldOrder(g_GLESFuncs);
@@ -227,8 +250,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            const SizeT targetIndex =
-                target == TextureTarget::Unknown ? kFormatCapabilityTargetCount : GetFormatCapabilityTargetIndex(target);
+            const SizeT targetIndex = target == TextureTarget::Unknown ? kFormatCapabilityTargetCount
+                                                                       : GetFormatCapabilityTargetIndex(target);
             GenerateFormatInfo(internalFormat, targetIndex, outInternalFormat, outFormat, outType);
         }
 
@@ -242,8 +265,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Bool ShouldUseCaveatTextureFormat(TextureInternalFormat internalFormat, TextureTarget target) {
-            const SizeT targetIndex =
-                target == TextureTarget::Unknown ? kFormatCapabilityTargetCount : GetFormatCapabilityTargetIndex(target);
+            const SizeT targetIndex = target == TextureTarget::Unknown ? kFormatCapabilityTargetCount
+                                                                       : GetFormatCapabilityTargetIndex(target);
             return ShouldUseCaveatFormat(internalFormat, targetIndex);
         }
 
@@ -256,7 +279,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!TargetRequiresRenderableFormat(targetIndex)) {
                     return false;
                 }
-                if (pActiveBackendObject && !ShouldUseCaveatFormat(internalFormat, targetIndex)) {
+                if (ActiveBackendFormatCaps() != nullptr && !ShouldUseCaveatFormat(internalFormat, targetIndex)) {
                     return false;
                 }
                 const GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
@@ -267,8 +290,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         } // namespace
 
         Bool BackendTextureFormatAddsAlpha(TextureInternalFormat internalFormat, TextureTarget target) {
-            const SizeT targetIndex =
-                target == TextureTarget::Unknown ? kFormatCapabilityTargetCount : GetFormatCapabilityTargetIndex(target);
+            const SizeT targetIndex = target == TextureTarget::Unknown ? kFormatCapabilityTargetCount
+                                                                       : GetFormatCapabilityTargetIndex(target);
             return BackendFormatAddsAlpha(internalFormat, targetIndex);
         }
 
@@ -278,8 +301,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         ImageBindableStorageWidening GetImageBindableStorageWidening(TextureInternalFormat internalFormat) {
             const GLenum requested = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
-            const auto carrier = static_cast<GLenum>(
-                MG_Util::ShaderTranspiler::ShaderCompiler::WidenedCoreEsslImageFormat(requested));
+            const auto carrier =
+                static_cast<GLenum>(MG_Util::ShaderTranspiler::ShaderCompiler::WidenedCoreEsslImageFormat(requested));
             if (carrier == 0) {
                 return {};
             }
@@ -291,7 +314,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // A driver WITH GL_NV_image_formats can spell the narrow format - but only for the
             // formats SPIRV-Cross will actually print. It throws for its is_desktop_only_format
             // set instead of emitting a token, and the throw loses the stage whatever the driver
-            // would have accepted: on Mesa, which advertises the extension, `layout(r8ui)
+            // would have accepted: on llvmpipe, which advertises the extension, `layout(r8ui)
             // uimage2D` still lost its whole program until the widening ran for it too.
             if (g_GLESCapabilities.SupportsExtendedImageFormats &&
                 MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(requested)) {
@@ -299,8 +322,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             ImageBindableStorageWidening widening;
             widening.InternalFormat = carrier;
-            widening.SourceChannels =
-                MG_Util::ShaderTranspiler::ShaderCompiler::ImageFormatChannelCount(requested);
+            widening.SourceChannels = MG_Util::ShaderTranspiler::ShaderCompiler::ImageFormatChannelCount(requested);
             switch (carrier) {
             case GL_RGBA32UI:
             case GL_RGBA16UI:
@@ -466,7 +488,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (; outputIt != outputEnd; ++outputIt) {
                 const Uint location = static_cast<Uint>(std::stoul((*outputIt)[1].str()));
                 if (location < 32 && (outputMask & (1u << location))) {
-                    outputClamps.push_back({(*outputIt)[2].str(), static_cast<Bool>(snormOutputMask & (1u << location))});
+                    outputClamps.push_back(
+                        {(*outputIt)[2].str(), static_cast<Bool>(snormOutputMask & (1u << location))});
                 }
             }
             if (outputClamps.empty()) {
@@ -490,8 +513,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         String clampLine;
                         for (const OutputClamp& outputClamp : outputClamps) {
                             const String minValue = outputClamp.Signed ? "-1.0" : "0.0";
-                            clampLine += "\n    " + outputClamp.Name + " = clamp(" + outputClamp.Name +
-                                         ", vec4(" + minValue + "), vec4(1.0));";
+                            clampLine += "\n    " + outputClamp.Name + " = clamp(" + outputClamp.Name + ", vec4(" +
+                                         minValue + "), vec4(1.0));";
                         }
                         clampLine += "\n";
                         glslCode.insert(pos, clampLine);
@@ -507,7 +530,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             // The name is the marker: ShaderSourceProcessor only emits it when the source
-            // wrote gl_FragColor, and such a shader can have no other output.
+            // names gl_FragColor, and a shader that writes it can have no other output. One that
+            // names it only in an inactive preprocessor arm keeps the declaration unwritten, and
+            // the IO resolver moves that inactive output off location 0, so the match below
+            // (which wants location 0) does not take it.
             static const char* const kLoweredName = "mg_FragColor";
             if (shaderType != GL_FRAGMENT_SHADER || drawBufferCount <= 1) {
                 return glslCode;
@@ -524,8 +550,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             String replicaCopies;
             for (Uint location = 1; location < drawBufferCount; ++location) {
                 const String name = String(kLoweredName) + "_" + std::to_string(location);
-                replicaDecls += "\nlayout(location = " + std::to_string(location) + ") out " + precision + "vec4 " +
-                                name + ";";
+                replicaDecls +=
+                    "\nlayout(location = " + std::to_string(location) + ") out " + precision + "vec4 " + name + ";";
                 replicaCopies += "\n    " + name + " = " + kLoweredName + ";";
             }
 
@@ -599,8 +625,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return result;
         }
 
-        String RetargetTextureBufferExtension(String glslCode,
-                                              MG_External::GLESCapabilities::TextureBufferTier tier) {
+        String RetargetTextureBufferExtension(String glslCode, MG_External::GLESCapabilities::TextureBufferTier tier) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -756,12 +781,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const char* PointSizeExtensionName(MG_External::GLESCapabilities::PointSizeTier tier, Bool tessellation) {
             using Tier = MG_External::GLESCapabilities::PointSizeTier;
             switch (tier) {
-                case Tier::ExtensionEXT:
-                    return tessellation ? "GL_EXT_tessellation_point_size" : "GL_EXT_geometry_point_size";
-                case Tier::ExtensionOES:
-                    return tessellation ? "GL_OES_tessellation_point_size" : "GL_OES_geometry_point_size";
-                default:
-                    return nullptr;
+            case Tier::ExtensionEXT:
+                return tessellation ? "GL_EXT_tessellation_point_size" : "GL_EXT_geometry_point_size";
+            case Tier::ExtensionOES:
+                return tessellation ? "GL_OES_tessellation_point_size" : "GL_OES_geometry_point_size";
+            default:
+                return nullptr;
             }
         }
 
@@ -773,7 +798,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // geometry STAGES core but leaves gl_PointSize out of their gl_PerVertex entirely,
             // and SPIRV-Cross - which only ever sees a SPIR-V BuiltIn PointSize decoration -
             // prints the identifier with no directive behind it. Same hard rule as the two
-            // neighbours: never emitted speculatively, because `#extension` on a name the driver
+            // neighbors: never emitted speculatively, because `#extension` on a name the driver
             // does not advertise is a compile error of its own.
             if (extensionName == nullptr || glslCode.find(extensionName) != String::npos) {
                 return glslCode;
@@ -794,8 +819,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return glslCode;
         }
 
-        String BakeImageFormatQualifiers(String glslCode,
-                                         const UnorderedMap<String, String>& esslFormatByUniformName) {
+        String BakeImageFormatQualifiers(String glslCode, const UnorderedMap<String, String>& esslFormatByUniformName) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -807,7 +831,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             static const std::regex imageDeclRegex(
                 R"((layout\s*\(([^)]*)\)\s*)?uniform\s+(?:(?:readonly|writeonly|coherent|volatile|restrict|highp|mediump|lowp)\s+)*[iu]?image[A-Za-z0-9]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\[[^\]]*\])?\s*;)");
             // Every image format spelling GLSL has, so a declaration that already carries one is
-            // recognised whatever it says - the caller's map is consulted only for declarations
+            // recognized whatever it says - the caller's map is consulted only for declarations
             // with NO format, never to override a written one.
             static const std::regex existingFormatRegex(
                 R"(\b(rgba32f|rgba16f|rg32f|rg16f|r11f_g11f_b10f|r32f|r16f|rgba16|rgb10_a2|rg16|rg8|r16|r8|rgba16_snorm|rgba8_snorm|rg16_snorm|rg8_snorm|r16_snorm|r8_snorm|rgba32i|rgba16i|rgba8i|rg32i|rg16i|rg8i|r32i|r16i|r8i|rgba32ui|rgba16ui|rgba8ui|rgb10_a2ui|rg32ui|rg16ui|rg8ui|r32ui|r16ui|r8ui)\b)");
@@ -898,11 +922,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             while ((pos = essl.find("gl_PerVertex", pos)) != String::npos) {
                 // Walk back over whitespace to the direction keyword.
                 SizeT before = pos;
-                while (before > 0 && std::isspace(static_cast<unsigned char>(essl[before - 1]))) --before;
+                while (before > 0 && std::isspace(static_cast<unsigned char>(essl[before - 1])))
+                    --before;
                 const Bool matches = before >= keyword.size() &&
                                      essl.compare(before - keyword.size(), keyword.size(), keyword) == 0 &&
-                                     (before == keyword.size() ||
-                                      !isIdentifierChar(essl[before - keyword.size() - 1]));
+                                     (before == keyword.size() || !isIdentifierChar(essl[before - keyword.size() - 1]));
                 if (!matches) {
                     pos += 1;
                     continue;
@@ -916,11 +940,176 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return std::nullopt;
         }
 
+        String RedeclareClipCullDistancesInPerVertexBlock(String glslCode, const GLenum shaderType) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (shaderType != GL_VERTEX_SHADER && shaderType != GL_TESS_EVALUATION_SHADER &&
+                shaderType != GL_GEOMETRY_SHADER) {
+                return glslCode;
+            }
+            if (glslCode.find("gl_ClipDistance[") == String::npos &&
+                glslCode.find("gl_CullDistance[") == String::npos) {
+                return glslCode;
+            }
+            // Whole lines only: the declarations SPIRV-Cross prints are one statement per line,
+            // and anchoring on the line keeps a use of the array in the body from ever matching.
+            static const std::regex standaloneRegex(
+                R"(^\s*out\s+(?:highp\s+)?float\s+(gl_ClipDistance|gl_CullDistance)\s*\[\s*([0-9]+)\s*\]\s*;\s*$)");
+            static const std::regex invariantPositionRegex(R"(^\s*invariant\s+gl_Position\s*;\s*$)");
+
+            Vector<String> lines;
+            SizeT lineStart = 0;
+            while (lineStart <= glslCode.size()) {
+                const SizeT lineEnd = glslCode.find('\n', lineStart);
+                if (lineEnd == String::npos) {
+                    lines.push_back(glslCode.substr(lineStart));
+                    break;
+                }
+                lines.push_back(glslCode.substr(lineStart, lineEnd - lineStart));
+                lineStart = lineEnd + 1;
+            }
+
+            String clipSize;
+            String cullSize;
+            SizeT insertAt = lines.size();
+            SizeT invariantLine = lines.size();
+            for (SizeT i = 0; i < lines.size(); ++i) {
+                std::smatch match;
+                if (std::regex_match(lines[i], match, standaloneRegex)) {
+                    (match[1] == "gl_ClipDistance" ? clipSize : cullSize) = match[2].str();
+                    if (insertAt == lines.size()) insertAt = i;
+                } else if (invariantLine == lines.size() && std::regex_match(lines[i], invariantPositionRegex)) {
+                    invariantLine = i;
+                }
+            }
+            if (insertAt == lines.size()) {
+                return glslCode;
+            }
+
+            // A WRITE of gl_PointSize is a bare identifier; a read of the previous stage's value
+            // is a member access on gl_in, which is not this block's business.
+            const auto isIdentifierChar = [](char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+            };
+            Bool writesPointSize = false;
+            static constexpr const char* kPointSize = "gl_PointSize";
+            const SizeT pointSizeLength = std::strlen(kPointSize);
+            for (SizeT pos = glslCode.find(kPointSize); pos != String::npos && !writesPointSize;
+                 pos = glslCode.find(kPointSize, pos + 1)) {
+                if (pos + pointSizeLength < glslCode.size() && isIdentifierChar(glslCode[pos + pointSizeLength])) {
+                    continue;
+                }
+                SizeT before = pos;
+                while (before > 0 && std::isspace(static_cast<unsigned char>(glslCode[before - 1])))
+                    --before;
+                if (before > 0 && (glslCode[before - 1] == '.' || isIdentifierChar(glslCode[before - 1]))) {
+                    continue;
+                }
+                writesPointSize = true;
+            }
+
+            const Bool invariantPosition = invariantLine != lines.size();
+            String block = "out gl_PerVertex\n{\n";
+            block += invariantPosition ? "    invariant highp vec4 gl_Position;\n" : "    highp vec4 gl_Position;\n";
+            if (writesPointSize) block += "    highp float gl_PointSize;\n";
+            if (!clipSize.empty()) block += "    highp float gl_ClipDistance[" + clipSize + "];\n";
+            if (!cullSize.empty()) block += "    highp float gl_CullDistance[" + cullSize + "];\n";
+            block += "};";
+
+            String result;
+            result.reserve(glslCode.size() + block.size());
+            for (SizeT i = 0; i < lines.size(); ++i) {
+                if (i == insertAt) {
+                    result += block;
+                } else if (i == invariantLine || std::regex_match(lines[i], standaloneRegex)) {
+                    continue;
+                } else {
+                    result += lines[i];
+                }
+                if (i + 1 < lines.size()) result += '\n';
+            }
+            return result;
+        }
+
+        String RedeclareClipCullDistanceInputsInPerVertexBlock(String glslCode, const GLenum shaderType,
+                                                               const String& producerOutMembers) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            const Bool tessellation = shaderType == GL_TESS_CONTROL_SHADER || shaderType == GL_TESS_EVALUATION_SHADER;
+            if (!tessellation && shaderType != GL_GEOMETRY_SHADER) return glslCode;
+            if (producerOutMembers.find("gl_ClipDistance") == String::npos &&
+                producerOutMembers.find("gl_CullDistance") == String::npos) {
+                return glslCode;
+            }
+            if (ExtractPerVertexBlockMembers(glslCode, /*input=*/true).has_value()) return glslCode;
+
+            // Every gl_in member the stage reads has to be in the redeclared block, or the stage
+            // stops compiling; one the producer does not write cannot be added honestly.
+            static const std::regex memberRegex(R"(gl_in\s*\[[^\]]*\]\s*\.\s*(gl_[A-Za-z]+))");
+            Bool readsDistances = false;
+            for (auto it = std::sregex_iterator(glslCode.begin(), glslCode.end(), memberRegex);
+                 it != std::sregex_iterator(); ++it) {
+                const String member = (*it)[1].str();
+                if (member == "gl_ClipDistance" || member == "gl_CullDistance") readsDistances = true;
+                if (producerOutMembers.find(member) == String::npos) return glslCode;
+            }
+            if (!readsDistances) return glslCode;
+
+            // `invariant` qualifies outputs only.
+            String members = producerOutMembers;
+            for (SizeT pos = members.find("invariant "); pos != String::npos; pos = members.find("invariant ")) {
+                members.erase(pos, std::strlen("invariant "));
+            }
+            while (!members.empty() && std::isspace(static_cast<unsigned char>(members.back())))
+                members.pop_back();
+            while (!members.empty() && (members.front() == '\n' || members.front() == '\r'))
+                members.erase(0, 1);
+            String block = "in gl_PerVertex\n{\n" + members + "\n} gl_in[";
+            block += tessellation ? "gl_MaxPatchVertices" : "";
+            block += "];\n";
+
+            // After the header (#directives, precision statements and the stage's layout-only
+            // in/out declarations, which a geometry stage's unsized gl_in[] depends on).
+            static const std::regex headerRegex(R"(^\s*(#.*|precision\s.*|layout\s*\(.*\)\s*(in|out)\s*;\s*)?$)");
+            SizeT insertAt = 0;
+            SizeT lineStart = 0;
+            while (lineStart < glslCode.size()) {
+                SizeT lineEnd = glslCode.find('\n', lineStart);
+                if (lineEnd == String::npos) lineEnd = glslCode.size();
+                const String line = glslCode.substr(lineStart, lineEnd - lineStart);
+                if (!std::regex_match(line, headerRegex)) break;
+                insertAt = std::min(lineEnd + 1, glslCode.size());
+                lineStart = lineEnd + 1;
+            }
+            glslCode.insert(insertAt, block);
+            return glslCode;
+        }
+
+        String RequestClipCullDistanceExtension(String glslCode) {
+            static constexpr const char* kDirective = "#extension GL_EXT_clip_cull_distance : require\n";
+            if (glslCode.find("GL_EXT_clip_cull_distance") != String::npos ||
+                (glslCode.find("gl_ClipDistance") == String::npos &&
+                 glslCode.find("gl_CullDistance") == String::npos)) {
+                return glslCode;
+            }
+            // Right after the #version line, like every other directive this backend adds.
+            const SizeT versionPos = glslCode.find("#version");
+            if (versionPos == String::npos) {
+                return kDirective + glslCode;
+            }
+            const SizeT lineEnd = glslCode.find('\n', versionPos);
+            if (lineEnd == String::npos) {
+                return glslCode + "\n" + kDirective;
+            }
+            glslCode.insert(lineEnd + 1, kDirective);
+            return glslCode;
+        }
+
         String BuildPassthroughTessControlEssl(const Uint esslVersion, const Uint patchVertices,
-                                               const String& inPerVertexMembers,
-                                               const String& outPerVertexMembers,
-                                               const FloatVec4& defaultOuterLevel,
-                                               const FloatVec2& defaultInnerLevel) {
+                                               const String& inPerVertexMembers, const String& outPerVertexMembers,
+                                               const FloatVec4& defaultOuterLevel, const FloatVec2& defaultInnerLevel) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -935,7 +1124,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             source += "precision highp float;\n";
             source += "precision highp int;\n";
             source += "layout(vertices = " + std::to_string(patchVertices) + ") out;\n";
-            // Mirrored, never invented. An empty member list means the neighbouring stage did not
+            // Mirrored, never invented. An empty member list means the neighboring stage did not
             // redeclare the block either, and the driver's own built-in declaration is then what
             // both sides agree on - redeclaring here would be the thing that broke the match.
             if (!inPerVertexMembers.empty()) {
@@ -972,8 +1161,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             SizeT CountIdentifierOccurrences(const String& code, const String& identifier) {
                 if (identifier.empty()) return 0;
                 SizeT count = 0;
-                for (SizeT pos = code.find(identifier); pos != String::npos;
-                     pos = code.find(identifier, pos + 1)) {
+                for (SizeT pos = code.find(identifier); pos != String::npos; pos = code.find(identifier, pos + 1)) {
                     if (pos > 0 && IsImagePassIdentifierChar(code[pos - 1])) continue;
                     const SizeT after = pos + identifier.size();
                     if (after < code.size() && IsImagePassIdentifierChar(code[after])) continue;
@@ -991,14 +1179,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // readonly/writeonly rule only applies to a declaration that carries one of them.
             Bool IsImageFormatQualifier(const String& token) {
                 static constexpr StringView FORMATS[] = {
-                    "rgba32f",      "rgba16f",      "rg32f",       "rg16f",        "r11f_g11f_b10f",
-                    "r32f",         "r16f",         "rgba16",      "rgb10_a2",     "rgba8",
-                    "rg16",         "rg8",          "r16",         "r8",           "rgba16_snorm",
-                    "rgba8_snorm",  "rg16_snorm",   "rg8_snorm",   "r16_snorm",    "r8_snorm",
-                    "rgba32i",      "rgba16i",      "rgba8i",      "rg32i",        "rg16i",
-                    "rg8i",         "r32i",         "r16i",        "r8i",          "rgba32ui",
-                    "rgba16ui",     "rgb10_a2ui",   "rgba8ui",     "rg32ui",       "rg16ui",
-                    "rg8ui",        "r32ui",        "r16ui",       "r8ui",
+                    "rgba32f",     "rgba16f",    "rg32f",     "rg16f",     "r11f_g11f_b10f",
+                    "r32f",        "r16f",       "rgba16",    "rgb10_a2",  "rgba8",
+                    "rg16",        "rg8",        "r16",       "r8",        "rgba16_snorm",
+                    "rgba8_snorm", "rg16_snorm", "rg8_snorm", "r16_snorm", "r8_snorm",
+                    "rgba32i",     "rgba16i",    "rgba8i",    "rg32i",     "rg16i",
+                    "rg8i",        "r32i",       "r16i",      "r8i",       "rgba32ui",
+                    "rgba16ui",    "rgb10_a2ui", "rgba8ui",   "rg32ui",    "rg16ui",
+                    "rg8ui",       "r32ui",      "r16ui",     "r8ui",
                 };
                 for (const StringView format : FORMATS) {
                     if (token == format) return true;
@@ -1054,7 +1242,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             // How an image builtin touches the image it is handed.
-            enum class ImageBuiltinAccess { None, Load, Store, Unknown };
+            enum class ImageBuiltinAccess {
+                None,
+                Load,
+                Store,
+                Unknown
+            };
 
             ImageBuiltinAccess ClassifyImageBuiltin(const String& name) {
                 if (name == "imageStore") return ImageBuiltinAccess::Store;
@@ -1082,7 +1275,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 String arraySuffix; // "" or "[7]"
                 SizeT declStart = 0;
                 SizeT declLength = 0;
-                SizeT nameStart = 0;   // the name token alone, for a rename that edits nothing else
+                SizeT nameStart = 0; // the name token alone, for a rename that edits nothing else
                 SizeT nameLength = 0;
                 SizeT referenceCount = 0; // uses this pass recognized and accounted for
                 Bool loaded = false;
@@ -1143,7 +1336,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     return false;
                 };
-                while (isTaken(candidate)) candidate += 'X';
+                while (isTaken(candidate))
+                    candidate += 'X';
                 return candidate;
             }
 
@@ -1301,8 +1495,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // stage that was never going to compile, and guessing which element it meant
                 // would only change which unit it addressed wrongly.
                 struct ElementUse {
-                    SizeT start;   // the first character of the name
-                    SizeT length;  // through the closing ']'
+                    SizeT start;  // the first character of the name
+                    SizeT length; // through the closing ']'
                     SizeT element;
                 };
                 Vector<ElementUse> uses;
@@ -1362,9 +1556,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Vector<String> elementNames;
                 String replacement;
                 for (SizeT element = 0; element < elementCount; ++element) {
-                    const String elementName =
-                        MakeImageAliasName(IMAGE_ARRAY_ELEMENT_PREFIX,
-                                           plan.name + "_" + std::to_string(element), glslCode, takenNames);
+                    const String elementName = MakeImageAliasName(
+                        IMAGE_ARRAY_ELEMENT_PREFIX, plan.name + "_" + std::to_string(element), glslCode, takenNames);
                     takenNames.push_back(elementName);
                     elementNames.push_back(elementName);
 
@@ -1490,7 +1683,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (SizeT pos = glslCode.find("image"); pos != String::npos; pos = glslCode.find("image", pos + 1)) {
                 if (pos > 0 && IsImagePassIdentifierChar(glslCode[pos - 1])) continue; // uimage2D, myimageFoo
                 SizeT tokenEnd = pos;
-                while (tokenEnd < glslCode.size() && IsImagePassIdentifierChar(glslCode[tokenEnd])) ++tokenEnd;
+                while (tokenEnd < glslCode.size() && IsImagePassIdentifierChar(glslCode[tokenEnd]))
+                    ++tokenEnd;
                 const String builtin = glslCode.substr(pos, tokenEnd - pos);
 
                 const SizeT openParen = glslCode.find_first_not_of(" \t\r\n", tokenEnd);
@@ -1502,7 +1696,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     continue; // an expression, not a bare variable - it names no image of ours
                 }
                 SizeT argEnd = argStart;
-                while (argEnd < glslCode.size() && IsImagePassIdentifierChar(glslCode[argEnd])) ++argEnd;
+                while (argEnd < glslCode.size() && IsImagePassIdentifierChar(glslCode[argEnd]))
+                    ++argEnd;
 
                 const SizeT declIndex = findDecl(glslCode.substr(argStart, argEnd - argStart));
                 if (declIndex == decls.size()) continue;
@@ -1516,11 +1711,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     Int depth = 0;
                     SizeT scan = after;
                     for (; scan < glslCode.size(); ++scan) {
-                        if (glslCode[scan] == '[') ++depth;
-                        else if (glslCode[scan] == ']' && --depth == 0) break;
+                        if (glslCode[scan] == '[')
+                            ++depth;
+                        else if (glslCode[scan] == ']' && --depth == 0)
+                            break;
                     }
-                    after = scan >= glslCode.size() ? String::npos
-                                                    : glslCode.find_first_not_of(" \t\r\n", scan + 1);
+                    after = scan >= glslCode.size() ? String::npos : glslCode.find_first_not_of(" \t\r\n", scan + 1);
                 }
                 const char nextChar = after == String::npos ? '\0' : glslCode[after];
                 if (nextChar != ',' && nextChar != ')') {
@@ -1583,11 +1779,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // KHR-GL43.shading_language_420pack.binding_images_texture_type_* went from 6
                 // image uniforms to 30 and the link failed outright with "Error: Image Image
                 // location or component exceeds max allowed." on an Adreno 830, where Mali and
-                // Mesa both accept the same text.
+                // llvmpipe both accept the same text.
                 //
                 // Nothing downstream reads these names: the two passes that key on the GL uniform
                 // name (RebindImageUniformsToFrontendUnits, BakeImageFormatQualifiers) both run
-                // BEFORE this one, RemoveLayoutBinding recognises an image declaration by its TYPE
+                // BEFORE this one, RemoveLayoutBinding recognizes an image declaration by its TYPE
                 // token, and CacheResourceLocations skips image uniforms outright because ES image
                 // units come only from layout(binding=N). The declarations this pass LEAVES ALONE -
                 // already readonly/writeonly in the source, or r32f/r32i/r32ui, which need no
@@ -1614,23 +1810,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 const char* aliasPrefix = decl.loaded && decl.stored ? IMAGE_SPLIT_READ_ALIAS_PREFIX
-                                          : decl.stored             ? IMAGE_WRITEONLY_ALIAS_PREFIX
-                                                                    : IMAGE_READONLY_ALIAS_PREFIX;
+                                          : decl.stored              ? IMAGE_WRITEONLY_ALIAS_PREFIX
+                                                                     : IMAGE_READONLY_ALIAS_PREFIX;
                 decl.aliasName = MakeImageAliasName(aliasPrefix, decl.name, glslCode, takenNames);
                 takenNames.push_back(decl.aliasName);
                 if (decl.loaded && decl.stored) {
                     // Minted from the ALREADY access-tagged name, so the write half of a split
                     // can never collide with the single declaration another stage's repair mints
                     // for the same image.
-                    decl.writeName =
-                        MakeImageAliasName(IMAGE_WRITE_ALIAS_PREFIX, decl.aliasName, glslCode, takenNames);
+                    decl.writeName = MakeImageAliasName(IMAGE_WRITE_ALIAS_PREFIX, decl.aliasName, glslCode, takenNames);
                     takenNames.push_back(decl.writeName);
                     decl.split = true;
                     if (outSplitCount != nullptr) ++*outSplitCount;
                     // Both halves carry `coherent`; see BuildImageDeclaration. The
                     // single-declaration cases below stay as they were - nothing aliases them, so
                     // there is no visibility to restore and no reason to pay for the cache
-                    // behaviour.
+                    // behavior.
                     edits.push_back({decl.declStart, decl.declLength,
                                      BuildImageDeclaration(decl, "readonly", decl.aliasName,
                                                            /*forceCoherent=*/true) +
@@ -1638,13 +1833,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          BuildImageDeclaration(decl, "writeonly", decl.writeName,
                                                                /*forceCoherent=*/true)});
                 } else if (decl.stored) {
-                    edits.push_back({decl.declStart, decl.declLength,
-                                     BuildImageDeclaration(decl, "writeonly", decl.aliasName)});
+                    edits.push_back(
+                        {decl.declStart, decl.declLength, BuildImageDeclaration(decl, "writeonly", decl.aliasName)});
                 } else {
                     // Loaded only, or only ever handed to imageSize (or unused): readonly is
                     // the qualifier that keeps every one of those legal.
-                    edits.push_back({decl.declStart, decl.declLength,
-                                     BuildImageDeclaration(decl, "readonly", decl.aliasName)});
+                    edits.push_back(
+                        {decl.declStart, decl.declLength, BuildImageDeclaration(decl, "readonly", decl.aliasName)});
                 }
             }
             for (const ImageUseSite& site : useSites) {
@@ -1652,8 +1847,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Empty exactly when the declaration was poisoned above and left untouched; its
                 // uses must keep naming the variable that is still called that.
                 if (decl.aliasName.empty()) continue;
-                edits.push_back(
-                    {site.start, site.length, decl.split && site.stores ? decl.writeName : decl.aliasName});
+                edits.push_back({site.start, site.length, decl.split && site.stores ? decl.writeName : decl.aliasName});
                 if (!decl.split || !site.stores) continue;
                 // ...and an explicit barrier behind it. `coherent` on both halves is what makes
                 // the store VISIBLE to a load through the other variable, but it says nothing
@@ -1693,7 +1887,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // before the optional bias.
             struct LodLookupForm {
                 const char* name;
-                Int requiredArgs; // arguments before the optional bias (implicit form)
+                Int requiredArgs;   // arguments before the optional bias (implicit form)
                 Int explicitLodArg; // index of the explicit LOD argument, -1 for implicit
             };
 
@@ -1710,15 +1904,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Sampler types with no mip chain, or whose GLSL lookups have no bias overload
             // at all (the array-shadow forms), so nothing can or should be folded in.
             Bool IsBiasableSamplerType(const String& samplerType) {
-                if (samplerType.find("MS") != String::npos) return false;      // multisample
-                if (samplerType.find("Buffer") != String::npos) return false;  // texture buffer
-                if (samplerType.find("Rect") != String::npos) return false;    // rectangle: no mips
+                if (samplerType.find("MS") != String::npos) return false;     // multisample
+                if (samplerType.find("Buffer") != String::npos) return false; // texture buffer
+                if (samplerType.find("Rect") != String::npos) return false;   // rectangle: no mips
                 if (samplerType == "sampler2DArrayShadow") return false;
                 if (samplerType == "samplerCubeArrayShadow") return false;
                 return true;
             }
 
-            Bool IsIdentifierChar(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; }
+            Bool IsIdentifierChar(char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+            }
 
             // Byte offsets of the top-level argument separators and of the closing paren,
             // starting from the '(' at openParen. Empty when the parentheses do not balance.
@@ -1797,7 +1993,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // First argument must be one of our samplers.
                 const SizeT firstArgStart = result.find_first_not_of(" \t", openParen + 1);
                 SizeT firstArgEnd = marks.front();
-                while (firstArgEnd > firstArgStart && (result[firstArgEnd - 1] == ' ' || result[firstArgEnd - 1] == '\t')) {
+                while (firstArgEnd > firstArgStart &&
+                       (result[firstArgEnd - 1] == ' ' || result[firstArgEnd - 1] == '\t')) {
                     --firstArgEnd;
                 }
                 if (firstArgStart == String::npos || firstArgEnd <= firstArgStart) continue;
@@ -1843,12 +2040,130 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (const auto& samplerName : usedSamplers) {
                 const String& biasName = samplerNames[samplerName];
                 if (result.find(String("float ") + biasName + ";") != String::npos) continue;
-                const std::regex declRegex(
-                    R"(uniform\s+(?:(?:highp|mediump|lowp)\s+)?[iu]?sampler[A-Za-z0-9]*\s+)" + samplerName + R"(\s*;)");
+                const std::regex declRegex(R"(uniform\s+(?:(?:highp|mediump|lowp)\s+)?[iu]?sampler[A-Za-z0-9]*\s+)" +
+                                           samplerName + R"(\s*;)");
                 std::smatch match;
                 if (!std::regex_search(result, match, declRegex)) continue;
                 const SizeT declEnd = static_cast<SizeT>(match.position(0)) + match[0].str().size();
                 result.insert(declEnd, String("\nuniform highp float ") + biasName + ";");
+            }
+            return result;
+        }
+
+        String LowerZeroGradCubeArrayShadowLookups(const String& glslCode, GLenum shaderType) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (shaderType == GL_FRAGMENT_SHADER || glslCode.find("samplerCubeArrayShadow") == String::npos ||
+                glslCode.find("textureGrad") == String::npos) {
+                return glslCode;
+            }
+            // Every name declared with the type: uniforms, and the parameters of functions the
+            // sampler is passed to.
+            static const std::regex declRegex(R"(samplerCubeArrayShadow\s+([A-Za-z_][A-Za-z0-9_]*))");
+            UnorderedMap<String, Bool> names;
+            for (std::sregex_iterator it(glslCode.begin(), glslCode.end(), declRegex), end; it != end; ++it) {
+                names.emplace((*it)[1].str(), true);
+            }
+            if (names.empty()) return glslCode;
+
+            static constexpr const char* kName = "textureGrad";
+            static constexpr SizeT kNameLength = 11;
+            String result = glslCode;
+            Bool changed = false;
+            // Right to left, so an earlier call's offsets stay valid.
+            for (SizeT scan = result.rfind(kName); scan != String::npos;
+                 scan = scan == 0 ? String::npos : result.rfind(kName, scan - 1)) {
+                if (scan > 0 && IsIdentifierChar(result[scan - 1])) continue;
+                const SizeT openParen = result.find_first_not_of(" \t", scan + kNameLength);
+                if (openParen == String::npos || result[openParen] != '(') continue;
+                const Vector<SizeT> marks = SplitCallArguments(result, openParen);
+                // sampler, P, compare, dPdx, dPdy
+                if (marks.size() != 5) continue;
+                SizeT nameStart = result.find_first_not_of(" \t", openParen + 1);
+                SizeT nameEnd = nameStart;
+                while (nameEnd < marks[0] && IsIdentifierChar(result[nameEnd]))
+                    ++nameEnd;
+                if (names.find(result.substr(nameStart, nameEnd - nameStart)) == names.end()) continue;
+                const auto argument = [&](SizeT index) {
+                    const SizeT start = marks[index - 1] + 1;
+                    String text = result.substr(start, marks[index] - start);
+                    text.erase(std::remove_if(text.begin(), text.end(), [](char c) { return c == ' ' || c == '\t'; }),
+                               text.end());
+                    return text;
+                };
+                if (argument(3) != "vec3(0.0)" || argument(4) != "vec3(0.0)") continue;
+                result.erase(marks[2], marks[4] - marks[2]);
+                result.replace(scan, kNameLength, "texture");
+                changed = true;
+            }
+            return changed ? result : glslCode;
+        }
+
+        String ClampUnsignedMultisampleFetches(const String& glslCode) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (glslCode.find("usampler2DMS") == String::npos || glslCode.find("texelFetch") == String::npos) {
+                return glslCode;
+            }
+
+            // The non-arrayed unsigned multisample samplers - the ones ClampMultisampleFetchPass
+            // deferred, and the only ones a lookup can name directly as its first argument.
+            static const std::regex declRegex(
+                R"(uniform\s+(?:(?:highp|mediump|lowp)\s+)?usampler2DMS(?:Array)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+            UnorderedMap<String, String> clampNames;   // sampler name -> sample-max uniform name
+            Vector<std::pair<SizeT, String>> declEnds; // where each declaration ends, and its uniform
+            for (std::sregex_iterator it(glslCode.begin(), glslCode.end(), declRegex), end; it != end; ++it) {
+                const String name = (*it)[1].str();
+                const String clampName = String(MS_SAMPLE_MAX_UNIFORM_PREFIX) + name;
+                if (clampNames.emplace(name, clampName).second) {
+                    declEnds.emplace_back(static_cast<SizeT>(it->position(0) + it->length(0)), clampName);
+                }
+            }
+            if (clampNames.empty()) {
+                return glslCode;
+            }
+
+            // Right-to-left, so an earlier call's offsets survive the insertions behind it.
+            constexpr const char* kFetch = "texelFetch";
+            const SizeT fetchLength = std::strlen(kFetch);
+            String result = glslCode;
+            Vector<String> usedClamps;
+            for (SizeT scan = result.rfind(kFetch); scan != String::npos;
+                 scan = scan == 0 ? String::npos : result.rfind(kFetch, scan - 1)) {
+                if (scan > 0 && IsIdentifierChar(result[scan - 1])) continue;
+                const SizeT openParen = result.find_first_not_of(" \t", scan + fetchLength);
+                if (openParen == String::npos || result[openParen] != '(') continue; // texelFetchOffset etc.
+                const Vector<SizeT> marks = SplitCallArguments(result, openParen);
+                if (marks.size() != 3) continue; // (sampler, coord, sample) is the multisample form
+                const SizeT firstStart = result.find_first_not_of(" \t", openParen + 1);
+                SizeT firstEnd = marks[0];
+                while (firstEnd > firstStart && (result[firstEnd - 1] == ' ' || result[firstEnd - 1] == '\t')) {
+                    --firstEnd;
+                }
+                if (firstStart == String::npos || firstEnd <= firstStart) continue;
+                const auto found = clampNames.find(result.substr(firstStart, firstEnd - firstStart));
+                if (found == clampNames.end()) continue;
+                const SizeT sampleStart = result.find_first_not_of(" \t\n", marks[1] + 1);
+                if (sampleStart == String::npos || sampleStart >= marks[2]) continue;
+                const SizeT sampleEnd = marks[2];
+                result.insert(sampleEnd, String(", ") + found->second + ")");
+                result.insert(sampleStart, "min(");
+                if (std::find(usedClamps.begin(), usedClamps.end(), found->second) == usedClamps.end()) {
+                    usedClamps.push_back(found->second);
+                }
+            }
+            if (usedClamps.empty()) {
+                return glslCode;
+            }
+
+            // Declared right after the sampler they bound, back to front so the recorded
+            // offsets (taken from the unedited text) stay valid: every fetch sits after the
+            // declarations in the emitted ESSL, so no insertion above has moved them.
+            for (auto it = declEnds.rbegin(); it != declEnds.rend(); ++it) {
+                if (std::find(usedClamps.begin(), usedClamps.end(), it->second) == usedClamps.end()) continue;
+                result.insert(it->first, String("\nuniform highp int ") + it->second + ";");
             }
             return result;
         }
@@ -1963,442 +2278,4 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
     } // namespace Utils
-
-    // ---- Client-format readback conversion helpers -------------------------------------------------
-    // ReadPixels/GetTexImage read a guaranteed wide RGBA(_INTEGER) layout from the ES driver and repack
-    // it on the CPU into the client's (format, type) layout. Everything here is pure byte shuffling so
-    // unit tests can assert the exact packed words; field positions follow GL 3.3 table 3.6 and mirror
-    // the GL CTS packed_pixels oracle (glcPackedPixelsTests.cpp pack_UNSIGNED_* helpers).
-    namespace ReadbackImpl {
-        using MG_Util::DecodeHalfBitsToFloat;
-        using MG_Util::EncodeFloatToHalfBits;
-
-        Bool GetReadbackChannelMapping(GLenum format, ReadbackChannelMapping& outMapping) {
-            switch (format) {
-            case GL_RED:          outMapping = {{0, 0, 0, 0}, 1, false}; return true;
-            case GL_RED_INTEGER:  outMapping = {{0, 0, 0, 0}, 1, true};  return true;
-            // Desktop-GL single-channel client formats (GL CTS packed_pixels rgba8_format_green/blue):
-            // the destination holds one component sourced from the named channel of the wide RGBA read.
-            // GL_ALPHA is mapped here from the raw enum because the state layer folds it into Red for the
-            // legacy alpha-texture upload hack.
-            case GL_GREEN:         outMapping = {{1, 0, 0, 0}, 1, false}; return true;
-            case GL_GREEN_INTEGER: outMapping = {{1, 0, 0, 0}, 1, true};  return true;
-            case GL_BLUE:          outMapping = {{2, 0, 0, 0}, 1, false}; return true;
-            case GL_BLUE_INTEGER:  outMapping = {{2, 0, 0, 0}, 1, true};  return true;
-            case GL_ALPHA:         outMapping = {{3, 0, 0, 0}, 1, false}; return true;
-            case GL_ALPHA_INTEGER: outMapping = {{3, 0, 0, 0}, 1, true};  return true;
-            case GL_RG:           outMapping = {{0, 1, 0, 0}, 2, false}; return true;
-            case GL_RG_INTEGER:   outMapping = {{0, 1, 0, 0}, 2, true};  return true;
-            case GL_RGB:          outMapping = {{0, 1, 2, 0}, 3, false}; return true;
-            case GL_RGB_INTEGER:  outMapping = {{0, 1, 2, 0}, 3, true};  return true;
-            case GL_BGR:          outMapping = {{2, 1, 0, 0}, 3, false}; return true;
-            case GL_BGR_INTEGER:  outMapping = {{2, 1, 0, 0}, 3, true};  return true;
-            case GL_RGBA:         outMapping = {{0, 1, 2, 3}, 4, false}; return true;
-            case GL_RGBA_INTEGER: outMapping = {{0, 1, 2, 3}, 4, true};  return true;
-            case GL_BGRA:         outMapping = {{2, 1, 0, 3}, 4, false}; return true;
-            case GL_BGRA_INTEGER: outMapping = {{2, 1, 0, 3}, 4, true};  return true;
-            default:
-                return false;
-            }
-        }
-
-        Bool GetPackedReadbackLayout(GLenum type, PackedReadbackLayout& out) {
-            switch (type) {
-            // Non-REV types pack the first format component starting at the most significant bit,
-            // *_REV types starting at the least significant bit (GL CTS pack_UNSIGNED_SHORT_5_6_5:
-            // R bits 15-11; pack_UNSIGNED_SHORT_1_5_5_5_REV: R bits 4-0, A bit 15).
-            case GL_UNSIGNED_BYTE_3_3_2:          out = {3, {3, 3, 2, 0},    {5, 2, 0, 0},    1, false}; return true;
-            case GL_UNSIGNED_BYTE_2_3_3_REV:      out = {3, {3, 3, 2, 0},    {0, 3, 6, 0},    1, false}; return true;
-            case GL_UNSIGNED_SHORT_5_6_5:         out = {3, {5, 6, 5, 0},    {11, 5, 0, 0},   2, false}; return true;
-            case GL_UNSIGNED_SHORT_5_6_5_REV:     out = {3, {5, 6, 5, 0},    {0, 5, 11, 0},   2, false}; return true;
-            case GL_UNSIGNED_SHORT_4_4_4_4:       out = {4, {4, 4, 4, 4},    {12, 8, 4, 0},   2, false}; return true;
-            case GL_UNSIGNED_SHORT_4_4_4_4_REV:   out = {4, {4, 4, 4, 4},    {0, 4, 8, 12},   2, false}; return true;
-            case GL_UNSIGNED_SHORT_5_5_5_1:       out = {4, {5, 5, 5, 1},    {11, 6, 1, 0},   2, false}; return true;
-            case GL_UNSIGNED_SHORT_1_5_5_5_REV:   out = {4, {5, 5, 5, 1},    {0, 5, 10, 15},  2, false}; return true;
-            case GL_UNSIGNED_INT_8_8_8_8:         out = {4, {8, 8, 8, 8},    {24, 16, 8, 0},  4, false}; return true;
-            case GL_UNSIGNED_INT_8_8_8_8_REV:     out = {4, {8, 8, 8, 8},    {0, 8, 16, 24},  4, false}; return true;
-            case GL_UNSIGNED_INT_10_10_10_2:      out = {4, {10, 10, 10, 2}, {22, 12, 2, 0},  4, false}; return true;
-            case GL_UNSIGNED_INT_2_10_10_10_REV:  out = {4, {10, 10, 10, 2}, {0, 10, 20, 30}, 4, false}; return true;
-            // Packed-float RGB types: fields hold unsigned small floats; 5_9_9_9_REV's shared 5-bit
-            // exponent (bits 31-27) is emitted by EncodeSharedExponentRGB9E5, not a component field.
-            case GL_UNSIGNED_INT_10F_11F_11F_REV: out = {3, {11, 11, 10, 0}, {0, 11, 22, 0},  4, true};  return true;
-            case GL_UNSIGNED_INT_5_9_9_9_REV:     out = {3, {9, 9, 9, 0},    {0, 9, 18, 0},   4, true};  return true;
-            default:
-                return false;
-            }
-        }
-
-        SizeT GetReadbackComponentSize(GLenum type) {
-            PackedReadbackLayout packedLayout{};
-            if (GetPackedReadbackLayout(type, packedLayout)) {
-                return packedLayout.byteSize;
-            }
-            switch (type) {
-            case GL_UNSIGNED_BYTE:
-            case GL_BYTE:
-                return 1;
-            case GL_UNSIGNED_SHORT:
-            case GL_SHORT:
-            case GL_HALF_FLOAT:
-                return 2;
-            case GL_UNSIGNED_INT:
-            case GL_INT:
-            case GL_FLOAT:
-                return 4;
-            default:
-                return 0;
-            }
-        }
-
-        SizeT GetReadbackDstPixelSize(const ReadbackChannelMapping& mapping, GLenum type) {
-            PackedReadbackLayout packedLayout{};
-            if (GetPackedReadbackLayout(type, packedLayout)) {
-                if (packedLayout.fieldCount != mapping.channelCount) {
-                    return 0; // 3-field packed types pair with 3-component formats only, 4 with 4
-                }
-                if (mapping.isInteger && packedLayout.isFloatPacked) {
-                    return 0; // packed-float RGB types never pair with integer formats
-                }
-                return packedLayout.byteSize;
-            }
-            if (mapping.isInteger && (type == GL_FLOAT || type == GL_HALF_FLOAT)) {
-                return 0;
-            }
-            const SizeT componentSize = GetReadbackComponentSize(type);
-            return componentSize == 0 ? 0 : static_cast<SizeT>(mapping.channelCount) * componentSize;
-        }
-
-        namespace {
-            void WritePackedReadbackWord(Uint8* dst, Uint32 word, SizeT byteSize) {
-                switch (byteSize) {
-                case 1: {
-                    const auto out = static_cast<Uint8>(word);
-                    Memcpy(dst, &out, sizeof(out));
-                    break;
-                }
-                case 2: {
-                    const auto out = static_cast<Uint16>(word);
-                    Memcpy(dst, &out, sizeof(out));
-                    break;
-                }
-                default:
-                    Memcpy(dst, &word, sizeof(word));
-                    break;
-                }
-            }
-        } // namespace
-
-        // Shared encoders live in MG_Util/Math/SmallFloat.h so the upload conversion
-        // (PixelStoreProcessor) uses byte-identical packing; kept exported here for unit tests.
-        Uint32 EncodeFloatToUnsignedF11(Float value) { return MG_Util::EncodeFloatToUnsignedF11(value); }
-        Uint32 EncodeFloatToUnsignedF10(Float value) { return MG_Util::EncodeFloatToUnsignedF10(value); }
-        Uint32 EncodeSharedExponentRGB9E5(const Float rgb[3]) { return MG_Util::EncodeSharedExponentRGB9E5(rgb); }
-
-        void ConvertWideReadbackRow(const Uint8* src, Uint8* dst, SizeT width, GLenum wideType,
-                                    const ReadbackChannelMapping& mapping, GLenum type) {
-            PackedReadbackLayout packedLayout{};
-            const Bool isPacked = GetPackedReadbackLayout(type, packedLayout);
-            const SizeT dstComponentSize = GetReadbackComponentSize(type);
-            const SizeT dstPixelBytes = GetReadbackDstPixelSize(mapping, type);
-            const SizeT srcPixelBytes = 4 * GetReadbackComponentSize(wideType);
-
-            for (SizeT col = 0; col < width; ++col) {
-                const Uint8* srcPixel = src + col * srcPixelBytes;
-                Uint8* dstPixel = dst + col * dstPixelBytes;
-                if (mapping.isInteger) {
-                    Int64 srcValues[4];
-                    for (Int c = 0; c < 4; ++c) {
-                        srcValues[c] = wideType == GL_INT
-                                           ? static_cast<Int64>(reinterpret_cast<const Int32*>(srcPixel)[c])
-                                           : static_cast<Int64>(reinterpret_cast<const Uint32*>(srcPixel)[c]);
-                    }
-                    if (isPacked) {
-                        // Integer sources clamp each component to the unsigned range of its field
-                        // (GL 3.3 section 4.3.1 final conversion).
-                        Uint32 word = 0;
-                        for (Int ch = 0; ch < packedLayout.fieldCount; ++ch) {
-                            const Int64 fieldMax = (Int64{1} << packedLayout.width[ch]) - 1;
-                            const auto v = static_cast<Uint32>(
-                                std::clamp<Int64>(srcValues[mapping.sourceChannel[ch]], 0, fieldMax));
-                            word |= v << packedLayout.shift[ch];
-                        }
-                        WritePackedReadbackWord(dstPixel, word, packedLayout.byteSize);
-                    } else {
-                        for (Int ch = 0; ch < mapping.channelCount; ++ch) {
-                            const Int64 v = srcValues[mapping.sourceChannel[ch]];
-                            Uint8* dstComponent = dstPixel + static_cast<SizeT>(ch) * dstComponentSize;
-                            switch (type) {
-                            case GL_UNSIGNED_BYTE:
-                                *dstComponent = static_cast<Uint8>(std::clamp<Int64>(v, 0, 255));
-                                break;
-                            case GL_BYTE: {
-                                const auto out = static_cast<Int8>(std::clamp<Int64>(v, -128, 127));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_UNSIGNED_SHORT: {
-                                const auto out = static_cast<Uint16>(std::clamp<Int64>(v, 0, 65535));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_SHORT: {
-                                const auto out = static_cast<Int16>(std::clamp<Int64>(v, -32768, 32767));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_UNSIGNED_INT: {
-                                const auto out = static_cast<Uint32>(std::clamp<Int64>(v, 0, 4294967295LL));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_INT: {
-                                const auto out =
-                                    static_cast<Int32>(std::clamp<Int64>(v, -2147483648LL, 2147483647LL));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            default:
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    Float srcValues[4];
-                    switch (wideType) {
-                    case GL_UNSIGNED_BYTE:
-                        for (Int c = 0; c < 4; ++c) {
-                            srcValues[c] = static_cast<Float>(srcPixel[c]) / 255.0f;
-                        }
-                        break;
-                    case GL_BYTE:
-                        for (Int c = 0; c < 4; ++c) {
-                            srcValues[c] = std::max(
-                                static_cast<Float>(reinterpret_cast<const Int8*>(srcPixel)[c]) / 127.0f, -1.0f);
-                        }
-                        break;
-                    case GL_UNSIGNED_SHORT:
-                        for (Int c = 0; c < 4; ++c) {
-                            srcValues[c] =
-                                static_cast<Float>(reinterpret_cast<const Uint16*>(srcPixel)[c]) / 65535.0f;
-                        }
-                        break;
-                    case GL_SHORT:
-                        for (Int c = 0; c < 4; ++c) {
-                            srcValues[c] = std::max(
-                                static_cast<Float>(reinterpret_cast<const Int16*>(srcPixel)[c]) / 32767.0f, -1.0f);
-                        }
-                        break;
-                    case GL_HALF_FLOAT:
-                        for (Int c = 0; c < 4; ++c) {
-                            srcValues[c] = DecodeHalfBitsToFloat(reinterpret_cast<const Uint16*>(srcPixel)[c]);
-                        }
-                        break;
-                    default: // GL_FLOAT
-                        for (Int c = 0; c < 4; ++c) {
-                            srcValues[c] = reinterpret_cast<const Float*>(srcPixel)[c];
-                        }
-                        break;
-                    }
-                    if (isPacked) {
-                        Uint32 word = 0;
-                        if (packedLayout.isFloatPacked) {
-                            const Float fields[3] = {srcValues[mapping.sourceChannel[0]],
-                                                     srcValues[mapping.sourceChannel[1]],
-                                                     srcValues[mapping.sourceChannel[2]]};
-                            word = type == GL_UNSIGNED_INT_5_9_9_9_REV
-                                       ? EncodeSharedExponentRGB9E5(fields)
-                                       : (EncodeFloatToUnsignedF11(fields[0]) << packedLayout.shift[0]) |
-                                             (EncodeFloatToUnsignedF11(fields[1]) << packedLayout.shift[1]) |
-                                             (EncodeFloatToUnsignedF10(fields[2]) << packedLayout.shift[2]);
-                        } else {
-                            // Normalized encode: round(clamp(v, 0, 1) * (2^bits - 1)) into each field.
-                            for (Int ch = 0; ch < packedLayout.fieldCount; ++ch) {
-                                const auto fieldMax = static_cast<Float>((1u << packedLayout.width[ch]) - 1u);
-                                const auto v = static_cast<Uint32>(std::llround(
-                                    std::clamp(srcValues[mapping.sourceChannel[ch]], 0.0f, 1.0f) * fieldMax));
-                                word |= v << packedLayout.shift[ch];
-                            }
-                        }
-                        WritePackedReadbackWord(dstPixel, word, packedLayout.byteSize);
-                    } else {
-                        for (Int ch = 0; ch < mapping.channelCount; ++ch) {
-                            const Float v = srcValues[mapping.sourceChannel[ch]];
-                            Uint8* dstComponent = dstPixel + static_cast<SizeT>(ch) * dstComponentSize;
-                            switch (type) {
-                            case GL_UNSIGNED_BYTE:
-                                *dstComponent =
-                                    static_cast<Uint8>(std::llround(std::clamp(v, 0.0f, 1.0f) * 255.0));
-                                break;
-                            case GL_BYTE: {
-                                const auto out =
-                                    static_cast<Int8>(std::llround(std::clamp(v, -1.0f, 1.0f) * 127.0));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_UNSIGNED_SHORT: {
-                                const auto out =
-                                    static_cast<Uint16>(std::llround(std::clamp(v, 0.0f, 1.0f) * 65535.0));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_SHORT: {
-                                const auto out =
-                                    static_cast<Int16>(std::llround(std::clamp(v, -1.0f, 1.0f) * 32767.0));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_UNSIGNED_INT: {
-                                const auto out = static_cast<Uint32>(
-                                    std::llround(static_cast<Double>(std::clamp(v, 0.0f, 1.0f)) * 4294967295.0));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_INT: {
-                                const auto out = static_cast<Int32>(
-                                    std::llround(static_cast<Double>(std::clamp(v, -1.0f, 1.0f)) * 2147483647.0));
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            case GL_FLOAT:
-                                Memcpy(dstComponent, &v, sizeof(v));
-                                break;
-                            case GL_HALF_FLOAT: {
-                                const Uint16 out = EncodeFloatToHalfBits(v);
-                                Memcpy(dstComponent, &out, sizeof(out));
-                                break;
-                            }
-                            default:
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        static SizeT AlignReadbackRow(SizeT rowBytes, Int alignment) {
-            const SizeT align = alignment > 0 ? static_cast<SizeT>(alignment) : 1;
-            return (rowBytes + align - 1) / align * align;
-        }
-
-        // Walks the client-side destination the PACK parameters describe and hands each row to
-        // `fillRow(slice, row, dstRow)`, which writes width * dstPixelBytes bytes of finished client
-        // texels. Shared by the converting and the raw-word stores so both address the destination -
-        // and feed the bound pixel-pack buffer - identically.
-        // applyPackImageParams: GL_PACK_IMAGE_HEIGHT / GL_PACK_SKIP_IMAGES apply only to GetTexImage
-        // of 3D/array images; ReadPixels and 2D GetTexImage ignore them (GL 3.3 sections 4.3.1, 6.1.4).
-        // Per the GL addressing rules, slice k row j lands at
-        // SKIP_IMAGES*imageStride + SKIP_ROWS*rowStride + SKIP_PIXELS*pixelBytes
-        //   + k*imageStride + j*rowStride, with imageStride = max(IMAGE_HEIGHT, sliceHeight)*rowStride.
-        template <typename FillRow>
-        static Bool StoreClientRows(SizeT dstPixelBytes, SizeT swapGroupSize, GLsizei width, GLsizei sliceHeight,
-                                    GLsizei sliceCount, void* pixels, Bool applyPackImageParams, FillRow&& fillRow) {
-            const auto& pixelPackBufferObject =
-                MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
-
-            // Destination layout is computed from the client-side PACK parameters; only the actual pixel
-            // rows are written so skip regions of the destination stay untouched.
-            const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
-            const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
-            const SizeT dstRowStride = AlignReadbackRow(rowPixels * dstPixelBytes, packParams.Alignment);
-            const SizeT imageRows =
-                applyPackImageParams && packParams.ImageHeight > 0
-                    ? static_cast<SizeT>(packParams.ImageHeight)
-                    : static_cast<SizeT>(sliceHeight);
-            const SizeT dstImageStride = imageRows * dstRowStride;
-            const SizeT skipImages =
-                applyPackImageParams ? static_cast<SizeT>(std::max(packParams.SkipImages, 0)) : SizeT{0};
-            const SizeT dstSkipOffset = skipImages * dstImageStride +
-                                        static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
-                                        static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
-            const SizeT dstRowBytes = static_cast<SizeT>(width) * dstPixelBytes;
-
-            const SizeT pboBaseOffset = reinterpret_cast<SizeT>(pixels); // with a PBO, `pixels` is an offset
-            if (pixelPackBufferObject) {
-                const SizeT requiredSize = pboBaseOffset + dstSkipOffset +
-                                        static_cast<SizeT>(sliceCount - 1) * dstImageStride +
-                                        static_cast<SizeT>(sliceHeight - 1) * dstRowStride + dstRowBytes;
-                if (requiredSize > pixelPackBufferObject->GetSize()) {
-                    MGLOG_E_ONCE("Readback conversion: pixel pack buffer is too small");
-                    return true;
-                }
-            }
-
-            Vector<Uint8> convertedRow(dstRowBytes);
-
-            for (GLsizei slice = 0; slice < sliceCount; ++slice) {
-                for (GLsizei row = 0; row < sliceHeight; ++row) {
-                    fillRow(slice, row, convertedRow.data());
-
-                    if (packParams.SwapBytes && swapGroupSize > 1) {
-                        for (SizeT offset = 0; offset + swapGroupSize <= dstRowBytes; offset += swapGroupSize) {
-                            std::reverse(convertedRow.data() + offset, convertedRow.data() + offset + swapGroupSize);
-                        }
-                    }
-
-                    const SizeT dstOffset = dstSkipOffset + static_cast<SizeT>(slice) * dstImageStride +
-                                         static_cast<SizeT>(row) * dstRowStride;
-                    if (pixelPackBufferObject) {
-                        pixelPackBufferObject->WritebackFromBackend({convertedRow.data(), dstRowBytes},
-                                                                 pboBaseOffset + dstOffset);
-                    } else {
-                        Memcpy(static_cast<Uint8*>(pixels) + dstOffset, convertedRow.data(), dstRowBytes);
-                    }
-                }
-            }
-            if (pixelPackBufferObject) {
-                // WritebackFromBackend bumps change serials with no backend op; re-open
-                // the buffer draw-clean memos (once for the whole row loop).
-                BufferImpl::BumpBufferMutationEpoch();
-            }
-            return true;
-        }
-
-        // Repacks wide RGBA(_INTEGER) rows into the client's (format, type) layout, honoring the
-        // client-side PACK parameters and the bound pixel-pack buffer. `wide` holds
-        // `sliceHeight * sliceCount` rows of `width` texels (slice-major, tightly stacked),
-        // 4 components x GetReadbackComponentSize(wideType) bytes each.
-        Bool StoreWideRowsToClient(const Uint8* wide, GLenum wideType, GLsizei width, GLsizei sliceHeight,
-                                   GLsizei sliceCount, const ReadbackChannelMapping& mapping, GLenum type,
-                                   void* pixels, Bool applyPackImageParams) {
-            const SizeT dstPixelBytes = GetReadbackDstPixelSize(mapping, type);
-            if (dstPixelBytes == 0) {
-                return false;
-            }
-            PackedReadbackLayout packedLayout{};
-            const Bool isPackedType = GetPackedReadbackLayout(type, packedLayout);
-            const SizeT swapGroupSize = isPackedType ? packedLayout.byteSize : GetReadbackComponentSize(type);
-            const SizeT srcPixelBytes = 4 * GetReadbackComponentSize(wideType);
-
-            return StoreClientRows(dstPixelBytes, swapGroupSize, width, sliceHeight, sliceCount, pixels,
-                                   applyPackImageParams,
-                                   [&](GLsizei slice, GLsizei row, Uint8* dstRow) {
-                                       const SizeT flatRow = static_cast<SizeT>(slice) *
-                                                                 static_cast<SizeT>(sliceHeight) +
-                                                             static_cast<SizeT>(row);
-                                       const Uint8* srcRow =
-                                           wide + flatRow * static_cast<SizeT>(width) * srcPixelBytes;
-                                       ConvertWideReadbackRow(srcRow, dstRow, static_cast<SizeT>(width), wideType,
-                                                              mapping, type);
-                                   });
-        }
-
-        Bool StorePackedWordsToClient(const Uint8* srcWords, GLsizei width, GLsizei sliceHeight, GLsizei sliceCount,
-                                      GLenum type, void* pixels, Bool applyPackImageParams) {
-            PackedReadbackLayout packedLayout{};
-            if (!GetPackedReadbackLayout(type, packedLayout) || packedLayout.byteSize != 4) {
-                return false;
-            }
-            const SizeT srcRowBytes = static_cast<SizeT>(width) * 4;
-
-            return StoreClientRows(4, packedLayout.byteSize, width, sliceHeight, sliceCount, pixels,
-                                   applyPackImageParams,
-                                   [&](GLsizei slice, GLsizei row, Uint8* dstRow) {
-                                       const SizeT flatRow = static_cast<SizeT>(slice) *
-                                                                 static_cast<SizeT>(sliceHeight) +
-                                                             static_cast<SizeT>(row);
-                                       Memcpy(dstRow, srcWords + flatRow * srcRowBytes, srcRowBytes);
-                                   });
-        }
-    } // namespace ReadbackImpl
 } // namespace MobileGL::MG_Backend::DirectGLES

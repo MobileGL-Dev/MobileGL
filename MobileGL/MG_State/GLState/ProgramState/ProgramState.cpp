@@ -25,19 +25,24 @@ namespace MobileGL::MG_State::GLState {
         return m_programObjects[id];
     }
 
-    void ProgramState::MarkProgramObjectForDeletion(const Uint program) {
+    Bool ProgramState::HasProgramSlot(const Uint program) const {
+        return CheckIndexAvail(program, m_programObjects);
+    }
+
+    void ProgramState::MarkProgramObjectForDeletion(const Uint program,
+                                                    const SharedPtr<ProgramObject>& currentProgram) {
         if (!CheckIndexAvail(program, m_programObjects)) return; // FIXME: add error reporting here
         auto& programObject = m_programObjects[program];
         if (programObject != nullptr) {
             programObject->MarkAsDeleted();
             // A program in use is only FLAGGED: its name (and every program query) stays
             // valid until it stops being current, at which point UseProgram finishes the job.
-            if (programObject == m_currentProgram) return;
-            DestroyProgramSlot(program);
+            if (programObject == currentProgram) return;
+            DestroyProgramSlot(program, currentProgram);
         }
     }
 
-    void ProgramState::DestroyProgramSlot(const Uint program) {
+    void ProgramState::DestroyProgramSlot(const Uint program, const SharedPtr<ProgramObject>& currentProgram) {
         auto& programObject = m_programObjects[program];
         // P1 join site J4/J5 (glDeleteProgram, and the deferred destroy UseProgram performs
         // when a deletion-flagged program stops being current). The program's name is about
@@ -55,32 +60,13 @@ namespace MobileGL::MG_State::GLState {
         for (const auto& shader : attachedShaders) {
             const Uint shaderName = shader->GetExternalIndex();
             if (CheckIndexAvail(shaderName, m_shaderObjects) && m_shaderObjects[shaderName] == shader) {
-                ReleaseShaderNameIfOrphaned(shaderName);
+                ReleaseShaderNameIfOrphaned(shaderName, currentProgram);
             }
         }
     }
 
     Bool ProgramState::ValidateProgramObject(const Uint program) const {
         return CheckIndexAvail(program, m_programObjects) && m_programObjects[program] != nullptr;
-    }
-
-    void ProgramState::UseProgram(Uint program) {
-        const SharedPtr<ProgramObject> previous = m_currentProgram;
-
-        if (program == 0) m_currentProgram.reset();
-
-        if (CheckIndexAvail(program, m_programObjects)) {
-            m_currentProgram = m_programObjects[program];
-        }
-
-        // A deletion flagged while the program was current takes effect the moment it
-        // stops being current.
-        if (previous != nullptr && previous != m_currentProgram && previous->GetDeleteStatus()) {
-            const Uint previousName = previous->GetExternalIndex();
-            if (CheckIndexAvail(previousName, m_programObjects) && m_programObjects[previousName] == previous) {
-                DestroyProgramSlot(previousName);
-            }
-        }
     }
 
     Uint ProgramState::CreateShader(ShaderStage stage) {
@@ -100,7 +86,7 @@ namespace MobileGL::MG_State::GLState {
         return m_shaderObjects[shader];
     }
 
-    void ProgramState::JoinAllPendingWork() {
+    void ProgramState::JoinAllPendingWork(const SharedPtr<ProgramObject>& currentProgram) {
         // Programs first: a link joins the compiles it depends on, so the shader pass that
         // follows finds most of them already settled. The reverse order would be correct but
         // would wait on each compile twice - once here, once inside the link's own prologue.
@@ -126,10 +112,10 @@ namespace MobileGL::MG_State::GLState {
         // The currently-used program is reachable through m_programObjects unless
         // glDeleteProgram already freed its slot while it stayed current. Nothing else holds
         // a GL-visible name for it, but a draw would still join it, so settle it here too.
-        if (m_currentProgram) m_currentProgram->JoinLinkAndSpirv();
+        if (currentProgram) currentProgram->JoinLinkAndSpirv();
     }
 
-    void ProgramState::MarkShaderObjectForDeletion(Uint shader) {
+    void ProgramState::MarkShaderObjectForDeletion(Uint shader, const SharedPtr<ProgramObject>& currentProgram) {
         if (!CheckIndexAvail(shader, m_shaderObjects)) return;
         auto& shaderObject = m_shaderObjects[shader];
         if (shaderObject != nullptr) {
@@ -138,11 +124,12 @@ namespace MobileGL::MG_State::GLState {
             // from every program. The GL CTS compiles shaders through exactly this
             // create-attach-delete-source-compile sequence (uniform_block.common.name_matching).
             shaderObject->MarkAsDeleted();
-            ReleaseShaderNameIfOrphaned(shader);
+            ReleaseShaderNameIfOrphaned(shader, currentProgram);
         }
     }
 
-    Bool ProgramState::ShaderHasGLVisibleAttachment(const SharedPtr<ShaderObject>& shaderObject) const {
+    Bool ProgramState::ShaderHasGLVisibleAttachment(const SharedPtr<ShaderObject>& shaderObject,
+                                                    const SharedPtr<ProgramObject>& currentProgram) const {
         for (const auto& programObject : m_programObjects) {
             if (programObject != nullptr && programObject->ShaderIsAttachedGLVisible(shaderObject)) {
                 return true;
@@ -150,14 +137,14 @@ namespace MobileGL::MG_State::GLState {
         }
         // A program deleted while current vacates its table slot but stays alive as the
         // current program; its attachments still count.
-        return m_currentProgram != nullptr && m_currentProgram->ShaderIsAttachedGLVisible(shaderObject);
+        return currentProgram != nullptr && currentProgram->ShaderIsAttachedGLVisible(shaderObject);
     }
 
-    void ProgramState::ReleaseShaderNameIfOrphaned(Uint shader) {
+    void ProgramState::ReleaseShaderNameIfOrphaned(Uint shader, const SharedPtr<ProgramObject>& currentProgram) {
         if (!CheckIndexAvail(shader, m_shaderObjects)) return;
         auto& shaderObject = m_shaderObjects[shader];
         if (shaderObject == nullptr || !shaderObject->GetDeleteStatus()) return;
-        if (ShaderHasGLVisibleAttachment(shaderObject)) return;
+        if (ShaderHasGLVisibleAttachment(shaderObject, currentProgram)) return;
         // The name is about to go, so nothing can observe this shader's compile through THIS
         // object any more and a job still in flight for it is pure waste - unless another
         // shader object adopted the same node (stage 6) or a pending link pinned it, which is

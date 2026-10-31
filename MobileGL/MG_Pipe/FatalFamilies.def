@@ -1,0 +1,71 @@
+// MobileGL - MobileGL/MG_Pipe/FatalFamilies.def
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// The internal fatal families and the coarse wire FatalCode each one reports to the peer. The
+// family word stays in the local log and in the SessionFault frame's `family` string. The table
+// is total: a family without a row does not compile (the build has no -Werror, so -Wswitch
+// cannot catch a missing arm). What each code means and how to choose one: ARCHITECTURE.md
+// §15.3.1. DeviceLost is set only by the latch, so no row projects onto it. Reuse an existing
+// family when it already describes the failure.
+//
+// clang-format off
+
+// X(Family, WireFatalCode, Why)
+#define MGL_FATAL_FAMILY_LIST(X) \
+    X(ProtocolCorruption,            ProtocolCorruption, "a record's bounds or self-describing length was violated") \
+    X(UnmigratedVerb,                ProtocolCorruption, "a wire verb slot P5/P6 does not implement was reached") \
+    X(UnmigratedSurface,             ProtocolCorruption, "a surface op named a client-process handle that means nothing here (a windowed client uses MOBILEGL_IPC_SURFACE=server)") \
+    X(UnmigratedPipeInput,           ProtocolCorruption, "a PipeInputs field with no field-ownership row was read across the boundary") \
+    X(UnmigratedEmulation,           ProtocolCorruption, "an emulation path the applier has no migrated arm for was reached") \
+    X(RoleViolation,                 ProtocolCorruption, "a call ran on the wrong role/thread - an invariant the two roles must hold") \
+    X(UnsetCallMask,                 ProtocolCorruption, "the CallMask was consulted before either half was published") \
+    X(CapsBeforeFirstSnapshot,       ProtocolCorruption, "a record family's liveness was asked of a placeholder caps mirror (F1)") \
+    X(ConsumerMaskLie,               ProtocolCorruption, "the server published a consumer bit for a family whose op table is absent") \
+    X(ClientTablesUninstalled,       ProtocolCorruption, "the applier ran before the client installed its tables") \
+    X(NoClientSession,               ProtocolCorruption, "a path that needs the client session ran without one") \
+    X(UnnamedIdentity,               ProtocolCorruption, "a per-context memo was consulted with a null context identity") \
+    X(PipeLegacyMemosDisabled,       ProtocolCorruption, "a subsystem bit is clear and this build compiles no legacy arm to fall back to (unreachable since P13 W3b fixed bits 0-13 on)") \
+    X(PipeSubsystemsFixedOn,         ProtocolCorruption, "MOBILEGL_PIPE_PUSH cleared one of subsystem bits 0-13, which P13 fixed on") \
+    X(PipeVerifyBadKnob,             ProtocolCorruption, "MOBILEGL_PIPE_VERIFY_CORRUPT named a field that does not exist") \
+    X(PipeVerifyDiffer,              ProtocolCorruption, "the verify comparator found a pushed field differing from the live one") \
+    X(UnexpectedMapAccept,           ProtocolCorruption, "a persistent-map accept arrived where the protocol permits none") \
+    X(UncarriedInitialBytes,         ProtocolCorruption, "a producer's initial bytes were required on the wire and absent") \
+    X(ReplyStatusInvalid,            ProtocolCorruption, "a reply carried a status outside the defined set") \
+    X(ReplyError,                    ProtocolCorruption, "a reply-owning verb saw an error status it cannot represent") \
+    X(ReplyMissing,                  ProtocolCorruption, "a reply slot the protocol requires was empty") \
+    X(ReplyMismatched,               ProtocolCorruption, "the reply mailbox held an answer for a different slot than the one waited on") \
+    X(ReplyOverrun,                  ProtocolCorruption, "an answer was posted while a previous one was still unread") \
+    X(ReplyToNoSlot,                 ProtocolCorruption, "an answer was posted against reply slot 0, which means \"no record\"") \
+    X(ReplyTooLarge,                 ProtocolCorruption, "an answer exceeded the size its verb's contract allows") \
+    X(ResidualBlockSize,             ProtocolCorruption, "a fixed-size residual block arrived at a size that is not its own") \
+    X(ReadbackDeclined,              ProtocolCorruption, "a readback that cannot return without complete pixels was declined") \
+    X(ReadbackReplyShort,            ProtocolCorruption, "a readback reply carried fewer bytes than its shape requires") \
+    X(UnsizedReadback,               ProtocolCorruption, "a readback arrived with no declared size") \
+    X(BlobMissing,                   ProtocolCorruption, "a record named a blob that was never staged") \
+    X(BlobNotStaged,                 ProtocolCorruption, "a blob was referenced before its staging completed") \
+    X(ArtifactsMissing,              ProtocolCorruption, "a program create arrived with no artifacts") \
+    X(ArchiveEmpty,                  ProtocolCorruption, "a create_*_state archive carried no payload") \
+    X(BarrierViolation,             ProtocolCorruption, "a field was pulled across a verb boundary the barrier forbids") \
+    X(UnimplementedAdoptTier,        ProtocolCorruption, "MOBILEGL_IPC_ADOPT_TIER named a tier P5 does not implement") \
+    X(UnimplementedWritebackWait,    ProtocolCorruption, "a writeback wait shape P5 does not implement was requested") \
+    X(UnimplementedRemoteBackendObject, ProtocolCorruption, "a BackendObject_Remote entry point P5 does not implement was called") \
+    X(UnimplementedClientSession,    ProtocolCorruption, "a ClientSession entry point P5 does not implement was called") \
+    X(RingOverrun,                   RingOverrun,        "a shared ring refused a record after sufficient space had retired") \
+    X(EventRingOverflow,             RingOverrun,        "the reverse event ring overflowed") \
+    X(StageSnapshotTooNarrow,        SegmentMismatch,    "SEG_STAGE was too small for a snapshot a verb had to place in it") \
+    X(AbiMismatch,                   AbiMismatch,        "the two builds disagree on struct layout or protocol version") \
+    X(BarrierTimeout,                ServerCrashed,      "appliedSeq did not reach the target within the bounded wait") \
+    X(PresentCreditTimeout,          ServerCrashed,      "a present credit did not return within the bounded wait") \
+    X(RetirementWaitFailed,          ServerCrashed,      "a wait for the server to retire staging did not complete") \
+    X(ApplyThreadJoinTimeout,        ServerCrashed,      "the apply thread did not join within its bound at teardown") \
+    X(ApplyThreadNotRunning,         ServerCrashed,      "an operation needed the apply thread and it was not running") \
+    X(ResourceUnavailable,           ServerCrashed,      "the server could not obtain a native GL/Vulkan resource it had to have") \
+    X(ServerWindowLost,              ServerCrashed,      "the server's own display window was destroyed under a live on-screen session (P12)") \
+    X(BackendDeviceLost,             ServerCrashed,      "the GPU device a session's backend renders with was lost (fault or hang reset)")
+
+// clang-format on

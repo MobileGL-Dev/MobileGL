@@ -41,8 +41,7 @@ protected:
     // binary, so drain whatever an earlier test left pending - otherwise an error-code assertion
     // here reads someone else's error. Bounded: one flag per code, so this cannot hang the suite.
     static void DrainPendingGlErrors() {
-        for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {
-        }
+        for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {}
     }
 
     // The call under test must raise exactly the expected error and nothing more: a second pending
@@ -302,7 +301,7 @@ TEST_F(VertexArrayTest, CurrentVertexAttributeStorageCoversFullCapacity) {
     EXPECT_FLOAT_EQ(stored.floatValue[0], 1.0f);
     EXPECT_FLOAT_EQ(stored.floatValue[3], 4.0f);
 
-    // Neighbouring slots keep the GL default of (0, 0, 0, 1).
+    // Neighboring slots keep the GL default of (0, 0, 0, 1).
     const auto& untouched = MG_State::pGLContext->GetCurrentVertexAttribute(highIndex - 1);
     EXPECT_FLOAT_EQ(untouched.floatValue[0], 0.0f);
     EXPECT_FLOAT_EQ(untouched.floatValue[3], 1.0f);
@@ -361,14 +360,54 @@ TEST_F(VertexArrayTest, DefaultAttributeBindingIsIdentityAcrossFullCapacity) {
     EXPECT_EQ(vao->GetAttribute(0).Buffer, nullptr);
 }
 
+// P15: the elements version (what keys the vertex-elements record) moves on everything that
+// record carries and on nothing else. A glBindVertexBuffer that only swaps the buffer moves the
+// config version but not the elements version; offset, stride, presence and enables move both.
+TEST_F(VertexArrayTest, ElementsVersionIgnoresABufferOnlySwapAndTracksEverythingTheRecordCarries) {
+    Vector<Uint> vaoNames;
+    MG_State::pGLContext->GenVertexArrayNames(1, vaoNames);
+    auto vao = MG_State::pGLContext->CreateVertexArrayObject(vaoNames[0]);
+    MG_State::pGLContext->BindVertexArray(vaoNames[0]);
+    auto vboA = CreateTestVBO();
+    auto vboB = CreateTestVBO();
+
+    vao->SetAttributeFormatSeparate(0, 3, DataType::Float32, false, false, 0);
+    vao->SetBindingBuffer(0, vboA, 0, 12);
+    vao->EnableAttribute(0);
+
+    Uint32 config = vao->GetConfigVersion(), elements = vao->GetElementsVersion();
+    const auto expectMoved = [&](Bool configMoves, Bool elementsMove, const char* what) {
+        EXPECT_EQ(vao->GetConfigVersion() != config, configMoves) << what;
+        EXPECT_EQ(vao->GetElementsVersion() != elements, elementsMove) << what;
+        config = vao->GetConfigVersion();
+        elements = vao->GetElementsVersion();
+    };
+
+    vao->SetBindingBuffer(0, vboB, 0, 12);
+    expectMoved(true, false, "buffer-only swap");
+    vao->SetBindingBuffer(0, vboB, 0, 12);
+    expectMoved(false, false, "identical rebind");
+    vao->SetBindingBuffer(0, vboA, 16, 12);
+    expectMoved(true, true, "offset change");
+    vao->SetBindingBuffer(0, vboA, 16, 24);
+    expectMoved(true, true, "stride change");
+    vao->SetBindingBuffer(0, nullptr, 16, 24);
+    expectMoved(true, true, "buffer -> none");
+    vao->SetBindingBuffer(0, vboB, 16, 24);
+    expectMoved(true, true, "none -> buffer");
+    vao->DisableAttribute(0);
+    expectMoved(true, true, "disable");
+    vao->SetBindingDivisor(0, 1);
+    expectMoved(true, true, "divisor");
+}
+
 using namespace MobileGL::MG_Impl::GLImpl;
 
 class GeneralVertexArrayTest : public ::testing::Test {
 protected:
     void SetUp() override { MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>(); }
 
-    void TearDown() override {
-    }
+    void TearDown() override {}
 
     GLuint CreateVAO() {
         GLuint vao;
@@ -966,9 +1005,9 @@ TEST_F(GeneralVertexArrayTest, CurrentAttrib_SignedNormalizedUsesGl33Formula) {
     const GLbyte extremes[4] = {-128, 127, 0, 127};
     VertexAttrib4Nbv(1, extremes);
     GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
-    EXPECT_FLOAT_EQ(out[0], -1.0f);              // exact, no clamp
-    EXPECT_FLOAT_EQ(out[1], 1.0f);               // exact
-    EXPECT_FLOAT_EQ(out[2], 1.0f / 255.0f);      // 0 -> 1/255, NOT 0.0
+    EXPECT_FLOAT_EQ(out[0], -1.0f);         // exact, no clamp
+    EXPECT_FLOAT_EQ(out[1], 1.0f);          // exact
+    EXPECT_FLOAT_EQ(out[2], 1.0f / 255.0f); // 0 -> 1/255, NOT 0.0
     EXPECT_FLOAT_EQ(out[3], 1.0f);
 
     const GLshort sExtremes[4] = {-32768, 32767, 0, 0};
@@ -1090,10 +1129,10 @@ TEST_F(GeneralVertexArrayTest, CurrentAttrib_PackedUnsigned) {
     VertexAttribP4ui(1, GL_UNSIGNED_INT_2_10_10_10_REV, GL_TRUE, packed);
     GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
-    EXPECT_FLOAT_EQ(out[0], 1.0f);              // 1023/1023
-    EXPECT_FLOAT_EQ(out[1], 0.0f);              // 0/1023
-    EXPECT_FLOAT_EQ(out[2], 512.0f / 1023.0f);  // 10-bit divisor, NOT 1023 for w
-    EXPECT_FLOAT_EQ(out[3], 1.0f);              // 3/3 (2-bit divisor)
+    EXPECT_FLOAT_EQ(out[0], 1.0f);             // 1023/1023
+    EXPECT_FLOAT_EQ(out[1], 0.0f);             // 0/1023
+    EXPECT_FLOAT_EQ(out[2], 512.0f / 1023.0f); // 10-bit divisor, NOT 1023 for w
+    EXPECT_FLOAT_EQ(out[3], 1.0f);             // 3/3 (2-bit divisor)
 
     // Unnormalized: the field values are cast straight to float, no scaling.
     VertexAttribP4ui(1, GL_UNSIGNED_INT_2_10_10_10_REV, GL_FALSE, packed);
@@ -1115,10 +1154,10 @@ TEST_F(GeneralVertexArrayTest, CurrentAttrib_PackedSignedUsesGl33Formula) {
     VertexAttribP4ui(1, GL_INT_2_10_10_10_REV, GL_TRUE, packed);
     GetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, out);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
-    EXPECT_FLOAT_EQ(out[0], 1.0f);             // (2*511+1)/1023 = 1023/1023
-    EXPECT_FLOAT_EQ(out[1], -1.0f);            // (2*-512+1)/1023 = -1023/1023
-    EXPECT_FLOAT_EQ(out[2], 1.0f / 1023.0f);   // (2*0+1)/1023 -- 4.2 rule would give 0.0
-    EXPECT_FLOAT_EQ(out[3], 1.0f);             // (2*1+1)/3 = 3/3
+    EXPECT_FLOAT_EQ(out[0], 1.0f);           // (2*511+1)/1023 = 1023/1023
+    EXPECT_FLOAT_EQ(out[1], -1.0f);          // (2*-512+1)/1023 = -1023/1023
+    EXPECT_FLOAT_EQ(out[2], 1.0f / 1023.0f); // (2*0+1)/1023 -- 4.2 rule would give 0.0
+    EXPECT_FLOAT_EQ(out[3], 1.0f);           // (2*1+1)/3 = 3/3
 
     // 2-bit signed minimum: w field = 0b10 = -2 -> (2*-2+1)/3 = -1.0.
     VertexAttribP4ui(1, GL_INT_2_10_10_10_REV, GL_TRUE, 2u << 30);
@@ -1181,7 +1220,7 @@ TEST_F(GeneralVertexArrayTest, CurrentAttrib_PackedValidation) {
     EXPECT_EQ(GetError(), GL_NO_ERROR);
     GetVertexAttribfv(0, GL_CURRENT_VERTEX_ATTRIB, out);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
-    EXPECT_FLOAT_EQ(out[0], 1.0f); // x field of the packed word
+    EXPECT_FLOAT_EQ(out[0], 1.0f);             // x field of the packed word
     VertexAttrib4f(0, 0.0f, 0.0f, 0.0f, 1.0f); // restore the initial current value
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 
@@ -1289,7 +1328,6 @@ TEST_F(GeneralVertexArrayTest, ArrayFormat_IntegerPathRejectsPackedAndBgra) {
     EXPECT_TRUE(a0.IsInteger);
     EXPECT_FALSE(a0.IsBgra);
 }
-
 
 // The integer path takes exactly the eight signed/unsigned integer types (GL 4.6 core 10.3.2).
 // The old check was a blacklist of Unknown + the packed types, so GL_FLOAT / GL_HALF_FLOAT /

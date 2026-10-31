@@ -1,0 +1,303 @@
+// MobileGL - MobileGL/MG_Test/Pipe/SlotAllocatorTest.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// The client slot allocator's IDENTITY CONTRACT (P2 brief C.0 c3). Everything Track H keys
+// off - Espryt's six slot tables and Magma's VaoDrawMemo - is only as sound as these five
+// statements, and each of them is the answer to a bug the {slot, gen} pair exists to close:
+//
+//   GenMovesOnlyOnSlotReuse            - a respecify must NOT move the generation, or every
+//                                        glBufferData would invalidate every memo; a REUSE
+//                                        must, or a stale handle would address its successor.
+//   FreedSlotComesBackBeforeHighWater  - slots stay DENSE, which is what lets the server's
+//                                        object table be an array rather than a hash map.
+//   SlotZeroIsNeverHandedOut           - {0, 0} is the null handle for every kind and {0, 1}
+//                                        is the default framebuffer.
+//   LifetimeIdSurvivesARecycledAddress - the frontend key is the lifetime id, never a heap
+//                                        address and never a GL name, so an ABA on either
+//                                        cannot reproduce a handle. This is the ABA
+//                                        HandleRecycleScenario reproduces end to end.
+//   CompositeShaderBandIsNeverHandedOut- the top 1/16 of the ShaderCso slot space belongs to
+//                                        the program-pipeline composite resolver.
+//
+// Needs the push sources (SlotAllocator.cpp is compiled only under MOBILEGL_PIPE_PUSH), so
+// every case is a visible SKIP in a pull build rather than a vanishing test, and the five
+// names are the same five in every build.
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <memory>
+#include <unordered_map>
+
+#include "Includes.h"
+#include <MG_Pipe/MGPipe.h>
+
+#include <MG_Impl/Pipe/SlotAllocator.h>
+#include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
+
+using namespace MobileGL;
+using namespace MobileGL::MG_Pipe;
+
+namespace {
+    // Slot 0 is reserved for every kind - null, and the default framebuffer for kind
+    // Framebuffer - so the first allocatable slot is 1 in every build, pull included.
+    TEST(SlotAllocator, ReservedHandlesAreWhatMGPipeHandlesSaysTheyAre) {
+        EXPECT_EQ(kMGPipeFirstAllocatableSlot, 1u);
+        EXPECT_TRUE(MGPipeHandleIsNull(kMGPipeNullHandle));
+        EXPECT_FALSE(MGPipeHandleIsNull(kMGPipeDefaultFramebuffer));
+        EXPECT_EQ(kMGPipeDefaultFramebuffer.Slot, 0u);
+    }
+
+    TEST(SlotAllocator, GenMovesOnlyOnSlotReuse) {
+        MGPipeSlotAllocator allocator;
+
+        const MGPipeHandle first = allocator.Allocate(MGPipeKind::Buffer);
+        const MGPipeHandle second = allocator.Allocate(MGPipeKind::Buffer);
+        EXPECT_EQ(first.Gen, 0u) << "a slot's FIRST handout is generation 0";
+        EXPECT_EQ(second.Gen, 0u);
+        EXPECT_NE(first.Slot, second.Slot);
+        EXPECT_TRUE(allocator.IsLive(MGPipeKind::Buffer, first));
+
+        // A respecify is not an event here at all: nothing in the allocator's interface can
+        // move a live handle's generation, which is the contract "gen increments only when a
+        // slot is REUSED, never on a respecify" stated as an absence.
+        EXPECT_EQ(allocator.GenOfSlot(MGPipeKind::Buffer, first.Slot), first.Gen);
+
+        allocator.Free(MGPipeKind::Buffer, first);
+        EXPECT_FALSE(allocator.IsLive(MGPipeKind::Buffer, first));
+        // The bump happens on the NEXT handout, not on the free, so a slot that is freed and
+        // never reused keeps its generation - and a double free cannot skip one.
+        EXPECT_EQ(allocator.GenOfSlot(MGPipeKind::Buffer, first.Slot), first.Gen);
+        allocator.Free(MGPipeKind::Buffer, first);
+        EXPECT_EQ(allocator.GenOfSlot(MGPipeKind::Buffer, first.Slot), first.Gen);
+
+        const MGPipeHandle reused = allocator.Allocate(MGPipeKind::Buffer);
+        EXPECT_EQ(reused.Slot, first.Slot) << "the free list did not hand the slot back";
+        EXPECT_NE(reused.Gen, first.Gen) << "a REUSED slot must carry a new generation";
+        EXPECT_EQ(reused.Gen, first.Gen + 1);
+
+        // THE POINT OF THE GENERATION: the dead handle is not the live one, it does not
+        // validate, and it cannot free the slot its successor now owns.
+        EXPECT_FALSE(first == reused);
+        EXPECT_FALSE(allocator.IsLive(MGPipeKind::Buffer, first));
+        EXPECT_TRUE(allocator.IsLive(MGPipeKind::Buffer, reused));
+        allocator.Free(MGPipeKind::Buffer, first);
+        EXPECT_TRUE(allocator.IsLive(MGPipeKind::Buffer, reused)) << "a stale handle freed a live slot";
+
+        // Kinds are independent slot spaces: a Buffer slot 1 and a Texture slot 1 are
+        // different objects, and freeing one must not touch the other.
+        const MGPipeHandle texture = allocator.Allocate(MGPipeKind::Texture);
+        EXPECT_EQ(texture.Slot, kMGPipeFirstAllocatableSlot);
+        EXPECT_EQ(texture.Gen, 0u);
+        EXPECT_TRUE(allocator.IsLive(MGPipeKind::Texture, texture));
+        EXPECT_TRUE(allocator.IsLive(MGPipeKind::Buffer, reused));
+    }
+
+    // P15: a hint (the handle a frontend object was last given, kept on the object) is a shortcut
+    // and never an answer of its own. It must give the live handle back, and it must miss - never
+    // name another object's handle - after a free, a recycle of its slot, or a reset.
+    TEST(SlotAllocator, AHandleHintIsOnlyBelievedWhileItsSlotStillBelongsToTheObject) {
+        MGPipeSlotAllocator allocator;
+        constexpr Uint64 kFirst = 1001, kSecond = 1002;
+
+        Uint64 hint = 0;
+        const MGPipeHandle minted = allocator.AcquireHinted(MGPipeKind::Buffer, kFirst, hint);
+        ASSERT_FALSE(MGPipeHandleIsNull(minted));
+        EXPECT_EQ(hint, MGPipePackHandleHint(minted)) << "a mint must leave the hint naming the new handle";
+        EXPECT_TRUE(allocator.FindByLifetimeIdHinted(MGPipeKind::Buffer, kFirst, hint) == minted);
+
+        // The slot is freed and handed to another object. The dead object's hint must miss, even
+        // when it is forged to carry the successor's exact slot and generation: the owner moved.
+        allocator.Free(MGPipeKind::Buffer, minted);
+        EXPECT_TRUE(MGPipeHandleIsNull(allocator.FindByLifetimeIdHinted(MGPipeKind::Buffer, kFirst, hint)))
+            << "a freed object's hint still answered";
+        Uint64 staleHint = MGPipePackHandleHint(minted);
+        const MGPipeHandle successor = allocator.AcquireHinted(MGPipeKind::Buffer, kSecond, staleHint);
+        EXPECT_EQ(successor.Slot, minted.Slot) << "the free list did not hand the slot back";
+        Uint64 forged = MGPipePackHandleHint(successor); // the successor's exact slot and generation
+        EXPECT_TRUE(MGPipeHandleIsNull(allocator.FindByLifetimeIdHinted(MGPipeKind::Buffer, kFirst, forged)))
+            << "a hint naming another object's live slot answered for the dead object";
+
+        // A reset forgets every handle; a hint from before it can only miss.
+        Uint64 beforeReset = MGPipePackHandleHint(successor);
+        allocator.Reset();
+        EXPECT_TRUE(MGPipeHandleIsNull(allocator.FindByLifetimeIdHinted(MGPipeKind::Buffer, kSecond, beforeReset)))
+            << "a hint survived the allocator's reset";
+    }
+
+    TEST(SlotAllocator, FreedSlotComesBackBeforeHighWaterGrows) {
+        MGPipeSlotAllocator allocator;
+
+        MGPipeHandle handles[8];
+        for (MGPipeHandle& handle : handles)
+            handle = allocator.Allocate(MGPipeKind::Framebuffer);
+        const Uint32 highWater = allocator.HighWater(MGPipeKind::Framebuffer);
+        EXPECT_EQ(allocator.LiveCount(MGPipeKind::Framebuffer), 8u);
+        EXPECT_EQ(allocator.FreeCount(MGPipeKind::Framebuffer), 0u);
+
+        allocator.Free(MGPipeKind::Framebuffer, handles[2]);
+        allocator.Free(MGPipeKind::Framebuffer, handles[5]);
+        EXPECT_EQ(allocator.LiveCount(MGPipeKind::Framebuffer), 6u);
+        EXPECT_EQ(allocator.FreeCount(MGPipeKind::Framebuffer), 2u);
+
+        // Density is the whole reason the server's object table can be an array: the two
+        // freed slots have to come back before a ninth is minted.
+        const MGPipeHandle a = allocator.Allocate(MGPipeKind::Framebuffer);
+        const MGPipeHandle b = allocator.Allocate(MGPipeKind::Framebuffer);
+        EXPECT_EQ(allocator.HighWater(MGPipeKind::Framebuffer), highWater) << "the high-water mark grew with two "
+                                                                              "slots waiting on the free list";
+        EXPECT_TRUE((a.Slot == handles[2].Slot && b.Slot == handles[5].Slot) ||
+                    (a.Slot == handles[5].Slot && b.Slot == handles[2].Slot))
+            << "the reused slots are not the two that were freed";
+
+        // Only now does the mark move.
+        const MGPipeHandle fresh = allocator.Allocate(MGPipeKind::Framebuffer);
+        EXPECT_GT(allocator.HighWater(MGPipeKind::Framebuffer), highWater);
+        EXPECT_EQ(fresh.Gen, 0u) << "a slot handed out for the FIRST time is generation 0";
+
+        allocator.Reset();
+        EXPECT_EQ(allocator.HighWater(MGPipeKind::Framebuffer), 0u);
+        EXPECT_EQ(allocator.LiveCount(MGPipeKind::Framebuffer), 0u);
+        EXPECT_EQ(allocator.FreeCount(MGPipeKind::Framebuffer), 0u);
+    }
+
+    TEST(SlotAllocator, SlotZeroIsNeverHandedOut) {
+        MGPipeSlotAllocator allocator;
+        for (SizeT kindIndex = 1; kindIndex < MGPipeSlotAllocator::kKindCount; ++kindIndex) {
+            const MGPipeKind kind = static_cast<MGPipeKind>(kindIndex);
+            for (int i = 0; i < 4; ++i) {
+                const MGPipeHandle handle = allocator.Allocate(kind);
+                EXPECT_GE(handle.Slot, kMGPipeFirstAllocatableSlot)
+                    << "kind " << kindIndex << " handed out the reserved slot";
+                EXPECT_FALSE(MGPipeHandleIsNull(handle));
+                // {0, 1} is the default framebuffer and must never be minted either.
+                EXPECT_FALSE(handle == kMGPipeDefaultFramebuffer);
+                allocator.Free(kind, handle);
+            }
+        }
+        // Freeing a slot never puts 0 on the free list, so a churned kind still starts at 1.
+        const MGPipeHandle again = allocator.Allocate(MGPipeKind::Buffer);
+        EXPECT_EQ(again.Slot, kMGPipeFirstAllocatableSlot);
+    }
+
+    TEST(SlotAllocator, LifetimeIdSurvivesARecycledAddress) {
+        using MG_State::GLState::VertexArrayObject;
+
+        // The allocation must actually happen: C++ permits eliding a new/delete pair, and an
+        // elided one would let two objects share an address for reasons that have nothing to
+        // do with the allocator. Publishing every pointer through a volatile sink keeps the
+        // pairs (MG_Test/State/ObjectLifetimeIdTest.cpp's trick, and the same one
+        // HandleRecycleScenario uses to reproduce the ABA through public GL).
+        static void* volatile addressSink = nullptr;
+
+        MGPipeSlotAllocator allocator;
+        std::unordered_map<std::uintptr_t, MGPipeHandle> handleAtAddress;
+        int reuseCount = 0;
+
+        for (int attempt = 0; attempt < 64; ++attempt) {
+            auto object = std::make_unique<VertexArrayObject>(0u);
+            addressSink = object.get();
+            const auto address = reinterpret_cast<std::uintptr_t>(object.get());
+            const Uint64 lifetimeId = object->GetLifetimeId();
+
+            // Acquire is the ordinary client path: find by lifetime id, allocate on a miss.
+            const MGPipeHandle handle = allocator.Acquire(MGPipeKind::VertexElementsCso, lifetimeId);
+            EXPECT_FALSE(MGPipeHandleIsNull(handle));
+            // Asking again with the same live object must answer the SAME handle - that is
+            // what makes the map an identity rather than a counter.
+            EXPECT_TRUE(allocator.Acquire(MGPipeKind::VertexElementsCso, lifetimeId) == handle);
+            EXPECT_EQ(allocator.LifetimeIdOfSlot(MGPipeKind::VertexElementsCso, handle.Slot), lifetimeId);
+
+            const auto previous = handleAtAddress.find(address);
+            if (previous != handleAtAddress.end()) {
+                ++reuseCount;
+                // THE ABA. The heap handed the same address back, and the handle must still
+                // be a different one - either a different slot, or the same slot with a new
+                // generation. If this ever held, an address-keyed memo would serve the dead
+                // object's entry to the live one, which is the bug Track H removes.
+                EXPECT_FALSE(previous->second == handle)
+                    << "a recycled heap address reproduced handle {slot=" << handle.Slot << ", gen=" << handle.Gen
+                    << "}";
+            }
+            handleAtAddress[address] = handle;
+
+            // The object dies; the client's death notification frees the slot.
+            allocator.Free(MGPipeKind::VertexElementsCso, handle);
+            EXPECT_FALSE(allocator.IsLive(MGPipeKind::VertexElementsCso, handle));
+            // And the lifetime id stops resolving, so a late lookup cannot resurrect it.
+            EXPECT_TRUE(MGPipeHandleIsNull(allocator.FindByLifetimeId(MGPipeKind::VertexElementsCso, lifetimeId)));
+        }
+
+        // Whether the heap repeats an address is the machine's business, not the allocator's,
+        // so the count is RECORDED and the case does not depend on it: the arm below proves
+        // the same property without waiting for luck, and it proves a STRICTLY STRONGER form
+        // of it. Acquire never sees an address at all (SlotAllocator.h) - it sees a lifetime
+        // id - so the sharpest possible ABA is not "the same address came back" but "the same
+        // LIFETIME ID came back", which is the key the map is actually built on. MG_State
+        // never reissues one, so this can only be built by hand; if even that cannot
+        // reproduce a handle, no recycled address can either.
+        RecordProperty("address_reuses_observed", reuseCount);
+
+        MGPipeSlotAllocator sharp;
+        const Uint64 repeatedLifetimeId = 0x5eed'0000'0000'0001ull;
+        const MGPipeHandle first = sharp.Acquire(MGPipeKind::VertexElementsCso, repeatedLifetimeId);
+        EXPECT_FALSE(MGPipeHandleIsNull(first));
+        sharp.Free(MGPipeKind::VertexElementsCso, first);
+        const MGPipeHandle second = sharp.Acquire(MGPipeKind::VertexElementsCso, repeatedLifetimeId);
+        EXPECT_FALSE(second == first) << "re-acquiring the SAME lifetime id after a free reproduced handle {slot="
+                                      << first.Slot << ", gen=" << first.Gen
+                                      << "}; an address-keyed or name-keyed memo would then serve the dead "
+                                         "object's entry to the live one";
+        EXPECT_EQ(second.Slot, first.Slot) << "the freed slot was not the one handed back";
+        EXPECT_EQ(second.Gen, first.Gen + 1) << "a reused slot must carry a new generation";
+        // And the dead handle stays dead, which is what makes the ABA detectable rather than
+        // merely unlikely.
+        EXPECT_FALSE(sharp.IsLive(MGPipeKind::VertexElementsCso, first));
+        EXPECT_TRUE(sharp.IsLive(MGPipeKind::VertexElementsCso, second));
+    }
+
+    TEST(SlotAllocator, CompositeShaderBandIsNeverHandedOut) {
+        MGPipeSlotAllocator allocator;
+        // Ordinary programs walk the low slots and never enter the band.
+        for (int i = 0; i < 8; ++i) {
+            const MGPipeHandle handle = allocator.Allocate(MGPipeKind::ShaderCso);
+            EXPECT_FALSE(MGPipeIsCompositeShaderSlot(handle.Slot));
+        }
+
+        // Every other kind is unaffected: the band is a ShaderCso rule, not a global one.
+        {
+            MGPipeSlotAllocator plain;
+            for (Uint32 i = 0; i < 4; ++i) {
+                const MGPipeHandle handle = plain.Allocate(MGPipeKind::Buffer);
+                EXPECT_EQ(handle.Slot, kMGPipeFirstAllocatableSlot + i);
+            }
+        }
+
+        // ONLY THE EXHAUSTION ARM needs the DEBUG skip, and it is placed here so the two arms
+        // above run in every build. Walking the ShaderCso slot space up to the band is what
+        // proves the band is held back, and reaching the band's edge trips the allocator's
+        // own "slot space is exhausted" MOBILEGL_ASSERT - which is live, and correctly so, in
+        // a DEBUG build. The claim is checked in the INFO builds every gate runs.
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
+        GTEST_SKIP() << "asserts are live in a DEBUG build and only the exhaustion arm trips one on purpose";
+#else
+        // Walk the whole space up to the band. The last handout below the base must be the
+        // slot immediately under it, and the next call must refuse rather than step in - a
+        // composite handle minted by the ordinary allocator would collide with one the
+        // program-pipeline resolver mints for a different object entirely.
+        MGPipeHandle last = kMGPipeNullHandle;
+        while (allocator.HighWater(MGPipeKind::ShaderCso) < kMGPipeShaderCsoCompositeSlotBase) {
+            last = allocator.Allocate(MGPipeKind::ShaderCso);
+            ASSERT_FALSE(MGPipeIsCompositeShaderSlot(last.Slot))
+                << "the ordinary allocator entered the composite band at slot " << last.Slot;
+        }
+        EXPECT_EQ(last.Slot, kMGPipeShaderCsoCompositeSlotBase - 1);
+        EXPECT_TRUE(MGPipeHandleIsNull(allocator.Allocate(MGPipeKind::ShaderCso)))
+            << "the allocator handed out a composite-band slot instead of refusing";
+#endif // the DEBUG guard on the exhaustion arm
+    }
+} // namespace

@@ -8,9 +8,198 @@
 
 #include "../../Includes.h"
 
+#include <cstring> // std::strcmp, for the spawned-server role check in InitFile
+
 namespace MobileGL {
     namespace MG_Util::Debug {
+        std::mutex& LogMutex();
         static FILE* s_logFile = nullptr;
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The server role's own sink. Opened lazily, on the first line a server-role thread
+        // writes, so a process that never plays the role never creates the file.
+        static FILE* s_serverLogFile = nullptr;
+        static LogForwarder s_forwarder = nullptr;
+        static void* s_forwarderUser = nullptr;
+        // P12 review fix (SetSessionLogForwarder). Written under BOTH mutexes, so either one is
+        // enough to read them; the lock order is LogMutex, then ForwardMutex.
+        static bool s_forwardSessionThreadsOnly = false;
+        static thread_local bool t_forwardsToPeer = false;
+        static thread_local bool t_forwarding = false; // a line logged by the send itself is not re-sent
+        static std::mutex& ForwardMutex() {
+            static std::mutex mutex;
+            return mutex;
+        }
+
+        void SetLogForwarder(LogForwarder forwarder, void* user) {
+            std::lock_guard<std::mutex> lock(LogMutex());
+            std::lock_guard<std::mutex> forwardLock(ForwardMutex());
+            s_forwarder = forwarder;
+            s_forwarderUser = user;
+            s_forwardSessionThreadsOnly = false;
+        }
+
+        void SetSessionLogForwarder(LogForwarder forwarder, void* user) {
+            {
+                std::lock_guard<std::mutex> lock(LogMutex());
+                std::lock_guard<std::mutex> forwardLock(ForwardMutex());
+                s_forwarder = forwarder;
+                s_forwarderUser = user;
+                s_forwardSessionThreadsOnly = forwarder != nullptr;
+            }
+            t_forwardsToPeer = forwarder != nullptr;
+        }
+
+        void SetThreadForwardsLogToPeer(bool forwards) {
+            t_forwardsToPeer = forwards;
+        }
+
+        void WithLogBarrier(void (*action)(void*), void* user) {
+            std::lock_guard<std::mutex> lock(LogMutex());
+            // A session-scoped line is sent under ForwardMutex after the log mutex was released; the
+            // barrier's action comes after every such send that has begun.
+            std::lock_guard<std::mutex> forwardLock(ForwardMutex());
+            action(user);
+        }
+
+        int LogLevelFromAndroidPriority(int priority) {
+            switch (priority) {
+            case ANDROID_LOG_VERBOSE:
+            case ANDROID_LOG_DEBUG:
+                return MOBILEGL_LOG_LEVEL_DEBUG;
+            case ANDROID_LOG_INFO:
+                return MOBILEGL_LOG_LEVEL_INFO;
+            case ANDROID_LOG_WARN:
+                return MOBILEGL_LOG_LEVEL_WARN;
+            case ANDROID_LOG_ERROR:
+                return MOBILEGL_LOG_LEVEL_ERROR;
+            case ANDROID_LOG_FATAL:
+                return MOBILEGL_LOG_LEVEL_FATAL;
+            default:
+                return MOBILEGL_LOG_LEVEL_INFO;
+            }
+        }
+
+        const char* LogLevelTag(int level) {
+            // The same five words MGLOG_D..MGLOG_F put in a header (Log.h), so a tagged peer line
+            // reads like a local one.
+            static const char* const kTags[] = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL"};
+            if (level < MOBILEGL_LOG_LEVEL_DEBUG) level = MOBILEGL_LOG_LEVEL_DEBUG;
+            if (level > MOBILEGL_LOG_LEVEL_FATAL) level = MOBILEGL_LOG_LEVEL_FATAL;
+            return kTags[level];
+        }
+
+        void WritePeerLog(int level, const char* message) {
+            std::lock_guard<std::mutex> lock(LogMutex());
+            const char* path = std::getenv("MOBILEGL_LOG_FILE_PATH");
+            if (!path || !*path) path = MOBILEGL_LOG_FILE_PATH;
+            if (!path || !*path) return;
+            if (!s_serverLogFile) s_serverLogFile = std::fopen(RoleLogPath(path, LogRole::Server).c_str(), "w");
+            if (s_serverLogFile) {
+                // A server-formatted line starts with its own "[time] [OS thread/LEVEL]: " header,
+                // level tag included, and is written untouched. Anything else gets the wire's level
+                // as its tag and a line end if it lacks one: the severity must survive into the file
+                // whatever the peer put in the text.
+                const bool headed = message[0] == '[';
+                if (!headed) std::fprintf(s_serverLogFile, "[peer/%s]: ", LogLevelTag(level));
+                std::fputs(message, s_serverLogFile);
+                const std::size_t length = std::strlen(message);
+                if (!headed && (length == 0 || message[length - 1] != '\n')) std::fputc('\n', s_serverLogFile);
+                std::fflush(s_serverLogFile);
+            }
+        }
+
+        // THE PROCESS DEFAULT, read once. A spawned server image is the server on every thread -
+        // there is no other role in it - and MOBILEGL_IPC_ROLE is set by the launcher before
+        // exec, so this is answerable before any MobileGL code runs. Under inproc it is false
+        // and the apply thread opts in per-thread.
+        static bool ProcessIsSpawnedServer() {
+            static const bool value = [] {
+                const char* role = std::getenv("MOBILEGL_IPC_ROLE");
+                return role != nullptr && std::strcmp(role, "server") == 0;
+            }();
+            return value;
+        }
+
+        // Per THREAD, not per process: under inproc the server role is the mgl-srv-apply thread
+        // and the GL thread is the client, in one address space. -1 means "not asked yet", which
+        // is resolved from the process default on first use.
+        static thread_local int t_logRole = -1;
+
+        static bool ThreadIsServerRole() {
+            if (t_logRole < 0) {
+                t_logRole = ProcessIsSpawnedServer() ? 1 : 0;
+            }
+            return t_logRole == 1;
+        }
+
+        void SetThreadLogRole(LogRole role) {
+            t_logRole = role == LogRole::Server ? 1 : 0;
+        }
+
+        std::string ReadRoleLogs(const char* basePath) {
+            std::string all;
+            for (const LogRole role : {LogRole::Client, LogRole::Server}) {
+                const std::string path = RoleLogPath(basePath, role);
+                if (FILE* file = std::fopen(path.c_str(), "rb")) {
+                    char chunk[4096];
+                    std::size_t got = 0;
+                    while ((got = std::fread(chunk, 1, sizeof(chunk), file)) > 0) {
+                        all.append(chunk, got);
+                    }
+                    std::fclose(file);
+                }
+            }
+            return all;
+        }
+
+        void TruncateRoleLogs(const char* basePath) {
+            // BOTH, because a reader that concatenates them would otherwise fold a previous
+            // run's server lines into this one's - which is the stale-tail failure R-16 was
+            // written after, one file over.
+            for (const LogRole role : {LogRole::Client, LogRole::Server}) {
+                if (FILE* file = std::fopen(RoleLogPath(basePath, role).c_str(), "w")) {
+                    std::fclose(file);
+                }
+            }
+        }
+
+        // MOBILEGL_LOG_FILE_PATH IS A BASE NAME NOW, AND NEITHER ROLE KEEPS IT.
+        //
+        // `foo.log` becomes `foo.client.log` and `foo.server.log`; a path with no extension gets
+        // the suffix appended. The suffix goes BEFORE the extension so the pair sorts together
+        // and a `*.log` glob still finds both.
+        //
+        // THE CLIENT IS RENAMED TOO, ON PURPOSE. Leaving it at the unsuffixed path would have
+        // been the compatible choice and the wrong one: every reader that was not updated would
+        // go on finding a file, go on passing, and go on seeing only half the session - and a
+        // refusal census that reports a confident zero for the half it cannot see is worse than
+        // one that fails. With both names moved, an un-updated reader gets ENOENT and says so.
+        // There were fourteen such readers in this tree when the split landed.
+        std::string RoleLogPath(const char* basePath, LogRole role) {
+            const char* roleSuffix = role == LogRole::Server ? "server" : "client";
+            std::string path(basePath);
+            const std::string::size_type slash = path.find_last_of("/\\");
+            const std::string::size_type dot = path.find_last_of('.');
+            if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
+                return path + "." + roleSuffix;
+            }
+            return path.substr(0, dot) + "." + roleSuffix + path.substr(dot);
+        }
+
+        // P6 gate 8: the role, in the two forms a caller can hold it in. Both are thin readers of
+        // state this file already keeps; neither adds a second source of truth.
+        LogRole CurrentThreadRole() {
+            if (t_logRole < 0) {
+                t_logRole = ProcessIsSpawnedServer() ? 1 : 0;
+            }
+            return t_logRole == 1 ? LogRole::Server : LogRole::Client;
+        }
+
+        bool CurrentProcessIsSpawnedServer() {
+            return ProcessIsSpawnedServer();
+        }
+#endif
 
         std::mutex& LogMutex() {
             static auto* mutex = new std::mutex();
@@ -62,32 +251,73 @@ namespace MobileGL {
 
         void InitFile() {
 #if MOBILEGL_LOG_ENABLE_FILE
-            if (!s_logFile) {
-                // MOBILEGL_LOG_FILE_PATH must stay a raw getenv (not MG_Config::Features):
-                // InitFile() runs before MG_ConfigLoader::Init() in MobileGL::Initialize().
-                const char* logPath = std::getenv("MOBILEGL_LOG_FILE_PATH");
-                if (!logPath || !*logPath) {
-                    logPath = MOBILEGL_LOG_FILE_PATH;
-                }
-                if (logPath && *logPath) {
-                    s_logFile = std::fopen(logPath, "w");
-                }
+            // MOBILEGL_LOG_FILE_PATH must stay a raw getenv (not MG_Config::Features):
+            // InitFile() runs before MG_ConfigLoader::Init() in MobileGL::Initialize().
+            const char* logPath = std::getenv("MOBILEGL_LOG_FILE_PATH");
+            if (!logPath || !*logPath) {
+                logPath = MOBILEGL_LOG_FILE_PATH;
             }
+            if (!logPath || !*logPath) {
+                return;
+            }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // ONE FILE PER ROLE, OPENED LAZILY BY WHOEVER FIRST WRITES ONE.
+            //
+            // Each role truncates ITS OWN file exactly once, which is what the previous
+            // single-file design could not do: there the client truncated and the server was
+            // forbidden to, because a truncate from the far side would have deleted the very
+            // startup lines a failed session needs. With separate files that asymmetry is gone -
+            // nobody else writes the file being truncated.
+            //
+            // "w" IS SAFE AGAIN HERE, and the O_APPEND this replaces was never about ordering:
+            // it was about two PROCESSES holding two handles to one path at two offsets, each
+            // overwriting the other's bytes. Two paths, two writers, no sharing.
+            if (ThreadIsServerRole()) {
+                if (!s_serverLogFile) {
+                    s_serverLogFile = std::fopen(RoleLogPath(logPath, LogRole::Server).c_str(), "w");
+                }
+                return;
+            }
+            if (!s_logFile) {
+                s_logFile = std::fopen(RoleLogPath(logPath, LogRole::Client).c_str(), "w");
+            }
+#else
+            if (!s_logFile) {
+                s_logFile = std::fopen(logPath, "w");
+            }
+#endif
 #endif
         }
 
         void WriteToFile(const char* msg) {
 #if MOBILEGL_LOG_ENABLE_FILE
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // The sink is chosen by the CALLING THREAD's role, which is the only choice that is
+            // correct under inproc: there both roles are threads of one process, so anything
+            // process-scoped would file the apply thread's lines under the client.
+            FILE** sink = ThreadIsServerRole() ? &s_serverLogFile : &s_logFile;
+            if (!*sink) InitFile();
+            if (*sink) {
+                std::fputs(msg, *sink);
+                std::fflush(*sink);
+            }
+#else
             if (!s_logFile) InitFile();
             if (s_logFile) {
                 std::fputs(msg, s_logFile);
                 std::fflush(s_logFile);
             }
 #endif
+#endif
         }
 
         void Log(const char* levelTag, android_LogPriority androidLogLevel, const char* fmt, ...) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // Unlocked early for a session-scoped forward (SetSessionLogForwarder).
+            std::unique_lock<std::mutex> lock(LogMutex());
+#else
             std::lock_guard<std::mutex> lock(LogMutex());
+#endif
 
 #if MOBILEGL_LOG_ENABLE_STACKTRACE
             auto trace = std::stacktrace::current();
@@ -120,17 +350,57 @@ namespace MobileGL {
             // every MobileGL log occupy TWO logcat records, the second one empty. That
             // halved the useful depth of every `adb logcat -t N` window the CI
             // diagnostics read (android-plugin/trace-replay-ci.sh).
-            __android_log_print(androidLogLevel, "MobileGL", "%.*s", static_cast<int>(out.size() - 1),
-                                out.c_str());
+            __android_log_print(androidLogLevel, "MobileGL", "%.*s", static_cast<int>(out.size() - 1), out.c_str());
 #endif
 
             WriteToFile(out.c_str());
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P9 W3: the forwarder is told the line's severity (LogForwarder, Log.h).
+            const int level = LogLevelFromAndroidPriority(androidLogLevel);
+            bool forwardOutsideLock = false;
+            bool forwardWasSessionScoped = false;
+            if (s_forwarder && ThreadIsServerRole() && !t_forwarding) {
+                forwardWasSessionScoped = s_forwardSessionThreadsOnly;
+                if (!s_forwardSessionThreadsOnly) {
+                    // A FATAL line goes out after the log mutex is released, like a session-scoped
+                    // one: the forwarder may wait (bounded) for it to reach the peer before the
+                    // process aborts, and must not hold every other thread's line while it does.
+                    if (level >= MOBILEGL_LOG_LEVEL_FATAL)
+                        forwardOutsideLock = true;
+                    else
+                        s_forwarder(s_forwarderUser, level, out.c_str());
+                } else {
+                    forwardOutsideLock = t_forwardsToPeer;
+                }
+            }
+#endif
 
             va_end(args);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (forwardOutsideLock) {
+                // SetSessionLogForwarder: this thread belongs to the live session. The line goes out
+                // after the log mutex is released, so a stalled client holds only the forward mutex.
+                // (And a FATAL line of either kind, for the reason above.) Re-asked under the
+                // forward mutex, because the forwarder may have been replaced or cleared since.
+                lock.unlock();
+                std::lock_guard<std::mutex> forwardLock(ForwardMutex());
+                if (s_forwarder != nullptr && s_forwardSessionThreadsOnly == forwardWasSessionScoped) {
+                    t_forwarding = true;
+                    s_forwarder(s_forwarderUser, level, out.c_str());
+                    t_forwarding = false;
+                }
+            }
+#endif
         }
 
         void Close() {
 #if MOBILEGL_LOG_ENABLE_FILE
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (s_serverLogFile) {
+                std::fclose(s_serverLogFile);
+                s_serverLogFile = nullptr;
+            }
+#endif
             if (s_logFile) {
                 std::fclose(s_logFile);
                 s_logFile = nullptr;

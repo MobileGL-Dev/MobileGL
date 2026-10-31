@@ -33,12 +33,30 @@ fun Project.mobileGlAbiFilters(): List<String> {
 fun Project.mobileGlCmakeCompilerLauncher(): String =
     (findProperty("mobilegl.cmakeCompilerLauncher") ?: System.getenv("MOBILEGL_CMAKE_COMPILER_LAUNCHER") ?: "").toString().trim()
 
+// Match the native module's two switches, including INPROC implying the parent
+// option. A D/P plugin must ask its launcher to select the transport at runtime;
+// compiling MG_Remote alone leaves ConfigLoader's default on monolith. The native module
+// builds the split shape by default in a standalone build (it carries the render server),
+// so this is only the opt-in for the launcher-selected in-process TRANSPORT: unset, the
+// plugin still runs monolith.
+fun Project.mobileGlDisaggregatedEnabled(): Boolean {
+    fun enabled(value: Any?): Boolean = value?.toString()?.trim()?.uppercase().orEmpty() in setOf("1", "ON", "YES", "TRUE", "Y")
+    return enabled(findProperty("mobilegl.buildDisaggregated") ?: System.getenv("MOBILEGL_BUILD_DISAGGREGATED")) ||
+        enabled(findProperty("mobilegl.buildDisaggregatedInproc") ?: System.getenv("MOBILEGL_BUILD_DISAGGREGATED_INPROC"))
+}
+
 // Optional application-id suffix, so a development build can sit next to an
 // already-installed plugin instead of having to replace it - a differently
 // signed APK cannot upgrade one in place, and uninstalling costs the user their
 // plugin settings and the launcher's binding to it.
 fun Project.mobileGlApplicationIdSuffix(): String =
     (findProperty("mobilegl.applicationIdSuffix") ?: "").toString().trim()
+
+// The Android API level of the build (the library's build.gradle reads the same property). Above
+// the shipped 26 the APK is a separate artifact: it gets an ".apiNN" id suffix and "-apiNN" version
+// suffix unless an explicit application-id suffix is given, so both installs can coexist.
+fun Project.mobileGlAndroidApi(): Int =
+    (findProperty("mobilegl.androidApi") ?: System.getenv("MOBILEGL_ANDROID_API") ?: "26").toString().trim().toInt()
 
 fun Project.runGit(vararg arguments: String): String? = runCatching {
     ProcessBuilder("git", *arguments)
@@ -62,7 +80,7 @@ val releaseSigningReady = signingStoreFile.exists()
 val debuggableRelease = (findProperty("mobilegl.debuggableRelease") ?: "false").toString().toBoolean()
 
 val mobileGlVersionMajor = 26
-val mobileGlVersionMinor = 8
+val mobileGlVersionMinor = 10
 val mobileGlGitShortHash = runGit("rev-parse", "--short=7", "HEAD") ?: "nogit"
 val mobileGlMonthlyRevision = runGit(
     "rev-list",
@@ -73,6 +91,7 @@ val mobileGlMonthlyRevision = runGit(
 val mobileGlApkSuffix = (findProperty("mobilegl.apkSuffix") ?: System.getenv("MOBILEGL_APK_SUFFIX") ?: mobileGlGitShortHash)
     .toString()
     .ifBlank { "nogit" }
+val mobileGlDisaggregated = mobileGlDisaggregatedEnabled()
 
 val pluginRendererConfig = buildJsonValue {
     renderer(
@@ -83,15 +102,20 @@ val pluginRendererConfig = buildJsonValue {
         dlopenLibPaths = emptyList(),
         env = buildEnvs {
             normal("LIBGL_ES", "3")
+            if (mobileGlDisaggregated) normal("MOBILEGL_TRANSPORT", "inproc")
             selectable(
                 key = "MOBILEGL_BACKEND_TYPE",
                 title = RendererConfig.MetaString("mobilegl_backend_type_title"),
                 items = RendererConfig.EnvItems("DirectGLES", listOf("DirectVulkan")),
             )
             toggleable("MOBILEGL_DISABLE_TIMERQUERY", "1", false, RendererConfig.MetaString("mobilegl_disable_timerquery_title"))
-            toggleable("MOBILEGL_MAGMA_DISABLE_SUBGROUP", "1", false, RendererConfig.MetaString("mobilegl_disable_subgroup_title"))
+            selectable(
+                key = "MOBILEGL_SUBGROUP_EMULATION",
+                title = RendererConfig.MetaString("mobilegl_subgroup_emulation_title"),
+                items = RendererConfig.EnvItems("Auto", listOf("ForceOn", "ForceOff")),
+            )
             toggleable("MOBILEGL_MAGMA_R11G11B10F_FALLBACK", "1", false, RendererConfig.MetaString("mobilegl_magma_r11g11b10f_fallback_title"))
-            customizable("MOBILEGL_MAGMA_FRAMESINFLIGHT", "3", RendererConfig.MetaString("mobilegl_magma_frames_inflight_title"))
+            customizable("MOBILEGL_FRAMES_IN_FLIGHT", "3", RendererConfig.MetaString("mobilegl_frames_inflight_title"))
             toggleable("MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER", "1", false, RendererConfig.MetaString("mobilegl_avoid_sampler_mipmap_min_filter_title"))
             toggleable("MOBILEGL_COHERENT_AS_FLUSH", "1", false, RendererConfig.MetaString("mobilegl_coherent_as_flush_title"))
             toggleable("MOBILEGL_RELAXED_SEMANTICS", "1", false, RendererConfig.MetaString("mobilegl_relaxed_semantics_title"))
@@ -109,8 +133,11 @@ android {
 
     defaultConfig {
         applicationId = "top.mobilegl.plugin"
-        mobileGlApplicationIdSuffix().takeIf { it.isNotEmpty() }?.let { applicationIdSuffix = it }
-        minSdk = 26
+        val androidApi = mobileGlAndroidApi()
+        val idSuffix = mobileGlApplicationIdSuffix().ifEmpty { if (androidApi > 26) ".api$androidApi" else "" }
+        idSuffix.takeIf { it.isNotEmpty() }?.let { applicationIdSuffix = it }
+        if (androidApi > 26) versionNameSuffix = "-api$androidApi"
+        minSdk = androidApi
         targetSdk = 34
         versionCode = mobileGlVersionMajor * 1_000_000 + mobileGlVersionMinor * 10_000 + mobileGlMonthlyRevision
         versionName = "%d.%02d.%s".format(mobileGlVersionMajor, mobileGlVersionMinor, mobileGlGitShortHash)
@@ -127,11 +154,13 @@ android {
                 put("LIBGL_ES", "3")
                 put("POJAV_RENDERER", "opengles3")
                 put("MOBILEGL_BACKEND_TYPE", "DirectGLES")
+                if (mobileGlDisaggregated) put("MOBILEGL_TRANSPORT", "inproc")
             }
             pojavEnv {
                 put("LIBGL_ES", "3")
                 put("POJAV_RENDERER", "opengles3")
                 put("MOBILEGL_BACKEND_TYPE", "DirectGLES")
+                if (mobileGlDisaggregated) put("MOBILEGL_TRANSPORT", "inproc")
             }
         })
         manifestPlaceholders["appLabel"] = "MobileGL"
@@ -153,17 +182,35 @@ android {
 
     buildFeatures {
         resValues = true
+        // P11 B1: ExternalClientHelper's default --server is BuildConfig.APPLICATION_ID - the package of
+        // the very APK an app_process loaded it from (flavour and id suffix included).
+        buildConfig = true
     }
 
     flavorDimensions += "profile"
     productFlavors {
         create("plugin") {
             dimension = "profile"
+            // The shipped renderer plugin keeps its render-server components private; the
+            // screen and NavBar start them from inside the app.
+            manifestPlaceholders["serverComponentsExported"] = "false"
         }
         create("trace") {
             dimension = "profile"
             applicationIdSuffix = ".trace"
             versionNameSuffix = "-trace"
+            // Debuggable dev APK: adb (tcp_device_server.py, the CI TCP lane) starts the
+            // server components directly by explicit component name.
+            manifestPlaceholders["serverComponentsExported"] = "true"
+            // P11 B1 (gate tooling): -Pmobilegl.packageRetraceExe=ON packages the adb-shell retrace CLI
+            // (tools/trace_replay) as nativeLibraryDir/libMobileGLRetrace.so, so an app - the external
+            // client of the B1 device gate - can exec it (targetSdk 34 forbids exec anywhere else).
+            val packageRetraceExe = (findProperty("mobilegl.packageRetraceExe") ?: "OFF").toString()
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DMOBILEGL_PACKAGE_RETRACE_EXE=$packageRetraceExe"
+                }
+            }
         }
     }
 

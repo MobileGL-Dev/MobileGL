@@ -16,7 +16,7 @@
 // and the copy read layer N. The layer the transfer touched was never transitioned: it sat in
 // COLOR_ATTACHMENT_OPTIMAL (or DEPTH_STENCIL_ATTACHMENT_OPTIMAL) while being read as TRANSFER_SRC.
 //
-// That is undefined behaviour, not a guaranteed wrong pixel: a layout is a compression/tiling
+// That is undefined behavior, not a guaranteed wrong pixel: a layout is a compression/tiling
 // promise, so a driver that stores both layouts identically returns the right bytes anyway. The
 // software lanes (lavapipe) are exactly such a driver, which is why this scenario is paired with a
 // validation-layer run - the layer names the mismatch outright
@@ -26,8 +26,8 @@
 //
 // The four cases below are the four transfer paths that take an attachment layer from GL:
 //
-//   glReadPixels (colour)                    -> VulkanRenderer::ReadPixels
-//   glBlitFramebuffer (colour)               -> VulkanRenderer::BlitNamedFramebuffer
+//   glReadPixels (color)                    -> VulkanRenderer::ReadPixels
+//   glBlitFramebuffer (color)               -> VulkanRenderer::BlitNamedFramebuffer
 //   glReadPixels (GL_DEPTH_COMPONENT)        -> VulkanRenderer::ReadDepthStencilImageToClient
 //   glBlitFramebuffer (GL_DEPTH_BUFFER_BIT)  -> VulkanRenderer::BlitNamedFramebuffer, depth leg
 //
@@ -140,7 +140,7 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
                 }
             }
 
-            // An RGBA8 2D array with a different uniform colour per layer.
+            // An RGBA8 2D array with a different uniform color per layer.
             GLuint MakeColorArray() {
                 GLuint texture = 0;
                 glGenTextures(1, &texture);
@@ -151,8 +151,8 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
                 glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 for (int layer = 0; layer < kLayers; ++layer) {
                     const std::vector<Rgba8> texels(static_cast<std::size_t>(kWidth) * kHeight, LayerFill(layer));
-                    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, kWidth, kHeight, 1, GL_RGBA,
-                                    GL_UNSIGNED_BYTE, texels.data());
+                    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, kWidth, kHeight, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                                    texels.data());
                 }
                 glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
                 return texture;
@@ -172,7 +172,7 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
                 return texture;
             }
 
-            // One FBO naming `layer` of the given arrays. Depth is optional (0 = colour only).
+            // One FBO naming `layer` of the given arrays. Depth is optional (0 = color only).
             GLuint MakeLayerFbo(GLuint colorArray, GLuint depthArray, int layer) {
                 GLuint fbo = 0;
                 glGenFramebuffers(1, &fbo);
@@ -200,8 +200,8 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
                 // a failure - reported here rather than silently reduced to pixels[0].
                 for (std::size_t i = 1; i < pixels.size(); ++i) {
                     EXPECT_TRUE(pixels[i] == pixels[0])
-                        << "layer " << layer << " is not uniform: texel 0 is " << Describe(pixels[0]) << ", texel "
-                        << i << " is " << Describe(pixels[i]);
+                        << "layer " << layer << " is not uniform: texel 0 is " << Describe(pixels[0]) << ", texel " << i
+                        << " is " << Describe(pixels[i]);
                 }
                 return pixels[0];
             }
@@ -296,11 +296,11 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
             EXPECT_NEAR(blitted.g, kPaintedColor.g, 2);
             EXPECT_NEAR(blitted.b, kPaintedColor.b, 2);
 
-            ExpectOtherLayersUntouched(destinationArray, kDestinationLayer, "colour blit destination");
+            ExpectOtherLayersUntouched(destinationArray, kDestinationLayer, "color blit destination");
             // The source layer was rendered, not blitted into, so it is checked separately.
             const Rgba8 source = ReadLayer(sourceArray, kSourceLayer);
             EXPECT_NEAR(source.r, kPaintedColor.r, 2) << "blit source layer is " << Describe(source);
-            ExpectOtherLayersUntouched(sourceArray, kSourceLayer, "colour blit source");
+            ExpectOtherLayersUntouched(sourceArray, kSourceLayer, "color blit source");
         }
 
         // The depth aspect of the same readback path: the depth image sits in
@@ -320,12 +320,12 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
             glClearDepth(0.375);
             glClear(GL_DEPTH_BUFFER_BIT);
 
-            const float centre = ReadDepthAt(kWidth / 2, kHeight / 2);
+            const float center = ReadDepthAt(kWidth / 2, kHeight / 2);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             EXPECT_EQ(FirstGLError(), 0u);
-            EXPECT_NEAR(centre, 0.375f, 1.0f / 4096.0f)
-                << "glReadPixels(GL_DEPTH_COMPONENT) off layer " << kSubjectLayer << " returned " << centre
-                << (std::fabs(centre - kDepthPoison) < 1e-6f ? " - the destination was never written at all" : "");
+            EXPECT_NEAR(center, 0.375f, 1.0f / 4096.0f)
+                << "glReadPixels(GL_DEPTH_COMPONENT) off layer " << kSubjectLayer << " returned " << center
+                << (std::fabs(center - kDepthPoison) < 1e-6f ? " - the destination was never written at all" : "");
         }
 
         // The depth leg of the blit path, both endpoints above layer 0. Verified by reading the
@@ -372,6 +372,47 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
             EXPECT_NEAR(blitted, 0.625f, 1.0f / 4096.0f)
                 << "depth blitted onto layer " << kDestinationLayer << " reads back as " << blitted
                 << (std::fabs(blitted - 0.125f) < 1e-3f ? " - the destination kept its own clear" : "");
+        }
+
+        TEST_F(LayeredAttachmentBarrierScenario, EndingAMiddleMipDrawPreservesOtherLevels) {
+            if (!Ready()) return;
+            GLuint texture = 0;
+            glGenTextures(1, &texture);
+            m_textures.push_back(texture);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexStorage2D(GL_TEXTURE_2D, 3, GL_RGBA8, 16, 16);
+            for (int level = 0; level < 3; ++level) {
+                const int size = 16 >> level;
+                const std::vector<Rgba8> initial(size * size, LayerFill(level));
+                glTexSubImage2D(GL_TEXTURE_2D, level, 0, 0, size, size, GL_RGBA, GL_UNSIGNED_BYTE, initial.data());
+            }
+            GLuint fbo = 0;
+            glGenFramebuffers(1, &fbo);
+            m_fbos.push_back(fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 1);
+            ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+            glViewport(0, 0, 8, 8);
+            glDisable(GL_SCISSOR_TEST);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_BLEND);
+            glDrawBuffer(GL_COLOR_ATTACHMENT0);
+            DrawFullViewportQuad(m_program);
+            // Ending this pass reconciles both lower and upper mip layouts. Their barriers
+            // must not see the pass as active and recursively end it a second time.
+            glFinish();
+            for (int level = 0; level < 3; ++level) {
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, level);
+                glReadBuffer(GL_COLOR_ATTACHMENT0);
+                Rgba8 actual{};
+                glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &actual);
+                const Rgba8 expected = level == 1 ? kPaintedColor : LayerFill(level);
+                EXPECT_NEAR(actual.r, expected.r, 2) << "level " << level;
+                EXPECT_NEAR(actual.g, expected.g, 2);
+                EXPECT_NEAR(actual.b, expected.b, 2);
+                EXPECT_EQ(actual.a, expected.a);
+            }
+            EXPECT_EQ(FirstGLError(), 0u);
         }
 
     } // namespace

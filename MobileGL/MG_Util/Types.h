@@ -13,6 +13,20 @@
 
 #define GL_UNKNOWN_MGL 0
 
+// GL_OES_EGL_image_external, which the desktop headers do not carry.
+#ifndef GL_TEXTURE_EXTERNAL_OES
+#define GL_TEXTURE_EXTERNAL_OES 0x8D65
+#endif
+#ifndef GL_SAMPLER_EXTERNAL_OES
+#define GL_SAMPLER_EXTERNAL_OES 0x8D66
+#endif
+#ifndef GL_TEXTURE_BINDING_EXTERNAL_OES
+#define GL_TEXTURE_BINDING_EXTERNAL_OES 0x8D67
+#endif
+#ifndef GL_REQUIRED_TEXTURE_IMAGE_UNITS_OES
+#define GL_REQUIRED_TEXTURE_IMAGE_UNITS_OES 0x8D68
+#endif
+
 #define THROW_EXCEPTION(msg) throw std::runtime_error(msg)
 
 #define THROW_UNIMPL_EXCEPTION THROW_EXCEPTION("Unimplemented function called!")
@@ -60,7 +74,7 @@ namespace MobileGL {
     // Open addressing with robin-hood probing. Any insert, emplace, operator[],
     // reserve or rehash invalidates every iterator, reference and pointer into the
     // map - and NOT only by rehashing: robin-hood insertion swaps the entry being
-    // placed against the occupant whenever it has travelled further from its desired
+    // placed against the occupant whenever it has traveled further from its desired
     // position, so an insert well under the load factor still relocates entries.
     // Erase relocates too, and less obviously - deletion shifts the rest of the probe
     // cluster backwards, so erasing one key can move a DIFFERENT key's element.
@@ -80,7 +94,7 @@ namespace MobileGL {
     //
     // T must be move-ASSIGNABLE, not merely move-constructible: robin-hood probing
     // swaps the entry being inserted against the one already in the slot whenever it
-    // has travelled further from its desired position. A move-only RAII type that
+    // has traveled further from its desired position. A move-only RAII type that
     // declares a destructor gets no implicit move assignment, so it needs an explicit
     // one or the table will not instantiate (see RenderPassEntry).
     template <typename Key, typename T, class Hash = std::hash<Key>, class KeyEqual = std::equal_to<Key>,

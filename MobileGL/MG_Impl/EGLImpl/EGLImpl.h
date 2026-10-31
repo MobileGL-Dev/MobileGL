@@ -8,11 +8,16 @@
 
 #pragma once
 #include <Includes.h>
+#include <EGL/eglext.h>
+
+#include <mutex>
 
 namespace MobileGL::MG_Impl::EGLImpl {
     EGLSurface CreateWindowSurface(EGLDisplay dpy, EGLConfig config, NativeWindowType window,
                                    const EGLint* attrib_list);
     EGLBoolean SwapBuffers(EGLDisplay dpy, EGLSurface draw);
+    EGLBoolean SwapBuffersWithDamage(EGLDisplay dpy, EGLSurface draw, const EGLint* rects, EGLint n_rects);
+    EGLBoolean SetDamageRegion(EGLDisplay dpy, EGLSurface surface, const EGLint* rects, EGLint n_rects);
     EGLBoolean ChooseConfig(EGLDisplay dpy, const EGLint* attrib_list, EGLConfig* configs, EGLint config_size,
                             EGLint* num_config);
     EGLContext CreateContext(EGLDisplay dpy, EGLConfig config, EGLContext shareCtx, const EGLint* attrib_list);
@@ -51,9 +56,34 @@ namespace MobileGL::MG_Impl::EGLImpl {
     EGLBoolean DestroySync(EGLDisplay dpy, EGLSync sync);
     EGLint ClientWaitSync(EGLDisplay dpy, EGLSync sync, EGLint flags, EGLTime timeout);
     EGLBoolean GetSyncAttrib(EGLDisplay dpy, EGLSync sync, EGLint attribute, EGLAttrib* value);
+    // EGL_ANDROID_native_fence_sync: a copy of a native fence sync's sync_file.
+    EGLint DupNativeFenceFD(EGLDisplay dpy, EGLSync sync);
     EGLImage CreateImage(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
                          const EGLAttrib* attrib_list);
     EGLBoolean DestroyImage(EGLDisplay dpy, EGLImage image);
+    EGLBoolean QueryDmaBufFormats(EGLDisplay dpy, EGLint max_formats, EGLint* formats, EGLint* num_formats);
+    EGLBoolean QueryDmaBufModifiers(EGLDisplay dpy, EGLint format, EGLint max_modifiers, EGLuint64KHR* modifiers,
+                                    EGLBoolean* external_only, EGLint* num_modifiers);
+    // Whether the active backend has shared images (MG_Backend::ClientHooks::AllocateSharedImage):
+    // a split client's does, a monolith's does not. Decides the dma-buf EGL extensions, the
+    // Wayland linux-dmabuf presentation and GL_OES_EGL_image.
+    Bool SharedImagesAvailable();
+    // Whether the server also holds YUV (NV12/P010) images: decides the YUV dma-buf formats and
+    // GL_OES_EGL_image_external. One round trip the first time it is asked, cached after.
+    Bool SharedImageYuvAvailable();
+    // Under a dispatching libEGL the dispatcher, not this library, owns eglBindAPI's state: it does
+    // not forward a bind of the API it already reports (EGL_OPENGL_ES_API, EGL's default), so a
+    // context would otherwise be created for whatever this library assumed. The glvnd vendor
+    // installs the dispatcher's own answer here; eglCreateContext asks it.
+    void SetDispatcherCurrentApiHook(EGLenum (*hook)());
+    // The shared image an EGLImage names (EGL_LINUX_DMA_BUF_EXT), for glEGLImageTargetTexture2DOES.
+    Bool LookupSharedImage(EGLImage image, Uint64* id, EGLint* width, EGLint* height);
+    // glEGLImageTargetTexture2DOES bound a shared image to a texture: from now on glFlush/glFinish
+    // may be shared-image boundaries (SharedImageFlushPolicy.h).
+    void NoteSharedImageBoundToTexture();
+    // From glFlush/glFinish, under the stream lock: publish this session's shared-image accesses
+    // when the policy says a flush is a boundary in this process. Cheap when it is not.
+    void FlushSharedImageAccesses();
     EGLDisplay GetPlatformDisplay(EGLenum platform, void* native_display, const EGLAttrib* attrib_list);
     EGLSurface CreatePlatformWindowSurface(EGLDisplay dpy, EGLConfig config, void* native_window,
                                            const EGLAttrib* attrib_list);
@@ -62,4 +92,67 @@ namespace MobileGL::MG_Impl::EGLImpl {
                                            const EGLAttrib* attrib_list);
     EGLBoolean WaitSync(EGLDisplay dpy, EGLSync sync, EGLint flags);
     __eglMustCastToProperFunctionPointerType GetProcAddress(const char* name);
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // THE CLIENT'S STREAM GATE. Under a split transport every thread of the process writes into
+    // ONE ring, and the server attributes each record to the context the last applied
+    // `bind_context` named - one current context per SESSION. A context, though, is current per
+    // THREAD, and Qt renders each window on its own QSGRenderThread: two threads' records then
+    // interleave on the ring with no binding between them and land in the wrong context's
+    // applier (empty sampler windows at a Clear, another context's buffers under an upload).
+    //
+    // So every GL entry point and every EGL operation that writes to the stream runs under one
+    // process-wide lock (EGLOperationMutex, which the EGL side already held), and before it
+    // writes, the server is re-bound to the CALLING thread's context whenever the last binding
+    // actually sent names a different one. A no-op scope on a monolith transport and on the
+    // server's own apply thread.
+    Bool StreamGateActive();
+    std::recursive_mutex& StreamMutex();
+    void StreamBindCallingThreadLocked();
+    // P14: the share-group token of the context the stream is bound to - the group whose object
+    // records anything written right now lands in on the server. False while the gate is inactive
+    // (a monolith, the server's own apply thread), where no binding crosses. Read under
+    // StreamMutex(), like the binding itself.
+    Bool StreamBoundShareGroupToken(Uint64* outToken);
+
+    class GLStreamScope {
+    public:
+        GLStreamScope() {
+            if (!StreamGateActive()) return;
+            m_mutex = &StreamMutex();
+            m_mutex->lock();
+            StreamBindCallingThreadLocked();
+        }
+        ~GLStreamScope() {
+            if (m_mutex != nullptr) m_mutex->unlock();
+        }
+        GLStreamScope(const GLStreamScope&) = delete;
+        GLStreamScope& operator=(const GLStreamScope&) = delete;
+
+    private:
+        std::recursive_mutex* m_mutex = nullptr;
+    };
+    // The lock alone, for every EGL entry point: an EGL call may publish into the ring too (a
+    // surface forwarder's catch-up wait, a present, a context frame), and a second thread's GL
+    // record written into the middle of it is a torn record the server latches the session on.
+    class StreamLockScope {
+    public:
+        StreamLockScope() {
+            if (!StreamGateActive()) return;
+            m_mutex = &StreamMutex();
+            m_mutex->lock();
+        }
+        ~StreamLockScope() {
+            if (m_mutex != nullptr) m_mutex->unlock();
+        }
+        StreamLockScope(const StreamLockScope&) = delete;
+        StreamLockScope& operator=(const StreamLockScope&) = delete;
+
+    private:
+        std::recursive_mutex* m_mutex = nullptr;
+    };
+#else
+    class GLStreamScope {};
+    class StreamLockScope {};
+#endif
 } // namespace MobileGL::MG_Impl::EGLImpl

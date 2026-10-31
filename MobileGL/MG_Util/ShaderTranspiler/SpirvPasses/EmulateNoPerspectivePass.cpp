@@ -93,8 +93,8 @@ namespace MobileGL {
 
                 // Multiply |valueId| (of type |valueTypeId|) by the scalar |scalarId|, inserting the op
                 // before |before|. Returns the product's id.
-                uint32_t InsertScale(IRContext* ctx, Instruction* before, uint32_t valueTypeId,
-                                     uint32_t valueId, uint32_t scalarId, bool isVector) {
+                uint32_t InsertScale(IRContext* ctx, Instruction* before, uint32_t valueTypeId, uint32_t valueId,
+                                     uint32_t scalarId, bool isVector) {
                     const uint32_t productId = ctx->TakeNextId();
                     const spv::Op op = isVector ? spv::Op::OpVectorTimesScalar : spv::Op::OpFMul;
                     before->InsertBefore(spvtools::MakeUnique<Instruction>(
@@ -115,10 +115,8 @@ namespace MobileGL {
                     uint32_t member = 0;
                     for (Instruction& ann : ctx->annotations()) {
                         if (ann.opcode() == spv::Op::OpMemberDecorate && ann.NumInOperands() >= 4 &&
-                            static_cast<spv::Decoration>(ann.GetSingleWordInOperand(2)) ==
-                                spv::Decoration::BuiltIn &&
-                            static_cast<spv::BuiltIn>(ann.GetSingleWordInOperand(3)) ==
-                                spv::BuiltIn::Position) {
+                            static_cast<spv::Decoration>(ann.GetSingleWordInOperand(2)) == spv::Decoration::BuiltIn &&
+                            static_cast<spv::BuiltIn>(ann.GetSingleWordInOperand(3)) == spv::BuiltIn::Position) {
                             structId = ann.GetSingleWordInOperand(0);
                             member = ann.GetSingleWordInOperand(1);
                             break;
@@ -148,8 +146,7 @@ namespace MobileGL {
                 Instruction* FindBuiltinInput(IRContext* ctx, spv::BuiltIn builtin) {
                     for (Instruction& ann : ctx->annotations()) {
                         if (ann.opcode() != spv::Op::OpDecorate || ann.NumInOperands() < 3) continue;
-                        if (static_cast<spv::Decoration>(ann.GetSingleWordInOperand(1)) !=
-                            spv::Decoration::BuiltIn)
+                        if (static_cast<spv::Decoration>(ann.GetSingleWordInOperand(1)) != spv::Decoration::BuiltIn)
                             continue;
                         if (static_cast<spv::BuiltIn>(ann.GetSingleWordInOperand(2)) != builtin) continue;
                         Instruction* var = ctx->get_def_use_mgr()->GetDef(ann.GetSingleWordInOperand(0));
@@ -168,16 +165,13 @@ namespace MobileGL {
                     ctx->AddGlobalValue(spvtools::MakeUnique<Instruction>(
                         ctx, spv::Op::OpVariable, ptrType, varId,
                         std::initializer_list<Operand>{
-                            {SPV_OPERAND_TYPE_STORAGE_CLASS,
-                             {static_cast<uint32_t>(spv::StorageClass::Input)}}}));
+                            {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<uint32_t>(spv::StorageClass::Input)}}}));
                     ctx->AddAnnotationInst(spvtools::MakeUnique<Instruction>(
                         ctx, spv::Op::OpDecorate, 0, 0,
                         std::initializer_list<Operand>{
                             {SPV_OPERAND_TYPE_ID, {varId}},
-                            {SPV_OPERAND_TYPE_DECORATION,
-                             {static_cast<uint32_t>(spv::Decoration::BuiltIn)}},
-                            {SPV_OPERAND_TYPE_LITERAL_INTEGER,
-                             {static_cast<uint32_t>(spv::BuiltIn::FragCoord)}}}));
+                            {SPV_OPERAND_TYPE_DECORATION, {static_cast<uint32_t>(spv::Decoration::BuiltIn)}},
+                            {SPV_OPERAND_TYPE_LITERAL_INTEGER, {static_cast<uint32_t>(spv::BuiltIn::FragCoord)}}}));
                     for (Instruction& ep : ctx->module()->entry_points()) {
                         ep.AddOperand({SPV_OPERAND_TYPE_ID, {varId}});
                     }
@@ -196,8 +190,7 @@ namespace MobileGL {
                 std::vector<Instruction*> decorationsToKill;
                 for (Instruction& ann : ctx->annotations()) {
                     if (ann.opcode() == spv::Op::OpDecorate && ann.NumInOperands() >= 2 &&
-                        static_cast<spv::Decoration>(ann.GetSingleWordInOperand(1)) ==
-                            spv::Decoration::NoPerspective) {
+                        static_cast<spv::Decoration>(ann.GetSingleWordInOperand(1)) == spv::Decoration::NoPerspective) {
                         plainVarIds.push_back(ann.GetSingleWordInOperand(0));
                         decorationsToKill.push_back(&ann);
                     } else if (ann.opcode() == spv::Op::OpMemberDecorate && ann.NumInOperands() >= 3 &&
@@ -213,8 +206,7 @@ namespace MobileGL {
                     return Status::SuccessWithoutChange;
                 }
 
-                const spv::StorageClass wantStorage =
-                    isVertex ? spv::StorageClass::Output : spv::StorageClass::Input;
+                const spv::StorageClass wantStorage = isVertex ? spv::StorageClass::Output : spv::StorageClass::Input;
 
                 // Emulatable = plain variable of the stage's interface direction, float or floatN.
                 struct Target {
@@ -228,8 +220,7 @@ namespace MobileGL {
                     for (const uint32_t id : plainVarIds) {
                         Instruction* var = ctx->get_def_use_mgr()->GetDef(id);
                         if (var == nullptr || var->opcode() != spv::Op::OpVariable) continue;
-                        if (static_cast<spv::StorageClass>(var->GetSingleWordInOperand(0)) != wantStorage)
-                            continue;
+                        if (static_cast<spv::StorageClass>(var->GetSingleWordInOperand(0)) != wantStorage) continue;
                         const uint32_t pointee = VariablePointeeType(ctx, var);
                         uint32_t floatTypeId = 0;
                         bool isVector = false;
@@ -245,13 +236,14 @@ namespace MobileGL {
                 if (!targets.empty()) {
                     std::vector<uint32_t> targetIds;
                     targetIds.reserve(targets.size());
-                    for (const Target& t : targets) targetIds.push_back(t.var->result_id());
+                    for (const Target& t : targets)
+                        targetIds.push_back(t.var->result_id());
                     for (Instruction& ann : ctx->annotations()) {
                         if (ann.opcode() == spv::Op::OpDecorate && ann.NumInOperands() >= 2 &&
                             static_cast<spv::Decoration>(ann.GetSingleWordInOperand(1)) ==
                                 spv::Decoration::RelaxedPrecision &&
-                            std::find(targetIds.begin(), targetIds.end(),
-                                      ann.GetSingleWordInOperand(0)) != targetIds.end()) {
+                            std::find(targetIds.begin(), targetIds.end(), ann.GetSingleWordInOperand(0)) !=
+                                targetIds.end()) {
                             decorationsToKill.push_back(&ann);
                         }
                     }
@@ -262,8 +254,7 @@ namespace MobileGL {
                     uint32_t memberIndex = 0;
                     uint32_t v4floatTypeId = 0;
                     if (FindPositionBlock(ctx, blockVarId, memberIndex, v4floatTypeId)) {
-                        const uint32_t ptrOutV4 =
-                            PointerTypeTo(ctx, v4floatTypeId, spv::StorageClass::Output);
+                        const uint32_t ptrOutV4 = PointerTypeTo(ctx, v4floatTypeId, spv::StorageClass::Output);
                         const uint32_t memberConst = SignedIntConstant(ctx, static_cast<int32_t>(memberIndex));
                         const uint32_t floatTy = FloatType(ctx);
 
@@ -281,8 +272,7 @@ namespace MobileGL {
                         for (auto funcIt = ctx->module()->begin(); funcIt != ctx->module()->end(); ++funcIt) {
                             if (funcIt->result_id() != entryFuncId) continue;
                             funcIt->ForEachInst([&](Instruction* inst) {
-                                if (inst->opcode() != spv::Op::OpReturn &&
-                                    inst->opcode() != spv::Op::OpReturnValue) {
+                                if (inst->opcode() != spv::Op::OpReturn && inst->opcode() != spv::Op::OpReturnValue) {
                                     return;
                                 }
                                 const uint32_t posPtrId = ctx->TakeNextId();
@@ -303,15 +293,12 @@ namespace MobileGL {
                                     const uint32_t valId = ctx->TakeNextId();
                                     inst->InsertBefore(spvtools::MakeUnique<Instruction>(
                                         ctx, spv::Op::OpLoad, t.typeId, valId,
-                                        std::initializer_list<Operand>{
-                                            {SPV_OPERAND_TYPE_ID, {t.var->result_id()}}}));
-                                    const uint32_t scaledId =
-                                        InsertScale(ctx, inst, t.typeId, valId, wId, t.isVector);
+                                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {t.var->result_id()}}}));
+                                    const uint32_t scaledId = InsertScale(ctx, inst, t.typeId, valId, wId, t.isVector);
                                     inst->InsertBefore(spvtools::MakeUnique<Instruction>(
                                         ctx, spv::Op::OpStore, 0, 0,
-                                        std::initializer_list<Operand>{
-                                            {SPV_OPERAND_TYPE_ID, {t.var->result_id()}},
-                                            {SPV_OPERAND_TYPE_ID, {scaledId}}}));
+                                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {t.var->result_id()}},
+                                                                       {SPV_OPERAND_TYPE_ID, {scaledId}}}));
                                 }
                             });
                         }
@@ -383,8 +370,8 @@ namespace MobileGL {
                                 std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {fcId}},
                                                                {SPV_OPERAND_TYPE_LITERAL_INTEGER, {3u}}}));
                             load->SetOpcode(loadIsVector ? spv::Op::OpVectorTimesScalar : spv::Op::OpFMul);
-                            load->SetInOperands(Instruction::OperandList{
-                                {SPV_OPERAND_TYPE_ID, {origId}}, {SPV_OPERAND_TYPE_ID, {wId}}});
+                            load->SetInOperands(Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {origId}},
+                                                                         {SPV_OPERAND_TYPE_ID, {wId}}});
                         }
                     }
                 }

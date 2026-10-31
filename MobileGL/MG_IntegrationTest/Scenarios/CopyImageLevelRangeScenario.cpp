@@ -85,8 +85,7 @@ namespace MGITest {
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             void DeleteTextures() {

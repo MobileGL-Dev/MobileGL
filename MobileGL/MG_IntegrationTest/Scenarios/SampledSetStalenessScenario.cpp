@@ -10,7 +10,7 @@
 //
 // DirectVulkan does not bind a texture GL calls incomplete: it substitutes a fallback so the
 // sampler reads (0,0,0,1) instead of losing the draw. That decision is made twice per draw - once
-// by CollectSampledTextures, which builds the list SetupDraw syncs, materialises pending clears
+// by CollectSampledTextures, which builds the list SetupDraw syncs, materializes pending clears
 // for and transitions to a sampled layout BEFORE the render pass opens, and once by the descriptor
 // resolve inside the pass. Both ask SamplesAsIncompleteTexture.
 //
@@ -21,7 +21,7 @@
 // incomplete -> complete under a fixed binding kept being answered out of the memo as "not in the
 // set", and the work SetupDraw does for the set never happened for it:
 //
-//   * its queued clear was never materialised, so the draw sampled pre-clear content - wrong
+//   * its queued clear was never materialized, so the draw sampled pre-clear content - wrong
 //     pixels, no validation layer needed, which is what the case below detects; and
 //   * its layout transition moved into the descriptor resolve, which records
 //     vkCmdPipelineBarrier inside an already-open render pass whose subpass declares no
@@ -138,7 +138,7 @@ void main() {
     } // namespace
 
     // The full sequence, ordered so the ONLY state change between the two draws is the filter.
-    TEST_F(SampledSetStalenessScenario, AQueuedClearIsMaterialisedWhenAFilterChangeCompletesTheTexture) {
+    TEST_F(SampledSetStalenessScenario, AQueuedClearIsMaterializedWhenAFilterChangeCompletesTheTexture) {
         if (!Ready() || IsSkipped()) return;
 
         // 1. Queue a clear on the texture through an FBO and take it straight back out, with no
@@ -170,23 +170,23 @@ void main() {
         ASSERT_EQ(FirstGLError(), 0u) << "changing the filter raised a GL error";
 
         // 4. Draw again, into the same recording, and only now read back. The texture is in the
-        //    sampled set now, so its queued clear has to be materialised before the pass opens and
+        //    sampled set now, so its queued clear has to be materialized before the pass opens and
         //    the fetch has to see RED. Reading the green the texture was uploaded with means the
-        //    clear was never materialised, i.e. the texture never entered the set - the stale-memo
+        //    clear was never materialized, i.e. the texture never entered the set - the stale-memo
         //    bug. Black means the fallback was still being handed out.
         DrawOnly();
         const Image afterFlip = ReadPixels(kFboSize, kFboSize);
         ASSERT_FALSE(afterFlip.Empty()) << "the readback came back empty";
         EXPECT_TRUE(RegionIsMostly(afterFlip, 0, kFboSize - 1, 0, kFboSize - 1, "red", 0.0,
                                    "the draw after the completeness flip"))
-            << "green means the queued clear was never materialised, so the texture never re-entered "
+            << "green means the queued clear was never materialized, so the texture never re-entered "
                "the sampled set after the filter change; blue means the draw did not happen at all";
     }
 
     // The same flip driven from a SAMPLER OBJECT rather than the texture's own parameters. It is
     // the other half of what feeds the completeness predicate, it moves the same generation, and
     // it likewise binds nothing.
-    TEST_F(SampledSetStalenessScenario, AQueuedClearIsMaterialisedWhenASamplerObjectCompletesTheTexture) {
+    TEST_F(SampledSetStalenessScenario, AQueuedClearIsMaterializedWhenASamplerObjectCompletesTheTexture) {
         if (!Ready() || IsSkipped()) return;
 
         GLuint sampler = 0;
@@ -222,7 +222,7 @@ void main() {
         ASSERT_FALSE(afterFlip.Empty()) << "the readback came back empty";
         EXPECT_TRUE(RegionIsMostly(afterFlip, 0, kFboSize - 1, 0, kFboSize - 1, "red", 0.0,
                                    "the draw after the sampler-object flip"))
-            << "green means the queued clear was never materialised after the sampler parameter change";
+            << "green means the queued clear was never materialized after the sampler parameter change";
 
         glBindSampler(0, 0);
         glDeleteSamplers(1, &sampler);

@@ -135,8 +135,8 @@ namespace {
         const uint64_t y = *static_cast<const uint64_t*>(b);
         return x < y ? -1 : x > y;
     }
-    #define now_ns NowNs
-    #define cmp_u64 CompareU64
+#define now_ns NowNs
+#define cmp_u64 CompareU64
 
     // Failure funnel for the shared scene builder: remember the first failure,
     // let the run finish reporting it instead of aborting the service process.
@@ -158,7 +158,7 @@ namespace {
         glMultiDrawElementsBaseVertex(mode, counts, type, offsets, drawCount, baseVertices);
     }
 
-    #include "../../MG_Benchmark/Driver/DriverBenchCases.inc"
+#include "../../MG_Benchmark/Driver/DriverBenchCases.inc"
 
     // Frame boundary: a real fence wait. MobileGL's glFinish/glFlush are
     // deliberate no-ops, so a glFinish-paced loop would time only CPU submit.
@@ -177,11 +177,21 @@ namespace {
         out.reserve(value.size() + 8);
         for (const char c : value) {
             switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
             default:
                 if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) >= 0x7F) {
                     char buffer[8];
@@ -206,7 +216,10 @@ namespace {
     // Espryt's display teardown is precisely the hazard being avoided.
     bool BootEgl(EglBench& out, std::string& error) {
         out.display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-        if (out.display == EGL_NO_DISPLAY) { error = "eglGetDisplay failed"; return false; }
+        if (out.display == EGL_NO_DISPLAY) {
+            error = "eglGetDisplay failed";
+            return false;
+        }
         EGLint major = 0, minor = 0;
         if (eglInitialize(out.display, &major, &minor) != EGL_TRUE) {
             char buffer[48];
@@ -214,13 +227,12 @@ namespace {
             error = buffer;
             return false;
         }
-        const EGLint configAttribs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8,
-                                        EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_DEPTH_SIZE, 24,
-                                        EGL_NONE};
+        const EGLint configAttribs[] = {
+            EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_DEPTH_SIZE, 24,
+            EGL_NONE};
         EGLConfig config = nullptr;
         EGLint numConfigs = 0;
-        if (eglChooseConfig(out.display, configAttribs, &config, 1, &numConfigs) != EGL_TRUE ||
-            numConfigs < 1) {
+        if (eglChooseConfig(out.display, configAttribs, &config, 1, &numConfigs) != EGL_TRUE || numConfigs < 1) {
             error = "eglChooseConfig found no pbuffer config";
             return false;
         }
@@ -296,16 +308,17 @@ namespace {
             qsort(samples, static_cast<size_t>(g_frames), sizeof(uint64_t), CompareU64);
             const uint64_t median = samples[g_frames / 2];
             const double frameMs = static_cast<double>(median) / 1e6;
-            const double nsPerOp =
-                benchCase.opsPerFrame > 0 ? static_cast<double>(median) / static_cast<double>(benchCase.opsPerFrame) : 0.0;
+            const double nsPerOp = benchCase.opsPerFrame > 0
+                                       ? static_cast<double>(median) / static_cast<double>(benchCase.opsPerFrame)
+                                       : 0.0;
             const GLenum caseError = glGetError();
 
             char row[256];
             snprintf(row, sizeof row,
                      "%s{\"case\":\"%s\",\"frames\":%d,\"opsPerFrame\":%ld,\"medianFrameMs\":%.3f,"
                      "\"nsPerOp\":%.1f,\"fps\":%.1f,\"glError\":%u}",
-                     rows.empty() ? "" : ",", benchCase.name, g_frames, benchCase.opsPerFrame, frameMs,
-                     nsPerOp, 1e9 / static_cast<double>(median), caseError);
+                     rows.empty() ? "" : ",", benchCase.name, g_frames, benchCase.opsPerFrame, frameMs, nsPerOp,
+                     1e9 / static_cast<double>(median), caseError);
             rows += row;
         }
 
@@ -324,8 +337,10 @@ namespace {
 
 } // namespace
 
-extern "C" JNIEXPORT jstring JNICALL Java_top_mobilegl_plugin_BenchService_nativeRunDriverBench(
-    JNIEnv* env, jclass, jstring backendType, jint frames, jint warmupFrames) {
+extern "C" JNIEXPORT jstring JNICALL Java_top_mobilegl_plugin_BenchService_nativeRunDriverBench(JNIEnv* env, jclass,
+                                                                                                jstring backendType,
+                                                                                                jint frames,
+                                                                                                jint warmupFrames) {
     const char* backendChars = backendType ? env->GetStringUTFChars(backendType, nullptr) : nullptr;
     const std::string backend = backendChars ? backendChars : "DirectGLES";
     if (backendChars) env->ReleaseStringUTFChars(backendType, backendChars);
@@ -333,9 +348,11 @@ extern "C" JNIEXPORT jstring JNICALL Java_top_mobilegl_plugin_BenchService_nativ
     std::string result;
     try {
         result = RunBench(backend, frames, warmupFrames);
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception& e) {
         result = std::string("{\"error\":\"") + EscapeJson(e.what()) + "\"}";
-    } catch (...) {
+    }
+    catch (...) {
         result = "{\"error\":\"unknown native exception\"}";
     }
     return env->NewStringUTF(result.c_str());

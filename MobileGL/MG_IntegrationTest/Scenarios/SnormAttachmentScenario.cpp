@@ -6,10 +6,10 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// Scenario - SIGNED-NORMALIZED COLOUR ATTACHMENTS, on a live driver.
+// Scenario - SIGNED-NORMALIZED COLOR ATTACHMENTS, on a live driver.
 //
 // The bug: a GLES driver without GL_EXT_render_snorm treats every signed-normalized format as
-// texture-only. DirectGLES had a colour-renderable substitute for exactly one of the eight
+// texture-only. DirectGLES had a color-renderable substitute for exactly one of the eight
 // (GL_RGB16_SNORM, through the three-channel widening), so an R8_SNORM or R16_SNORM attachment got
 // no storage the driver would render into: the ES framebuffer was incomplete, the draw landed
 // nowhere, and glGetTexImage fell through to the CPU shadow - all zeroes for a texture created with
@@ -24,10 +24,10 @@
 // worse outcome, so the round trip below is pinned tightly enough to fail on a half-float substitute
 // (tolerance two SNORM steps, half-float error six).
 //
-// WHAT THIS GATE CAN AND CANNOT SEE. Both CI drivers (Mesa llvmpipe) and Adreno expose
+// WHAT THIS GATE CAN AND CANNOT SEE. Both CI drivers (llvmpipe) and Adreno expose
 // GL_EXT_render_snorm, so they take the NATIVE path here and the substitution stays dead. That is
 // precisely why the assertions are written as invariants of the format rather than of the fallback:
-// "a signed-normalized colour attachment is complete and round-trips its channel values" has to
+// "a signed-normalized color attachment is complete and round-trips its channel values" has to
 // hold whichever path answers it, so the scenario fails if anyone ever routes these formats to a
 // lossy storage on a driver where it IS live. The substitution itself can only be observed on a
 // device without EXT_render_snorm (Mali Immortalis-G925).
@@ -71,7 +71,7 @@ void main() { oColor = vec4(uValue, 0.0, 0.0, 1.0); }
 
         // The two channel values the round trip is pinned on. Both are positive on purpose:
         // glReadPixels applies GL_CLAMP_READ_COLOR (GL_FIXED_ONLY by default) to a fixed-point
-        // colour buffer, so the negative half of a SNORM attachment reads back as 0 and would
+        // color buffer, so the negative half of a SNORM attachment reads back as 0 and would
         // measure the clamp instead of the storage.
         constexpr int kSnorm8Value = 99;
         constexpr int kSnorm16Value = 23451;
@@ -186,10 +186,10 @@ void main() { oColor = vec4(uValue, 0.0, 0.0, 1.0); }
         TEST_F(SnormAttachmentScenario, SignedNormalizedColorAttachmentsReportComplete) {
             if (!Ready() || IsSkipped()) return;
 
-            // GL_R8 is the control: colour-renderable in ES core, so it must pass with or without
+            // GL_R8 is the control: color-renderable in ES core, so it must pass with or without
             // any substitution. If it ever fails, nothing below means anything.
             EXPECT_EQ(SingleAttachmentStatus(GL_R8), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE))
-                << "GL_R8 is ES-core colour-renderable";
+                << "GL_R8 is ES-core color-renderable";
 
             // The single-channel pair KHR-GL4x.texture_swizzle renders into for every SNORM source
             // format - the whole 46-case failure.
@@ -215,17 +215,16 @@ void main() { oColor = vec4(uValue, 0.0, 0.0, 1.0); }
             const float snorm8Expected = static_cast<float>(kSnorm8Value) / 127.0f;
             float red8 = -1.0f;
             ASSERT_TRUE(RenderAndReadRed(GL_R8_SNORM, snorm8Expected, &red8))
-                << "an R8_SNORM colour attachment must be complete before any value can be asserted";
+                << "an R8_SNORM color attachment must be complete before any value can be asserted";
             // Two 8-bit SNORM steps. A half float is exact here (worst case 0.03 of a step), so this
             // only has to catch a storage that quantizes harder than the format itself.
-            EXPECT_NEAR(red8, snorm8Expected, 2.0f / 127.0f)
-                << "R8_SNORM attachment lost its channel value";
+            EXPECT_NEAR(red8, snorm8Expected, 2.0f / 127.0f) << "R8_SNORM attachment lost its channel value";
             EXPECT_GT(red8, 0.5f) << "the draw never landed - this is the cleared texture, not the rendered one";
 
             const float snorm16Expected = static_cast<float>(kSnorm16Value) / 32767.0f;
             float red16 = -1.0f;
             ASSERT_TRUE(RenderAndReadRed(GL_R16_SNORM, snorm16Expected, &red16))
-                << "an R16_SNORM colour attachment must be complete before any value can be asserted";
+                << "an R16_SNORM color attachment must be complete before any value can be asserted";
             // Two 16-bit SNORM steps (6.1e-5). A half float would land 1.9e-4 away - three times
             // this window - which is exactly the failure this bound exists to catch.
             EXPECT_NEAR(red16, snorm16Expected, 2.0f / 32767.0f)
@@ -234,7 +233,7 @@ void main() { oColor = vec4(uValue, 0.0, 0.0, 1.0); }
 
             float red16x4 = -1.0f;
             ASSERT_TRUE(RenderAndReadRed(GL_RGBA16_SNORM, snorm16Expected, &red16x4))
-                << "an RGBA16_SNORM colour attachment must be complete before any value can be asserted";
+                << "an RGBA16_SNORM color attachment must be complete before any value can be asserted";
             EXPECT_NEAR(red16x4, snorm16Expected, 2.0f / 32767.0f)
                 << "RGBA16_SNORM attachment was stored in something that cannot hold 16 signed bits";
 

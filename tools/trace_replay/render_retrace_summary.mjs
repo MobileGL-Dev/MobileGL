@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+// MobileGL - tools/trace_replay/render_retrace_summary.mjs
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
 
 import { createWriteStream, readFileSync } from "node:fs";
 import { mkdir, readdir, readFile, stat } from "node:fs/promises";
@@ -144,9 +151,15 @@ function parseGpuLabel(logText) {
 
 async function collectGroupLabels(files, defaultGroup) {
   const labels = new Map();
+  // A pull library writes one mobilegl.log. A split library writes one log per ROLE
+  // (mobilegl.client.log / mobilegl.server.log) and no mobilegl.log, so the Linux split lanes'
+  // summaries had no GPU label at all; their role logs are read wherever mobilegl.log is absent.
+  const present = new Set(files.map((file) => normalizeSlashes(file)));
   const logFiles = files.filter((file) => {
     const name = path.basename(file).toLowerCase();
-    return name === "mobilegl.log" || name === "logcat.txt";
+    if (name === "mobilegl.log" || name === "logcat.txt") return true;
+    if (name !== "mobilegl.client.log" && name !== "mobilegl.server.log") return false;
+    return !present.has(normalizeSlashes(path.join(path.dirname(file), "mobilegl.log")));
   });
   for (const logFile of logFiles) {
     const group = inferGroup(logFile, defaultGroup);

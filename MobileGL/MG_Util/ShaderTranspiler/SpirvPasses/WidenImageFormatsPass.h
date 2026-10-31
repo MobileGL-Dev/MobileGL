@@ -95,7 +95,7 @@ namespace MobileGL {
                 // no ESSL route even on a driver that DOES advertise GL_NV_image_formats.
                 // SPIRV-Cross's is_desktop_only_format set - r8ui, rg16f, r16i and fifteen others -
                 // makes it THROW for an ESSL target rather than print a token, and the throw takes
-                // the stage with it whatever the driver could have accepted. Mesa is exactly that
+                // the stage with it whatever the driver could have accepted. llvmpipe is exactly that
                 // case: it advertises the extension, so nothing else needs widening there, and
                 // `layout(r8ui) uimage2D` still lost its whole program until this ran for it.
                 //

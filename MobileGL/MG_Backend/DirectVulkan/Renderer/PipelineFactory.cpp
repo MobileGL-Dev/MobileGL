@@ -13,17 +13,17 @@
 namespace MobileGL::MG_Backend::DirectVulkan {
     static const char* PrimitiveTopologyToString(VkPrimitiveTopology topology) {
         switch (topology) {
-        ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_POINT_LIST)
-        ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_LINE_LIST)
-        ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_LINE_STRIP)
-        ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-        ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
-        ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN)
-        ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY)
-        ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY)
-        ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY)
-        ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY)
-        ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_PATCH_LIST)
+            ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_POINT_LIST)
+            ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_LINE_LIST)
+            ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_LINE_STRIP)
+            ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
+            ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN)
+            ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY)
+            ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY)
+            ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY)
+            ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY)
+            ENUM_STR_CASE(VK_PRIMITIVE_TOPOLOGY_PATCH_LIST)
         default:
             return "VK_PRIMITIVE_TOPOLOGY_UNKNOWN";
         }
@@ -31,13 +31,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     static const char* SampleCountToString(VkSampleCountFlagBits sampleCount) {
         switch (sampleCount) {
-        ENUM_STR_CASE(VK_SAMPLE_COUNT_1_BIT)
-        ENUM_STR_CASE(VK_SAMPLE_COUNT_2_BIT)
-        ENUM_STR_CASE(VK_SAMPLE_COUNT_4_BIT)
-        ENUM_STR_CASE(VK_SAMPLE_COUNT_8_BIT)
-        ENUM_STR_CASE(VK_SAMPLE_COUNT_16_BIT)
-        ENUM_STR_CASE(VK_SAMPLE_COUNT_32_BIT)
-        ENUM_STR_CASE(VK_SAMPLE_COUNT_64_BIT)
+            ENUM_STR_CASE(VK_SAMPLE_COUNT_1_BIT)
+            ENUM_STR_CASE(VK_SAMPLE_COUNT_2_BIT)
+            ENUM_STR_CASE(VK_SAMPLE_COUNT_4_BIT)
+            ENUM_STR_CASE(VK_SAMPLE_COUNT_8_BIT)
+            ENUM_STR_CASE(VK_SAMPLE_COUNT_16_BIT)
+            ENUM_STR_CASE(VK_SAMPLE_COUNT_32_BIT)
+            ENUM_STR_CASE(VK_SAMPLE_COUNT_64_BIT)
         default:
             return "VK_SAMPLE_COUNT_UNKNOWN";
         }
@@ -60,14 +60,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     static const char* CompareOpToString(VkCompareOp compareOp) {
         switch (compareOp) {
-        ENUM_STR_CASE(VK_COMPARE_OP_NEVER)
-        ENUM_STR_CASE(VK_COMPARE_OP_LESS)
-        ENUM_STR_CASE(VK_COMPARE_OP_EQUAL)
-        ENUM_STR_CASE(VK_COMPARE_OP_LESS_OR_EQUAL)
-        ENUM_STR_CASE(VK_COMPARE_OP_GREATER)
-        ENUM_STR_CASE(VK_COMPARE_OP_NOT_EQUAL)
-        ENUM_STR_CASE(VK_COMPARE_OP_GREATER_OR_EQUAL)
-        ENUM_STR_CASE(VK_COMPARE_OP_ALWAYS)
+            ENUM_STR_CASE(VK_COMPARE_OP_NEVER)
+            ENUM_STR_CASE(VK_COMPARE_OP_LESS)
+            ENUM_STR_CASE(VK_COMPARE_OP_EQUAL)
+            ENUM_STR_CASE(VK_COMPARE_OP_LESS_OR_EQUAL)
+            ENUM_STR_CASE(VK_COMPARE_OP_GREATER)
+            ENUM_STR_CASE(VK_COMPARE_OP_NOT_EQUAL)
+            ENUM_STR_CASE(VK_COMPARE_OP_GREATER_OR_EQUAL)
+            ENUM_STR_CASE(VK_COMPARE_OP_ALWAYS)
         default:
             return "VK_COMPARE_OP_UNKNOWN";
         }
@@ -75,29 +75,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     static const char* LogicOpToString(VkLogicOp logicOp) {
         switch (logicOp) {
-        ENUM_STR_CASE(VK_LOGIC_OP_CLEAR)
-        ENUM_STR_CASE(VK_LOGIC_OP_AND)
-        ENUM_STR_CASE(VK_LOGIC_OP_AND_REVERSE)
-        ENUM_STR_CASE(VK_LOGIC_OP_COPY)
-        ENUM_STR_CASE(VK_LOGIC_OP_AND_INVERTED)
-        ENUM_STR_CASE(VK_LOGIC_OP_NO_OP)
-        ENUM_STR_CASE(VK_LOGIC_OP_XOR)
-        ENUM_STR_CASE(VK_LOGIC_OP_OR)
-        ENUM_STR_CASE(VK_LOGIC_OP_NOR)
-        ENUM_STR_CASE(VK_LOGIC_OP_EQUIVALENT)
-        ENUM_STR_CASE(VK_LOGIC_OP_INVERT)
-        ENUM_STR_CASE(VK_LOGIC_OP_OR_REVERSE)
-        ENUM_STR_CASE(VK_LOGIC_OP_COPY_INVERTED)
-        ENUM_STR_CASE(VK_LOGIC_OP_OR_INVERTED)
-        ENUM_STR_CASE(VK_LOGIC_OP_NAND)
-        ENUM_STR_CASE(VK_LOGIC_OP_SET)
+            ENUM_STR_CASE(VK_LOGIC_OP_CLEAR)
+            ENUM_STR_CASE(VK_LOGIC_OP_AND)
+            ENUM_STR_CASE(VK_LOGIC_OP_AND_REVERSE)
+            ENUM_STR_CASE(VK_LOGIC_OP_COPY)
+            ENUM_STR_CASE(VK_LOGIC_OP_AND_INVERTED)
+            ENUM_STR_CASE(VK_LOGIC_OP_NO_OP)
+            ENUM_STR_CASE(VK_LOGIC_OP_XOR)
+            ENUM_STR_CASE(VK_LOGIC_OP_OR)
+            ENUM_STR_CASE(VK_LOGIC_OP_NOR)
+            ENUM_STR_CASE(VK_LOGIC_OP_EQUIVALENT)
+            ENUM_STR_CASE(VK_LOGIC_OP_INVERT)
+            ENUM_STR_CASE(VK_LOGIC_OP_OR_REVERSE)
+            ENUM_STR_CASE(VK_LOGIC_OP_COPY_INVERTED)
+            ENUM_STR_CASE(VK_LOGIC_OP_OR_INVERTED)
+            ENUM_STR_CASE(VK_LOGIC_OP_NAND)
+            ENUM_STR_CASE(VK_LOGIC_OP_SET)
         default:
             return "VK_LOGIC_OP_UNKNOWN";
         }
     }
 
-    PipelineFactory::PipelineFactory(VkDevice device, const VulkanRendererConfig& config):
-        m_device(device), m_config(config) {
+    PipelineFactory::PipelineFactory(VkDevice device, const VulkanRendererConfig& config)
+        : m_device(device), m_config(config) {
         MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE, "PipelineFactory: device is null");
 
         if (m_config.DisablePipelineCache) {
@@ -149,8 +149,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // If a future workload pairs another blend shape with an equality chain, widen
         // this with that evidence in hand rather than pre-emptively.
         Bool IsAccumulationBlend(const VkPipelineColorBlendAttachmentState& attachment) {
-            return attachment.colorBlendOp == VK_BLEND_OP_MIN ||
-                   attachment.colorBlendOp == VK_BLEND_OP_MAX;
+            return attachment.colorBlendOp == VK_BLEND_OP_MIN || attachment.colorBlendOp == VK_BLEND_OP_MAX;
         }
     } // namespace
 
@@ -194,59 +193,63 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     PipelineFactory::HashType PipelineFactory::ComputeHash(const PipelineCreatePayload& payload) const {
-        XXHASH_VERIFY(XXH64_reset(m_hashState, m_config.CacheVersion));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.programHash, sizeof(payload.programHash)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.vertexInputHash, sizeof(payload.vertexInputHash)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.pipelineLayout, sizeof(payload.pipelineLayout)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.renderPass, sizeof(payload.renderPass)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.colorAttachmentCount, sizeof(payload.colorAttachmentCount)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.rasterizationSamples, sizeof(payload.rasterizationSamples)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.sampleShadingEnable, sizeof(payload.sampleShadingEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.minSampleShading, sizeof(payload.minSampleShading)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.sampleMask, sizeof(payload.sampleMask)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.subpass, sizeof(payload.subpass)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.topology, sizeof(payload.topology)));
-        XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.primitiveRestartEnable, sizeof(payload.primitiveRestartEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.patchControlPoints, sizeof(payload.patchControlPoints)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.passthroughTessControlKey,
-                                   sizeof(payload.passthroughTessControlKey)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.viewportCount, sizeof(payload.viewportCount)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.polygonMode, sizeof(payload.polygonMode)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.cullMode, sizeof(payload.cullMode)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.frontFace, sizeof(payload.frontFace)));
-        XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.provokingVertexMode, sizeof(payload.provokingVertexMode)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.depthTestEnable, sizeof(payload.depthTestEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.depthWriteEnable, sizeof(payload.depthWriteEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.depthBiasEnable, sizeof(payload.depthBiasEnable)));
-        XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.rasterizerDiscardEnable, sizeof(payload.rasterizerDiscardEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.logicOpEnable, sizeof(payload.logicOpEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.stencilTestEnable, sizeof(payload.stencilTestEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.depthCompareOp, sizeof(payload.depthCompareOp)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.logicOp, sizeof(payload.logicOp)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.frontStencilFailOp, sizeof(payload.frontStencilFailOp)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.frontStencilPassOp, sizeof(payload.frontStencilPassOp)));
-        XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.frontStencilDepthFailOp, sizeof(payload.frontStencilDepthFailOp)));
-        XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.frontStencilCompareOp, sizeof(payload.frontStencilCompareOp)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.backStencilFailOp, sizeof(payload.backStencilFailOp)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.backStencilPassOp, sizeof(payload.backStencilPassOp)));
-        XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.backStencilDepthFailOp, sizeof(payload.backStencilDepthFailOp)));
-        XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.backStencilCompareOp, sizeof(payload.backStencilCompareOp)));
-        XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.fragmentReplacesDepth, sizeof(payload.fragmentReplacesDepth)));
-        if (payload.colorAttachmentCount > 0) {
-            XXHASH_VERIFY(XXH64_update(
-                m_hashState,
-                payload.colorBlendAttachments.data(),
-                sizeof(payload.colorBlendAttachments[0]) * payload.colorAttachmentCount));
+        // P15: one read of the thread_local per hash (emulated TLS: every read is a call).
+        XXH64_state_t* const hashState = m_hashState;
+        XXHASH_VERIFY(XXH64_reset(hashState, m_config.CacheVersion));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.programHash, sizeof(payload.programHash)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.vertexInputHash, sizeof(payload.vertexInputHash)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.pipelineLayout, sizeof(payload.pipelineLayout)));
+        if (payload.wireRenderPassCompatibilityId != 0) {
+            constexpr Uint64 wireDomain = 0x5749524552504b59ull;
+            XXHASH_VERIFY(XXH64_update(hashState, &wireDomain, sizeof(wireDomain)));
+            XXHASH_VERIFY(XXH64_update(hashState, &payload.wireRenderPassCompatibilityId,
+                                       sizeof(payload.wireRenderPassCompatibilityId)));
+        } else {
+            XXHASH_VERIFY(XXH64_update(hashState, &payload.renderPass, sizeof(payload.renderPass)));
         }
-        return XXH64_digest(m_hashState);
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.colorAttachmentCount, sizeof(payload.colorAttachmentCount)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.rasterizationSamples, sizeof(payload.rasterizationSamples)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.sampleShadingEnable, sizeof(payload.sampleShadingEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.minSampleShading, sizeof(payload.minSampleShading)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.sampleMask, sizeof(payload.sampleMask)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.subpass, sizeof(payload.subpass)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.topology, sizeof(payload.topology)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.primitiveRestartEnable, sizeof(payload.primitiveRestartEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.patchControlPoints, sizeof(payload.patchControlPoints)));
+        XXHASH_VERIFY(
+            XXH64_update(hashState, &payload.passthroughTessControlKey, sizeof(payload.passthroughTessControlKey)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.viewportCount, sizeof(payload.viewportCount)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.nonLayeredStages, sizeof(payload.nonLayeredStages)));
+        const Bool fullCoverageSampleMask = payload.fullCoverageFragmentModule != VK_NULL_HANDLE;
+        XXHASH_VERIFY(XXH64_update(hashState, &fullCoverageSampleMask, sizeof(fullCoverageSampleMask)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.polygonMode, sizeof(payload.polygonMode)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.cullMode, sizeof(payload.cullMode)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.frontFace, sizeof(payload.frontFace)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.provokingVertexMode, sizeof(payload.provokingVertexMode)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.depthTestEnable, sizeof(payload.depthTestEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.depthWriteEnable, sizeof(payload.depthWriteEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.depthBiasEnable, sizeof(payload.depthBiasEnable)));
+        XXHASH_VERIFY(
+            XXH64_update(hashState, &payload.rasterizerDiscardEnable, sizeof(payload.rasterizerDiscardEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.logicOpEnable, sizeof(payload.logicOpEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.stencilTestEnable, sizeof(payload.stencilTestEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.depthCompareOp, sizeof(payload.depthCompareOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.logicOp, sizeof(payload.logicOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.frontStencilFailOp, sizeof(payload.frontStencilFailOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.frontStencilPassOp, sizeof(payload.frontStencilPassOp)));
+        XXHASH_VERIFY(
+            XXH64_update(hashState, &payload.frontStencilDepthFailOp, sizeof(payload.frontStencilDepthFailOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.frontStencilCompareOp, sizeof(payload.frontStencilCompareOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.backStencilFailOp, sizeof(payload.backStencilFailOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.backStencilPassOp, sizeof(payload.backStencilPassOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.backStencilDepthFailOp, sizeof(payload.backStencilDepthFailOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.backStencilCompareOp, sizeof(payload.backStencilCompareOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.fragmentReplacesDepth, sizeof(payload.fragmentReplacesDepth)));
+        if (payload.colorAttachmentCount > 0) {
+            XXHASH_VERIFY(XXH64_update(hashState, payload.colorBlendAttachments.data(),
+                                       sizeof(payload.colorBlendAttachments[0]) * payload.colorAttachmentCount));
+        }
+        return XXH64_digest(hashState);
     }
 
     VkPipeline PipelineFactory::GetOrCreatePipeline(const PipelineCreatePayload& payload) {
@@ -271,12 +274,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Log.h ordering fix made MGLOG_E live in INFO builds.
             MGLOG_E("PipelineFactory::GetOrCreatePipeline: creation failed for hash=0x%llx "
                     "programHash=0x%llx; not caching the failure",
-                    static_cast<unsigned long long>(hash),
-                    static_cast<unsigned long long>(payload.programHash));
+                    static_cast<unsigned long long>(hash), static_cast<unsigned long long>(payload.programHash));
             return VK_NULL_HANDLE;
         }
-        m_cache.emplace(hash, PipelineCacheEntry{pipeline, payload.programHash, payload.renderPass,
-                                                 m_frameCounter});
+        m_cache.emplace(
+            hash, PipelineCacheEntry{pipeline, payload.programHash,
+                                     // Wire pipelines outlive their creator pass and
+                                     // may serve another compatible pass in flight.
+                                     // Never evict them by a recycled native handle.
+                                     payload.wireRenderPassCompatibilityId != 0 ? VK_NULL_HANDLE : payload.renderPass,
+                                     m_frameCounter});
         return pipeline;
     }
 
@@ -324,34 +331,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return evicted;
     }
 
-    Uint32 PipelineFactory::EvictByRenderPasses(const Vector<VkRenderPass>& renderPasses) {
-        if (renderPasses.empty() || m_cache.empty()) {
-            return 0;
-        }
-        // Sorted-batch membership test keeps a mass eviction (shader-pack switch,
-        // dimension exit) at one O(cache * log batch) scan instead of one full scan
-        // per dying pass.
-        Vector<VkRenderPass> sortedPasses = renderPasses;
-        std::sort(sortedPasses.begin(), sortedPasses.end());
-        Uint32 evicted = 0;
-        for (auto it = m_cache.begin(); it != m_cache.end();) {
-            if (std::binary_search(sortedPasses.begin(), sortedPasses.end(), it->second.renderPass)) {
-                if (it->second.pipeline != VK_NULL_HANDLE) {
-                    vkDestroyPipeline(m_device, it->second.pipeline, nullptr);
-                }
-                it = m_cache.erase(it);
-                ++evicted;
-            } else {
-                ++it;
-            }
-        }
-        if (evicted > 0) {
-            MGLOG_D("PipelineFactory::EvictByRenderPasses: evicted %u pipelines for %zu destroyed render passes",
-                    evicted, sortedPasses.size());
-        }
-        return evicted;
-    }
-
     Uint32 PipelineFactory::EvictByProgramHash(HashType programHash) {
         Uint32 evicted = 0;
         for (auto it = m_cache.begin(); it != m_cache.end();) {
@@ -366,40 +345,50 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         if (evicted > 0) {
-            MGLOG_D("PipelineFactory::EvictByProgramHash: evicted %u pipelines for program hash 0x%llx",
-                    evicted, static_cast<unsigned long long>(programHash));
+            MGLOG_D("PipelineFactory::EvictByProgramHash: evicted %u pipelines for program hash 0x%llx", evicted,
+                    static_cast<unsigned long long>(programHash));
         }
         return evicted;
     }
 
     VkPipeline PipelineFactory::CreatePipeline(const PipelineCreatePayload& payload) const {
         MOBILEGL_ASSERT(payload.stages != nullptr && !payload.stages->empty(), "PipelineFactory: stages are empty");
+        // The assert compiles out of shipping builds, and a program declined for an invalid
+        // module (VkProgramObject::invalidSpirvDeclined) has no stages at all: a caller that
+        // forgot to refuse it must get a skipped draw, not a stageCount=0 pipeline.
+        if (payload.stages == nullptr || payload.stages->empty()) {
+            MGLOG_E_ONCE("PipelineFactory::CreatePipeline: refusing a pipeline with no shader stages "
+                         "(programHash=0x%llx); its draws are skipped",
+                         static_cast<unsigned long long>(payload.programHash));
+            return VK_NULL_HANDLE;
+        }
         MOBILEGL_ASSERT(payload.vertexInputState != nullptr, "PipelineFactory: vertexInputState is null");
         MOBILEGL_ASSERT(payload.pipelineLayout != VK_NULL_HANDLE, "PipelineFactory: pipelineLayout is null");
         MOBILEGL_ASSERT(payload.renderPass != VK_NULL_HANDLE, "PipelineFactory: renderPass is null");
         MOBILEGL_ASSERT(payload.colorAttachmentCount <= PipelineCreatePayload::kMaxColorAttachments,
-                "PipelineFactory: colorAttachmentCount=%u is unexpectedly large",
-                payload.colorAttachmentCount);
-        MGLOG_D("PipelineFactory::CreatePipeline: programHash=0x%llx vertexInputHash=0x%llx colorAttachmentCount=%u subpass=%u",
-            static_cast<unsigned long long>(payload.programHash),
-            static_cast<unsigned long long>(payload.vertexInputHash),
-            payload.colorAttachmentCount,
-            payload.subpass);
+                        "PipelineFactory: colorAttachmentCount=%u is unexpectedly large", payload.colorAttachmentCount);
+        MGLOG_D("PipelineFactory::CreatePipeline: programHash=0x%llx vertexInputHash=0x%llx colorAttachmentCount=%u "
+                "subpass=%u",
+                static_cast<unsigned long long>(payload.programHash),
+                static_cast<unsigned long long>(payload.vertexInputHash), payload.colorAttachmentCount,
+                payload.subpass);
 
-        static constexpr VkDynamicState kDynamicStates[] = {
-            VK_DYNAMIC_STATE_VIEWPORT,
-            VK_DYNAMIC_STATE_SCISSOR,
-            VK_DYNAMIC_STATE_BLEND_CONSTANTS,
-            VK_DYNAMIC_STATE_DEPTH_BIAS,
-            VK_DYNAMIC_STATE_LINE_WIDTH,
-            VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
-            VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
-            VK_DYNAMIC_STATE_STENCIL_REFERENCE
-        };
+        // The fragment shading rate goes last so the common prefix is the eight-state list every
+        // pipeline shares; it is only present when the device enabled the pipeline rate.
+        static constexpr VkDynamicState kDynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                                            VK_DYNAMIC_STATE_SCISSOR,
+                                                            VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+                                                            VK_DYNAMIC_STATE_DEPTH_BIAS,
+                                                            VK_DYNAMIC_STATE_LINE_WIDTH,
+                                                            VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+                                                            VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
+                                                            VK_DYNAMIC_STATE_STENCIL_REFERENCE,
+                                                            VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR};
 
         VkPipelineDynamicStateCreateInfo dynamicState{};
         dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dynamicState.dynamicStateCount = static_cast<uint32_t>(std::size(kDynamicStates));
+        dynamicState.dynamicStateCount =
+            static_cast<uint32_t>(std::size(kDynamicStates)) - (payload.fragmentShadingRateDynamic ? 0u : 1u);
         dynamicState.pDynamicStates = kDynamicStates;
 
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
@@ -506,11 +495,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // wrong). Returning VK_NULL_HANDLE routes this through the same path a driver rejection
         // takes: the draw is skipped, nothing is memoised, and the process survives.
         const Vector<VkPipelineShaderStageCreateInfo>* effectiveStages = payload.stages;
-        Vector<VkPipelineShaderStageCreateInfo> stagesWithPassthrough;
-        if (payload.passthroughTessControlStage.module != VK_NULL_HANDLE) {
-            stagesWithPassthrough = *payload.stages;
-            stagesWithPassthrough.push_back(payload.passthroughTessControlStage);
-            effectiveStages = &stagesWithPassthrough;
+        Vector<VkPipelineShaderStageCreateInfo> adjustedStages;
+        if (payload.passthroughTessControlStage.module != VK_NULL_HANDLE ||
+            payload.fullCoverageFragmentModule != VK_NULL_HANDLE) {
+            adjustedStages = *payload.stages;
+            if (payload.passthroughTessControlStage.module != VK_NULL_HANDLE) {
+                adjustedStages.push_back(payload.passthroughTessControlStage);
+            }
+            if (payload.fullCoverageFragmentModule != VK_NULL_HANDLE) {
+                for (auto& stageInfo : adjustedStages) {
+                    if (stageInfo.stage == VK_SHADER_STAGE_FRAGMENT_BIT) {
+                        stageInfo.module = payload.fullCoverageFragmentModule;
+                    }
+                }
+            }
+            effectiveStages = &adjustedStages;
+        }
+        // A static rasterizer discard leaves the pipeline without fragment shader state, and then
+        // pStages may not name a fragment stage (VUID-VkGraphicsPipelineCreateInfo-pStages-06894).
+        // Nothing would run it anyway.
+        if (payload.rasterizerDiscardEnable) {
+            if (effectiveStages != &adjustedStages) adjustedStages = *effectiveStages;
+            std::erase_if(adjustedStages, [](const VkPipelineShaderStageCreateInfo& stageInfo) {
+                return stageInfo.stage == VK_SHADER_STAGE_FRAGMENT_BIT;
+            });
+            effectiveStages = &adjustedStages;
         }
         {
             VkShaderStageFlags stagesPresent = 0;
@@ -529,12 +538,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (!s_warnedHalfTessellatedPipeline) {
                     s_warnedHalfTessellatedPipeline = true;
                     MGLOG_E_ONCE("PipelineFactory::CreatePipeline: refusing a pipeline with %s tessellation stage and "
-                            "no %s stage (VUID-VkGraphicsPipelineCreateInfo-pStages-00730). programHash=0x%llx "
-                            "patchControlPoints=%u. Its draws are skipped; logged once.",
-                            hasTessEval ? "an evaluation" : "a control",
-                            hasTessEval ? "control" : "evaluation",
-                            static_cast<unsigned long long>(payload.programHash),
-                            payload.patchControlPoints);
+                                 "no %s stage (VUID-VkGraphicsPipelineCreateInfo-pStages-00730). programHash=0x%llx "
+                                 "patchControlPoints=%u. Its draws are skipped; logged once.",
+                                 hasTessEval ? "an evaluation" : "a control", hasTessEval ? "control" : "evaluation",
+                                 static_cast<unsigned long long>(payload.programHash), payload.patchControlPoints);
                 }
                 return VK_NULL_HANDLE;
             }
@@ -545,8 +552,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         gpi.pStages = effectiveStages->data();
         gpi.pVertexInputState = payload.vertexInputState;
         gpi.pInputAssemblyState = &ia;
-        gpi.pTessellationState =
-            payload.topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST ? &tessellation : nullptr;
+        gpi.pTessellationState = payload.topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST ? &tessellation : nullptr;
         gpi.pViewportState = &vpci;
         gpi.pRasterizationState = &raster;
         gpi.pMultisampleState = &ms;
@@ -567,32 +573,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // GetOrCreatePipeline deliberately does not cache the failure, which is what makes that
         // repetition happen; if the repetition ever needs to stop, fix the pipeline, not the log.
         if (result != VK_SUCCESS) {
-            MGLOG_F("PipelineFactory::CreatePipeline failed: result=%s (%d) programHash=0x%llx vertexInputHash=0x%llx stageCount=%u topology=%s(%d) colorAttachmentCount=%u samples=%s(%d) subpass=%u",
-                    VkResultToString(result),
-                    result,
-                    static_cast<unsigned long long>(payload.programHash),
-                    static_cast<unsigned long long>(payload.vertexInputHash),
-                    gpi.stageCount,
-                    PrimitiveTopologyToString(payload.topology),
-                    payload.topology,
-                    payload.colorAttachmentCount,
-                    SampleCountToString(payload.rasterizationSamples),
-                    payload.rasterizationSamples,
-                    payload.subpass);
-            MGLOG_F("PipelineFactory::CreatePipeline state: cullMode=%s(0x%x) frontFace=%d depthTest=%d depthWrite=%d depthCompare=%s(%d) depthBias=%d rasterizerDiscard=%d stencilTest=%d logicOpEnable=%d logicOp=%s(%d)",
-                    CullModeToString(payload.cullMode),
-                    static_cast<Uint32>(payload.cullMode),
-                    payload.frontFace,
-                    payload.depthTestEnable ? 1 : 0,
-                    payload.depthWriteEnable ? 1 : 0,
-                    CompareOpToString(payload.depthCompareOp),
-                    payload.depthCompareOp,
-                    payload.depthBiasEnable ? 1 : 0,
-                    payload.rasterizerDiscardEnable ? 1 : 0,
-                    payload.stencilTestEnable ? 1 : 0,
-                    payload.logicOpEnable ? 1 : 0,
-                    LogicOpToString(payload.logicOp),
-                    payload.logicOp);
+            MGLOG_F("PipelineFactory::CreatePipeline failed: result=%s (%d) programHash=0x%llx vertexInputHash=0x%llx "
+                    "stageCount=%u topology=%s(%d) colorAttachmentCount=%u samples=%s(%d) subpass=%u",
+                    VkResultToString(result), result, static_cast<unsigned long long>(payload.programHash),
+                    static_cast<unsigned long long>(payload.vertexInputHash), gpi.stageCount,
+                    PrimitiveTopologyToString(payload.topology), payload.topology, payload.colorAttachmentCount,
+                    SampleCountToString(payload.rasterizationSamples), payload.rasterizationSamples, payload.subpass);
+            MGLOG_F(
+                "PipelineFactory::CreatePipeline state: cullMode=%s(0x%x) frontFace=%d depthTest=%d depthWrite=%d "
+                "depthCompare=%s(%d) depthBias=%d rasterizerDiscard=%d stencilTest=%d logicOpEnable=%d logicOp=%s(%d)",
+                CullModeToString(payload.cullMode), static_cast<Uint32>(payload.cullMode), payload.frontFace,
+                payload.depthTestEnable ? 1 : 0, payload.depthWriteEnable ? 1 : 0,
+                CompareOpToString(payload.depthCompareOp), payload.depthCompareOp, payload.depthBiasEnable ? 1 : 0,
+                payload.rasterizerDiscardEnable ? 1 : 0, payload.stencilTestEnable ? 1 : 0,
+                payload.logicOpEnable ? 1 : 0, LogicOpToString(payload.logicOp), payload.logicOp);
             MGLOG_F("PipelineFactory::CreatePipeline vertex input: bindingCount=%u attributeCount=%u",
                     payload.vertexInputState->vertexBindingDescriptionCount,
                     payload.vertexInputState->vertexAttributeDescriptionCount);
@@ -606,8 +600,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     const auto& digest = (*payload.stageSpirvDigests)[i];
                     MGLOG_I("PipelineFactory::CreatePipeline spirv[%zu]: stage=0x%x words=%u bytes=%zu "
                             "hash=0x%llx",
-                            i, digest.stage, digest.wordCount,
-                            static_cast<SizeT>(digest.wordCount) * sizeof(Uint32),
+                            i, digest.stage, digest.wordCount, static_cast<SizeT>(digest.wordCount) * sizeof(Uint32),
                             static_cast<unsigned long long>(digest.hash));
                 }
             } else {
@@ -628,16 +621,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             for (Uint32 i = 0; i < payload.colorAttachmentCount; ++i) {
                 const auto& attachment = payload.colorBlendAttachments[i];
-                MGLOG_F("PipelineFactory::CreatePipeline colorAttachment[%u]: blend=%d colorWriteMask=0x%x srcColor=%d dstColor=%d colorOp=%d srcAlpha=%d dstAlpha=%d alphaOp=%d",
-                        i,
-                        attachment.blendEnable == VK_TRUE ? 1 : 0,
-                        static_cast<Uint32>(attachment.colorWriteMask),
-                        attachment.srcColorBlendFactor,
-                        attachment.dstColorBlendFactor,
-                        attachment.colorBlendOp,
-                        attachment.srcAlphaBlendFactor,
-                        attachment.dstAlphaBlendFactor,
-                        attachment.alphaBlendOp);
+                MGLOG_F("PipelineFactory::CreatePipeline colorAttachment[%u]: blend=%d colorWriteMask=0x%x srcColor=%d "
+                        "dstColor=%d colorOp=%d srcAlpha=%d dstAlpha=%d alphaOp=%d",
+                        i, attachment.blendEnable == VK_TRUE ? 1 : 0, static_cast<Uint32>(attachment.colorWriteMask),
+                        attachment.srcColorBlendFactor, attachment.dstColorBlendFactor, attachment.colorBlendOp,
+                        attachment.srcAlphaBlendFactor, attachment.dstAlphaBlendFactor, attachment.alphaBlendOp);
             }
         }
         VK_VERIFY(result, "vkCreateGraphicsPipelines");

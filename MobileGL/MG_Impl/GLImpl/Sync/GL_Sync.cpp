@@ -7,8 +7,15 @@
 // End of Source File Header
 
 #include "GL_Sync.h"
-#include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/BackendFunctions.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/BufferState/BufferObject.h>
+#include <MG_Impl/Pipe/PipeFill.h>
+// CONTRACT-P5.md §7 / ID-14: a null check on a GLFunctionsTable slot may not survive into the
+// client under split - it becomes a caps-mirror read. SlotCaps.h carries the rule and the test
+// that decides which of its two spellings a site takes; in a pull build both expand to exactly
+// the check they replaced.
+#include <MG_Remote/Client/SlotCaps.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
@@ -55,7 +62,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto* syncObject = new SyncObject;
         syncObject->condition = condition;
         syncObject->flags = flags;
+        // P5b: FenceSync is now a class-B emitter under split. Its server sink keeps the
+        // backend's optional/null-native fallback; the client must reach the wire first.
+        // This is the same pointer expression MGL_BACKEND_SLOT_PTR_LOCAL had in a pull build.
         if (const auto backendFenceSync = MG_Backend::gBackendFunctionsTable.GL.FenceSync) {
+            MGP_FILL(FenceSync);
             syncObject->backendHandle = backendFenceSync();
         }
         const GLsync handle = reinterpret_cast<GLsync>(syncObject);
@@ -91,10 +102,18 @@ namespace MobileGL::MG_Impl::GLImpl {
             return GL_WAIT_FAILED;
         }
         const auto backendClientWaitSync = MG_Backend::gBackendFunctionsTable.GL.ClientWaitSync;
-        if (!backendClientWaitSync || !syncObject->backendHandle) {
-            return GL_ALREADY_SIGNALED; // legacy always-signaled fallback
+        GLenum result = GL_ALREADY_SIGNALED; // legacy always-signaled fallback
+        if (backendClientWaitSync && syncObject->backendHandle) {
+            MGP_FILL(ClientWaitSync);
+            result = backendClientWaitSync(syncObject->backendHandle, flags, timeout);
         }
-        return backendClientWaitSync(syncObject->backendHandle, flags, timeout);
+        // A satisfied wait is the point at which GPU writes issued before the fence become
+        // visible through a persistent read map (GL 4.6 core 7.13), and its pointer is the
+        // frontend shadow, which only an explicit pull refreshes.
+        if (result == GL_ALREADY_SIGNALED || result == GL_CONDITION_SATISFIED) {
+            MG_State::GLState::SyncPersistentReadMapsFromGpu();
+        }
+        return result;
     }
 
     void WaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
@@ -119,6 +138,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         const auto backendWaitSync = MG_Backend::gBackendFunctionsTable.GL.WaitSync;
         if (backendWaitSync && syncObject->backendHandle) {
+            MGP_FILL(WaitSync);
             backendWaitSync(syncObject->backendHandle, flags, timeout);
         }
     }
@@ -139,6 +159,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         const auto backendDeleteSync = MG_Backend::gBackendFunctionsTable.GL.DeleteSync;
         if (backendDeleteSync && syncObject->backendHandle) {
+            MGP_FILL(DeleteSync);
             backendDeleteSync(syncObject->backendHandle);
         }
         delete syncObject;
@@ -146,7 +167,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetSynciv(GLsync sync, GLenum pname, GLsizei bufSize, GLsizei* length, GLint* values) {
         // GL 4.6 core 4.1: a negative bufSize is INVALID_VALUE, an unnamed sync is INVALID_VALUE
-        // and an unrecognised pname is INVALID_ENUM. All three used to leave glGetError() clean
+        // and an unrecognized pname is INVALID_ENUM. All three used to leave glGetError() clean
         // and write a plausible-looking zero, which is the one failure mode a caller cannot tell
         // apart from a real answer - GL_SYNC_STATUS legitimately answers GL_UNSIGNALED (0x9118),
         // but a mistyped pname answered a bare 0 that no query ever returns.
@@ -174,8 +195,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_SYNC_STATUS: {
             const auto backendGetSyncStatus = MG_Backend::gBackendFunctionsTable.GL.GetSyncStatus;
-            const Bool signaled = !backendGetSyncStatus || !syncObject->backendHandle ||
-                                  backendGetSyncStatus(syncObject->backendHandle);
+            MGP_FILL(GetSyncStatus);
+            const Bool signaled =
+                !backendGetSyncStatus || !syncObject->backendHandle || backendGetSyncStatus(syncObject->backendHandle);
             value = signaled ? GL_SIGNALED : GL_UNSIGNALED;
             break;
         }
@@ -227,6 +249,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto backendDeleteSync = MG_Backend::gBackendFunctionsTable.GL.DeleteSync;
         for (const auto& [_, syncObject] : orphans) {
             if (backendDeleteSync && syncObject->backendHandle) {
+                MGP_FILL(DeleteSync);
                 backendDeleteSync(syncObject->backendHandle);
             }
             delete syncObject;

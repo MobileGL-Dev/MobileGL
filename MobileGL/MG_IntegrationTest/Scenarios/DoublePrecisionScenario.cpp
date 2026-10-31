@@ -96,8 +96,7 @@ void main() {
                 glGenBuffers(1, &m_output);
                 glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_output);
                 const std::vector<float> zeroes(kOutputSlots, 0.0f);
-                glBufferData(GL_SHADER_STORAGE_BUFFER, kOutputSlots * sizeof(float), zeroes.data(),
-                             GL_DYNAMIC_DRAW);
+                glBufferData(GL_SHADER_STORAGE_BUFFER, kOutputSlots * sizeof(float), zeroes.data(), GL_DYNAMIC_DRAW);
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_output);
                 glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
             }
@@ -263,7 +262,7 @@ void main() {
         }
 
         // The block's contents, at the offsets the standard puts them. Padding stays zero, which
-        // is what makes a byte-for-byte comparison against the (zero-initialised) output buffer
+        // is what makes a byte-for-byte comparison against the (zero-initialized) output buffer
         // catch a member that landed somewhere it should not have.
         std::vector<unsigned char> MakeBlockContents(const BlockLayout& layout) {
             std::vector<unsigned char> bytes(static_cast<std::size_t>(layout.size), 0);
@@ -293,9 +292,8 @@ void main() {
         // diagnosis rather than "the buffer is wrong".
         std::string DescribeOffset(const BlockLayout& layout, int offset) {
             const std::pair<int, const char*> members[] = {
-                {layout.data0, "data0"}, {layout.data1, "data1"}, {layout.data2, "data2"},
-                {layout.data3, "data3"}, {layout.data4, "data4"}, {layout.data5, "data5"},
-                {layout.data6, "data6"}};
+                {layout.data0, "data0"}, {layout.data1, "data1"}, {layout.data2, "data2"}, {layout.data3, "data3"},
+                {layout.data4, "data4"}, {layout.data5, "data5"}, {layout.data6, "data6"}};
             const char* owner = "(padding before data0)";
             for (const auto& [start, name] : members) {
                 if (offset >= start) owner = name;
@@ -378,12 +376,10 @@ void main() {
         };
 
         constexpr DoubleShape kDoubleShapes[] = {
-            {"g_0 double", 0, 1, 1, &kG0},      {"g_1 dvec2", 1, 1, 2, kG1},
-            {"g_2 dvec3", 3, 1, 3, kG2},        {"g_3 dvec4", 6, 1, 4, kG3},
-            {"g_4 dmat2", 10, 2, 2, kG4},       {"g_5 dmat2x3", 14, 2, 3, kG5},
-            {"g_6 dmat2x4", 20, 2, 4, kG6},     {"g_7 dmat3x2", 28, 3, 2, kG7},
-            {"g_8 dmat3", 34, 3, 3, kG8},       {"g_9 dmat3x4", 43, 3, 4, kG9},
-            {"g_10 dmat4x2", 55, 4, 2, kG10},   {"g_11 dmat4x3", 63, 4, 3, kG11},
+            {"g_0 double", 0, 1, 1, &kG0},  {"g_1 dvec2", 1, 1, 2, kG1},      {"g_2 dvec3", 3, 1, 3, kG2},
+            {"g_3 dvec4", 6, 1, 4, kG3},    {"g_4 dmat2", 10, 2, 2, kG4},     {"g_5 dmat2x3", 14, 2, 3, kG5},
+            {"g_6 dmat2x4", 20, 2, 4, kG6}, {"g_7 dmat3x2", 28, 3, 2, kG7},   {"g_8 dmat3", 34, 3, 3, kG8},
+            {"g_9 dmat3x4", 43, 3, 4, kG9}, {"g_10 dmat4x2", 55, 4, 2, kG10}, {"g_11 dmat4x3", 63, 4, 3, kG11},
             {"g_12 dmat4", 75, 4, 4, kG12},
         };
 
@@ -445,7 +441,7 @@ void main() {
             const GLint scalar = glGetUniformLocation(m_program, "uScalar");
             ASSERT_GE(scalar, 0);
             // 0.1 has no exact float (or double) representation, so this only passes if the
-            // value really travelled through the demoted slot rather than being read out of
+            // value really traveled through the demoted slot rather than being read out of
             // some other four bytes.
             glUniform1d(scalar, 0.1);
             glUseProgram(0);
@@ -477,7 +473,8 @@ void main() {
             // Column-major, and every entry distinct so a transposed or mis-strided write
             // cannot land on a value that happens to match.
             GLdouble matrixValue[16] = {};
-            for (int i = 0; i < 16; ++i) matrixValue[i] = 100.0 + i;
+            for (int i = 0; i < 16; ++i)
+                matrixValue[i] = 100.0 + i;
             glUniformMatrix4dv(matrix, 1, GL_FALSE, matrixValue);
             const GLdouble arrayValue[3] = {71.0, 72.0, 73.0};
             glUniform1dv(array0, 3, arrayValue);
@@ -504,7 +501,8 @@ void main() {
             const GLint matrix = glGetUniformLocation(m_program, "uMatrix");
             ASSERT_GE(matrix, 0);
             GLdouble matrixValue[16] = {};
-            for (int i = 0; i < 16; ++i) matrixValue[i] = 100.0 + i;
+            for (int i = 0; i < 16; ++i)
+                matrixValue[i] = 100.0 + i;
             glUniformMatrix4dv(matrix, 1, GL_TRUE, matrixValue);
             glUseProgram(0);
 
@@ -547,8 +545,8 @@ void main() {
                     GLsizei length = 0;
                     GLint size = 0;
                     GLenum type = 0;
-                    glGetActiveUniform(m_program, static_cast<GLuint>(index), sizeof(name) - 1, &length, &size,
-                                       &type, name);
+                    glGetActiveUniform(m_program, static_cast<GLuint>(index), sizeof(name) - 1, &length, &size, &type,
+                                       name);
                     if (std::string(name, static_cast<size_t>(length)) != expectation.name) continue;
                     found = true;
                     EXPECT_EQ(type, expectation.type) << expectation.name;
@@ -573,7 +571,8 @@ void main() {
             const GLdouble vectorValue[3] = {11.5, 12.5, 13.5};
             glUniform3dv(vector, 1, vectorValue);
             GLdouble matrixValue[16] = {};
-            for (int i = 0; i < 16; ++i) matrixValue[i] = 100.0 + i;
+            for (int i = 0; i < 16; ++i)
+                matrixValue[i] = 100.0 + i;
             glUniformMatrix4dv(matrix, 1, GL_FALSE, matrixValue);
             glUseProgram(0);
 
@@ -753,8 +752,7 @@ void main() {
                     for (int c = 0; c < shape.columns; ++c) {
                         for (int r = 0; r < shape.rows; ++r) {
                             const int component = c * shape.rows + r;
-                            EXPECT_FLOAT_EQ(values[shape.base + component],
-                                            static_cast<float>(shape.values[component]))
+                            EXPECT_FLOAT_EQ(values[shape.base + component], static_cast<float>(shape.values[component]))
                                 << pass << ": " << shape.name << " column " << c << " row " << r;
                         }
                     }
@@ -1020,8 +1018,8 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
                 const char* packing = pass == 0 ? "std140" : "std430";
                 std::vector<unsigned char> observed(expected.size(), 0xEE);
                 glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[2 + pass]);
-                glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
-                                   static_cast<GLsizeiptr>(observed.size()), observed.data());
+                glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(observed.size()),
+                                   observed.data());
                 int mismatches = 0;
                 int firstMismatch = -1;
                 for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -1029,12 +1027,11 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
                     ++mismatches;
                     if (firstMismatch < 0) firstMismatch = static_cast<int>(i);
                 }
-                EXPECT_EQ(mismatches, 0)
-                    << packing << " block: " << mismatches << " of " << expected.size()
-                    << " bytes differ, first at byte " << firstMismatch << " (in "
-                    << DescribeOffset(layout, firstMismatch < 0 ? 0 : firstMismatch)
-                    << "); a block that was repacked around its doubles reads and writes every "
-                       "member after the first one at the wrong offset";
+                EXPECT_EQ(mismatches, 0) << packing << " block: " << mismatches << " of " << expected.size()
+                                         << " bytes differ, first at byte " << firstMismatch << " (in "
+                                         << DescribeOffset(layout, firstMismatch < 0 ? 0 : firstMismatch)
+                                         << "); a block that was repacked around its doubles reads and writes every "
+                                            "member after the first one at the wrong offset";
             }
 
             glUseProgram(0);

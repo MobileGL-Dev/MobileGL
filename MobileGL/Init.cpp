@@ -17,9 +17,17 @@
 #include <MG_Impl/GLImpl/Sync/GL_Sync.h>
 #include <MG_Impl/GLImpl/Query/GL_Query.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
+#include <MG_Util/Metrics/PipeStats.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_State/GLState/ProgramState/ProgramTranslationCache.h>
 #include <MG_Util/ShaderTranspiler/TranslationCache.h>
+#if MOBILEGL_PIPE_VERIFY
+#include <MG_Backend/MGPipe/PipeInputs.h> // MGPipeVerifyFlushSummary, before Debug::Close in DestroyImpl
+#endif
+#include <MG_Impl/Pipe/Verb/VerbPort.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Remote/Client/ServerProbe.h>
+#endif
 
 #include <atomic>
 #include <mutex>
@@ -42,6 +50,20 @@ namespace MobileGL {
             if (logLifecycle) {
                 MGLOG_I("MobileGL closing...");
             }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5: the split roles come down FIRST - ARCHITECTURE.md §14's order puts the whole
+            // of it before MobileGL::Destroy(), and this function IS MobileGL::Destroy. A no-op
+            // in a monolith RUN; absent from a monolith BUILD, because G1 admits no new pull
+            // symbol and no resized one (the first version called it unconditionally and moved
+            // DestroyImpl by 32 bytes). See BackendObjects.h for why the position rather than
+            // the call is the load-bearing part.
+            MG_Backend::ShutdownSplitRoles();
+#endif
+            // Before any subsystem the counters name goes away, and before the last frame's
+            // numbers can be lost: emits the final summary line and, when
+            // MOBILEGL_PIPE_STATS_FILE is set, the JSON dump. A no-op when the counters are
+            // off, and idempotent.
+            MG_Util::PipeStats::Shutdown();
             // First, before anything else is torn down. In-flight compile/link jobs own
             // their own inputs and are safe against everything below EXCEPT glslang's
             // process globals and the TShader/TProgram objects hanging off pGLContext,
@@ -84,13 +106,25 @@ namespace MobileGL {
             MG_State::GLState::ClearProgramTranslationCache();
             MG_Backend::gBackendFunctionsTable = {};
             g_isInitialized = false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // A later re-initialization asks whether the server is there again.
+            MG_Remote::Client::ResetServerProbeCache();
+#endif
+#if MOBILEGL_PIPE_VERIFY
+            // BEFORE Close, and from here rather than from a static destructor (V1 fix round 2):
+            // Close() nulls the role's sink and Log.cpp's next write reopens it with "w", so the
+            // FATAL=0 summary the comparator used to write from __run_exit_handlers truncated the
+            // client half of every such run to that one line. Verify builds only - the guard is
+            // the compile definition, not a runtime knob, and the pull build gains no byte (G1).
+            MG_Pipe::MGPipeVerifyFlushSummary();
+#endif
             if (logLifecycle) {
                 MG_Util::Debug::Close();
             }
 
             // TODO: add and use Destroy functions for other subsystems
         }
-    }
+    } // namespace
 
     void Initialize() {
         if (g_isInitialized) {
@@ -102,9 +136,61 @@ namespace MobileGL {
         MGLOG_I("Initializing MobileGL...");
         MG_ConfigLoader::Init();
         MGLOG_I("Config loaded");
+        // Immediately after the config load and before anything can count: the MGPipe
+        // boundary counters latch their enable flag here, so every counting site in the
+        // two backends is a load of an already-settled global for the rest of the run.
+        MG_Util::PipeStats::Init();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // F1 (P7 wave 2). THE WIRE COMES UP BEFORE THE FIRST FRONTEND OBJECT IS BORN, and the
+        // ORDER is the fix - not a wait, and not a friendlier default mask.
+        //
+        // MG_State::Init() constructs GLContext, and GLContext's TextureState constructor
+        // materializes one default texture object per target (GL 3.3 core 3.8,
+        // TextureState.cpp:62-71). TextureObjectBase's constructor emits resource_create for
+        // every one of them (TextureState/TextureObject.cpp:168-169), and that emission is
+        // gated, through PipeFill's FamilyIsLive, on
+        // CapsMirror::ServerConsumes(kMGPipeSubsystemTextureResources). In the old order the
+        // mirror was still GENERATION 0 when it was asked - it had no snapshot because the
+        // session had not been started yet, MG_Backend::Init() being what starts it - so it
+        // answered from the placeholder, every one of those creates was withheld, and the log
+        // said so once and then never again:
+        //
+        //     MG_Remote client: the server does not consume MGPipe subsystem 0x400 - this
+        //     family emits NOTHING and the legacy pull path runs for it (R-8). callMask=0x0,
+        //     caps generation 0
+        //
+        // That is not a race and it never was one: the line reproduces byte-for-byte on
+        // lavapipe and on an Adreno 830, because the two Init calls are two statements in one
+        // thread. And "the legacy pull path runs for it" is false under split - the client has
+        // no pull path to fall back to - so the records are simply lost, and only a later
+        // respecify's self-healing create (EmitResourceRespecify in TextureEmit.h) ever brings one back.
+        //
+        // A BOUNDED WAIT INSIDE ServerConsumes CANNOT FIX THIS AND WOULD DEADLOCK: during
+        // MG_State::Init() no handshake is in flight, and the one that will land is started
+        // LATER BY THIS SAME THREAD. The only correct answer is to have already brought it up,
+        // which is what this hook does. ServerConsumes now REFUSES to answer from a
+        // placeholder (CapsMirror.cpp), so a regression of this order is a named Fatal rather
+        // than a whole family of silently dropped records.
+        //
+        // In a build without MOBILEGL_BUILD_DISAGGREGATED this statement does not exist, so
+        // the pull build gains no symbol, no branch and no byte - which is what G1 measures.
+        const Bool splitBackendIsUp = MG_Backend::InitSplitRolesBeforeState();
+#endif
         MG_State::Init();
         MGLOG_D("MG_State initialized");
-        MG_Backend::Init();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (!splitBackendIsUp)
+#endif
+        {
+            MG_Backend::Init();
+            // P13 W4: monolith's record arm reads the verb's own state, which only a verb sink
+            // writes; the port routes the ported verbs through one (MG_Impl/Pipe/Verb/VerbPort.cpp).
+            // Installed HERE, by the library's role-neutral init, rather than by MG_Backend's: the
+            // port is client code, and the server image must not need it to link.
+            if (MG_Config::RecordArmAliasesFrontend() && MG_Backend::pActiveBackendObject) {
+                MG_Record::InstallMonolithVerbPort(MG_Backend::gBackendFunctionsTable);
+            }
+        }
         MGLOG_D("MG_Backend initialized");
         MG_Impl::Init();
         MGLOG_D("MG_Impl initialized");
@@ -119,8 +205,13 @@ namespace MobileGL {
         // three throwaway parses buy nothing - they just add to every eglInitialize. Read the
         // flag here rather than inside PrewarmBuiltins so ShaderCompiler keeps no dependency
         // on the async subsystem (ProgramUtilTest compiles that file without it).
+        // MOBILEGL_DISABLE_SHADER_PREWARM skips it for processes too short-lived to repay it.
         if (MG_Util::Async::AsyncShaderCompileEnabled()) {
-            MG_Util::ShaderTranspiler::ShaderCompiler::PrewarmBuiltins();
+            if (MG_Config::Features.DisableShaderPrewarm) {
+                MGLOG_I("glslang built-in table prewarm skipped: MOBILEGL_DISABLE_SHADER_PREWARM is set");
+            } else {
+                MG_Util::ShaderTranspiler::ShaderCompiler::PrewarmBuiltins();
+            }
         }
         MGLOG_D("glslang initialized");
         g_isInitialized = true;
@@ -147,6 +238,25 @@ namespace MobileGL {
 
     void Destroy() {
         DestroyImpl(true);
+    }
+
+    Bool ImplementationAvailable() {
+        if (g_isInitialized.load(std::memory_order_acquire)) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // Initialized: under a split transport the session either came up (a backend object
+            // exists) or it did not, and a display on a session that never came up cannot draw.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                return MG_Backend::pActiveBackendObject != nullptr;
+            }
+#endif
+            return true;
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Not yet: the bring-up would dial the configured server and wait for it. Ask first.
+        return MG_Remote::Client::ConfiguredServerAvailable();
+#else
+        return true;
+#endif
     }
 
     // MobileGL's lifecycle is owned entirely by the host-API layers

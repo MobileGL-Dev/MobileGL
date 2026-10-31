@@ -106,7 +106,7 @@ namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
                                     Int stride, Bool integerPath) {
         constexpr const char* fn = "ValidateVertexAttribFormat";
         // GL_UNSIGNED_INT_10F_11F_11F_REV is a three-component float-path-only packing that has no
-        // DataType of its own, so it has to be recognised by name before the conversion below turns
+        // DataType of its own, so it has to be recognized by name before the conversion below turns
         // it into Unknown and reports the wrong error (GL 4.6 core 10.3.2).
         if (glType == GL_UNSIGNED_INT_10F_11F_11F_REV) {
             if (integerPath) {
@@ -235,17 +235,15 @@ namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", fn,
-                    std::format("Invalid size {} for attribute {}. Must be 1-4.", size, index)));
+                    "MG_Impl/GLImpl", fn, std::format("Invalid size {} for attribute {}. Must be 1-4.", size, index)));
             return false;
         }
         // GL 4.6 core 10.3.2: the long form takes GL_DOUBLE and nothing else.
         if (type != GL_DOUBLE) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", fn,
-                    std::format("Type 0x{:X} is not GL_DOUBLE (attribute {}).", type, index)));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", fn,
+                                             std::format("Type 0x{:X} is not GL_DOUBLE (attribute {}).", type, index)));
             return false;
         }
         return true;

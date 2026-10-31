@@ -1,0 +1,11 @@
+# Cases known to wedge the device (reboot / adb dead) - tools/cts/skills/gl-cts-on-mobilegl/SKILL.md "device hangs".
+# KHR-GL46 spellings of the KHR-GL33 names recorded there; the whole multisampled_to_singlesampled family is suspect.
+KHR-GL46.clip_distance.functional
+KHR-GL46.framebuffer_blit.multisampled_to_singlesampled_blit_color_config_test
+KHR-GL46.framebuffer_blit.multisampled_to_singlesampled_blit_depth_config_test
+KHR-GL46.framebuffer_blit.multisampled_to_singlesampled_blit_stencil_config_test
+KHR-GL46.texture_repeat_mode.rgb565_11x131_0_clamp_to_edge
+KHR-GL33.clip_distance.functional
+KHR-GL33.framebuffer_blit.multisampled_to_singlesampled_blit_color_config_test
+KHR-GL33.framebuffer_blit.multisampled_to_singlesampled_blit_depth_config_test
+KHR-GL33.texture_repeat_mode.rgb565_11x131_0_clamp_to_edge

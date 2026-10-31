@@ -47,6 +47,9 @@ namespace MobileGL {
             Int MaxIntegerSamples = 1;
             Int MaxSamples = 1;
             Int MaxSampleMaskWords = 1;
+            // VkPhysicalDeviceLimits::standardSampleLocations: the device places the samples of
+            // every supported count at the standard locations the Vulkan specification tabulates.
+            Bool StandardSampleLocations = false;
             Int MaxTextureImageUnits = 32;
             Int MaxVertexTextureImageUnits = 32;
             Int MaxComputeTextureImageUnits = 32;
@@ -56,6 +59,11 @@ namespace MobileGL {
             Int MaxCombinedShaderStorageBlocks = 32;
             Int MaxComputeUniformBlocks = 12;
             Int MaxComputeWorkGroupInvocations = 128;
+            // VkPhysicalDeviceLimits::maxComputeWorkGroupCount / maxComputeWorkGroupSize per
+            // axis, saturated to Int like every other limit here. Raw: the frontend floors them
+            // at the GL minimums itself.
+            Int MaxComputeWorkGroupCount[3] = {65535, 65535, 65535};
+            Int MaxComputeWorkGroupSize[3] = {1024, 1024, 64};
             Int MaxShaderStorageBufferBindings = 8;
             Int MaxTextureBufferSize = 65536;
             // GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT; 1 means the offset is unconstrained.
@@ -99,10 +107,10 @@ namespace MobileGL {
             // (VUID-VkImageViewCreateInfo-viewType-01004), which is every cube map array texture -
             // both its sampled view and its full view.
             Bool SupportsImageCubeArray = false;
-            // VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT on a 3D colour image, i.e. whether one z slice
+            // VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT on a 3D color image, i.e. whether one z slice
             // of a GL_TEXTURE_3D texture can be named by a 2D view and attached to a framebuffer.
             // Vulkan 1.1 core, but per format+usage - this is an OPTIMISTIC summary probed over the
-            // common colour attachment formats. The authoritative answer is taken per format at
+            // common color attachment formats. The authoritative answer is taken per format at
             // image creation in VkTextureManager, which withdraws the flag and remembers the verdict
             // when a driver refuses it.
             Bool Supports2DArrayCompatible3DImages = false;
@@ -112,6 +120,9 @@ namespace MobileGL {
             Bool SupportsVertexPipelineStoresAndAtomics = false;
             Bool SupportsFragmentStoresAndAtomics = false;
             Bool SupportsGeometryShader = false;
+            // VkPhysicalDeviceFeatures::tessellationShader, which VulkanRenderer enables wherever
+            // the physical device has it.
+            Bool SupportsTessellationShader = false;
             // VkPhysicalDeviceFeatures::shaderClipDistance. maxClipDistances is a LIMIT and is
             // reported whatever the feature says, so the limit alone does not mean a module may
             // declare ClipDistance - VulkanRenderer enables the feature only where the physical

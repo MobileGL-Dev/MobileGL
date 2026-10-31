@@ -25,6 +25,10 @@ namespace MobileGL {
                 using TargetEnum = RenderbufferTarget;
 
                 RenderbufferObject(Uint externalIndex);
+                // P2 step e2. Out of line, and declared only where there is a notice to raise:
+                // in a pull build this class stays trivially destructible, which is what keeps
+                // the pull build's symbol set byte-for-byte the pre-P2 one (G1).
+                ~RenderbufferObject();
 
                 Uint GetExternalIndex() const;
                 void SetInternalFormat(TextureInternalFormat format);
@@ -42,9 +46,25 @@ namespace MobileGL {
                 Int GetDepthSize() const;
                 Int GetStencilSize() const;
                 Int GetSamples() const;
+                // Globally-unique, never-reused id for THIS object's lifetime - same contract
+                // and same motivation as BufferObject::GetLifetimeId(),
+                // ProgramObject::GetLifetimeId() and VertexArrayObject::GetLifetimeId(). A
+                // backend that folds a renderbuffer's IDENTITY into a cache key must use this,
+                // never the GL name (LIFO-recycled by glGenRenderbuffers) and never the heap
+                // address (recycled by the allocator): both let a deleted-and-recreated
+                // renderbuffer answer to a dead one's cache entry.
+                Uint64 GetLifetimeId() const { return m_lifetimeId; }
 
             private:
+                static Uint64 AllocateLifetimeId();
+                // P4a D-D2: resource_respecify, from every storage-defining setter. Non-virtual
+                // and push-only, so the pull build's object layout is untouched (P4a's
+                // admitted-resize set is EMPTY); defined in RenderbufferObject.cpp, which is the
+                // one translation unit that includes the client emitter.
+                void PipePublishDescriptor();
+
                 Uint m_externalIndex = 0;
+                const Uint64 m_lifetimeId = AllocateLifetimeId();
                 TextureInternalFormat m_internalFormat = TextureInternalFormat::RGBA;
                 Int m_width = 0;
                 Int m_height = 0;

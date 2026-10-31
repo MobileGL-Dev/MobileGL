@@ -18,6 +18,13 @@ Usage:
     --pid-file FILE \
     --boot-timeout SECONDS
 
+  sh android-plugin/run-avd-ci.sh preboot \
+    --avd-name NAME \
+    --gpu GPU \
+    --emulator-log FILE \
+    --pid-file FILE \
+    --boot-timeout SECONDS
+
   sh android-plugin/run-avd-ci.sh stop \
     --avd-name NAME \
     --emulator-log FILE \
@@ -118,35 +125,8 @@ create_avd() {
   echo no | "${avdmanager_bin}" create avd --force --name "${avd_name}" --package "${system_image}" --device "${profile}"
 }
 
-start_avd() {
-  avd_name=""
-  gpu=""
-  emulator_log=""
-  pid_file=""
-  boot_timeout=""
-
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --avd-name) avd_name="$(next_arg "$@")"; shift 2 ;;
-      --gpu) gpu="$(next_arg "$@")"; shift 2 ;;
-      --emulator-log) emulator_log="$(next_arg "$@")"; shift 2 ;;
-      --pid-file) pid_file="$(next_arg "$@")"; shift 2 ;;
-      --boot-timeout) boot_timeout="$(next_arg "$@")"; shift 2 ;;
-      -h|--help) usage; exit 0 ;;
-      *) die "unknown start argument: $1" ;;
-    esac
-  done
-
-  require_value "${avd_name}" "--avd-name"
-  require_value "${gpu}" "--gpu"
-  require_value "${emulator_log}" "--emulator-log"
-  require_value "${pid_file}" "--pid-file"
-  require_value "${boot_timeout}" "--boot-timeout"
-
-  adb_bin="$(find_android_tool adb platform-tools/adb)"
-  emulator_bin="$(find_android_tool emulator emulator/emulator)"
-  ensure_android_avd_home
-
+# The retrace jobs and `preboot` launch the emulator the same way, through here.
+launch_emulator() {
   mkdir -p "$(dirname "${emulator_log}")" "$(dirname "${pid_file}")"
   "${emulator_bin}" -avd "${avd_name}" \
     -no-window \
@@ -157,9 +137,10 @@ start_avd() {
     -camera-back none \
     -camera-front none \
     > "${emulator_log}" 2>&1 &
-  emulator_pid="$!"
-  echo "${emulator_pid}" > "${pid_file}"
+  echo "$!" > "${pid_file}"
+}
 
+wait_for_boot() {
   if ! timeout "${boot_timeout}" "${adb_bin}" wait-for-device; then
     print_diagnostics "${emulator_log}"
     die "emulator did not connect to adb within ${boot_timeout}s"
@@ -183,6 +164,67 @@ start_avd() {
   "${adb_bin}" shell settings put global transition_animation_scale 0
   "${adb_bin}" shell settings put global animator_duration_scale 0
   "${adb_bin}" shell input keyevent 82 || true
+}
+
+parse_boot_args() {
+  avd_name=""
+  gpu=""
+  emulator_log=""
+  pid_file=""
+  boot_timeout=""
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --avd-name) avd_name="$(next_arg "$@")"; shift 2 ;;
+      --gpu) gpu="$(next_arg "$@")"; shift 2 ;;
+      --emulator-log) emulator_log="$(next_arg "$@")"; shift 2 ;;
+      --pid-file) pid_file="$(next_arg "$@")"; shift 2 ;;
+      --boot-timeout) boot_timeout="$(next_arg "$@")"; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "unknown argument: $1" ;;
+    esac
+  done
+
+  require_value "${avd_name}" "--avd-name"
+  require_value "${gpu}" "--gpu"
+  require_value "${emulator_log}" "--emulator-log"
+  require_value "${pid_file}" "--pid-file"
+  require_value "${boot_timeout}" "--boot-timeout"
+
+  adb_bin="$(find_android_tool adb platform-tools/adb)"
+  emulator_bin="$(find_android_tool emulator emulator/emulator)"
+  ensure_android_avd_home
+}
+
+start_avd() {
+  parse_boot_args "$@"
+  started_at="$(date +%s)"
+  launch_emulator
+  wait_for_boot
+  echo "run-avd-ci.sh: ${gpu} cold boot took $(( $(date +%s) - started_at ))s"
+}
+
+# Boot a freshly created AVD once and power it off, so the cached AVD is past its first-boot setup
+# and every retrace job's cold boot skips it. The guest powers off itself, so its data is flushed
+# before the emulator exits.
+preboot_avd() {
+  parse_boot_args "$@"
+  started_at="$(date +%s)"
+  launch_emulator
+  wait_for_boot
+  echo "run-avd-ci.sh: first boot took $(( $(date +%s) - started_at ))s"
+
+  "${adb_bin}" shell reboot -p >/dev/null 2>&1 || true
+  emulator_pid="$(cat "${pid_file}")"
+  for _ in $(seq 1 120); do
+    kill -0 "${emulator_pid}" 2>/dev/null || break
+    sleep 1
+  done
+  if kill -0 "${emulator_pid}" 2>/dev/null; then
+    "${adb_bin}" emu kill >/dev/null 2>&1 || true
+    kill "${emulator_pid}" >/dev/null 2>&1 || true
+    die "emulator did not exit within 120s of the guest power-off"
+  fi
 }
 
 stop_avd() {
@@ -226,6 +268,7 @@ shift
 case "${command}" in
   create) create_avd "$@" ;;
   start) start_avd "$@" ;;
+  preboot) preboot_avd "$@" ;;
   stop) stop_avd "$@" ;;
   -h|--help) usage; exit 0 ;;
   *) die "unknown command: ${command}" ;;

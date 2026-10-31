@@ -28,7 +28,7 @@ namespace MobileGL {
             // glTransformFeedbackVaryings, links, and reports the names straight back from
             // glGetTransformFeedbackVarying - and then captures NONE of them: the recorded
             // stream holds gl_Position in slot 0 and leaves the rest of every vertex's record
-            // untouched. Proven on an Adreno 830 by writing a recognisable gl_Position into
+            // untouched. Proven on an Adreno 830 by writing a recognizable gl_Position into
             // the KHR-GL43.vertex_attrib_binding.basic-input capture program: the value landed
             // in the slot that had asked for StageData.attrib[0]. The same program with the
             // block flattened into a plain output array captures every member correctly, which
@@ -48,8 +48,7 @@ namespace MobileGL {
                 // "StageData.attrib[0]". `flattenedBlockNames` receives the subset this pass
                 // actually rewrote, so the caller can rename exactly those capture requests
                 // and leave the rest spelled as the application wrote them.
-                FlattenXfbInterfaceBlocksPass(const std::set<String>& blockNames,
-                                              std::set<String>* flattenedBlockNames)
+                FlattenXfbInterfaceBlocksPass(const std::set<String>& blockNames, std::set<String>* flattenedBlockNames)
                     : m_blockNames(blockNames), m_flattenedBlockNames(flattenedBlockNames) {}
 
                 const char* name() const override { return "mobilegl-flatten-xfb-interface-blocks"; }

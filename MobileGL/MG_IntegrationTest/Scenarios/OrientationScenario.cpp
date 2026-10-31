@@ -18,17 +18,17 @@
 // unflipped flags and the whole frame rendered upside down (retrace SSIM 0.052,
 // deterministic; flickering clouds on device).
 //
-// What pins it: a pattern asymmetric in BOTH axes - four quadrants, coloured
+// What pins it: a pattern asymmetric in BOTH axes - four quadrants, colored
 //
 //        top-left  RED  | WHITE  top-right
 //     bottom-left BLUE  | GREEN  bottom-right
 //
 // - drawn to a target, read back with glReadPixels, and reduced to the four
-// quadrant-centre colours in the fixed order bottom-left, bottom-right,
+// quadrant-center colors in the fixed order bottom-left, bottom-right,
 // top-left, top-right.
 //
 // Four quadrants rather than the three horizontal stripes this scenario used to
-// draw, because stripes only pin ONE axis. Stripes read down the centre line
+// draw, because stripes only pin ONE axis. Stripes read down the center line
 // are unchanged by an X flip, by a transpose, and by a 180 rotation composed
 // with a Y flip: all three of those bugs would have rendered a green stripe
 // between a blue one and a red one and passed. Every one of the eight
@@ -45,7 +45,7 @@
 //
 // The assertions then go further than the signature: every quadrant is checked
 // pixel by pixel over its whole area (RegionIsMostly), so a partial or torn
-// draw cannot pass by having the four sampled centres come out right.
+// draw cannot pass by having the four sampled centers come out right.
 //
 // Both orderings are covered, because the memo is poisoned by whichever pass
 // runs first and these tests share one process:
@@ -102,7 +102,7 @@ void main() {
         // "every single pixel" an achievable (and therefore useful) demand.
         constexpr int kQuadrantInset = 2;
 
-        // A deliberately asymmetric sub-rect of the 128x96 surface: neither centred nor
+        // A deliberately asymmetric sub-rect of the 128x96 surface: neither centered nor
         // full-extent in either axis, mirroring the conformance suite's randomised
         // sub-viewport geometry (glcShaderRenderCase.cpp:735-741). Asymmetry is the whole
         // point - y == H - y - h is exactly the case an unconverted Y origin gets right by
@@ -223,7 +223,7 @@ void main() {
             }
 
             // The signature says WHICH transform went wrong; this says the whole
-            // image is right, not merely its four sampled centres.
+            // image is right, not merely its four sampled centers.
             void ExpectUprightQuadrants(const Image& image, const std::string& when) {
                 const int w = image.Width();
                 const int h = image.Height();
@@ -231,8 +231,8 @@ void main() {
                 EXPECT_TRUE(RegionIsMostly(image, inset, w / 2 - inset, inset, h / 2 - inset, "blue", 0.0, when));
                 EXPECT_TRUE(RegionIsMostly(image, w / 2 + inset, w - inset, inset, h / 2 - inset, "green", 0.0, when));
                 EXPECT_TRUE(RegionIsMostly(image, inset, w / 2 - inset, h / 2 + inset, h - inset, "red", 0.0, when));
-                EXPECT_TRUE(RegionIsMostly(image, w / 2 + inset, w - inset, h / 2 + inset, h - inset, "white", 0.0,
-                                           when));
+                EXPECT_TRUE(
+                    RegionIsMostly(image, w / 2 + inset, w - inset, h / 2 + inset, h - inset, "white", 0.0, when));
             }
 
             unsigned int m_program = 0;
@@ -292,8 +292,7 @@ void main() {
             const Image offscreen = OffscreenPass();
             const Image presented = DefaultFramebufferPass();
 
-            EXPECT_EQ(offscreen.QuadrantSignature(), kUprightSignature)
-                << "render-to-texture pass rendered flipped";
+            EXPECT_EQ(offscreen.QuadrantSignature(), kUprightSignature) << "render-to-texture pass rendered flipped";
             EXPECT_EQ(presented.QuadrantSignature(), kUprightSignature)
                 << "the default-framebuffer pass that follows a render-to-texture pass "
                    "rendered upside down";
@@ -334,8 +333,8 @@ void main() {
 
             const int w = upright.Width();
             const int h = upright.Height();
-            // Transposes are expressed on the largest centred square the readback
-            // contains, which is enough for the four quadrant centres to move.
+            // Transposes are expressed on the largest centered square the readback
+            // contains, which is enough for the four quadrant centers to move.
             const int side = std::min(w, h);
             const int ox = (w - side) / 2;
             const int oy = (h - side) / 2;
@@ -374,7 +373,7 @@ void main() {
             }
 
             // The four symmetries that move the axes into each other. They only
-            // make sense on a square, so they run on the largest centred one.
+            // make sense on a square, so they run on the largest centered one.
             struct SquareSymmetry {
                 const char* name;
                 const char* expected;
@@ -414,8 +413,8 @@ void main() {
         // ------------------------------------------------------------------ sub-rect / M-1 ----
         //
         // Everything above reads the FULL extent of its target, which is the one case
-        // DirectVulkan's default-framebuffer readback ever re-oriented: the remap at
-        // VulkanRenderer.cpp:2042 had no rect parameters at all, so :8278 gated it on
+        // DirectVulkan's default-framebuffer readback ever re-oriented: the remap
+        // (RemapDefaultFramebufferReadback) had no rect parameters at all, so its caller gated it on
         // `width == swapchainExtent.width && height == swapchainExtent.height` and fell back to a
         // raw copy otherwise. Meanwhile the viewport (:422), the scissor (:506-546) and the
         // ReadPixels copy offset (:8238) all used the GL bottom-origin Y verbatim as a Vulkan
@@ -431,7 +430,7 @@ void main() {
         // shape where the two cancel.
 
         // Placement: a sub-viewport draw must land in GL rows [y0, y0+h), not mirrored about the
-        // surface centre. Read back full-extent, which is the path that already worked, so a
+        // surface center. Read back full-extent, which is the path that already worked, so a
         // failure here can only be the viewport's Y origin.
         TEST_F(OrientationScenario, SubViewportDrawLandsWhereGLPutsIt) {
             BindDefaultFramebuffer();
@@ -450,10 +449,10 @@ void main() {
 
             // Nothing may have been painted outside the viewport. This is what catches the
             // mirrored placement: the drawn band would sit at GL rows [41, 83) instead.
-            EXPECT_TRUE(RegionIsMostly(whole, 0, Gl().Width() - 1, 0, kSubY - 2, "black", 0.0,
-                                       "below the sub-viewport"));
-            EXPECT_TRUE(RegionIsMostly(whole, 0, Gl().Width() - 1, kSubY + kSubH + 1, Gl().Height() - 1, "black",
-                                       0.0, "above the sub-viewport"));
+            EXPECT_TRUE(
+                RegionIsMostly(whole, 0, Gl().Width() - 1, 0, kSubY - 2, "black", 0.0, "below the sub-viewport"));
+            EXPECT_TRUE(RegionIsMostly(whole, 0, Gl().Width() - 1, kSubY + kSubH + 1, Gl().Height() - 1, "black", 0.0,
+                                       "above the sub-viewport"));
         }
 
         // Readback: a full-viewport draw read back through a sub-rect must return the requested
@@ -529,12 +528,11 @@ void main() {
             ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
             glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_offscreen.fbo);
-            glBlitFramebuffer(kSubX, kSubY, kSubX + kSubW, kSubY + kSubH, kSubX, kSubY, kSubX + kSubW,
-                              kSubY + kSubH, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glBlitFramebuffer(kSubX, kSubY, kSubX + kSubW, kSubY + kSubH, kSubX, kSubY, kSubX + kSubW, kSubY + kSubH,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
             const unsigned int blitError = FirstGLError();
             if (blitError != GL_NO_ERROR) {
-                GTEST_SKIP() << "this backend refused the default-framebuffer blit: "
-                             << GLErrorName(blitError);
+                GTEST_SKIP() << "this backend refused the default-framebuffer blit: " << GLErrorName(blitError);
             }
 
             glBindFramebuffer(GL_FRAMEBUFFER, m_offscreen.fbo);
@@ -543,8 +541,7 @@ void main() {
 
             const Image landed = CropRect(blitted, kSubX, kSubY, kSubW, kSubH);
             const Image expected = CropRect(whole, kSubX, kSubY, kSubW, kSubH);
-            EXPECT_FALSE(landed == VFlip(expected))
-                << "ORIENTATION: the blitted band arrived upside down";
+            EXPECT_FALSE(landed == VFlip(expected)) << "ORIENTATION: the blitted band arrived upside down";
             EXPECT_TRUE(landed == expected)
                 << "the blitted sub-rect differs from the same sub-rect of a direct read in "
                 << landed.ByteDiffCount(expected) << " bytes";
@@ -576,8 +573,8 @@ void main() {
                 << "an FBO sub-viewport draw must land in GL rows [y0, y0+h) upright";
             EXPECT_TRUE(RegionIsMostly(placedWhole, 0, m_offscreen.width - 1, 0, kSubY - 2, "black", 0.0,
                                        "below an FBO sub-viewport"));
-            EXPECT_TRUE(RegionIsMostly(placedWhole, 0, m_offscreen.width - 1, kSubY + kSubH + 1,
-                                       m_offscreen.height - 1, "black", 0.0, "above an FBO sub-viewport"));
+            EXPECT_TRUE(RegionIsMostly(placedWhole, 0, m_offscreen.width - 1, kSubY + kSubH + 1, m_offscreen.height - 1,
+                                       "black", 0.0, "above an FBO sub-viewport"));
         }
 
     } // namespace

@@ -15,8 +15,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VertexInputStateBuilder();
 
         void Reset();
-        VertexInputStateBuilder& AddBinding(
-            Uint32 binding, Uint32 stride, VkVertexInputRate inputRate = VK_VERTEX_INPUT_RATE_VERTEX);
+        VertexInputStateBuilder& AddBinding(Uint32 binding, Uint32 stride,
+                                            VkVertexInputRate inputRate = VK_VERTEX_INPUT_RATE_VERTEX);
         VertexInputStateBuilder& AddAttribute(Uint32 location, Uint32 binding, VkFormat format, Uint32 offset);
 
         const VkPipelineVertexInputStateCreateInfo& Build();

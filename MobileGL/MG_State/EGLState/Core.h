@@ -9,6 +9,7 @@
 #pragma once
 #include <Includes.h>
 #include <type_traits>
+#include <MG_State/GLState/Core.h>
 
 namespace MobileGL {
     namespace MG_State {
@@ -37,6 +38,9 @@ namespace MobileGL {
                 EGLDisplayHandle GetPlatformDisplay(EGLenum platform, void* nativeDisplay);
                 Bool ValidateDisplay(EGLDisplayHandle display) const;
                 Bool IsDisplayInitialized(EGLDisplayHandle display) const;
+                // The native display a display was made for and the platform it was asked for on
+                // (EGL_NONE for eglGetDisplay): what decides how its window surfaces are presented.
+                Bool GetDisplayNative(EGLDisplayHandle display, Uint64* nativeDisplayKey, EGLenum* platform) const;
                 Bool InitializeDisplay(EGLDisplayHandle display, EGLint* major, EGLint* minor);
                 Bool TerminateDisplay(EGLDisplayHandle display);
                 // Whole-library idle checks used by EGLImpl::Terminate to decide
@@ -55,9 +59,28 @@ namespace MobileGL {
                                      EGLint* value) const;
 
                 // Context
+                // `deferGLState`: the context is created without its GL state, which
+                // BuildContextGLState builds later. Building it creates the context's default
+                // objects, and a split client has to tell its server which context they belong to
+                // first (the server must know the context before anything is filed under it).
                 EGLContextHandle CreateContext(EGLDisplayHandle display, EGLConfigHandle config,
-                                               EGLContextHandle shareCtx, const EGLint* attribList);
-                Bool DestroyContext(EGLDisplayHandle display, EGLContextHandle context);
+                                               EGLContextHandle shareCtx, const EGLint* attribList,
+                                               Bool deferGLState = false);
+                Bool BuildContextGLState(EGLContextHandle context);
+                // EGL 1.5 3.7.2: a context current to some thread is not destroyed until it is no
+                // longer current. Such a destroy answers true with `*deferred` set: the handle is
+                // invalid for any new use from here on, and the release that ends its last binding
+                // moves it to the reaped list (TakeReapedContexts), where the caller finishes it.
+                Bool DestroyContext(EGLDisplayHandle display, EGLContextHandle context, Bool* deferred = nullptr);
+                struct ReapedContext {
+                    EGLContextHandle Handle = nullptr;
+                    Uint64 ClientContextToken = 0;
+                    Uint64 ShareGroupToken = 0;
+                    SharedPtr<GLState::GLContext> GLStateObject;
+                };
+                // The contexts whose deferred destroy a release has just completed, oldest first.
+                // The caller owns them now: dropping a GLStateObject destroys the context's objects.
+                Vector<ReapedContext> TakeReapedContexts();
                 Bool QueryContext(EGLDisplayHandle display, EGLContextHandle context, EGLint attribute,
                                   EGLint* value) const;
                 Bool ValidateContext(EGLContextHandle context) const;
@@ -65,6 +88,28 @@ namespace MobileGL {
                 Bool IsCurrentContextOpenGLCoreProfile() const;
                 Bool IsCurrentContextOpenGLCompatibilityProfile() const;
                 EGLint GetCurrentContextFlags() const;
+                // The calling thread's current context's reset notification behavior
+                // (EGL_NO_RESET_NOTIFICATION with no context current) and whether it asked for
+                // robust buffer access.
+                EGLint GetCurrentContextResetNotificationStrategy() const;
+                Bool IsCurrentContextRobustAccessRequested() const;
+                // The client API the calling thread's current context was created for
+                // (EGL_OPENGL_API with no context current).
+                EGLenum GetCurrentContextClientAPI() const;
+
+                // P14 S1. The wire identity of a context, and of the context the CALLING THREAD
+                // has current (0 when it has none - the release edge's value, and the value a
+                // session that never crossed a bind_context answers with). Read by MG_Impl's two
+                // producers: EGLImpl's CreateContext/DestroyContext control frames and PipeFill's
+                // bind_context emission at the make-current edge.
+                Uint64 GetContextClientToken(EGLContextHandle context) const;
+                Uint64 GetContextShareGroupToken(EGLContextHandle context) const;
+                Uint64 CurrentContextClientToken() const;
+
+                // P14 S3. The frontend GL state this context owns, so a caller outside MG_State
+                // can reach the other half of a context it just made current. Null for an
+                // unknown handle.
+                SharedPtr<GLState::GLContext> GetContextGLState(EGLContextHandle context) const;
 
                 // Surface
                 EGLSurfaceHandle CreateWindowSurface(EGLDisplayHandle display, EGLConfigHandle config,
@@ -87,6 +132,25 @@ namespace MobileGL {
                 Bool ValidateSurface(EGLSurfaceHandle surface) const;
                 Bool ValidateSurfaceOnDisplay(EGLDisplayHandle display, EGLSurfaceHandle surface) const;
                 Bool SwapInterval(EGLDisplayHandle display, EGLint interval);
+                // The interval eglSwapInterval last set on `display` (1, EGL's default, until then or
+                // for a display this state does not know).
+                EGLint GetSwapInterval(EGLDisplayHandle display) const;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P12 (on-screen server window), MOBILEGL_IPC_SURFACE=server. A window surface whose
+                // window is the SERVER's: the client's native window may be NULL (a headless client
+                // has none), and the extent it asked for (EGL_WIDTH/EGL_HEIGHT; 0/0 = the server
+                // window's own) stands until the server's real one arrives through SetSurfaceExtent.
+                // `platformWindow` keeps eglCreatePlatformWindowSurface's surface type. Split builds
+                // only: the pull build's state class is unchanged (G1).
+                EGLSurfaceHandle CreateServerOwnedWindowSurface(EGLDisplayHandle display, EGLConfigHandle config,
+                                                                const void* nativeWindow, EGLint width, EGLint height,
+                                                                Bool platformWindow);
+                // P12: the server's REAL extent of a surface - a server-owned window's geometry, from
+                // the CreateWindowSurface reply and from every surface-changed event after it - so
+                // eglQuerySurface(EGL_WIDTH/EGL_HEIGHT) answers what the server renders at. Unlike
+                // ResizeSurface it needs no display (the event carries none) and keeps a 0 as 0.
+                Bool SetSurfaceExtent(EGLSurfaceHandle surface, EGLint width, EGLint height);
+#endif
 
                 // Current
                 Bool MakeCurrent(EGLDisplayHandle display, EGLSurfaceHandle draw, EGLSurfaceHandle read,
@@ -104,11 +168,90 @@ namespace MobileGL {
                 Bool GetSyncAttrib(EGLDisplayHandle display, EGLSyncHandle sync, EGLint attribute,
                                    EGLAttrib* value) const;
                 Bool WaitSync(EGLDisplayHandle display, EGLSyncHandle sync, EGLint flags) const;
+                // EGL_ANDROID_native_fence_sync. A native fence sync owns a sync_file descriptor and
+                // its status is that descriptor's: CreateSync takes one an application imports
+                // (EGL_SYNC_NATIVE_FENCE_FD_ANDROID), and CreateNativeFenceSync takes the one a fence
+                // command produced (`condition` EGL_SYNC_PRIOR_COMMANDS_COMPLETE; fd -1 = the fenced
+                // work has completed and no descriptor came with it). Both take ownership of `fd`,
+                // also on failure. DupNativeFenceFD hands out a copy, or EGL_NO_NATIVE_FENCE_FD_ANDROID
+                // (EGL_BAD_PARAMETER) when the sync has none. Not on Windows, which has no sync_file.
+                EGLSyncHandle CreateNativeFenceSync(EGLDisplayHandle display, int fd, EGLenum condition);
+                EGLint DupNativeFenceFD(EGLDisplayHandle display, EGLSyncHandle sync);
 
                 // Image
                 EGLImageHandle CreateImage(EGLDisplayHandle display, EGLContextHandle context, EGLenum target,
                                            EGLClientBuffer buffer, const EGLAttrib* attribList);
-                Bool DestroyImage(EGLDisplayHandle display, EGLImageHandle image);
+                // `releasedSharedImageId` (optional) receives the shared image the destroyed image
+                // named, 0 for any other image: the caller drops the backend's reference to it.
+                Bool DestroyImage(EGLDisplayHandle display, EGLImageHandle image,
+                                  Uint64* releasedSharedImageId = nullptr);
+
+                // DMA-BUF IMPORT (EGL_EXT_image_dma_buf_import[_modifiers]). A dma-buf this library
+                // can name is one of the backend's shared images (MG_Backend::SharedImageExport):
+                // single plane, DRM ABGR8888 / XBGR8888 / ARGB8888 / XRGB8888 (all stored RGBA8 by the
+                // server, whose layout no client can observe). The state
+                // validates and records; the backend identifies the descriptor in between.
+                struct DmaBufImportAttribs {
+                    EGLint Width = 0;
+                    EGLint Height = 0;
+                    Uint32 Fourcc = 0;
+                    int Fd = -1;
+                    EGLint Offset = 0;
+                    EGLint Pitch = 0;
+                    Bool HasModifier = false;
+                    Uint64 Modifier = 0;
+                    // YUV (two planes): the second plane, and the color hints (0 = not given).
+                    Uint32 PlaneCount = 1;
+                    int Plane1Fd = -1;
+                    EGLint Plane1Offset = 0;
+                    EGLint Plane1Pitch = 0;
+                    Uint32 ColorSpace = 0;
+                    Uint32 Range = 0;
+                    Uint32 SitingX = 0;
+                    Uint32 SitingY = 0;
+                };
+                struct SharedImageInfo {
+                    Uint64 Id = 0;
+                    EGLint Width = 0;
+                    EGLint Height = 0;
+                    Uint32 Fourcc = 0;
+                    // The server session the reference was taken on (MG_State::CurrentWireEpoch() at the
+                    // import). A reference of an ended session died with it and is never released on
+                    // another: the same image imported again on the fresh session has the same Id.
+                    Uint64 WireEpoch = 0;
+                };
+                static constexpr Uint32 kDrmFourccAbgr8888 = 0x34324241u; // 'AB24'
+                static constexpr Uint32 kDrmFourccXbgr8888 = 0x34324258u; // 'XB24'
+                static constexpr Uint32 kDrmFourccArgb8888 = 0x34325241u; // 'AR24'
+                static constexpr Uint32 kDrmFourccXrgb8888 = 0x34325258u; // 'XR24'
+                // Two-plane YUV 4:2:0, sampled only (through GL_OES_EGL_image_external, or as RGBA).
+                static constexpr Uint32 kDrmFourccNv12 = 0x3231564Eu; // 'NV12'
+                static constexpr Uint32 kDrmFourccP010 = 0x30313050u; // 'P010'
+                static Bool IsDmaBufFourccSupported(Uint32 fourcc);
+                static Bool IsDmaBufFourccYuv(Uint32 fourcc);
+
+                // The checks eglCreateImage owes an EGL_LINUX_DMA_BUF_EXT target before anything
+                // is imported: the display, a null context and buffer, and a complete attribute
+                // list of a supported format - one plane, or two for YUV. False with the EGL error
+                // set. Whether the YUV formats can be served at all is the caller's question.
+                Bool PrepareDmaBufImport(EGLDisplayHandle display, EGLContextHandle context, EGLClientBuffer buffer,
+                                         const EGLAttrib* attribList, DmaBufImportAttribs* out);
+                // An EGLImage naming an imported shared image.
+                EGLImageHandle CreateSharedImage(EGLDisplayHandle display, const SharedImageInfo& info);
+                // The shared image `image` names; false for anything else (an invalid image, or one
+                // of another target).
+                Bool GetSharedImage(EGLImageHandle image, SharedImageInfo* out) const;
+                // Shared images whose EGLImages went with an eglTerminate: the caller releases them.
+                Vector<Uint64> TakeOrphanedSharedImages();
+                // eglQueryDmaBufFormatsEXT / eglQueryDmaBufModifiersEXT. `available` is whether the
+                // backend has shared images at all; without them the lists are empty. `yuvAvailable`
+                // adds the YUV formats, which are external-only (OES_EGL_image_external) and LINEAR
+                // as far as an explicit modifier goes.
+                Bool QueryDmaBufFormats(EGLDisplayHandle display, Bool available, Bool yuvAvailable, EGLint maxFormats,
+                                        EGLint* formats, EGLint* numFormats);
+                Bool QueryDmaBufModifiers(EGLDisplayHandle display, Bool available, Bool yuvAvailable, EGLint format,
+                                          EGLint maxModifiers, Uint64* modifiers, EGLBoolean* externalOnly,
+                                          EGLint* numModifiers);
 
             private:
                 enum class SurfaceType {
@@ -161,13 +304,37 @@ namespace MobileGL {
                     EGLDisplayHandle Display = EGL_NO_DISPLAY;
                     EGLConfigHandle Config = nullptr;
                     EGLContextHandle SharedContext = nullptr;
+                    // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). The wire identity of
+                    // this context: `ClientContextToken` is what bind_context carries and what the
+                    // server's per-session context table is keyed by, `ShareGroupToken` the group
+                    // it was derived into (ShareContext's group, or one of its own). Minted here,
+                    // in the one place a context is born, so no caller can invent a second one.
+                    Uint64 ClientContextToken = 0;
+                    Uint64 ShareGroupToken = 0;
+                    // P14 S3. The GL state of THIS EGL context. Its object registries live in the
+                    // share group's ShareGroupState (shared with every context that shares with
+                    // this one); its bindings, errors and current program are its own.
+                    SharedPtr<GLState::GLContext> GLStateObject;
+                    // The group GLStateObject joins when it is built later (CreateContext's
+                    // deferGLState); null once it is built.
+                    SharedPtr<GLState::ShareGroupState> PendingShareGroup;
+                    // eglDestroyContext was called while the context was current to a thread.
+                    Bool DestroyPending = false;
                     EGLenum ClientAPI = EGL_OPENGL_API;
                     EGLint ClientVersion = 1;
                     EGLint MajorVersion = 1;
                     EGLint MinorVersion = 0;
                     EGLint OpenGLProfileMask = 0;
                     EGLint EGLContextFlags = 0;
+                    // GL_CONTEXT_FLAGS as requested, without GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT: that
+                    // one is reported only where robust buffer access is actually provided, which
+                    // the GL layer decides (RobustAccessRequested below is the request).
                     EGLint OpenGLContextFlags = 0;
+                    // EGL_EXT_create_context_robustness / EGL 1.5. EGL_NO_RESET_NOTIFICATION or
+                    // EGL_LOSE_CONTEXT_ON_RESET; contexts that share must agree on it.
+                    EGLint ResetNotificationStrategy = EGL_NO_RESET_NOTIFICATION;
+                    // EGL_CONTEXT_OPENGL_ROBUST_ACCESS(_EXT) or the KHR flag bit was given as true.
+                    Bool RobustAccessRequested = false;
                 };
 
                 struct SurfaceObject {
@@ -193,6 +360,8 @@ namespace MobileGL {
                     EGLenum Type = EGL_SYNC_FENCE;
                     EGLenum Condition = EGL_SYNC_PRIOR_COMMANDS_COMPLETE;
                     EGLenum Status = EGL_SIGNALED;
+                    // EGL_SYNC_NATIVE_FENCE_ANDROID only: the owned sync_file, -1 = none (signaled).
+                    int NativeFd = -1;
                 };
 
                 struct ImageObject {
@@ -200,6 +369,8 @@ namespace MobileGL {
                     EGLContextHandle Context = nullptr;
                     EGLenum Target = EGL_NONE;
                     EGLClientBuffer Buffer = nullptr;
+                    // EGL_LINUX_DMA_BUF_EXT only: the backend's shared image (Id != 0).
+                    SharedImageInfo Shared;
                 };
 
                 struct ThreadCurrentState {
@@ -207,6 +378,10 @@ namespace MobileGL {
                     EGLSurfaceHandle DrawSurface = EGL_NO_SURFACE;
                     EGLSurfaceHandle ReadSurface = EGL_NO_SURFACE;
                     EGLContextHandle Context = nullptr;
+                    // P14 S3. What pGLContext held on this thread BEFORE the first eglMakeCurrent
+                    // bound an EGL context to it, so releasing restores exactly the binding the
+                    // thread had rather than a guessed default.
+                    SharedPtr<GLState::GLContext> RestoreThreadGLState;
                 };
 
                 template <typename HandleType>
@@ -250,14 +425,19 @@ namespace MobileGL {
                 Uint64 m_nextContextHandle = 1;
                 Uint64 m_nextSyncHandle = 1;
                 Uint64 m_nextImageHandle = 1;
+                // P14 S1. Dense from 1, never reused, never 0: 0 is "no context" on both planes.
+                Uint64 m_nextClientContextToken = 1;
+                Uint64 m_nextShareGroupToken = 1;
 
                 UnorderedMap<DisplayLookupKey, EGLDisplayHandle, DisplayLookupHasher> m_displayLookup;
                 UnorderedMap<EGLDisplayHandle, DisplayObject> m_displays;
                 UnorderedMap<EGLConfigHandle, ConfigObject> m_configs;
                 UnorderedMap<EGLSurfaceHandle, SurfaceObject> m_surfaces;
                 UnorderedMap<EGLContextHandle, ContextObject> m_contexts;
+                Vector<ReapedContext> m_reapedContexts;
                 UnorderedMap<EGLSyncHandle, SyncObject> m_syncs;
                 UnorderedMap<EGLImageHandle, ImageObject> m_images;
+                Vector<Uint64> m_orphanedSharedImages;
 
                 UnorderedMap<std::thread::id, EGLint> m_threadErrors;
                 UnorderedMap<std::thread::id, EGLenum> m_threadBoundAPI;

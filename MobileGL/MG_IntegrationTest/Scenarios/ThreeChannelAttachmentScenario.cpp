@@ -6,11 +6,11 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// Scenario - THREE-CHANNEL COLOUR ATTACHMENTS, on a live driver.
+// Scenario - THREE-CHANNEL COLOR ATTACHMENTS, on a live driver.
 //
 // The bug: no OpenGL ES driver renders to a three-channel image. EXT_render_snorm covers
 // R/RG/RGBA only, EXT_color_buffer_float excludes RGB16F, and RGB integer formats are not
-// colour-renderable anywhere. Complementary Reimagined declares colortex1 = RGB8_SNORM and
+// color-renderable anywhere. Complementary Reimagined declares colortex1 = RGB8_SNORM and
 // colortex2 = RGB16F, so every framebuffer Iris built from them answered
 // GL_FRAMEBUFFER_UNSUPPORTED and Iris refused to load the shaderpack. DirectGLES now stores such
 // an attachment in its four-channel sibling (GL_RGB8_SNORM -> GL_RGBA16F) and reports the
@@ -18,12 +18,12 @@
 //
 // WHY THIS SCENARIO EXISTS RATHER THAN A UNIT TEST. The unit tests in
 // MG_Test/Framebuffer/FramebufferTest.cpp drive a HAND-BUILT capability cache: they prove the
-// frontend accepts a caveat capability, and prove the colour-mask/clear discipline that keeps a
+// frontend accepts a caveat capability, and prove the color-mask/clear discipline that keeps a
 // widened attachment's stored alpha at 1.0, but they cannot prove that a real driver's probe
 // actually PRODUCES that caveat. Only a live glCheckFramebufferStatus can, and the answer is
 // per-driver, not per-platform:
 //
-//   Mesa llvmpipe (the headless CI driver), ES 3.2, GL_TEXTURE_2D colour attachment:
+//   llvmpipe (the headless CI driver), ES 3.2, GL_TEXTURE_2D color attachment:
 //     COMPLETE               GL_RGB8, GL_RGB16F, GL_R11F_G11F_B10F, every RGBA*
 //     INCOMPLETE_ATTACHMENT  GL_RGB8_SNORM, GL_SRGB8, every RGB integer format
 //     UNSUPPORTED            GL_RGB32F
@@ -125,10 +125,10 @@ void main() {
         TEST_F(ThreeChannelAttachmentScenario, ThreeChannelColorAttachmentsReportComplete) {
             if (!Ready() || IsSkipped()) return;
 
-            // GL_RGB8 is the control: colour-renderable in ES core, so it must pass with or
+            // GL_RGB8 is the control: color-renderable in ES core, so it must pass with or
             // without any substitution. If it ever fails, nothing below means anything.
             EXPECT_EQ(SingleAttachmentStatus(GL_RGB8), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE))
-                << "GL_RGB8 is ES-core colour-renderable";
+                << "GL_RGB8 is ES-core color-renderable";
 
             // Complementary Reimagined's colortex1 and colortex2.
             EXPECT_EQ(SingleAttachmentStatus(GL_RGB8_SNORM), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE))
@@ -148,10 +148,10 @@ void main() {
         // The other half: the substitution has to be INVISIBLE. A three-channel format has no
         // alpha, so GL answers 1.0 for it - and that answer has to hold after a draw that wrote
         // something else into the widened storage's real alpha channel, which is what the
-        // colour-mask discipline in SyncRenderState is for. GL_DST_ALPHA blending and
+        // color-mask discipline in SyncRenderState is for. GL_DST_ALPHA blending and
         // glBlitFramebuffer read that stored alpha inside the driver, where no readback fixup can
         // reach it, so "the storage really holds 1.0" is the only workable invariant.
-        TEST_F(ThreeChannelAttachmentScenario, WidenedAttachmentReadsBackOpaqueWhileItsNeighbourKeepsItsAlpha) {
+        TEST_F(ThreeChannelAttachmentScenario, WidenedAttachmentReadsBackOpaqueWhileItsNeighborKeepsItsAlpha) {
             if (!Ready() || IsSkipped()) return;
 
             std::string error;
@@ -274,7 +274,7 @@ void main() { oColor = uColor; }
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
             // dst = stored alpha; src factor GL_DST_ALPHA, dst factor GL_ZERO, source white
-            // => the destination colour becomes (storedAlpha, storedAlpha, storedAlpha).
+            // => the destination color becomes (storedAlpha, storedAlpha, storedAlpha).
             glEnable(GL_BLEND);
             glBlendFunc(GL_DST_ALPHA, GL_ZERO);
             glUniform4f(colorLocation, 1.0f, 1.0f, 1.0f, 1.0f);

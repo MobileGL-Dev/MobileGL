@@ -1,0 +1,31 @@
+// MobileGL - MobileGL/MG_Pipe/SubsystemDeps.def
+// Copyright (c) 2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+// The subsystem dependency rule ("bit X requires bit Y"), stated once as rows. Preprocessor
+// only (no generator reads it) and pure bit constants, so MGPipe.h may include it under
+// check_include_closure.py's value-header rule. MGPipe.h builds kMGPipeSubsystemDependencies[]
+// and the MGPipeSubsystem{Requires,DependenciesAreSet,DependencyWhy} helpers from it; the client
+// gate (MG_Impl/Pipe/PipeFill.cpp) and Espryt's Resolve<Family>SubsystemArm read only those, and
+// MG_Test/Backend/DirectGLES/SubsystemDepsTest.cpp checks both against the rows. Rows are not
+// transitive: each reader tests the required bits against MOBILEGL_PIPE_PUSH alone, as Espryt's
+// resolvers do. The bit pairs that are safe without a row are listed in MGPipe.h.
+
+// clang-format off
+
+// X(Family, Requires, Why)
+//   Family   - exactly one kMGPipeSubsystem* bit
+//   Requires - the bits MOBILEGL_PIPE_PUSH must ALSO carry for that family to be live; 0 is a
+//              ROW and not an absence, so the table covers its families exhaustively
+#define MGL_SUBSYSTEM_DEPENDENCY_LIST(X) \
+    X(kMGPipeSubsystemVertexInput,      kMGPipeSubsystemResources,                                  "a vertex buffer binding names a Buffer handle and only bit 7 puts one in the slot table (P3a's shipped shape; ResolveVertexInputSubsystemArm)") \
+    X(kMGPipeSubsystemFramebuffer,      kMGPipeSubsystemTextureResources,                           "every MGPSurface::Res names a Texture or Renderbuffer handle and only bit 10 populates those two slot tables (ResolveFramebufferSubsystemArm)") \
+    X(kMGPipeSubsystemTextureResources, kMGPipeSubsystemResources | kMGPipeSubsystemSamplers,       "a buffer texture's BufferForTexBuffer names a Buffer handle (bit 7); and MGPTextureParams::BuiltinSampler is a SamplerCso HANDLE only bit 11 mints, whose null the applier treats as Fatal{ProtocolCorruption} rather than a decline - D-K2's fourth row, ID-14/ID-15, which WITHDRAWS the brief's 'bit 10 without 11 is fine'") \
+    X(kMGPipeSubsystemSamplers,         kMGPipeSubsystemTextureResources,                           "every MGPBoundView::Texture and MGPImageView::Res names a Texture handle and only bit 10 populates that slot table; with the row above this is SYMMETRIC - bits 10 and 11 are one arm with two switches (ResolveSamplerSubsystemArm)") \
+    X(kMGPipeSubsystemPrograms,         0,                                                          "a ShaderCso handle names no texture and no buffer, the archive rides beside the record as a companion pointer, and the server's extra specialization inputs come from state the backend already holds (ResolveProgramSubsystemArm)") \
+    X(kMGPipeSubsystemBufferBindings,   kMGPipeSubsystemResources,                                  "every MGPBufferRange::Res names a Buffer handle and only bit 7 puts one in the slot table, so without it every server-side EnsureBufferResourceForHandle would mint a twin with no record behind it (P5e sb; ResolveBufferBindingSubsystemArm)")
+
+// clang-format on

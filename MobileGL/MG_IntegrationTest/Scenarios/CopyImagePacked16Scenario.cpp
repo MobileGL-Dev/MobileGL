@@ -38,7 +38,7 @@
 //
 // This scenario runs in BOTH configurations, and both must hand back identical client words:
 //   * the ambient registrations take the narrow path on a clean driver (llvmpipe has no
-//     mirror, so Auto keeps the native 16-bit storage - the pre-existing behaviour stays
+//     mirror, so Auto keeps the native 16-bit storage - the pre-existing behavior stays
 //     covered);
 //   * the DirectGLES.WidenedPacked16. registration pins MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE=1,
 //     which is the storage every affected device will actually run - without it the repair
@@ -74,7 +74,7 @@ namespace MGITest {
         constexpr int kLayers = 12;
         constexpr int kFlatSize = 7; // the plain-2D / renderbuffer endpoint, level 0
         // Copies cover the whole flat endpoint and land at (8, 8) inside the 15x15 level so
-        // that offsets are honoured, not just texel (0, 0): 8 + 7 == 15 reaches the far edge.
+        // that offsets are honored, not just texel (0, 0): 8 + 7 == 15 reaches the far edge.
         constexpr int kRegion = kFlatSize;
         constexpr int kArrayOffset = 8;
 
@@ -155,10 +155,9 @@ namespace MGITest {
                     glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, 1, 1, 1);
                 }
                 glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-                while (glGetError() != GL_NO_ERROR) {
-                }
-                glCopyImageSubData(probe[0], GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, probe[1], GL_TEXTURE_2D_ARRAY, 0, 0, 0,
-                                   0, 1, 1, 1);
+                while (glGetError() != GL_NO_ERROR) {}
+                glCopyImageSubData(probe[0], GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, probe[1], GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0,
+                                   1, 1, 1);
                 const bool usable = glGetError() == GL_NO_ERROR;
                 glDeleteTextures(2, probe);
                 return usable;
@@ -182,8 +181,8 @@ namespace MGITest {
                              kLevel1Size, kLayers, 0, format.transferFormat, format.transferType, level1.data());
                 const int level2Size = kLevel1Size / 2;
                 const auto level2 = MakeWords(format.transferType, level2Size * level2Size * kLayers, 211);
-                glTexImage3D(GL_TEXTURE_2D_ARRAY, 2, static_cast<GLint>(format.internalFormat), level2Size,
-                             level2Size, kLayers, 0, format.transferFormat, format.transferType, level2.data());
+                glTexImage3D(GL_TEXTURE_2D_ARRAY, 2, static_cast<GLint>(format.internalFormat), level2Size, level2Size,
+                             kLayers, 0, format.transferFormat, format.transferType, level2.data());
                 glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
                 return texture;
             }
@@ -210,8 +209,8 @@ namespace MGITest {
                 return texture;
             }
 
-            std::vector<GLushort> ReadTexImage(GLenum target, GLuint texture, int level,
-                                               const PackedFormatCase& format, size_t texelCount) {
+            std::vector<GLushort> ReadTexImage(GLenum target, GLuint texture, int level, const PackedFormatCase& format,
+                                               size_t texelCount) {
                 std::vector<GLushort> words(texelCount, 0);
                 glBindTexture(target, texture);
                 glGetTexImage(target, level, format.transferFormat, format.transferType, words.data());
@@ -228,17 +227,15 @@ namespace MGITest {
                               const std::vector<GLushort>& fill, const char* what) {
                 for (int y = 0; y < width; ++y) {
                     for (int x = 0; x < width && static_cast<size_t>(y * width + x) < got.size(); ++x) {
-                        const bool inRegion =
-                            x >= x0 && x < x0 + kRegion && y >= y0 && y < y0 + kRegion;
+                        const bool inRegion = x >= x0 && x < x0 + kRegion && y >= y0 && y < y0 + kRegion;
                         const GLushort actual = got[static_cast<size_t>(y * width + x)];
                         const GLushort expected =
-                            inRegion ? source[static_cast<size_t>((sourceY0 + y - y0) * sourceWidth + sourceX0 +
-                                                                  (x - x0))]
-                                     : fill[static_cast<size_t>(y * width + x)];
+                            inRegion
+                                ? source[static_cast<size_t>((sourceY0 + y - y0) * sourceWidth + sourceX0 + (x - x0))]
+                                : fill[static_cast<size_t>(y * width + x)];
                         EXPECT_EQ(actual, expected)
-                            << what << ": texel (" << x << ", " << y << ")"
-                            << (inRegion ? " (copied)" : " (untouched)") << " holds 0x" << std::hex << actual
-                            << ", expected 0x" << expected;
+                            << what << ": texel (" << x << ", " << y << ")" << (inRegion ? " (copied)" : " (untouched)")
+                            << " holds 0x" << std::hex << actual << ", expected 0x" << expected;
                         if (actual != expected) return; // one texel names the defect; 224 more would bury it
                     }
                 }
@@ -302,8 +299,8 @@ namespace MGITest {
                 ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR))
                     << format.name << ": glCopyImageSubData raised an error";
 
-                const auto got = ReadTexImage(GL_TEXTURE_2D, destination, 0, format,
-                                              static_cast<size_t>(kFlatSize) * kFlatSize);
+                const auto got =
+                    ReadTexImage(GL_TEXTURE_2D, destination, 0, format, static_cast<size_t>(kFlatSize) * kFlatSize);
                 ExpectRegion(got, kFlatSize, 0, 0, level1, kLevel1Size, kArrayOffset, kArrayOffset, fill,
                              (std::string("2d_array level 1 -> 2d, ") + format.name).c_str());
             }

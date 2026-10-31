@@ -29,9 +29,9 @@
 // what says a red pixel in the colliding case is about the name and not about this machine's
 // tessellation, its geometry stage, or the block mechanism in general.
 //
-// Colour code, so a failure names its own cause:
+// Color code, so a failure names its own cause:
 //   green  - the payload crossed all four stage boundaries, which is the pass.
-//   blue   - the clear colour: nothing was drawn at all (the program did not link, or the
+//   blue   - the clear color: nothing was drawn at all (the program did not link, or the
 //            backend program was rejected and every draw became a no-op).
 //   red    - the pipeline ran but the plain (non-block) varying did not arrive, i.e. the
 //            failure is not about interface blocks.
@@ -39,7 +39,7 @@
 //            zeroed or garbage. That is the defect this scenario exists for.
 //
 // llvmpipe and lavapipe run this faithfully but do NOT reproduce the original defect - the
-// aliasing is a Mali ES compiler behaviour. Read a green run here as "the rename did not
+// aliasing is a Mali ES compiler behavior. Read a green run here as "the rename did not
 // break the ordinary path"; the claim it pins on the device is the CTS group above.
 
 #include <string>
@@ -230,17 +230,15 @@ void main()
                 glGetIntegerv(GL_MAX_TESS_GEN_LEVEL, &maxTessGenLevel);
                 GLint maxGeometryOutputVertices = 0;
                 glGetIntegerv(GL_MAX_GEOMETRY_OUTPUT_VERTICES, &maxGeometryOutputVertices);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxTessGenLevel >= 1 && maxGeometryOutputVertices >= 4;
             }
 
             GLuint BuildPipeline(const char* tessEvalSource, const char* geometrySource) {
-                const GLenum stages[] = {GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER,
-                                         GL_TESS_EVALUATION_SHADER, GL_GEOMETRY_SHADER,
-                                         GL_FRAGMENT_SHADER};
-                const char* const sources[] = {kVertexSource, kTessControlSource, tessEvalSource,
-                                               geometrySource, kFragmentSource};
+                const GLenum stages[] = {GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER,
+                                         GL_GEOMETRY_SHADER, GL_FRAGMENT_SHADER};
+                const char* const sources[] = {kVertexSource, kTessControlSource, tessEvalSource, geometrySource,
+                                               kFragmentSource};
 
                 GLuint shaders[5] = {0, 0, 0, 0, 0};
                 bool ok = true;
@@ -282,9 +280,9 @@ void main()
                 return program;
             }
 
-            // Clears to BLUE, so "the draw painted nothing" is a colour of its own rather
+            // Clears to BLUE, so "the draw painted nothing" is a color of its own rather
             // than something that could be mistaken for a zeroed payload.
-            Rgba8 DrawAndReadCentre(GLuint program) const {
+            Rgba8 DrawAndReadCenter(GLuint program) const {
                 glViewport(0, 0, Gl().Width(), Gl().Height());
                 glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT);
@@ -297,16 +295,13 @@ void main()
                 return pixel;
             }
 
-            static bool IsGreen(const Rgba8& pixel) {
-                return pixel.r < 64 && pixel.g > 192 && pixel.b < 64;
-            }
+            static bool IsGreen(const Rgba8& pixel) { return pixel.r < 64 && pixel.g > 192 && pixel.b < 64; }
 
             const std::string& BuildLog() const { return m_buildLog; }
 
             static GLenum FirstGLError() {
                 const GLenum first = glGetError();
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return first;
             }
 
@@ -339,20 +334,19 @@ void main()
         // stages honestly, but nothing MobileGL reports answers for the geometry stage the
         // same way (GL_MAX_GEOMETRY_* are frontend constants and an ES driver may legitimately
         // report zero geometry storage blocks while having geometry shaders), so a stack that
-        // cannot build a five-stage program at all is recognised here, by trying.
+        // cannot build a five-stage program at all is recognized here, by trying.
         TEST_F(IoBlockNameCollisionScenario, DistinctlyNamedBlocksCarryThePayloadThroughFiveStages) {
             if (!Ready()) return;
 
             const GLuint program = BuildPipeline(kDistinctTessEvalSource, kDistinctGeometrySource);
             if (program == 0) {
                 GTEST_SKIP() << "this stack cannot build a five-stage tessellation+geometry program on "
-                             << Gl().BackendName() << ", so there is no block to carry through: "
-                             << BuildLog();
+                             << Gl().BackendName() << ", so there is no block to carry through: " << BuildLog();
             }
 
-            const Rgba8 centre = DrawAndReadCentre(program);
+            const Rgba8 center = DrawAndReadCenter(program);
             EXPECT_EQ(FirstGLError(), 0u);
-            EXPECT_TRUE(IsGreen(centre)) << "the control pipeline did not deliver its payload: " << centre;
+            EXPECT_TRUE(IsGreen(center)) << "the control pipeline did not deliver its payload: " << center;
         }
 
         TEST_F(IoBlockNameCollisionScenario, OneBlockNameInBothDirectionsStillCarriesThePayload) {
@@ -363,26 +357,25 @@ void main()
             // DISTINCT-name build succeeds does a failure of the colliding one mean something.
             if (BuildPipeline(kDistinctTessEvalSource, kDistinctGeometrySource) == 0) {
                 GTEST_SKIP() << "this stack cannot build a five-stage tessellation+geometry program on "
-                             << Gl().BackendName() << ", so there is no block to carry through: "
-                             << BuildLog();
+                             << Gl().BackendName() << ", so there is no block to carry through: " << BuildLog();
             }
 
             // Legal desktop GLSL: input and output block names live in separate namespaces, so
             // the evaluation stage below declares TcsData twice and must still compile. The
             // control above having built is what makes this assertion about the NAME.
             const GLuint program = BuildPipeline(kCollidingTessEvalSource, kCollidingGeometrySource);
-            ASSERT_NE(program, 0u)
-                << "an interface block name reused across the two directions of one stage is legal "
-                   "desktop GLSL, but the program did not build: "
-                << BuildLog();
+            ASSERT_NE(program, 0u) << "an interface block name reused across the two directions of one stage is legal "
+                                      "desktop GLSL, but the program did not build: "
+                                   << BuildLog();
 
-            const Rgba8 centre = DrawAndReadCentre(program);
+            const Rgba8 center = DrawAndReadCenter(program);
             EXPECT_EQ(FirstGLError(), 0u);
-            EXPECT_TRUE(IsGreen(centre))
+            EXPECT_TRUE(IsGreen(center))
                 << "the payload did not survive the stage that names its input and output block "
                    "the same: "
-                << centre << " (blue: nothing drew; red: the plain varying was lost too; black: "
-                             "the block arrived empty)";
+                << center
+                << " (blue: nothing drew; red: the plain varying was lost too; black: "
+                   "the block arrived empty)";
         }
 
     } // namespace

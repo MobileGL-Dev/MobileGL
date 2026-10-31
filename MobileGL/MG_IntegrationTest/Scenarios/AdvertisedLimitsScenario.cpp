@@ -26,9 +26,11 @@
 // quantities, so an entry that only fails on DirectVulkan is a translation bug and one that
 // fails on both is a table bug.
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
+#include "../Harness/BackendCapsPeek.h"
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
 
@@ -85,14 +87,13 @@ namespace MGITest {
                 GLint value = -424242;
                 glGetIntegerv(bound.pname, &value);
                 const unsigned int error = FirstGLError();
-                EXPECT_EQ(error, GLenum(GL_NO_ERROR))
-                    << bound.name << " is not answerable: " << GLErrorName(error);
+                EXPECT_EQ(error, GLenum(GL_NO_ERROR)) << bound.name << " is not answerable: " << GLErrorName(error);
                 if (error != GL_NO_ERROR) continue;
 
                 EXPECT_GE(value, bound.minimum)
-                    << bound.name << " = " << value << " is below the GL required minimum "
-                    << bound.minimum << " (a negative or tiny value here is a uint32 limit that lost "
-                                        "its top bit on the way to a signed Int)";
+                    << bound.name << " = " << value << " is below the GL required minimum " << bound.minimum
+                    << " (a negative or tiny value here is a uint32 limit that lost "
+                       "its top bit on the way to a signed Int)";
                 EXPECT_LE(value, bound.ceiling)
                     << bound.name << " = " << value << " exceeds the ceiling " << bound.ceiling
                     << " this implementation is willing to promise - an application that allocates "
@@ -178,8 +179,8 @@ namespace MGITest {
                 glGetIntegerv(relation.combined, &combined);
                 ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << relation.stageName;
                 EXPECT_LE(stage, combined)
-                    << relation.stageName << " = " << stage << " exceeds " << relation.combinedName << " = "
-                    << combined << "; GL 4.6 table 23.64 orders MAX_*_BUFFER_BINDINGS >= MAX_COMBINED_*_BLOCKS >= "
+                    << relation.stageName << " = " << stage << " exceeds " << relation.combinedName << " = " << combined
+                    << "; GL 4.6 table 23.64 orders MAX_*_BUFFER_BINDINGS >= MAX_COMBINED_*_BLOCKS >= "
                        "every per-stage count, and a single-stage program may use its whole per-stage allowance";
             }
         }
@@ -216,13 +217,12 @@ namespace MGITest {
                 ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << family.maxSizeName;
                 ASSERT_GT(maxBindings, 0) << family.maxBindingsName;
                 const GLint perBinding = maxSize / maxBindings;
-                EXPECT_GT(perBinding, 0)
-                    << family.maxSizeName << " (" << maxSize << ") / " << family.maxBindingsName << " ("
-                    << maxBindings << ") is zero, and BindBufferRange rejects a zero size";
+                EXPECT_GT(perBinding, 0) << family.maxSizeName << " (" << maxSize << ") / " << family.maxBindingsName
+                                         << " (" << maxBindings << ") is zero, and BindBufferRange rejects a zero size";
                 EXPECT_EQ(perBinding % family.sizeGranularity, 0)
-                    << family.maxSizeName << " (" << maxSize << ") / " << family.maxBindingsName << " ("
-                    << maxBindings << ") = " << perBinding << " is not a multiple of the "
-                    << family.sizeGranularity << "-byte size granularity BindBufferRange requires for it";
+                    << family.maxSizeName << " (" << maxSize << ") / " << family.maxBindingsName << " (" << maxBindings
+                    << ") = " << perBinding << " is not a multiple of the " << family.sizeGranularity
+                    << "-byte size granularity BindBufferRange requires for it";
             }
         }
 
@@ -242,9 +242,9 @@ namespace MGITest {
             EXPECT_GT(blockSize, 0);
             // GL_MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS is derived from the product of these two,
             // so their product has to stay representable.
-            EXPECT_LE(static_cast<long long>(blocks) * blockSize,
-                      static_cast<long long>(2147483647))
-                << "blocks(" << blocks << ") * blockSize(" << blockSize << ") overflows the GLint the "
+            EXPECT_LE(static_cast<long long>(blocks) * blockSize, static_cast<long long>(2147483647))
+                << "blocks(" << blocks << ") * blockSize(" << blockSize
+                << ") overflows the GLint the "
                    "derived component limits are computed in";
         }
 
@@ -279,8 +279,7 @@ namespace MGITest {
                 {GL_MAX_TESS_EVALUATION_INPUT_COMPONENTS, "GL_MAX_TESS_EVALUATION_INPUT_COMPONENTS", 128, 1 << 16},
                 {GL_MAX_TESS_EVALUATION_OUTPUT_COMPONENTS, "GL_MAX_TESS_EVALUATION_OUTPUT_COMPONENTS", 128, 1 << 16},
                 {GL_MAX_TESS_EVALUATION_TEXTURE_IMAGE_UNITS, "GL_MAX_TESS_EVALUATION_TEXTURE_IMAGE_UNITS", 16, 256},
-                {GL_MAX_TESS_EVALUATION_UNIFORM_COMPONENTS, "GL_MAX_TESS_EVALUATION_UNIFORM_COMPONENTS", 1024,
-                 1 << 20},
+                {GL_MAX_TESS_EVALUATION_UNIFORM_COMPONENTS, "GL_MAX_TESS_EVALUATION_UNIFORM_COMPONENTS", 1024, 1 << 20},
                 {GL_MAX_TESS_EVALUATION_UNIFORM_BLOCKS, "GL_MAX_TESS_EVALUATION_UNIFORM_BLOCKS", 14, 256},
                 {GL_MAX_TESS_PATCH_COMPONENTS, "GL_MAX_TESS_PATCH_COMPONENTS", 120, 1 << 16},
                 {GL_MAX_COMBINED_TESS_CONTROL_UNIFORM_COMPONENTS, "GL_MAX_COMBINED_TESS_CONTROL_UNIFORM_COMPONENTS",
@@ -294,10 +293,10 @@ namespace MGITest {
                 const unsigned int error = FirstGLError();
                 EXPECT_EQ(error, GLenum(GL_NO_ERROR)) << bound.name << " is not answerable: " << GLErrorName(error);
                 if (error != GL_NO_ERROR) continue;
-                EXPECT_GE(value, bound.minimum) << bound.name << " = " << value << " is below the GL 4.5 minimum "
-                                                << bound.minimum;
-                EXPECT_LE(value, bound.ceiling) << bound.name << " = " << value << " exceeds the ceiling "
-                                                << bound.ceiling;
+                EXPECT_GE(value, bound.minimum)
+                    << bound.name << " = " << value << " is below the GL 4.5 minimum " << bound.minimum;
+                EXPECT_LE(value, bound.ceiling)
+                    << bound.name << " = " << value << " exceeds the ceiling " << bound.ceiling;
             }
 
             // ARB_cull_distance's pair. Zero is honest on a backend with no cull-distance route,
@@ -376,6 +375,250 @@ namespace MGITest {
             // renderable surface, or a full-size framebuffer could not be fully viewported.
             EXPECT_GE(viewportDims[0], maxRenderbufferSize);
             EXPECT_GE(viewportDims[1], maxRenderbufferSize);
+        }
+
+        // THE INDEXED AND PER-PROGRAM QUERIES THAT NAME FRONTEND STATE, pinned on both lanes.
+        //
+        // Both backends used to carry their own arms for GL_SHADER_STORAGE_BUFFER_* and
+        // GL_IMAGE_BINDING_* inside GLFunctionsTable::GetIntegeri_v, and their own
+        // GetInteger64i_v / GetProgramiv table entries. None of it was reachable: GL_Getter and
+        // GL_Program answer every one of these pnames from the frontend's own state and return
+        // before the table is consulted. The duplicates did not even agree - the backend arms
+        // clamped a bound range to the buffer's current storage, which GL 4.6 core tables
+        // 23.4/23.5 do not permit - so the code was one refactor away from becoming the answer.
+        // These cases pin what the frontend actually reports, so a future move of any of it back
+        // behind the interface has to keep saying the same thing.
+        TEST_F(AdvertisedLimitsScenario, IndexedBufferBindingsAreReportedVerbatimOnBothWidths) {
+            GLuint buffer = 0;
+            glGenBuffers(1, &buffer);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, 1024, nullptr, GL_DYNAMIC_DRAW);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+
+            // A range that is NOT the whole buffer, so a clamp to the store would be visible.
+            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 1, buffer, 256, 512);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+
+            GLint binding32 = -1;
+            GLint start32 = -1;
+            GLint size32 = -1;
+            glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_BINDING, 1, &binding32);
+            glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_START, 1, &start32);
+            glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_SIZE, 1, &size32);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_EQ(binding32, static_cast<GLint>(buffer));
+            EXPECT_EQ(start32, 256);
+            EXPECT_EQ(size32, 512);
+
+            // The 64-bit width has to agree pname for pname. It has no backend entry of its own
+            // and derives everything from the 32-bit answer above plus its own buffer arm.
+            GLint64 binding64 = -1;
+            GLint64 start64 = -1;
+            GLint64 size64 = -1;
+            glGetInteger64i_v(GL_SHADER_STORAGE_BUFFER_BINDING, 1, &binding64);
+            glGetInteger64i_v(GL_SHADER_STORAGE_BUFFER_START, 1, &start64);
+            glGetInteger64i_v(GL_SHADER_STORAGE_BUFFER_SIZE, 1, &size64);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_EQ(binding64, static_cast<GLint64>(buffer));
+            EXPECT_EQ(start64, static_cast<GLint64>(256));
+            EXPECT_EQ(size64, static_cast<GLint64>(512));
+
+            // An unbound index answers zero rather than erroring or leaking the driver's answer.
+            GLint unbound = -1;
+            glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_BINDING, 0, &unbound);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_EQ(unbound, 0);
+
+            // THE ARM THAT SEPARATES VERBATIM FROM CLAMPED. GL 4.6 core tables 23.4/23.5 report
+            // the size glBindBufferRange was ASKED for; it does not follow the buffer, so
+            // shrinking the store underneath the binding must not move it. A clamp to the
+            // current storage - which is exactly what both backends' deleted arms did - answers
+            // 128 here, and answers 0 for the bind-then-allocate shape
+            // KHR-GL43.shader_storage_buffer_object.basic-binding uses.
+            glBufferData(GL_SHADER_STORAGE_BUFFER, 128, nullptr, GL_DYNAMIC_DRAW);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            GLint startAfterShrink = -1;
+            GLint sizeAfterShrink = -1;
+            GLint64 sizeAfterShrink64 = -1;
+            glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_START, 1, &startAfterShrink);
+            glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_SIZE, 1, &sizeAfterShrink);
+            glGetInteger64i_v(GL_SHADER_STORAGE_BUFFER_SIZE, 1, &sizeAfterShrink64);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_EQ(startAfterShrink, 256)
+                << "the bound range's start followed the buffer through a re-specification";
+            EXPECT_EQ(sizeAfterShrink, 512)
+                << "the bound range's size was clamped to the buffer's current 128-byte storage; the range is "
+                   "state of the BINDING POINT and is reported verbatim";
+            EXPECT_EQ(sizeAfterShrink64, static_cast<GLint64>(512))
+                << "the 64-bit width disagreed with the 32-bit one about the same pname";
+
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, 0);
+            glDeleteBuffers(1, &buffer);
+            (void)FirstGLError();
+        }
+
+        TEST_F(AdvertisedLimitsScenario, ImageUnitBindingsAreReportedFromTheFrontendState) {
+            GLint maxImageUnits = 0;
+            glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
+            (void)FirstGLError();
+            if (maxImageUnits < 2) GTEST_SKIP() << "no image units to bind on this lane";
+
+            GLuint texture = 0;
+            glGenTextures(1, &texture);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexStorage2D(GL_TEXTURE_2D, 2, GL_RGBA8, 8, 8);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+
+            glBindImageTexture(1, texture, 1, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+
+            struct Expectation {
+                GLenum pname;
+                const char* name;
+                GLint expected;
+            };
+            const Expectation expectations[] = {
+                {GL_IMAGE_BINDING_NAME, "GL_IMAGE_BINDING_NAME", static_cast<GLint>(texture)},
+                {GL_IMAGE_BINDING_LEVEL, "GL_IMAGE_BINDING_LEVEL", 1},
+                {GL_IMAGE_BINDING_LAYERED, "GL_IMAGE_BINDING_LAYERED", GL_FALSE},
+                {GL_IMAGE_BINDING_LAYER, "GL_IMAGE_BINDING_LAYER", 0},
+                {GL_IMAGE_BINDING_ACCESS, "GL_IMAGE_BINDING_ACCESS", GL_READ_ONLY},
+                {GL_IMAGE_BINDING_FORMAT, "GL_IMAGE_BINDING_FORMAT", GL_RGBA8},
+            };
+            for (const Expectation& expectation : expectations) {
+                GLint value = -424242;
+                glGetIntegeri_v(expectation.pname, 1, &value);
+                EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << expectation.name;
+                EXPECT_EQ(value, expectation.expected) << expectation.name;
+
+                // Same pname through the wide width - it must not fall through to a driver that
+                // knows nothing about MobileGL's image-unit state.
+                GLint64 wide = -424242;
+                glGetInteger64i_v(expectation.pname, 1, &wide);
+                EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << expectation.name << " (64-bit)";
+                EXPECT_EQ(wide, static_cast<GLint64>(expectation.expected)) << expectation.name << " (64-bit)";
+            }
+
+            glBindImageTexture(1, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+            glDeleteTextures(1, &texture);
+            (void)FirstGLError();
+        }
+
+        // glGetProgramiv(GL_COMPUTE_WORK_GROUP_SIZE) is a LINK ARTIFACT of the program the
+        // application wrote. DirectVulkan used to answer it from its own spirv-reflect cache and
+        // DirectGLES by forwarding to the driver's ESSL program - neither of which the
+        // application ever named - while GL_Program.cpp has always answered it from
+        // ProgramObject::GetComputeLocalSize. This pins the declared local size on both lanes.
+        TEST_F(AdvertisedLimitsScenario, ComputeLocalSizeComesFromTheLinkedProgram) {
+            static const char* kSource = R"(#version 430 core
+layout(local_size_x = 4, local_size_y = 3, local_size_z = 2) in;
+layout(std430, binding = 0) buffer Output { uint g_data[]; };
+void main() { g_data[gl_LocalInvocationIndex] = 1u; }
+)";
+            const GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+            glShaderSource(shader, 1, &kSource, nullptr);
+            glCompileShader(shader);
+            GLint compiled = 0;
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+            if (compiled == GL_FALSE) {
+                char log[2048] = {};
+                glGetShaderInfoLog(shader, sizeof(log) - 1, nullptr, log);
+                glDeleteShader(shader);
+                (void)FirstGLError();
+                GTEST_SKIP() << "no compute shader support on this lane: " << log;
+            }
+            const GLuint program = glCreateProgram();
+            glAttachShader(program, shader);
+            glLinkProgram(program);
+            glDeleteShader(shader);
+            GLint linked = 0;
+            glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            if (linked == GL_FALSE) {
+                char log[2048] = {};
+                glGetProgramInfoLog(program, sizeof(log) - 1, nullptr, log);
+                glDeleteProgram(program);
+                (void)FirstGLError();
+                GTEST_SKIP() << "the compute program did not link on this lane: " << log;
+            }
+
+            GLint localSize[3] = {-1, -1, -1};
+            glGetProgramiv(program, GL_COMPUTE_WORK_GROUP_SIZE, localSize);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_EQ(localSize[0], 4);
+            EXPECT_EQ(localSize[1], 3);
+            EXPECT_EQ(localSize[2], 2);
+
+            // A program with no compute stage must answer INVALID_OPERATION, not a stale or
+            // defaulted (1, 1, 1) - the frontend's rule, and the one a backend that answers from
+            // its own reflection cache cannot express.
+            const GLuint empty = glCreateProgram();
+            GLint ignored[3] = {0, 0, 0};
+            glGetProgramiv(empty, GL_COMPUTE_WORK_GROUP_SIZE, ignored);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
+                << "GL 4.6 core 7.13: the query is only defined for a linked program with a compute shader";
+
+            glDeleteProgram(empty);
+            glDeleteProgram(program);
+            (void)FirstGLError();
+        }
+
+        // THE SIX COMPUTE LIMITS THAT OUTLIVE THE GETTER. GL_MAX_COMPUTE_WORK_GROUP_COUNT and
+        // GL_MAX_COMPUTE_WORK_GROUP_SIZE, three axes each, are the only indexed pnames the
+        // DEVICE answers rather than the frontend (glGetIntegeri_v on Espryt, VkPhysicalDevice-
+        // Limits on Magma), and therefore the only ones that have to cross the MGPipe boundary
+        // once GetIntegeri_v is retired (plan B section 4.4.6 / P0.5). They ride in MGPCaps by
+        // inclusion, as DynamicBackendParameters::MaxComputeWorkGroupCount/Size, filled by both
+        // backends at capability init. This case pins that the caps copy and the live getter
+        // answer are one number - the getter floors the backend's raw answer at the GL 4.3
+        // minimum, so the comparison is against the floored caps value - and pins the
+        // GL-visible half on every lane: answerability, the floors, vector/indexed agreement
+        // and the index bound. On a lane where the caps block is out of reach (Android links
+        // the shipping .so) only the GL-visible half runs.
+        TEST_F(AdvertisedLimitsScenario, ComputeWorkGroupLimitsAreTheCapsBlocksAnswer) {
+            struct Axis {
+                GLenum pname;
+                const char* name;
+                GLint minimum[3]; // GL 4.3 core table 23.60
+            };
+            const Axis axes[] = {
+                {GL_MAX_COMPUTE_WORK_GROUP_COUNT, "GL_MAX_COMPUTE_WORK_GROUP_COUNT", {65535, 65535, 65535}},
+                {GL_MAX_COMPUTE_WORK_GROUP_SIZE, "GL_MAX_COMPUTE_WORK_GROUP_SIZE", {1024, 1024, 64}},
+            };
+            int capsCount[3] = {0, 0, 0};
+            int capsSize[3] = {0, 0, 0};
+            const bool capsVisible = PeekComputeWorkGroupCaps(capsCount, capsSize);
+
+            for (const Axis& axis : axes) {
+                GLint indexed[3] = {-1, -1, -1};
+                for (GLuint i = 0; i < 3; ++i) {
+                    glGetIntegeri_v(axis.pname, i, &indexed[i]);
+                    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << axis.name << "[" << i << "]";
+                    EXPECT_GE(indexed[i], axis.minimum[i])
+                        << axis.name << "[" << i << "] = " << indexed[i]
+                        << " is below the GL 4.3 core table 23.60 minimum " << axis.minimum[i];
+                }
+                GLint vector[3] = {-1, -1, -1};
+                glGetIntegerv(axis.pname, vector);
+                ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << axis.name;
+                for (int i = 0; i < 3; ++i) {
+                    EXPECT_EQ(vector[i], indexed[i])
+                        << axis.name << "[" << i << "]: the vector query and the indexed query disagree";
+                }
+                GLint outOfRange = -424242;
+                glGetIntegeri_v(axis.pname, 3, &outOfRange);
+                EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_VALUE))
+                    << axis.name << "[3]: an index past the three axes is INVALID_VALUE (GL 4.6 core 22.1)";
+
+                if (!capsVisible) continue;
+                const int* capsAxis = axis.pname == GL_MAX_COMPUTE_WORK_GROUP_COUNT ? capsCount : capsSize;
+                for (int i = 0; i < 3; ++i) {
+                    EXPECT_EQ(std::max(capsAxis[i], axis.minimum[i]), indexed[i])
+                        << axis.name << "[" << i << "]: MGPCaps carries " << capsAxis[i]
+                        << " but glGetIntegeri_v answers " << indexed[i]
+                        << " - the caps block and the getter path must be one number, because P0.5 retires "
+                           "the getter in favor of the caps";
+                }
+            }
         }
 
     } // namespace

@@ -39,22 +39,21 @@ namespace MobileGL {
                     // glslang mangles function OpNames as "name(<paramcodes>"; the base name is
                     // everything before the '(' (entry points like "main" carry no mangling).
                     const std::string mangled = debugInst.GetInOperand(1).AsString();
-                    const std::string_view baseName =
-                        std::string_view(mangled).substr(0, mangled.find('('));
+                    const std::string_view baseName = std::string_view(mangled).substr(0, mangled.find('('));
                     if (!IsEsslBuiltinFunctionName(baseName)) {
                         continue;
                     }
 
-                    debugInst.SetInOperand(1, spvtools::utils::MakeVector<spvtools::opt::Operand::OperandData>(
-                                                  "mg_" + mangled));
+                    debugInst.SetInOperand(
+                        1, spvtools::utils::MakeVector<spvtools::opt::Operand::OperandData>("mg_" + mangled));
                     modified = true;
                 }
 
                 return modified ? Status::SuccessWithChange : Status::SuccessWithoutChange;
             }
 
-            spvtools::Optimizer::PassToken
-            RenameBuiltinShadowingFunctionsPass::CreateRenameBuiltinShadowingFunctionsPass() {
+            spvtools::Optimizer::PassToken RenameBuiltinShadowingFunctionsPass::
+                CreateRenameBuiltinShadowingFunctionsPass() {
                 return spvtools::Optimizer::PassToken(MakeUnique<RenameBuiltinShadowingFunctionsPass>());
             }
         } // namespace ShaderTranspiler

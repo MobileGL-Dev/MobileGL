@@ -36,6 +36,8 @@ namespace MobileGL {
                 return "Texture1DArray";
             case TextureTarget::Texture2DMultisampleArray:
                 return "Texture2DMultisampleArray";
+            case TextureTarget::External:
+                return "External";
             default:
                 return "Unknown";
             }

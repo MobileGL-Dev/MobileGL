@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "TextureObject2DCube.h"
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL {
     namespace MG_State {
@@ -30,11 +31,17 @@ namespace MobileGL {
                                                       MipmapInput input) {
                 BumpShapeVersion();
                 m_textureStorage.AllocateLevel(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, input);
+                // AFTER the allocation, for TextureObjectWithOneMipmap's reason: BumpShapeVersion
+                // runs first and a descriptor built there would describe the level set this call
+                // is about to change. The FACE rides in `uploadTarget`, so the key the emitter
+                // drops is that face's level and no other face's (final review C-1).
+                PipePublishLevelDescriptor(uploadTarget, mipmapLevel);
             }
 
             void TextureObject2DCube::TruncateMipmapLevels(TextureUploadTarget uploadTarget, Uint levelCount) {
                 BumpShapeVersion();
                 m_textureStorage.TruncateToLevelCount(GetIndexOfTextureUploadTarget(uploadTarget), levelCount);
+                PipePublishTruncatedDescriptor(uploadTarget, levelCount);
             }
 
             void TextureObject2DCube::UpdateMipmapSubData(TextureUploadTarget uploadTarget, Uint mipmapLevel,
@@ -49,8 +56,12 @@ namespace MobileGL {
             void TextureObject2DCube::MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, bool dirty) {
                 if (dirty) {
                     ++m_contentVersion;
+                    MGP_NOTE_AGGREGATE(TextureContent);
                 }
                 m_textureStorage.MarkDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, dirty);
+                // SIX FACES, SIX BLOBS, SIX DRAIN KEYS: the upload target is the face, and it is
+                // what the sub-data record's Target byte carries beside the resource target.
+                if (dirty) PipeNoteLevelDirty(uploadTarget, mipmapLevel);
             }
 
             bool TextureObject2DCube::IsStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel) const {
@@ -60,8 +71,10 @@ namespace MobileGL {
             void TextureObject2DCube::MarkStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                              IntVec3 offset, IntVec3 size) {
                 ++m_contentVersion;
+                MGP_NOTE_AGGREGATE(TextureContent);
                 m_textureStorage.MarkDirtyRegion(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, offset,
                                                  size);
+                PipeNoteLevelDirty(uploadTarget, mipmapLevel);
             }
 
             MipmapDirtyRegion TextureObject2DCube::GetStorageDirtyRegion(TextureUploadTarget uploadTarget,
@@ -81,7 +94,7 @@ namespace MobileGL {
             }
 
             void TextureObject2DCube::SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
-                                                              GLenum internalFormat, const void* data, SizeT size) {
+                                                               GLenum internalFormat, const void* data, SizeT size) {
                 m_textureStorage.SetCompressedImage(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
                                                     internalFormat, data, size);
             }
@@ -92,17 +105,17 @@ namespace MobileGL {
             }
 
             SizeT TextureObject2DCube::GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget,
-                                                                    Uint mipmapLevel) const {
+                                                                   Uint mipmapLevel) const {
                 return m_textureStorage.GetCompressedByteSize(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
             const void* TextureObject2DCube::MapMipmapCompressedImage(TextureUploadTarget uploadTarget,
-                                                                       Uint mipmapLevel) const {
+                                                                      Uint mipmapLevel) const {
                 return m_textureStorage.MapCompressedData(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
             void TextureObject2DCube::SetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget,
-                                                                       Uint mipmapLevel, GLenum internalFormat) {
+                                                                         Uint mipmapLevel, GLenum internalFormat) {
                 m_textureStorage.SetRequestedCompressedFormat(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
                                                               internalFormat);
             }

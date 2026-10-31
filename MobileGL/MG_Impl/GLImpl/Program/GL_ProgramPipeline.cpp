@@ -15,8 +15,8 @@
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
         void RecordPipelineError(ErrorCode code, const char* function, String message) {
-            MG_State::pGLContext->RecordError(
-                code, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", function, Move(message)));
+            MG_State::pGLContext->RecordError(code,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", function, Move(message)));
         }
 
         // GL 4.6 core 7.4 asks only that the name came from GenProgramPipelines and has not been
@@ -31,7 +31,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // rejected calls' error was left in the queue for the harness to find. One cause, both
         // symptoms.
         const SharedPtr<MG_State::GLState::ProgramPipelineObject>* TryGetPipeline(GLuint pipeline,
-                                                                                 const char* function) {
+                                                                                  const char* function) {
             const auto& object = MG_State::pGLContext->MaterializeProgramPipelineObject(pipeline);
             if (!object) {
                 RecordPipelineError(ErrorCode::InvalidOperation, function,
@@ -52,19 +52,32 @@ namespace MobileGL::MG_Impl::GLImpl {
         // GL 4.6 core table 7.1 maps each stage bit onto a shader stage.
         Bool TryResolveStageBit(GLbitfield bit, ShaderStage& outStage) {
             switch (bit) {
-            case GL_VERTEX_SHADER_BIT: outStage = ShaderStage::Vertex; return true;
-            case GL_TESS_CONTROL_SHADER_BIT: outStage = ShaderStage::TessControl; return true;
-            case GL_TESS_EVALUATION_SHADER_BIT: outStage = ShaderStage::TessEval; return true;
-            case GL_GEOMETRY_SHADER_BIT: outStage = ShaderStage::Geometry; return true;
-            case GL_FRAGMENT_SHADER_BIT: outStage = ShaderStage::Fragment; return true;
-            case GL_COMPUTE_SHADER_BIT: outStage = ShaderStage::Compute; return true;
-            default: return false;
+            case GL_VERTEX_SHADER_BIT:
+                outStage = ShaderStage::Vertex;
+                return true;
+            case GL_TESS_CONTROL_SHADER_BIT:
+                outStage = ShaderStage::TessControl;
+                return true;
+            case GL_TESS_EVALUATION_SHADER_BIT:
+                outStage = ShaderStage::TessEval;
+                return true;
+            case GL_GEOMETRY_SHADER_BIT:
+                outStage = ShaderStage::Geometry;
+                return true;
+            case GL_FRAGMENT_SHADER_BIT:
+                outStage = ShaderStage::Fragment;
+                return true;
+            case GL_COMPUTE_SHADER_BIT:
+                outStage = ShaderStage::Compute;
+                return true;
+            default:
+                return false;
             }
         }
 
         constexpr GLbitfield kAllStageBits = GL_VERTEX_SHADER_BIT | GL_TESS_CONTROL_SHADER_BIT |
-                                            GL_TESS_EVALUATION_SHADER_BIT | GL_GEOMETRY_SHADER_BIT |
-                                            GL_FRAGMENT_SHADER_BIT | GL_COMPUTE_SHADER_BIT;
+                                             GL_TESS_EVALUATION_SHADER_BIT | GL_GEOMETRY_SHADER_BIT |
+                                             GL_FRAGMENT_SHADER_BIT | GL_COMPUTE_SHADER_BIT;
     } // namespace
 
     void GenProgramPipelines(GLsizei n, GLuint* pipelines) {
@@ -126,13 +139,27 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = active ? static_cast<GLint>(active->GetExternalIndex()) : 0;
             break;
         }
-        case GL_VERTEX_SHADER: *params = stageProgramName(ShaderStage::Vertex); break;
-        case GL_TESS_CONTROL_SHADER: *params = stageProgramName(ShaderStage::TessControl); break;
-        case GL_TESS_EVALUATION_SHADER: *params = stageProgramName(ShaderStage::TessEval); break;
-        case GL_GEOMETRY_SHADER: *params = stageProgramName(ShaderStage::Geometry); break;
-        case GL_FRAGMENT_SHADER: *params = stageProgramName(ShaderStage::Fragment); break;
-        case GL_COMPUTE_SHADER: *params = stageProgramName(ShaderStage::Compute); break;
-        case GL_VALIDATE_STATUS: *params = (*pipelineObject)->GetValidateStatus() ? GL_TRUE : GL_FALSE; break;
+        case GL_VERTEX_SHADER:
+            *params = stageProgramName(ShaderStage::Vertex);
+            break;
+        case GL_TESS_CONTROL_SHADER:
+            *params = stageProgramName(ShaderStage::TessControl);
+            break;
+        case GL_TESS_EVALUATION_SHADER:
+            *params = stageProgramName(ShaderStage::TessEval);
+            break;
+        case GL_GEOMETRY_SHADER:
+            *params = stageProgramName(ShaderStage::Geometry);
+            break;
+        case GL_FRAGMENT_SHADER:
+            *params = stageProgramName(ShaderStage::Fragment);
+            break;
+        case GL_COMPUTE_SHADER:
+            *params = stageProgramName(ShaderStage::Compute);
+            break;
+        case GL_VALIDATE_STATUS:
+            *params = (*pipelineObject)->GetValidateStatus() ? GL_TRUE : GL_FALSE;
+            break;
         case GL_INFO_LOG_LENGTH: {
             // GL counts the null terminator, and reports 0 rather than 1 for an empty log.
             const auto& log = (*pipelineObject)->GetInfoLog();
@@ -140,9 +167,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         }
         default:
-            RecordPipelineError(ErrorCode::InvalidEnum, __func__,
-                                std::format("pname {} is not a program pipeline parameter.",
-                                            MG_Util::ConvertGLEnumToString(pname)));
+            RecordPipelineError(
+                ErrorCode::InvalidEnum, __func__,
+                std::format("pname {} is not a program pipeline parameter.", MG_Util::ConvertGLEnumToString(pname)));
             break;
         }
     }
@@ -243,8 +270,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ValidateProgramPipeline(GLuint pipeline) {
         const auto* pipelineObject = TryGetPipeline(pipeline, __func__);
         if (!pipelineObject) return;
-        // Nothing here can fail today: MobileGL links each stage program on its own, so there is no
-        // cross-stage interface to re-check at validation time. The log stays empty, which GL allows.
-        (*pipelineObject)->SetValidateStatus(true);
+        String reason = (*pipelineObject)->FindValidationError(/*requireAnyStage=*/true);
+        (*pipelineObject)->SetValidateStatus(reason.empty());
+        (*pipelineObject)->SetInfoLog(Move(reason));
     }
 } // namespace MobileGL::MG_Impl::GLImpl

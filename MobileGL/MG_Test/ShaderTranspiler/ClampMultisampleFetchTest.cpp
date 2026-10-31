@@ -74,8 +74,7 @@ namespace {
         EXPECT_TRUE(programResult) << (programResult ? String{} : programResult.error().log);
         if (!programResult) return {};
 
-        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_FRAGMENT_SHADER},
-                                         .program = *programResult.value()};
+        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_FRAGMENT_SHADER}, .program = *programResult.value()};
         auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
         EXPECT_TRUE(binaryResult) << (binaryResult ? String{} : binaryResult.error().log);
         if (!binaryResult || binaryResult->empty()) return {};
@@ -192,7 +191,7 @@ void main() {
 }
 )";
 
-    // The colour class, which real devices squeeze to something above 1 rather than to 1.
+    // The color class, which real devices squeeze to something above 1 rather than to 1.
     const char* const kColorMultisampleFetch = R"(#version 410 core
 uniform sampler2DMS colorMs;
 out vec4 fragColor;
@@ -269,15 +268,15 @@ TEST_F(ClampMultisampleFetchTest, TheCombinedProbeAgreesWithThePerGateOnes) {
 
 // The overwhelming majority of modules. Behind the probe they never reach the pass at all, but the
 // pass has to be inert for them on its own, or a future caller that forgets the gate silently
-// re-serialises every shader in the program.
+// re-serializes every shader in the program.
 TEST_F(ClampMultisampleFetchTest, LeavesAModuleWithoutAMultisampledImageUntouched) {
     const Vector<Uint32> input = CompileFragment(kNoMultisampleFetch);
     ASSERT_FALSE(input.empty());
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
-        input, output, /*maxColorSamples=*/4, /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
-        kAdvertisedMaxSamples, true));
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(input, output, /*maxColorSamples=*/4,
+                                                               /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
+                                                               kAdvertisedMaxSamples, true));
     EXPECT_EQ(output, input) << Disassemble(output);
 }
 
@@ -299,9 +298,9 @@ TEST_F(ClampMultisampleFetchTest, ReplacesAnOutOfRangeIntegerSampleWithZero) {
     EXPECT_EQ(constantsBefore.at(sampleBefore->maskOperandIds.front()), 3u);
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
-        input, output, /*maxColorSamples=*/4, /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
-        kAdvertisedMaxSamples, true));
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(input, output, /*maxColorSamples=*/4,
+                                                               /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
+                                                               kAdvertisedMaxSamples, true));
     ASSERT_FALSE(output.empty());
     const String dis = Disassemble(output);
     ASSERT_TRUE(Validates(output)) << dis;
@@ -329,15 +328,15 @@ TEST_F(ClampMultisampleFetchTest, ReplacesAnOutOfRangeIntegerSampleWithZero) {
 }
 
 // The same shader on a device whose integer ceiling really is what MobileGL advertises. Nothing is
-// out of range, so nothing may be rewritten - and the module must not even be re-serialised.
+// out of range, so nothing may be rewritten - and the module must not even be re-serialized.
 TEST_F(ClampMultisampleFetchTest, LeavesTheFetchAloneWhenTheCategoryReachesTheAdvertisedMaximum) {
     const Vector<Uint32> input = CompileFragment(kIntegerMultisampleFetch);
     ASSERT_FALSE(input.empty());
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
-        input, output, /*maxColorSamples=*/4, /*maxIntegerSamples=*/4, /*maxDepthSamples=*/4,
-        kAdvertisedMaxSamples, true));
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(input, output, /*maxColorSamples=*/4,
+                                                               /*maxIntegerSamples=*/4, /*maxDepthSamples=*/4,
+                                                               kAdvertisedMaxSamples, true));
     EXPECT_EQ(output, input) << Disassemble(output);
 }
 
@@ -353,9 +352,9 @@ TEST_F(ClampMultisampleFetchTest, ClampsAColorSampleWithAMinimum) {
     const Uint32 originalSampleId = before.front().maskOperandIds.front();
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
-        input, output, /*maxColorSamples=*/2, /*maxIntegerSamples=*/4, /*maxDepthSamples=*/4,
-        kAdvertisedMaxSamples, true));
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(input, output, /*maxColorSamples=*/2,
+                                                               /*maxIntegerSamples=*/4, /*maxDepthSamples=*/4,
+                                                               kAdvertisedMaxSamples, true));
     ASSERT_FALSE(output.empty());
     const String dis = Disassemble(output);
     ASSERT_TRUE(Validates(output)) << dis;
@@ -380,4 +379,68 @@ TEST_F(ClampMultisampleFetchTest, ClampsAColorSampleWithAMinimum) {
     const std::map<Uint32, Uint32> constants = CollectScalarConstants(output);
     ASSERT_EQ(constants.count(minimum->operandIds[1]), 1u) << dis;
     EXPECT_EQ(constants.at(minimum->operandIds[1]), 1u) << dis;
+}
+
+namespace {
+    // KHR-GL4x.texture_stencil8.multisample in miniature: a four-sample STENCIL_INDEX8 texture
+    // read through a usampler2DMS with literal sample indices. Beside it, the same sampler
+    // reached through a function parameter and a signed integer sampler - neither of which the
+    // runtime bound can name, so both must keep the static integer clamp.
+    const char* const kStencilMultisampleFetch = R"(#version 410 core
+uniform usampler2DMS stencilTex;
+uniform isampler2DMS signedMs;
+out vec4 fragColor;
+uint fetchThrough(usampler2DMS s, int i) { return texelFetch(s, ivec2(0), i).r; }
+void main() {
+    uint direct = texelFetch(stencilTex, ivec2(0), 3).r;
+    uint viaParameter = fetchThrough(stencilTex, 3);
+    int signedValue = texelFetch(signedMs, ivec2(0), 3).r;
+    fragColor = vec4(float(direct), float(viaParameter), float(signedValue), 1.0);
+}
+)";
+
+    // How many Sample operands of the module's multisample fetches are the constant `value`.
+    SizeT CountSampleOperandsEqualTo(const Vector<Uint32>& spirv, Uint32 value) {
+        const std::map<Uint32, Uint32> constants = CollectScalarConstants(spirv);
+        SizeT count = 0;
+        for (const ImageFetch& fetch : CollectImageFetches(spirv)) {
+            if ((fetch.mask & static_cast<Uint32>(spv::ImageOperandsMask::Sample)) == 0u) continue;
+            const auto constant = constants.find(fetch.maskOperandIds.back());
+            if (constant != constants.end() && constant->second == value) ++count;
+        }
+        return count;
+    }
+} // namespace
+
+// Integer color squeezed to one sample but depth/stencil at four (Adreno): a usampler2DMS fetch
+// straight from its uniform is handed to the runtime bound and keeps sample 3 - a stencil texture
+// really has it - while the fetch through a parameter and the signed one still read sample 0.
+TEST_F(ClampMultisampleFetchTest, DefersADirectUnsignedFetchToTheRuntimeBound) {
+    const Vector<Uint32> input = CompileFragment(kStencilMultisampleFetch);
+    ASSERT_FALSE(input.empty());
+
+    Vector<Uint32> output;
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
+        input, output, /*maxColorSamples=*/4, /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4, kAdvertisedMaxSamples,
+        true, /*deferDirectUnsignedFetches=*/true));
+    ASSERT_FALSE(output.empty());
+    const String dis = Disassemble(output);
+    ASSERT_TRUE(Validates(output)) << dis;
+    EXPECT_EQ(CountSampleOperandsEqualTo(output, 3u), 1u) << dis;
+    EXPECT_EQ(CountSampleOperandsEqualTo(output, 0u), 2u) << dis;
+}
+
+// Without the runtime bound nothing is deferred: the pre-existing static clamp, all three to 0.
+TEST_F(ClampMultisampleFetchTest, WithoutTheRuntimeBoundEveryIntegerFetchKeepsTheStaticClamp) {
+    const Vector<Uint32> input = CompileFragment(kStencilMultisampleFetch);
+    ASSERT_FALSE(input.empty());
+
+    Vector<Uint32> output;
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(input, output, /*maxColorSamples=*/4,
+                                                               /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
+                                                               kAdvertisedMaxSamples, true));
+    ASSERT_FALSE(output.empty());
+    const String dis = Disassemble(output);
+    EXPECT_EQ(CountSampleOperandsEqualTo(output, 3u), 0u) << dis;
+    EXPECT_EQ(CountSampleOperandsEqualTo(output, 0u), 3u) << dis;
 }

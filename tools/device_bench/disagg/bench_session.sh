@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# MobileGL - tools/device_bench/disagg/bench_session.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
+# bench_session.sh start|stop|status - P15 measurement-validity rule, device side (Lenovo Y700, SM8650).
+#
+# start:
+#   1. records each frequency-moving service's prior state and the msm_performance requests
+#      (/data/local/tmp/p15-bench-session, also echoed to the caller's log);
+#   2. stops those services: thermal-engine, the QTI perf HAL, the vendor perf service, Lenovo's
+#      performance and hyperschedule services. Their requests OUTLIVE them: the perf stack's
+#      game-mode levels land in /sys/kernel/msm_performance/parameters/cpu_{max,min}_freq, a
+#      frequency QoS that clamps scaling_max_freq below any pin (measured 2026-10-08: 787 / 1286 /
+#      1075 / 1248 MHz on policies 0/2/5/7 while pin_clocks.sh believed it had pinned 2035 MHz);
+#   3. releases those requests and re-pins (pin_clocks.sh);
+#   4. force-stops the anland desktop app, recording whether it ran. Its activity takes the
+#      foreground back whenever it is paused, so FCL launched over it never reaches the world
+#      (2026-10-08: a job's own end-of-run relaunch left it up and the next job got 0 of 4 worlds).
+# stop: unpins the clocks (pin_clocks.sh restore: scaling min/max and the GPU devfreq window go back to
+#   their saved pre-pin values; before 2026-10-09 stop left them pinned), then starts every service
+#   that was running before start, and verifies each is running again;
+#   relaunches the anland app if it ran before start (keeps anland usable).
+#   ALWAYS run it - callers trap it on EXIT/INT/TERM, so an interrupted session restores too.
+# Kernel-level protection (LMh, BCL, kernel thermal trip points) is never touched; the run's sampler
+# (freq_sampler.sh -> freqcheck.py) shows any frequency collapse, and a collapse ends benchmarking.
+set -u
+export MSYS_NO_PATHCONV=1
+SER="${SER:-HA27Q3LQ}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+SERVICES="${BENCH_STOP_SERVICES:-thermal-engine perf2-hal-1-0 vendor.perfservice performance hyperschedule_hal_service}"
+MARK=/data/local/tmp/p15-bench-session
+MP=/sys/kernel/msm_performance/parameters
+ANLAND=com.anland.consumer.mobilegl
+su_sh() { adb -s "$SER" shell "su -c '$1'"; }
+case "${1:-status}" in
+  start)
+    su_sh "if [ ! -f $MARK ]; then for s in $SERVICES; do echo svc \$s \$(getprop init.svc.\$s); done > $MARK; echo maxreq \$(cat $MP/cpu_max_freq) >> $MARK; echo minreq \$(cat $MP/cpu_min_freq) >> $MARK; echo anland \$(pidof $ANLAND >/dev/null && echo running || echo stopped) >> $MARK; fi; cat $MARK"
+    su_sh "am force-stop $ANLAND"
+    su_sh "for s in $SERVICES; do setprop ctl.stop \$s; done"
+    sleep 2
+    su_sh "echo \"0:4294967295 1:4294967295 2:4294967295 3:4294967295 4:4294967295 5:4294967295 6:4294967295 7:4294967295\" > $MP/cpu_max_freq; echo \"0:0 1:0 2:0 3:0 4:0 5:0 6:0 7:0\" > $MP/cpu_min_freq"
+    SER=$SER bash "$HERE/pin_clocks.sh" pin
+    "$0" status ;;
+  stop)
+    # Clocks first: a failed service check below must not leave the device pinned.
+    SER=$SER bash "$HERE/pin_clocks.sh" restore >/dev/null 2>&1 || echo "bench_session: clock restore failed" >&2
+    # Trace-replay packages a job started must not idle on the device after it (they hold GPU
+    # memory and a surface): every MobileGL plugin package is force-stopped at session end.
+    su_sh "for p in \$(pm list packages top.mobilegl.plugin | sed s/package://); do am force-stop \$p; done"
+    su_sh "if [ -f $MARK ]; then grep \"^svc \" $MARK | while read k s st; do [ \"\$st\" = running ] && setprop ctl.start \$s; done; else for s in $SERVICES; do setprop ctl.start \$s; done; fi"
+    # A HAL can take several seconds to come back (2026-10-08: perf2-hal-1-0 was still down at
+    # 3 s and the session read NOT RESTORED); re-start and re-check for up to ~30 s.
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      sleep 3
+      bad=$(su_sh "if [ -f $MARK ]; then grep \"^svc \" $MARK | while read k s st; do [ \"\$st\" = running ] && [ \"\$(getprop init.svc.\$s)\" != running ] && echo \$s; done; fi" | tr -d '\r')
+      [ -z "$bad" ] && break
+      for s in $bad; do su_sh "setprop ctl.start $s"; done
+    done
+    if [ -n "$bad" ]; then echo "bench_session: NOT RESTORED: $bad" >&2; exit 1; fi
+    su_sh "if grep -q \"^anland running\" $MARK 2>/dev/null; then monkey -p $ANLAND -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; fi"
+    su_sh "rm -f $MARK"
+    "$0" status ;;
+  status)
+    su_sh "for s in $SERVICES; do echo \$s=\$(getprop init.svc.\$s); done | tr '\n' ' '; echo; echo maxreq \$(cat $MP/cpu_max_freq)" ;;
+esac

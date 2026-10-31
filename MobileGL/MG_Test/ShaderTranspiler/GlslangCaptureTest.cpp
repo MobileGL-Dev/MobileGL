@@ -204,8 +204,7 @@ void main() {
     EXPECT_EQ(probed->at("probeSampler").binding, 3u);
 
     ASSERT_TRUE(probed->contains("probeImage"));
-    EXPECT_TRUE(probed->at("probeImage").hasBinding)
-        << "images take the same path as samplers (both are EbtSampler)";
+    EXPECT_TRUE(probed->at("probeImage").hasBinding) << "images take the same path as samplers (both are EbtSampler)";
     EXPECT_EQ(probed->at("probeImage").binding, 5u);
 
     // The default-block uniform is gone from the entity list entirely - it was swept into
@@ -353,7 +352,7 @@ void main() { gl_Position = vec4(two_d[1][2] + three_d[1][1][3] + one_d[2]); }
     EXPECT_EQ(locations.count("one_d[0]"), 0u);
 }
 
-// A DELIBERATE BEHAVIOUR CHANGE, recorded here because it is the one place the migration does
+// A DELIBERATE BEHAVIOR CHANGE, recorded here because it is the one place the migration does
 // not reproduce the old answer.
 //
 // The lexical extractor advanced the location across the declarators of one statement, so
@@ -472,7 +471,7 @@ void main() { realBlock.u = atomicCounterIncrement(counterA) + atomicCounterIncr
     ASSERT_TRUE(capture.linked) << capture.log;
 
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("RealBlock"), 1u)
-        << "the application's own unqualified block is still recognised";
+        << "the application's own unqualified block is still recognized";
     for (const String& name : capture.storageBlocksWithoutBinding) {
         EXPECT_FALSE(name.starts_with(MG_Util::ShaderTranspiler::ATOMIC_COUNTER_BLOCK_PREFIX))
             << "a synthesized atomic-counter block reached the storage-block capture: " << name;
@@ -558,7 +557,7 @@ void main() {
     ASSERT_TRUE(capture.linked) << capture.log;
 
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("OutputBuffer"), 1u)
-        << "the block the test binds at 0 with glBindBufferBase must be recognised";
+        << "the block the test binds at 0 with glBindBufferBase must be recognized";
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("BoundBlock"), 0u)
         << "a declared binding must never be defaulted away";
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("BoundFirst"), 0u)
@@ -566,8 +565,7 @@ void main() {
     // A UNIFORM block is a different binding space with its own glUniformBlockBinding path, so it
     // must not reach the storage-block seeder - it has a capture set of its own (see
     // UnqualifiedUniformBlocksAreCapturedSeparatelyFromStorageBlocks below).
-    EXPECT_EQ(capture.storageBlocksWithoutBinding.count("InputBuffer"), 0u)
-        << "uniform blocks belong to the other set";
+    EXPECT_EQ(capture.storageBlocksWithoutBinding.count("InputBuffer"), 0u) << "uniform blocks belong to the other set";
 }
 
 // The uniform-block half of the same capture, and the reason it exists: glslang packs uniform
@@ -598,8 +596,7 @@ void main() {
         << "a declared binding must never be defaulted away";
     EXPECT_EQ(capture.uniformBlocksWithoutBinding.count("OutputBuffer"), 0u)
         << "storage blocks belong to the other set";
-    EXPECT_EQ(capture.storageBlocksWithoutBinding.count("GOKU"), 0u)
-        << "the two sets must not cross-contaminate";
+    EXPECT_EQ(capture.storageBlocksWithoutBinding.count("GOKU"), 0u) << "the two sets must not cross-contaminate";
 
     // The negative control every capture case here carries: with the OUT pointer left null the
     // resolver must write nothing at all.
@@ -630,8 +627,7 @@ void main() { noBinding.c = afterLayout.a + beforeLayout.b + uint(texelFetch(tex
         << "a qualifier may precede the layout list too";
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("NoBindingAtAll"), 1u)
         << "a memory-qualified block with no binding is still an unqualified block";
-    EXPECT_EQ(capture.storageBlocksWithoutBinding.count("texelSampler"), 0u)
-        << "a samplerBuffer is not a buffer block";
+    EXPECT_EQ(capture.storageBlocksWithoutBinding.count("texelSampler"), 0u) << "a samplerBuffer is not a buffer block";
 }
 
 // THE REGRESSION THIS MIGRATION EXISTS FOR (7de7cfc6, the original capture now replayed as
@@ -687,7 +683,7 @@ void main() {
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("PlainLayout"), 1u)
         << "std430/row_major are layout identifiers, not bindings";
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("ReallyUnqualified"), 1u)
-        << "a block that truly declares no binding is still recognised in the same shader";
+        << "a block that truly declares no binding is still recognized in the same shader";
 }
 
 // THE NEGATIVE CONTROL for the storage-block capture.
@@ -718,12 +714,11 @@ void main() { gl_Position = vec4(float(sharedInstance.u + vertexOnly.v)); }
     const String fragment = R"(#version 430 core
 layout(std430) buffer SharedBlock { uint u; } sharedInstance;
 layout(std430, binding = 4) buffer FragmentBound { uint f; } fragmentBound;
-out vec4 colour;
-void main() { colour = vec4(float(sharedInstance.u + fragmentBound.f)); }
+out vec4 color;
+void main() { color = vec4(float(sharedInstance.u + fragmentBound.f)); }
 )";
 
-    const LinkCapture capture =
-        CaptureFromLink({{GL_VERTEX_SHADER, vertex}, {GL_FRAGMENT_SHADER, fragment}});
+    const LinkCapture capture = CaptureFromLink({{GL_VERTEX_SHADER, vertex}, {GL_FRAGMENT_SHADER, fragment}});
     ASSERT_TRUE(capture.linked) << capture.log;
 
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("SharedBlock"), 1u);
@@ -770,8 +765,7 @@ TEST_F(GlslangCaptureProbeTest, AtomicCounterOffsetRulesAreRaisedByTheParse) {
     // offset spelled as a macro, are now both judged. The scanner declined both - it read
     // unexpanded text and only understood integer literals.
     EXPECT_FALSE(compiles("const int kCount = 4;\nlayout(binding = 0, offset = " +
-                          std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE - 8) +
-                          ") uniform atomic_uint c[kCount];\n"));
+                          std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE - 8) + ") uniform atomic_uint c[kCount];\n"));
     EXPECT_FALSE(compiles("#define BAD_OFFSET 2\nlayout(binding = 0, offset = BAD_OFFSET) uniform atomic_uint c;\n"));
 
     // The counterweight: `offset` as an ordinary identifier is not a layout qualifier, and an

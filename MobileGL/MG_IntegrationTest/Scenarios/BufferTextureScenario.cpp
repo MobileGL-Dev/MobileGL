@@ -94,8 +94,7 @@ void main() {
                 GLint maxComputeImageUniforms = 0;
                 glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
                 glGetIntegerv(GL_MAX_COMPUTE_IMAGE_UNIFORMS, &maxComputeImageUniforms);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxImageUnits >= 1 && maxComputeImageUniforms >= 1;
             }
 
@@ -181,8 +180,7 @@ void main() {
         GLuint buffer = 0;
         glGenBuffers(1, &buffer);
         glBindBuffer(GL_TEXTURE_BUFFER, buffer);
-        glBufferData(GL_TEXTURE_BUFFER, static_cast<GLsizeiptr>(texels.size()), texels.data(),
-                     GL_DYNAMIC_DRAW);
+        glBufferData(GL_TEXTURE_BUFFER, static_cast<GLsizeiptr>(texels.size()), texels.data(), GL_DYNAMIC_DRAW);
 
         GLuint texture = 0;
         glGenTextures(1, &texture);

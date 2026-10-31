@@ -37,8 +37,7 @@ namespace {
     // one mode cannot leak into the next.
     class AsyncModeScope {
     public:
-        explicit AsyncModeScope(const Bool async)
-            : m_saved(MG_Config::Features.AsyncShaderCompile) {
+        explicit AsyncModeScope(const Bool async) : m_saved(MG_Config::Features.AsyncShaderCompile) {
             MG_Config::Features.AsyncShaderCompile =
                 async ? MG_Config::QuirkOverride::ForceOn : MG_Config::QuirkOverride::ForceOff;
         }
@@ -306,8 +305,9 @@ TEST_F(AsyncCompileTest, LinkDiagnosticsQuoteTheAsyncCompileLog) {
     const String programLog(buffer.data(), static_cast<size_t>(written));
     const String shaderLog = QueryShaderInfoLog(fs);
     ASSERT_FALSE(shaderLog.empty());
-    EXPECT_NE(programLog.find(shaderLog), String::npos)
-        << "program log:\n" << programLog << "\nshader log:\n" << shaderLog;
+    EXPECT_NE(programLog.find(shaderLog), String::npos) << "program log:\n"
+                                                        << programLog << "\nshader log:\n"
+                                                        << shaderLog;
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 
@@ -507,8 +507,7 @@ TEST_F(AsyncCompileTest, StressCompileQueryResourceDeleteInterleaved) {
         for (int i = 0; i < kPerRound; ++i) {
             const GLuint shader = shaders[static_cast<SizeT>(i)];
             EXPECT_EQ(QueryCompileStatus(shader), GL_TRUE) << QueryShaderInfoLog(shader);
-            const String expectedUniform =
-                "uSeed" + std::to_string(round * 1000 + (i % 2 == 0 ? 500 + i : i));
+            const String expectedUniform = "uSeed" + std::to_string(round * 1000 + (i % 2 == 0 ? 500 + i : i));
             const GLuint vs = MakeShader(GL_VERTEX_SHADER, kVs);
             CompileShader(vs);
             const GLuint program = CreateProgram();

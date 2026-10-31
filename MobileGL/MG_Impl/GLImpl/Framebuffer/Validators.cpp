@@ -66,16 +66,16 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
         const auto index = static_cast<SizeT>(attachment);
         if (index < first) return true;
         const auto colorIndex = index - first;
-        const auto limit = static_cast<SizeT>(
-            MG_Backend::pActiveBackendObject ? MG_Backend::pActiveBackendObject->GetDynamicParameters()
-                                                   .MaxColorAttachments
-                                             : static_cast<Int>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS));
+        const auto limit =
+            static_cast<SizeT>(MG_Backend::pActiveBackendObject
+                                   ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxColorAttachments
+                                   : static_cast<Int>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS));
         if (colorIndex >= limit) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl/FramebufferImpl", caller,
-                    std::format("Colour attachment {} is beyond GL_MAX_COLOR_ATTACHMENTS ({}).", colorIndex, limit)));
+                    std::format("Color attachment {} is beyond GL_MAX_COLOR_ATTACHMENTS ({}).", colorIndex, limit)));
             return false;
         }
         return true;
@@ -140,10 +140,9 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
             if (forSetter) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidEnum,
-                    MakeUnique<GenericErrorInfo>(
-                        "MG_Impl/GLImpl/FramebufferImpl", caller,
-                        std::format("pname {} is not settable on a framebuffer.",
-                                    MG_Util::ConvertGLEnumToString(pname))));
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/FramebufferImpl", caller,
+                                                 std::format("pname {} is not settable on a framebuffer.",
+                                                             MG_Util::ConvertGLEnumToString(pname))));
                 return false;
             }
             break;
@@ -152,8 +151,7 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl/FramebufferImpl", caller,
-                    std::format("pname {} is not a framebuffer parameter.",
-                                MG_Util::ConvertGLEnumToString(pname))));
+                    std::format("pname {} is not a framebuffer parameter.", MG_Util::ConvertGLEnumToString(pname))));
             return false;
         }
 
@@ -162,10 +160,9 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
         if (isDefaultFramebuffer && isDefaultParameter) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl/FramebufferImpl", caller,
-                    std::format("pname {} does not apply to the default framebuffer.",
-                                MG_Util::ConvertGLEnumToString(pname))));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/FramebufferImpl", caller,
+                                             std::format("pname {} does not apply to the default framebuffer.",
+                                                         MG_Util::ConvertGLEnumToString(pname))));
             return false;
         }
         return true;
@@ -183,8 +180,7 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
         }
 
         const FramebufferAttachmentType readBuffer = framebufferObject->GetReadBuffer();
-        if (readBuffer == FramebufferAttachmentType::None ||
-            !framebufferObject->GetAttachment(readBuffer).IsValid()) {
+        if (readBuffer == FramebufferAttachmentType::None || !framebufferObject->GetAttachment(readBuffer).IsValid()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/FramebufferImpl", caller,
@@ -201,8 +197,8 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
             isMultisampled = readAttachment.GetRenderbuffer()->GetSamples() > 0;
         } else if (readAttachment.IsTexture() && readAttachment.GetTexture()) {
             const auto target = readAttachment.GetTexture()->GetTarget();
-            isMultisampled = target == TextureTarget::Texture2DMultisample ||
-                             target == TextureTarget::Texture2DMultisampleArray;
+            isMultisampled =
+                target == TextureTarget::Texture2DMultisample || target == TextureTarget::Texture2DMultisampleArray;
         }
         if (isMultisampled) {
             MG_State::pGLContext->RecordError(

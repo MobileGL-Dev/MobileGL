@@ -63,8 +63,15 @@ namespace MobileGL {
             typedef EGLBoolean (*eglSurfaceAttrib_PTR)(EGLDisplay dpy, EGLSurface surface, EGLint attribute,
                                                        EGLint value);
             typedef EGLBoolean (*eglSwapBuffers_PTR)(EGLDisplay dpy, EGLSurface surface);
-            typedef EGLBoolean (*eglSwapBuffersWithDamageEXT_PTR)(EGLDisplay dpy, EGLSurface surface, EGLint* rects,
-                                                                  EGLint n_rects);
+            // The damage-based present entry point, in both spellings a driver may expose it
+            // under. EGL_EXT_swap_buffers_with_damage and EGL_KHR_swap_buffers_with_damage
+            // define the same function with the same signature, so the two pointers are
+            // interchangeable and one slot can hold either - see
+            // BackendLoader::ResolveSwapBuffersWithDamage.
+            typedef EGLBoolean (*eglSwapBuffersWithDamageEXT_PTR)(EGLDisplay dpy, EGLSurface surface,
+                                                                  const EGLint* rects, EGLint n_rects);
+            typedef EGLBoolean (*eglSwapBuffersWithDamageKHR_PTR)(EGLDisplay dpy, EGLSurface surface,
+                                                                  const EGLint* rects, EGLint n_rects);
             typedef EGLBoolean (*eglSwapInterval_PTR)(EGLDisplay dpy, EGLint interval);
             typedef EGLBoolean (*eglTerminate_PTR)(EGLDisplay dpy);
             typedef EGLBoolean (*eglUnlockSurfaceKHR_PTR)(EGLDisplay display, EGLSurface surface);
@@ -116,6 +123,8 @@ namespace MobileGL {
             EGL_FUNC_DECL(eglReleaseThread)
             EGL_FUNC_DECL(eglSurfaceAttrib)
             EGL_FUNC_DECL(eglSwapBuffers)
+            // Holds whichever spelling of the damage-based present the driver provided, EXT
+            // preferred; resolved after making the display current.
             EGL_FUNC_DECL(eglSwapBuffersWithDamageEXT)
             EGL_FUNC_DECL(eglSwapInterval)
             EGL_FUNC_DECL(eglTerminate)
@@ -605,11 +614,16 @@ namespace MobileGL {
             // suffixed spellings instead, and a strict eglGetProcAddress returns NULL for the core
             // one there - so resolving only the core name makes both extension tiers look absent.
             GL_FUNC_TYPEDEF(void, glTextureViewEXT, GLuint texture, GLenum target, GLuint origtexture,
-                            GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer,
-                            GLuint numlayers)
+                            GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer, GLuint numlayers)
             GL_FUNC_TYPEDEF(void, glTextureViewOES, GLuint texture, GLenum target, GLuint origtexture,
-                            GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer,
-                            GLuint numlayers)
+                            GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer, GLuint numlayers)
+            // GL_EXT_fragment_shading_rate (+ _attachment). Extension-only in every ES version.
+            GL_FUNC_TYPEDEF(void, glShadingRateEXT, GLenum rate)
+            GL_FUNC_TYPEDEF(void, glShadingRateCombinerOpsEXT, GLenum combinerOp0, GLenum combinerOp1)
+            GL_FUNC_TYPEDEF(void, glGetFragmentShadingRatesEXT, GLsizei samples, GLsizei maxCount, GLsizei* count,
+                            GLenum* shadingRates)
+            GL_FUNC_TYPEDEF(void, glFramebufferShadingRateEXT, GLenum target, GLenum attachment, GLuint texture,
+                            GLint baseLayer, GLsizei numLayers, GLsizei texelWidth, GLsizei texelHeight)
             GL_FUNC_TYPEDEF(void, glTexBufferEXT, GLenum target, GLenum internalformat, GLuint buffer)
             GL_FUNC_TYPEDEF(void, glTexBufferOES, GLenum target, GLenum internalformat, GLuint buffer)
             GL_FUNC_TYPEDEF(void, glTexBufferRangeEXT, GLenum target, GLenum internalformat, GLuint buffer,
@@ -634,8 +648,12 @@ namespace MobileGL {
             // Extension aliases for glPolygonMode (GLES core has none) and indexed glColorMaski.
             GL_FUNC_TYPEDEF(void, glPolygonModeNV, GLenum face, GLenum mode)
             GL_FUNC_TYPEDEF(void, glPolygonModeANGLE, GLenum face, GLenum mode)
+            // GL_EXT_clip_control (ES has no core glClipControl).
+            GL_FUNC_TYPEDEF(void, glClipControlEXT, GLenum origin, GLenum depth)
             GL_FUNC_TYPEDEF(void, glColorMaskiEXT, GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a)
             GL_FUNC_TYPEDEF(void, glColorMaskiOES, GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a)
+            // GL_EXT_polygon_offset_clamp. ES has no core spelling at any version.
+            GL_FUNC_TYPEDEF(void, glPolygonOffsetClampEXT, GLfloat factor, GLfloat units, GLfloat clamp)
 
             GL_FUNC_TYPEDEF(void, glMultiDrawArraysIndirectEXT, GLenum mode, const void* indirect, GLsizei drawcount,
                             GLsizei stride)
@@ -1031,6 +1049,10 @@ namespace MobileGL {
             GL_FUNC_DECL(glTexBufferRange)
             GL_FUNC_DECL(glTextureViewEXT)
             GL_FUNC_DECL(glTextureViewOES)
+            GL_FUNC_DECL(glShadingRateEXT)
+            GL_FUNC_DECL(glShadingRateCombinerOpsEXT)
+            GL_FUNC_DECL(glGetFragmentShadingRatesEXT)
+            GL_FUNC_DECL(glFramebufferShadingRateEXT)
             GL_FUNC_DECL(glTexBufferEXT)
             GL_FUNC_DECL(glTexBufferOES)
             GL_FUNC_DECL(glTexBufferRangeEXT)
@@ -1046,8 +1068,10 @@ namespace MobileGL {
             GL_FUNC_DECL(glMapBufferOES)
             GL_FUNC_DECL(glPolygonModeNV)
             GL_FUNC_DECL(glPolygonModeANGLE)
+            GL_FUNC_DECL(glClipControlEXT)
             GL_FUNC_DECL(glColorMaskiEXT)
             GL_FUNC_DECL(glColorMaskiOES)
+            GL_FUNC_DECL(glPolygonOffsetClampEXT)
 
             GL_FUNC_DECL(glMultiDrawArraysIndirectEXT)
             GL_FUNC_DECL(glMultiDrawElementsIndirectEXT)
@@ -1068,11 +1092,11 @@ namespace MobileGL {
             String GLESShadingLanguageVersionString;
             Bool SupportsPersistentMapping = false;
             Bool SupportsNorm16Texture = false;
-            // GL_EXT_render_snorm is present, so the signed-normalized formats are colour-renderable
+            // GL_EXT_render_snorm is present, so the signed-normalized formats are color-renderable
             // (and usable as multisample texture storage) rather than texture-only.
             Bool SupportsRenderSnorm = false;
             // GL_EXT_color_buffer_float is present, so GL_RGBA16F / GL_RGBA32F / GL_R11F_G11F_B10F
-            // (and the R/RG float formats) are colour-renderable. ES 3.x core makes them
+            // (and the R/RG float formats) are color-renderable. ES 3.x core makes them
             // texture-only, and every Iris shaderpack renders into at least R11F_G11F_B10F, so
             // without this no shaderpack can work at all.
             Bool SupportsColorBufferFloat = false;
@@ -1089,11 +1113,17 @@ namespace MobileGL {
             // anisotropy may be forwarded without raising GL_INVALID_ENUM in GLES.
             Bool SupportsTextureFilterAnisotropy = false;
             // GL_TEXTURE_BORDER_COLOR and GL_CLAMP_TO_BORDER: ES 3.2 core, or
-            // EXT/OES_texture_border_clamp before that. Without it every border-colour parameter
+            // EXT/OES_texture_border_clamp before that. Without it every border-color parameter
             // raises INVALID_ENUM on the driver, so the syncs have to be gated on it.
             Bool SupportsTextureBorderClamp = false;
             // GL_TEXTURE_CUBE_MAP_ARRAY: ES 3.2 core, or EXT/OES_texture_cube_map_array before it.
             Bool SupportsTextureCubeMapArray = false;
+            // Tessellation stages: ES 3.2 core, or GL_EXT_tessellation_shader on 3.1, with
+            // glPatchParameteri resolved either way.
+            Bool SupportsTessellationShader = false;
+            // GL_EXT_clip_control advertised and glClipControlEXT resolved: the driver applies a
+            // clip-space origin and depth mode, so the application's glClipControl is forwarded.
+            Bool SupportsClipControl = false;
             // GL_EXT_texture_view / GL_OES_texture_view: two ES texture names sharing one
             // storage, i.e. the only way DirectGLES can answer glTextureView at all. ES never
             // made this core - not even in 3.2 - so unlike every other capability here there is
@@ -1102,6 +1132,27 @@ namespace MobileGL {
             // through the other). Gate on this, never on the entry points: eglGetProcAddress
             // hands back live-looking stubs (see AcquireGLESFunctions).
             Bool SupportsTextureView = false;
+            // GL_EXT_fragment_shading_rate and its _primitive / _attachment companions, with what the
+            // driver answers for them. Extension-only in every ES version; each flag also requires
+            // the entry points that extension brings, and _primitive / _attachment require the base
+            // one. The values below are meaningful only when their flag is set.
+            Bool SupportsFragmentShadingRate = false;
+            Bool SupportsFragmentShadingRatePrimitive = false;
+            Bool SupportsFragmentShadingRateAttachment = false;
+            Bool FragmentShadingRateNonTrivialCombiners = false;
+            Bool FragmentShadingRateWithShaderDepthStencilWrites = false;
+            Bool FragmentShadingRateWithSampleMask = false;
+            Bool FragmentShadingRatePrimitiveWithMultiViewport = false;
+            Bool FragmentShadingRateAttachmentWithDefaultFramebuffer = false;
+            // glGetFragmentShadingRatesEXT for 1, 2, 4 .. 64 samples, as a mask of packed rates
+            // (see MG_Backend::DynamicBackendParameters::FragmentShadingRateMasks).
+            Uint16 FragmentShadingRateMasks[7] = {};
+            Int MinFragmentShadingRateAttachmentTexelWidth = 0;
+            Int MinFragmentShadingRateAttachmentTexelHeight = 0;
+            Int MaxFragmentShadingRateAttachmentTexelWidth = 0;
+            Int MaxFragmentShadingRateAttachmentTexelHeight = 0;
+            Int MaxFragmentShadingRateAttachmentTexelAspectRatio = 0;
+            Int MaxFragmentShadingRateAttachmentLayers = 0;
             // Which spelling of buffer-texture support the host driver has. Desktop GL makes buffer
             // textures core from 3.1 on, so the frontend advertises them unconditionally and an app
             // may call glTexBuffer at any time; ES only gained them in 3.2, and before that only
@@ -1112,8 +1163,8 @@ namespace MobileGL {
             // neither cannot compile such a shader at all. Gate on this, never on the entry point:
             // eglGetProcAddress hands back live-looking stubs (see AcquireGLESFunctions).
             enum class TextureBufferTier : Uint8 {
-                None = 0,  // no core support and neither extension; glTexBuffer is unusable
-                CoreEs32,  // ES >= 3.2, buffer textures are core and ESSL 320 needs no directive
+                None = 0,     // no core support and neither extension; glTexBuffer is unusable
+                CoreEs32,     // ES >= 3.2, buffer textures are core and ESSL 320 needs no directive
                 ExtensionEXT, // GL_EXT_texture_buffer; ESSL below 320 must say GL_EXT_texture_buffer
                 ExtensionOES, // GL_OES_texture_buffer; ESSL below 320 must say GL_OES_texture_buffer
             };
@@ -1166,6 +1217,14 @@ namespace MobileGL {
             // factors and layout(index = 1) fragment outputs. GLES core has no dual-source blending,
             // so without this a draw using a SRC1 factor cannot proceed.
             Bool SupportsDualSourceBlend = false;
+            // GL_EXT_polygon_offset_clamp is present and glPolygonOffsetClampEXT resolved. Without
+            // it the GL_POLYGON_OFFSET_CLAMP value cannot be applied and only glPolygonOffset's
+            // unclamped offset reaches the driver.
+            Bool SupportsPolygonOffsetClamp = false;
+            // GL_FRAMEBUFFER_DEFAULT_LAYERS is a legal glFramebufferParameteri pname: ES 3.2 core,
+            // or GL_EXT/OES_geometry_shader before it. The other four no-attachment defaults are
+            // ES 3.1 core and need no flag.
+            Bool SupportsFramebufferDefaultLayers = false;
             // GL_NV_shader_noperspective_interpolation is present: the driver accepts the
             // `noperspective` interpolation qualifier in ESSL. GLES core has none, so without this
             // SPIRV-Cross's `#extension ... : require` would fail to compile and MobileGL falls back
@@ -1255,9 +1314,25 @@ namespace MobileGL {
             // by block name and member sequence instead.
             //
             // Defaults TRUE and stays true when the probe cannot run, because that is the
-            // behaviour every driver had before the probe existed - a capability like this
+            // behavior every driver had before the probe existed - a capability like this
             // must never be assumed broken on a driver nobody measured.
             Bool SupportsLocatedInterStageIoBlocks = true;
+            // True when a geometry shader's storage writes made AFTER EmitVertex() are dropped
+            // (SelfTest::GeometryStageSsboWriteAfterEmitDropped - measured on Adreno). DirectGLES
+            // then defers every emit of a geometry stage that writes memory behind those writes
+            // (DeferGeometryEmitsPass). Defaults FALSE: never assumed broken on an unmeasured driver.
+            Bool DropsGeometryWritesAfterEmit = false;
+            // True when two loads of one shared-memory word separated by a store and barrier()
+            // return the same (first) value (SelfTest::SharedMemoryLoadsGoStale - measured on
+            // Adreno). The subgroup emulation then reads its scratch through atomic loads.
+            // Defaults FALSE: never assumed broken on an unmeasured driver.
+            Bool SharedMemoryLoadsGoStale = false;
+            // True when DirectGLES binds an invalid image unit to a zeroed placeholder instead of
+            // leaving it empty: on a driver whose load through an EMPTY unit returns a nonzero
+            // texel (SelfTest::EmptyImageUnitsReadNonzero - measured on Adreno: alpha 1), and on
+            // ANGLE, which faults on a dispatch or draw that reaches an empty unit and so cannot
+            // be probed. Defaults FALSE: never assumed broken on an unmeasured driver.
+            Bool UseInvalidImagePlaceholder = false;
             Int UniformBufferOffsetAlignment = 256;
             // Its storage-buffer counterpart, queried separately because it is a separate limit:
             // Adreno 830 answers 32 for GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT and 64 for
@@ -1309,6 +1384,23 @@ namespace MobileGL {
             Int MaxFragmentShaderStorageBlocks = 4;
             Int MaxComputeUniformBlocks = 12;
             Int MaxComputeWorkGroupInvocations = 128;
+            // GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE per axis, as the driver answers
+            // glGetIntegeri_v. Raw: the frontend floors them at the GL minimums itself. The
+            // initializers are those minimums, for a context that rejects the query.
+            Int MaxComputeWorkGroupCount[3] = {65535, 65535, 65535};
+            Int MaxComputeWorkGroupSize[3] = {1024, 1024, 64};
+            // GL_MAX_COMPUTE_SHARED_MEMORY_SIZE; the initializer is the ES 3.1 minimum. The budget
+            // the subgroup emulation's workgroup scratch has to fit in.
+            Int MaxComputeSharedMemorySize = 16384;
+            // GL_KHR_shader_subgroup on the ES driver, with what it answers for it. Extension-only
+            // in every ES version; the values are meaningful only when the flag is set, and the
+            // flag is only set when the driver also answers a usable size (> 0) with the compute
+            // stage and the basic feature - the same rule the Vulkan loader applies.
+            Bool SupportsShaderSubgroup = false;
+            Uint32 SubgroupSize = 0;
+            Uint32 SubgroupSupportedStages = 0;   // GL_*_SHADER_BIT, as the ES query answers
+            Uint32 SubgroupSupportedFeatures = 0; // GL_SUBGROUP_FEATURE_*_BIT_KHR
+            Bool SubgroupQuadOperationsInAllStages = false;
             Int MaxShaderStorageBufferBindings = 8;
             Int MaxTextureBufferSize = 65536;
             // GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT; 1 means the offset is unconstrained.
@@ -1318,6 +1410,8 @@ namespace MobileGL {
             Int MaxImageUnits = 8;
             Int MaxCombinedImageUniforms = 8;
             Int MaxVertexImageUniforms = 0;
+            Int MaxTessControlImageUniforms = 0;
+            Int MaxTessEvaluationImageUniforms = 0;
             Int MaxGeometryImageUniforms = 0;
             Int MaxFragmentImageUniforms = 8;
             Int MaxComputeImageUniforms = 8;
@@ -1350,9 +1444,19 @@ namespace MobileGL {
     } // namespace MG_External
 
     namespace MG_Util::BackendLoader {
+        // Match a complete name in a space-separated GLES/EGL extension string.
+        Bool HasExtensionWord(const char* list, const char* word);
         void AcquireGLESFunctions(MG_External::GLESFunctionsTable& funcs,
                                   MG_External::EGL::eglGetProcAddress_PTR procAddress);
         void AcquireEGLFunctions(MG_External::EGLFunctionsTable& funcs);
+        // Query the current display's extensions before resolving EXT -> KHR -> nothing.
+        // Requires a current, initialized EGL display. A null
+        // result is not a failure: it means this driver offers neither spelling, and the
+        // caller presents with plain eglSwapBuffers, which a zero-rectangle call to either
+        // spelling is defined to be equivalent to anyway. Exposed so MG_Test can pin the
+        // preference order without a driver.
+        MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR ResolveSwapBuffersWithDamage(
+            const MG_External::EGLFunctionsTable& funcs);
         Bool FillInGLESCapabilities(MG_External::GLESCapabilities& caps,
                                     const MG_External::GLESFunctionsTable& glesFuncs);
         // Detects whether indirect draws leak the command's baseInstance word into

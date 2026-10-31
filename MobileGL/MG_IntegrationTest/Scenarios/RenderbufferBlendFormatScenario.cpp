@@ -19,11 +19,11 @@
 //
 // VkFormatProperties for VK_FORMAT_UNDEFINED are all zero, so the probe concluded "not blendable"
 // and every pipeline for that attachment was built with blendEnable = VK_FALSE - permanently, and
-// silently apart from one log line. The source colour then overwrites the destination instead of
+// silently apart from one log line. The source color then overwrites the destination instead of
 // blending with it, which is a wrong PICTURE, not a wrong error code.
 //
 // GL_RGB8 is the ordinary shape and is what this scenario leads with: it is a required
-// colour-renderable format, its image has been R8G8B8A8_UNORM all along, and the probe asked about
+// color-renderable format, its image has been R8G8B8A8_UNORM all along, and the probe asked about
 // the 24-bit R8G8B8_UNORM that most drivers do not support at all. GL_RGBA4 covers the other half -
 // a format whose probe answered a real-but-different VkFormat.
 //
@@ -106,7 +106,7 @@ void main()
 
             // Returns false (having skipped, not failed) when the driver will not give us a complete
             // framebuffer for this format - GL only requires a subset of formats to be
-            // colour-renderable, and the point of the scenario is blending, not format support.
+            // color-renderable, and the point of the scenario is blending, not format support.
             bool MakeTarget(GLenum internalFormat) {
                 Destroy();
                 glGenRenderbuffers(1, &m_renderbuffer);
@@ -116,8 +116,7 @@ void main()
                 glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
                 glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, m_renderbuffer);
                 const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
                 return status == GL_FRAMEBUFFER_COMPLETE;
             }
 
@@ -137,25 +136,26 @@ void main()
         };
 
         // One draw of opaque black, then a 50%-alpha white draw over it with the ordinary
-        // SRC_ALPHA / ONE_MINUS_SRC_ALPHA function. Blending gives mid-grey; a pipeline built with
+        // SRC_ALPHA / ONE_MINUS_SRC_ALPHA function. Blending gives mid-gray; a pipeline built with
         // blendEnable = VK_FALSE gives white, because the source simply overwrites.
         //
-        // The tolerance is wide on purpose: RGBA4 has four bits per channel, so "mid-grey" is one of
+        // The tolerance is wide on purpose: RGBA4 has four bits per channel, so "mid-gray" is one of
         // a handful of representable values and the test must not become a quantisation test.
         void ExpectBlendedRatherThanOverwritten(const char* what) {
             const Image image = ReadPixels(kExtent, kExtent);
             ASSERT_FALSE(image.Empty()) << what;
-            const Rgba8 centre = image.At(kExtent / 2, kExtent / 2);
-            EXPECT_GT(int(centre.r), 40) << what << ": got " << centre << ", which is darker than a blend of "
-                                                              "black and 50% white";
-            EXPECT_LT(int(centre.r), 215) << what << ": got " << centre
-                                          << ", which is the source colour - blending was disabled";
+            const Rgba8 center = image.At(kExtent / 2, kExtent / 2);
+            EXPECT_GT(int(center.r), 40) << what << ": got " << center
+                                         << ", which is darker than a blend of "
+                                            "black and 50% white";
+            EXPECT_LT(int(center.r), 215)
+                << what << ": got " << center << ", which is the source color - blending was disabled";
         }
 
     } // namespace
 
     // The ordinary case, and the one broken today rather than only after the format table was
-    // unified: a three-channel colour renderbuffer. Its image has been R8G8B8A8_UNORM all along while
+    // unified: a three-channel color renderbuffer. Its image has been R8G8B8A8_UNORM all along while
     // the blend probe asked about R8G8B8_UNORM, which most drivers do not support at all.
     TEST_F(RenderbufferBlendFormatScenario, BlendingWorksOnAThreeChannelRenderbuffer) {
         if (!Ready()) GTEST_SKIP();

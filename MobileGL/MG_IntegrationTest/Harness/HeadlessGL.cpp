@@ -79,8 +79,8 @@ namespace MGITest {
                 }
                 registered = true;
             }
-            return CreateWindowExW(0, kClassName, L"MobileGL Integration Test", WS_OVERLAPPEDWINDOW,
-                                   CW_USEDEFAULT, CW_USEDEFAULT, kSurfaceWidth, kSurfaceHeight, nullptr, nullptr,
+            return CreateWindowExW(0, kClassName, L"MobileGL Integration Test", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+                                   CW_USEDEFAULT, kSurfaceWidth, kSurfaceHeight, nullptr, nullptr,
                                    GetModuleHandleW(nullptr), nullptr);
         }
 #elif defined(__ANDROID__)
@@ -99,8 +99,8 @@ namespace MGITest {
             constexpr int kMaxImages = 4;
             const media_status_t status = AImageReader_newWithUsage(
                 kSurfaceWidth, kSurfaceHeight, AIMAGE_FORMAT_RGBA_8888,
-                AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT,
-                kMaxImages, &g_imageReader);
+                AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT, kMaxImages,
+                &g_imageReader);
             if (status != AMEDIA_OK || g_imageReader == nullptr) return false;
 
             AImageReader_ImageListener listener = {nullptr, DrainImageReader};
@@ -158,6 +158,7 @@ namespace MGITest {
             void* display = nullptr;
             void* surface = nullptr;
             void* context = nullptr;
+            void* config = nullptr;
             std::string renderer;
         };
 
@@ -166,10 +167,10 @@ namespace MGITest {
         // not a CI accommodation - it is what keeps a developer's run and a CI run
         // the same run. The lane was wired up green on a workstation and immediately
         // died on the runner precisely because the workstation had a DISPLAY (WSLg)
-        // and took Mesa's x11 platform, while the runner has none; that divergence
+        // and took the x11 EGL platform, while the runner has none; that divergence
         // is the bug, and pinning the platform here is the fix for it.
         //
-        // Mesa selects its EGL platform from EGL_PLATFORM at loader time, so this
+        // The desktop EGL library selects its platform from EGL_PLATFORM at loader time, so this
         // has to run before the first EGL call in the process (see EnsureHeadless
         // callers). surfaceless is the platform with no window-system dependency at
         // all; the surface this file then creates is still a pbuffer, which every
@@ -240,9 +241,9 @@ namespace MGITest {
             EGLConfig config = nullptr;
             EGLint configCount = 0;
             if (eglChooseConfig(display, configAttribs, &config, 1, &configCount) != EGL_TRUE || configCount < 1) {
-                outReason = WithEglError(useWindowSurface
-                                             ? "eglChooseConfig found no window-capable RGBA8/D24 config"
-                                             : "eglChooseConfig found no pbuffer-capable RGBA8/D24 config");
+                outReason =
+                    WithEglError(useWindowSurface ? "eglChooseConfig found no window-capable RGBA8/D24 config"
+                                                  : "eglChooseConfig found no pbuffer-capable RGBA8/D24 config");
                 return 4;
             }
 
@@ -280,8 +281,8 @@ namespace MGITest {
 #if defined(__ANDROID__)
                 DestroyImageReaderWindow();
 #endif
-                outReason = WithEglError(useWindowSurface ? "eglCreateWindowSurface failed"
-                                                         : "eglCreatePbufferSurface failed");
+                outReason =
+                    WithEglError(useWindowSurface ? "eglCreateWindowSurface failed" : "eglCreatePbufferSurface failed");
                 return 6;
             }
             // The step that brings the whole backend up (DirectVulkan creates its
@@ -301,6 +302,7 @@ namespace MGITest {
             out.display = display;
             out.surface = surface;
             out.context = context;
+            out.config = config;
             out.renderer = reinterpret_cast<const char*>(renderer);
             outReason.clear();
             return 0;
@@ -327,7 +329,18 @@ namespace MGITest {
         // has thought of. Only then does the parent do the real bring-up.
         //
         // Returns an empty string when the platform survived a full bring-up.
+        bool RemoteConnectRequested() {
+            const char* control = std::getenv("MOBILEGL_IPC_CONTROL");
+            return control != nullptr && std::strncmp(control, "tcp://", 6) == 0;
+        }
+
         std::string PreflightBringUp() {
+            // Connect already isolates driver setup in the server's session
+            // child. A local pre-flight would consume a remote session, then
+            // race its teardown and make the actual test receive Refuse{Busy}.
+            if (RemoteConnectRequested()) {
+                return {};
+            }
 #if !MGITEST_HAVE_FORK_PREFLIGHT
             // No fork(): let the in-process bring-up speak for itself, which is
             // what this module did before. Windows/macOS are not CI targets for
@@ -418,7 +431,7 @@ namespace MGITest {
                 return out.str();
             }
             if (!WIFEXITED(status)) {
-                return "the EGL bring-up pre-flight child neither exited nor was signalled";
+                return "the EGL bring-up pre-flight child neither exited nor was signaled";
             }
             const int exitStatus = WEXITSTATUS(status);
             if (exitStatus != 0) {
@@ -486,7 +499,7 @@ namespace MGITest {
 
     std::string Image::QuadrantSignature() const {
         if (m_width < 2 || m_height < 2) return "<empty>";
-        // Quadrant CENTRES, so a one-pixel rounding difference at a quadrant edge
+        // Quadrant CENTERS, so a one-pixel rounding difference at a quadrant edge
         // never decides the answer. Order is fixed and load-bearing: bottom-left,
         // bottom-right, top-left, top-right.
         const int leftX = m_width / 4;
@@ -523,13 +536,12 @@ namespace MGITest {
     }
 
     ::testing::AssertionResult RegionIsMostly(const Image& image, int x0, int x1, int y0, int y1,
-                                              const char* expectedColor, double tolerance,
-                                              const std::string& when) {
+                                              const char* expectedColor, double tolerance, const std::string& when) {
         const RegionScan scan = ScanRegion(image, x0, x1, y0, y1, expectedColor);
         if (scan.total == 0) {
             return ::testing::AssertionFailure()
-                   << when << ": region x[" << x0 << "," << x1 << "] y[" << y0 << "," << y1
-                   << "] is empty against a " << image.Width() << "x" << image.Height() << " readback";
+                   << when << ": region x[" << x0 << "," << x1 << "] y[" << y0 << "," << y1 << "] is empty against a "
+                   << image.Width() << "x" << image.Height() << " readback";
         }
         const double offendingFraction = static_cast<double>(scan.offenders) / scan.total;
         if (offendingFraction <= tolerance) {
@@ -585,13 +597,16 @@ namespace MGITest {
             // That is a real result, not a machine without a GPU, so say so: it
             // means something is different between the two attempts (a leaked
             // exclusive device, an environment the child did not have).
-            m_skipReason = reason + " - although an identical bring-up in a forked pre-flight child succeeded";
+            m_skipReason = reason + (RemoteConnectRequested()
+                                         ? " - remote TCP bring-up failed"
+                                         : " - although an identical bring-up in a forked pre-flight child succeeded");
             return false;
         }
 
         m_display = brought.display;
         m_surface = brought.surface;
         m_context = brought.context;
+        m_config = brought.config;
         m_width = kSurfaceWidth;
         m_height = kSurfaceHeight;
         m_renderer = std::move(brought.renderer);
@@ -602,6 +617,27 @@ namespace MGITest {
         if (!m_usable) return;
         eglSwapBuffers(static_cast<EGLDisplay>(m_display), static_cast<EGLSurface>(m_surface));
         ++m_frameIndex;
+    }
+
+    void* HeadlessGL::CreateSharingContext() {
+        if (!m_usable) return nullptr;
+        const EGLint contextAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3, EGL_NONE};
+        EGLContext context = eglCreateContext(static_cast<EGLDisplay>(m_display), static_cast<EGLConfig>(m_config),
+                                              static_cast<EGLContext>(m_context), contextAttribs);
+        return context == EGL_NO_CONTEXT ? nullptr : context;
+    }
+
+    bool HeadlessGL::MakeContextCurrent(void* context) {
+        if (!m_usable) return false;
+        EGLSurface surface = static_cast<EGLSurface>(m_surface);
+        return eglMakeCurrent(static_cast<EGLDisplay>(m_display), surface, surface,
+                              static_cast<EGLContext>(context != nullptr ? context : m_context)) == EGL_TRUE;
+    }
+
+    void HeadlessGL::DestroySharingContext(void* context) {
+        if (!m_usable || context == nullptr) return;
+        MakeContextCurrent(nullptr);
+        eglDestroyContext(static_cast<EGLDisplay>(m_display), static_cast<EGLContext>(context));
     }
 
     void HeadlessGL::ShutDown() {
@@ -745,6 +781,14 @@ namespace MGITest {
         // Drain, bounded: a broken stack must not turn an error check into a hang.
         for (int i = 0; i < 64 && glGetError() != GL_NO_ERROR; ++i) {}
         return first;
+    }
+
+    void ResetStateBetweenScenarios() {
+        // A program deleted while current stays current, flagged (GL 4.6 core 7.3); the next
+        // case would read its name back from GL_CURRENT_PROGRAM and restore a dead one.
+        // Unbinding it here is what finally deletes it.
+        glUseProgram(0);
+        FirstGLError();
     }
 
     const char* GLErrorName(unsigned int error) {

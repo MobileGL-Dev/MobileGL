@@ -206,8 +206,7 @@ void main() {
                 glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, captureBytes, readback.data());
                 for (std::size_t i = 0; i < kCaptureFloats; ++i) {
                     EXPECT_FLOAT_EQ(readback[userVaryingOffset + i], static_cast<float>(i + 1))
-                        << what << ": captured float " << i << " came back as "
-                        << readback[userVaryingOffset + i]
+                        << what << ": captured float " << i << " came back as " << readback[userVaryingOffset + i]
                         << "; the pre-fill value means the draw never produced a vertex, which is what an "
                            "invalid shader module looks like from out here";
                 }
@@ -248,8 +247,8 @@ void main() {
             GTEST_SKIP() << "capturing an unwritten gl_Position by name is a separate, known "
                          << "DirectGLES gap; this case pins the DirectVulkan injection";
         }
-        ExpectUserVaryingIsCaptured(kUnwrittenPositionVertexSource, {"gl_Position", "vs_out_value"},
-                                    kCaptureFloats * 2, kCaptureFloats, "capturing an unwritten gl_Position");
+        ExpectUserVaryingIsCaptured(kUnwrittenPositionVertexSource, {"gl_Position", "vs_out_value"}, kCaptureFloats * 2,
+                                    kCaptureFloats, "capturing an unwritten gl_Position");
     }
 
     // Control: the same shader with the one assignment restored. Its block is never delisted,
@@ -262,8 +261,8 @@ void main() {
 
     TEST_F(UnwrittenPositionOutputScenario, CapturingAWrittenPositionStillDraws) {
         if (!Ready() || IsSkipped()) return;
-        ExpectUserVaryingIsCaptured(kWrittenPositionVertexSource, {"gl_Position", "vs_out_value"},
-                                    kCaptureFloats * 2, kCaptureFloats, "capturing a written gl_Position");
+        ExpectUserVaryingIsCaptured(kWrittenPositionVertexSource, {"gl_Position", "vs_out_value"}, kCaptureFloats * 2,
+                                    kCaptureFloats, "capturing a written gl_Position");
     }
 
     // Control: no gl_PerVertex redeclaration, so no Position annotation and nothing to delist.

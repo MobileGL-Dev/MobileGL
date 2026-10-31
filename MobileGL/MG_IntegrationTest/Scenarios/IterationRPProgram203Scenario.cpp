@@ -37,10 +37,8 @@ namespace MGITest {
         constexpr int kSceneHeight = 480;
         constexpr int kPixelDataWidth = 512;
         constexpr int kPixelDataHeight = 513;
-        constexpr std::size_t kSceneTexelCount =
-            static_cast<std::size_t>(kSceneWidth) * kSceneHeight;
-        constexpr std::size_t kPixelDataTexelCount =
-            static_cast<std::size_t>(kPixelDataWidth) * kPixelDataHeight;
+        constexpr std::size_t kSceneTexelCount = static_cast<std::size_t>(kSceneWidth) * kSceneHeight;
+        constexpr std::size_t kPixelDataTexelCount = static_cast<std::size_t>(kPixelDataWidth) * kPixelDataHeight;
 
         struct Rgba32f {
             float r, g, b, a;
@@ -200,8 +198,8 @@ void main() {
                     const float dy = static_cast<float>(y - 4);
                     base += 0.65f * std::exp(-(dx * dx + dy * dy) / 18.0f);
                     if (((x + y * 17) % 113) == 0) base += 1.75f;
-                    texels[static_cast<std::size_t>(y) * kSceneWidth + x] =
-                        {base * 0.83f, base * 1.07f, base * 1.31f, 1.0f};
+                    texels[static_cast<std::size_t>(y) * kSceneWidth + x] = {base * 0.83f, base * 1.07f, base * 1.31f,
+                                                                             1.0f};
                 }
             }
             return texels;
@@ -222,8 +220,7 @@ void main() {
                 if (halfExponent < -10) return static_cast<std::uint16_t>(sign);
                 mantissa |= 0x800000u;
                 const unsigned shift = static_cast<unsigned>(14 - halfExponent);
-                const std::uint32_t rounded = mantissa + ((1u << (shift - 1u)) - 1u) +
-                                              ((mantissa >> shift) & 1u);
+                const std::uint32_t rounded = mantissa + ((1u << (shift - 1u)) - 1u) + ((mantissa >> shift) & 1u);
                 return static_cast<std::uint16_t>(sign | (rounded >> shift));
             }
             mantissa += 0xfffu + ((mantissa >> 13u) & 1u);
@@ -251,8 +248,7 @@ void main() {
             return golden;
         }
 
-        GLuint MakeTexture(GLenum internalFormat, GLenum format, GLenum type, int width, int height,
-                           const void* data) {
+        GLuint MakeTexture(GLenum internalFormat, GLenum format, GLenum type, int width, int height, const void* data) {
             GLuint texture = 0;
             glGenTextures(1, &texture);
             glBindTexture(GL_TEXTURE_2D, texture);
@@ -260,8 +256,7 @@ void main() {
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(internalFormat), width, height, 0, format,
-                         type, data);
+            glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(internalFormat), width, height, 0, format, type, data);
             return texture;
         }
 
@@ -277,8 +272,7 @@ void main() {
             glUniform1i(glGetUniformLocation(program, "img_pixelData2D"), 0);
             glUniform1i(glGetUniformLocation(program, "frameCounter"), 100);
             glUniform1f(glGetUniformLocation(program, "frameTime"), 1.0f / 60.0f);
-            glUniform1f(glGetUniformLocation(program, "aspectRatio"),
-                        static_cast<float>(kSceneWidth) / kSceneHeight);
+            glUniform1f(glGetUniformLocation(program, "aspectRatio"), static_cast<float>(kSceneWidth) / kSceneHeight);
             glUniform2f(glGetUniformLocation(program, "pixelSize"), 1.0f / kSceneWidth, 1.0f / kSceneHeight);
             glUniform1f(glGetUniformLocation(program, "nightVision"), 0.23f);
             glUniform1f(glGetUniformLocation(program, "darknessLightFactor"), 0.08f);
@@ -305,8 +299,7 @@ void main() {
                 glGetIntegerv(GL_SUBGROUP_SUPPORTED_STAGES_KHR, &stages);
                 glGetIntegerv(GL_SUBGROUP_SUPPORTED_FEATURES_KHR, &features);
                 glGetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &invocations);
-                const GLbitfield required =
-                    GL_SUBGROUP_FEATURE_BASIC_BIT_KHR | GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR;
+                const GLbitfield required = GL_SUBGROUP_FEATURE_BASIC_BIT_KHR | GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR;
                 if ((static_cast<GLbitfield>(stages) & GL_COMPUTE_SHADER_BIT) == 0 ||
                     (static_cast<GLbitfield>(features) & required) != required || invocations < 512) {
                     GTEST_SKIP() << "requires 512-invocation basic+arithmetic compute subgroups";
@@ -320,8 +313,7 @@ void main() {
                 const std::vector<Rg16> pixelData = MakePixelDataInput();
                 m_scene = MakeTexture(GL_RGBA16F, GL_RGBA, GL_FLOAT, kSceneWidth, kSceneHeight, scene.data());
                 m_originalOutput =
-                    MakeTexture(GL_RG16F, GL_RG, GL_HALF_FLOAT, kPixelDataWidth, kPixelDataHeight,
-                                pixelData.data());
+                    MakeTexture(GL_RG16F, GL_RG, GL_HALF_FLOAT, kPixelDataWidth, kPixelDataHeight, pixelData.data());
                 ASSERT_EQ(FirstGLError(), static_cast<GLenum>(GL_NO_ERROR));
             }
 
@@ -360,19 +352,18 @@ void main() {
         RecordProperty("program203_output_height", kPixelDataHeight);
         RecordProperty("program203_compared_texels", static_cast<long long>(actual.size()));
         RecordProperty("program203_mismatch_texels", static_cast<long long>(mismatchTexels));
-        std::cout << "IterationRPProgram203Scenario complete-output actualExposureBits=(0x" << std::hex
-                  << actual[0].r << ", 0x" << actual[0].g << ") goldenExposureBits=(0x" << expected[0].r
-                  << ", 0x" << expected[0].g << std::dec << ") mismatches=" << mismatchTexels << '/'
-                  << actual.size() << '\n';
+        std::cout << "IterationRPProgram203Scenario complete-output actualExposureBits=(0x" << std::hex << actual[0].r
+                  << ", 0x" << actual[0].g << ") goldenExposureBits=(0x" << expected[0].r << ", 0x" << expected[0].g
+                  << std::dec << ") mismatches=" << mismatchTexels << '/' << actual.size() << '\n';
 
         if (firstMismatch != actual.size()) {
             const std::size_t x = firstMismatch % kPixelDataWidth;
             const std::size_t y = firstMismatch / kPixelDataWidth;
-            ADD_FAILURE() << "complete Program 203 output differs at " << x << ',' << y
-                          << ": actual half bits=(0x" << std::hex << actual[firstMismatch].r << ", 0x"
-                          << actual[firstMismatch].g << ") golden half bits=(0x" << expected[firstMismatch].r
-                          << ", 0x" << expected[firstMismatch].g << std::dec << "); mismatched "
-                          << mismatchTexels << " of " << actual.size() << " texels";
+            ADD_FAILURE() << "complete Program 203 output differs at " << x << ',' << y << ": actual half bits=(0x"
+                          << std::hex << actual[firstMismatch].r << ", 0x" << actual[firstMismatch].g
+                          << ") golden half bits=(0x" << expected[firstMismatch].r << ", 0x"
+                          << expected[firstMismatch].g << std::dec << "); mismatched " << mismatchTexels << " of "
+                          << actual.size() << " texels";
         }
         EXPECT_EQ(mismatchTexels, 0u);
     }

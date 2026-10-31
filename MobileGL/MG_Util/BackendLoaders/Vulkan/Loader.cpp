@@ -91,9 +91,6 @@ namespace MobileGL::MG_Util::BackendLoader {
             return loaded;
         }
 
-        Bool IsShaderSubgroupForcedDisabled() {
-            return MG_Config::Features.MagmaDisableSubgroup;
-        }
     } // namespace
 
     inline Version DecodeApiVersion(uint32_t version) {
@@ -108,8 +105,7 @@ namespace MobileGL::MG_Util::BackendLoader {
     }
 
     inline Bool HasUsableShaderSubgroupSupport(const VkPhysicalDeviceSubgroupProperties& subgroupProps) {
-        return subgroupProps.subgroupSize > 0 &&
-               (subgroupProps.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+        return subgroupProps.subgroupSize > 0 && (subgroupProps.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
                (subgroupProps.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT) != 0;
     }
 
@@ -187,6 +183,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // reproduced on this backend. One word is the spec minimum and therefore always legal.
         // It is also what PipelineCreatePayload::sampleMask is sized for.
         caps.MaxSampleMaskWords = std::min(SaturateToInt(p.limits.maxSampleMaskWords), 1);
+        caps.StandardSampleLocations = p.limits.standardSampleLocations == VK_TRUE;
         caps.MaxTextureImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorSampledImages);
         caps.MaxVertexTextureImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorSampledImages);
         caps.MaxComputeTextureImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorSampledImages);
@@ -196,6 +193,10 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxCombinedShaderStorageBlocks = SaturateToInt(p.limits.maxDescriptorSetStorageBuffers);
         caps.MaxComputeUniformBlocks = SaturateToInt(p.limits.maxPerStageDescriptorUniformBuffers);
         caps.MaxComputeWorkGroupInvocations = SaturateToInt(p.limits.maxComputeWorkGroupInvocations);
+        for (SizeT axis = 0; axis < 3; ++axis) {
+            caps.MaxComputeWorkGroupCount[axis] = SaturateToInt(p.limits.maxComputeWorkGroupCount[axis]);
+            caps.MaxComputeWorkGroupSize[axis] = SaturateToInt(p.limits.maxComputeWorkGroupSize[axis]);
+        }
         caps.MaxShaderStorageBufferBindings = SaturateToInt(p.limits.maxDescriptorSetStorageBuffers);
         caps.MaxTextureBufferSize = SaturateToInt(p.limits.maxTexelBufferElements);
         caps.TextureBufferOffsetAlignment =
@@ -230,19 +231,18 @@ namespace MobileGL::MG_Util::BackendLoader {
             supportedFeatures.shaderTessellationAndGeometryPointSize == VK_TRUE;
         caps.SupportsImageCubeArray = supportedFeatures.imageCubeArray == VK_TRUE;
         {
-            // Probe the formats a colour render target actually uses. A driver that refuses the flag
+            // Probe the formats a color render target actually uses. A driver that refuses the flag
             // for one of them refuses per-slice attachment for that format only, which
             // VkTextureManager detects and records at image creation; this field just says whether
             // the capability is worth offering at all.
-            static constexpr VkFormat k3DSliceProbeFormats[] = {VK_FORMAT_R8G8B8A8_UNORM,
-                                                                VK_FORMAT_R8G8B8A8_SRGB};
+            static constexpr VkFormat k3DSliceProbeFormats[] = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB};
             Bool all2DArrayCompatible = true;
             for (const VkFormat probeFormat : k3DSliceProbeFormats) {
                 VkImageFormatProperties probeProperties{};
                 const VkResult probeResult = vkGetPhysicalDeviceImageFormatProperties(
                     physicalDevice, probeFormat, VK_IMAGE_TYPE_3D, VK_IMAGE_TILING_OPTIMAL,
-                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                        VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                     VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT, &probeProperties);
                 if (probeResult != VK_SUCCESS) {
                     all2DArrayCompatible = false;
@@ -251,17 +251,16 @@ namespace MobileGL::MG_Util::BackendLoader {
             }
             caps.Supports2DArrayCompatible3DImages = all2DArrayCompatible;
         }
-        caps.SupportsVertexPipelineStoresAndAtomics =
-            supportedFeatures.vertexPipelineStoresAndAtomics == VK_TRUE;
+        caps.SupportsVertexPipelineStoresAndAtomics = supportedFeatures.vertexPipelineStoresAndAtomics == VK_TRUE;
         caps.SupportsFragmentStoresAndAtomics = supportedFeatures.fragmentStoresAndAtomics == VK_TRUE;
         caps.SupportsGeometryShader = supportedFeatures.geometryShader == VK_TRUE;
+        caps.SupportsTessellationShader = supportedFeatures.tessellationShader == VK_TRUE;
         caps.SupportsShaderClipDistance = supportedFeatures.shaderClipDistance == VK_TRUE;
         caps.SupportsShaderCullDistance = supportedFeatures.shaderCullDistance == VK_TRUE;
         caps.MaxShaderStorageBlockSize = static_cast<SizeT>(p.limits.maxStorageBufferRange);
-        const Bool supportsShaderSubgroup = vk.vkGetPhysicalDeviceProperties2 &&
-                                            HasUsableShaderSubgroupSupport(subgroupProps);
-        const Bool forceDisableShaderSubgroup = IsShaderSubgroupForcedDisabled();
-        caps.SupportsShaderSubgroup = supportsShaderSubgroup && !forceDisableShaderSubgroup;
+        const Bool supportsShaderSubgroup =
+            vk.vkGetPhysicalDeviceProperties2 && HasUsableShaderSubgroupSupport(subgroupProps);
+        caps.SupportsShaderSubgroup = supportsShaderSubgroup;
         if (caps.SupportsShaderSubgroup) {
             caps.SubgroupSize = subgroupProps.subgroupSize;
             caps.SubgroupSupportedStages = subgroupProps.supportedStages;
@@ -274,12 +273,9 @@ namespace MobileGL::MG_Util::BackendLoader {
             caps.SubgroupQuadOperationsInAllStages = false;
         }
 
-        MGLOG_I("Vulkan shader subgroup support: detected=%s advertised=%s size=%u stages=0x%x operations=0x%x",
-                supportsShaderSubgroup ? "true" : "false", caps.SupportsShaderSubgroup ? "true" : "false",
-                subgroupProps.subgroupSize, subgroupProps.supportedStages, subgroupProps.supportedOperations);
-        if (supportsShaderSubgroup && forceDisableShaderSubgroup) {
-            MGLOG_W("Vulkan shader subgroup support forced off by MOBILEGL_MAGMA_DISABLE_SUBGROUP");
-        }
+        MGLOG_I("Vulkan shader subgroup support: native=%s size=%u stages=0x%x operations=0x%x",
+                supportsShaderSubgroup ? "true" : "false", subgroupProps.subgroupSize, subgroupProps.supportedStages,
+                subgroupProps.supportedOperations);
 
         return true;
     }
@@ -291,8 +287,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.DriverVersionString = DecodeDriverVersion(properties.driverVersion);
         caps.VendorId = properties.vendorID;
         caps.UniformBufferOffsetAlignment = static_cast<int>(properties.limits.minUniformBufferOffsetAlignment);
-        caps.ShaderStorageBufferOffsetAlignment =
-            static_cast<int>(properties.limits.minStorageBufferOffsetAlignment);
+        caps.ShaderStorageBufferOffsetAlignment = static_cast<int>(properties.limits.minStorageBufferOffsetAlignment);
         caps.AliasedLineWidthRangeMin = properties.limits.lineWidthRange[0];
         caps.AliasedLineWidthRangeMax = properties.limits.lineWidthRange[1];
         caps.MaxSamplerAnisotropy = properties.limits.maxSamplerAnisotropy;
@@ -324,6 +319,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // reproduced on this backend. One word is the spec minimum and therefore always legal.
         // It is also what PipelineCreatePayload::sampleMask is sized for.
         caps.MaxSampleMaskWords = std::min(SaturateToInt(properties.limits.maxSampleMaskWords), 1);
+        caps.StandardSampleLocations = properties.limits.standardSampleLocations == VK_TRUE;
         caps.MaxTextureImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorSampledImages);
         caps.MaxVertexTextureImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorSampledImages);
         caps.MaxComputeTextureImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorSampledImages);
@@ -333,6 +329,10 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxCombinedShaderStorageBlocks = SaturateToInt(properties.limits.maxDescriptorSetStorageBuffers);
         caps.MaxComputeUniformBlocks = SaturateToInt(properties.limits.maxPerStageDescriptorUniformBuffers);
         caps.MaxComputeWorkGroupInvocations = SaturateToInt(properties.limits.maxComputeWorkGroupInvocations);
+        for (SizeT axis = 0; axis < 3; ++axis) {
+            caps.MaxComputeWorkGroupCount[axis] = SaturateToInt(properties.limits.maxComputeWorkGroupCount[axis]);
+            caps.MaxComputeWorkGroupSize[axis] = SaturateToInt(properties.limits.maxComputeWorkGroupSize[axis]);
+        }
         caps.MaxShaderStorageBufferBindings = SaturateToInt(properties.limits.maxDescriptorSetStorageBuffers);
         caps.MaxTextureBufferSize = SaturateToInt(properties.limits.maxTexelBufferElements);
         caps.TextureBufferOffsetAlignment =
@@ -364,6 +364,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.SupportsVertexPipelineStoresAndAtomics = false;
         caps.SupportsFragmentStoresAndAtomics = false;
         caps.SupportsGeometryShader = false;
+        caps.SupportsTessellationShader = false;
         caps.SupportsShaderClipDistance = false;
         caps.SupportsShaderCullDistance = false;
         caps.MaxShaderStorageBlockSize = static_cast<SizeT>(properties.limits.maxStorageBufferRange);

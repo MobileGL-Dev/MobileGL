@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
 
 #ifdef GLAPI
@@ -84,7 +85,7 @@ void main() {
 )";
 
         // The state cases: the unit-square vertices (or a triangle of them) stretched over an
-        // NDC rectangle at a given depth, in a uniform colour. A zero rectangle makes a
+        // NDC rectangle at a given depth, in a uniform color. A zero rectangle makes a
         // zero-area primitive - a draw that reaches the renderer and rasterizes nothing.
         constexpr const char* kRectVS = R"(#version 330 core
 in vec2 aPos;
@@ -123,29 +124,25 @@ void main() { o_color = vec4(1.0); }
             return (end != nullptr && *end == '\0') ? parsed : 0;
         }
 
-        // The library log, for the arming assertion. Same machinery and reasoning as
-        // UnlocatedIoBlockScenario: MOBILEGL_LOG_FILE_PATH is read at log-init, every process in
-        // the lane appends to the file, and only bytes appended after the snapshot count.
-        std::filesystem::path LibraryLogPath() {
-            const char* path = std::getenv("MOBILEGL_LOG_FILE_PATH");
-            return (path != nullptr && *path != '\0') ? std::filesystem::path(path) : std::filesystem::path();
+        // The library log, for the arming assertion. MOBILEGL_LOG_FILE_PATH is read at log-init,
+        // every process in the lane appends to it, and only bytes appended after the snapshot
+        // count. P11 M2: ON A SPLIT BUILD IT IS A BASE NAME - the library writes one file per role
+        // (PipeStatsWindow.h) - and the latched line comes from the RENDERER, which under a
+        // transport is the server role: the apply thread under inproc, the spawned server process
+        // under spawn (it inherits this entry's environment, budget and log base included). So the
+        // mark and the read cover both roles, as PrimitivesGeneratedNoXfbScenario's arming does; a
+        // read of the literal base found no file and reported an unsplit renderer. In the pull
+        // build the client role is the whole log.
+        std::string LibraryLogPath() {
+            return PipeStatsWindow::LibraryLogPath();
         }
 
-        std::uintmax_t LibraryLogSize() {
-            std::error_code ec;
-            const std::filesystem::path path = LibraryLogPath();
-            if (path.empty()) return 0;
-            const std::uintmax_t size = std::filesystem::file_size(path, ec);
-            return ec ? 0 : size;
+        PipeStatsWindow::LogMark LibraryLogSize() {
+            return PipeStatsWindow::MarkLaneLog();
         }
 
-        std::string LibraryLogSince(std::uintmax_t offset) {
-            const std::filesystem::path path = LibraryLogPath();
-            if (path.empty()) return {};
-            std::ifstream file(path, std::ios::binary);
-            if (!file.good()) return {};
-            file.seekg(static_cast<std::streamoff>(offset));
-            return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::string LibraryLogSince(const PipeStatsWindow::LogMark& mark) {
+            return PipeStatsWindow::ReadLaneLogSince(mark);
         }
 
         std::string Describe(const Rgba8& c) {
@@ -177,24 +174,23 @@ void main() { o_color = vec4(1.0); }
                 return ::testing::AssertionSuccess();
             }
             return ::testing::AssertionFailure()
-                   << wrong << " of " << kDraws << " pixels do not hold their own draw's colour. First: (" << firstX
+                   << wrong << " of " << kDraws << " pixels do not hold their own draw's color. First: (" << firstX
                    << ", " << firstY << ") = " << firstSeen << ", drawn by draw " << (firstY * kSide + firstX)
-                   << " (a pixel no draw reached still holds the clear colour 0,0,0,0)";
+                   << " (a pixel no draw reached still holds the clear color 0,0,0,0)";
         }
 
         // Every pixel of columns [x0, x1] (all rows) is `expected`, each channel within `tolerance`.
-        ::testing::AssertionResult ColumnsAre(const Image& image, int x0, int x1, const Rgba8& expected,
-                                              int tolerance, const char* what) {
+        ::testing::AssertionResult ColumnsAre(const Image& image, int x0, int x1, const Rgba8& expected, int tolerance,
+                                              const char* what) {
             int wrong = 0;
             int firstX = -1, firstY = -1;
             Rgba8 firstSeen{};
             for (int y = 0; y < kSide; ++y) {
                 for (int x = x0; x <= x1; ++x) {
                     const Rgba8 seen = image.At(x, y);
-                    const bool close = std::abs(seen.r - expected.r) <= tolerance &&
-                                       std::abs(seen.g - expected.g) <= tolerance &&
-                                       std::abs(seen.b - expected.b) <= tolerance &&
-                                       std::abs(seen.a - expected.a) <= tolerance;
+                    const bool close =
+                        std::abs(seen.r - expected.r) <= tolerance && std::abs(seen.g - expected.g) <= tolerance &&
+                        std::abs(seen.b - expected.b) <= tolerance && std::abs(seen.a - expected.a) <= tolerance;
                     if (!close) {
                         if (wrong == 0) {
                             firstX = x;
@@ -250,9 +246,12 @@ void main() { o_color = vec4(1.0); }
                     if (m_rectProgram != 0) glDeleteProgram(m_rectProgram);
                     if (m_vbo != 0) glDeleteBuffers(1, &m_vbo);
                     if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
-                    for (GLuint rbo : m_renderbuffers) glDeleteRenderbuffers(1, &rbo);
-                    for (GLuint fbo : m_framebuffers) glDeleteFramebuffers(1, &fbo);
-                    for (ColorFbo& target : m_colorTargets) DestroyColorFbo(target);
+                    for (GLuint rbo : m_renderbuffers)
+                        glDeleteRenderbuffers(1, &rbo);
+                    for (GLuint fbo : m_framebuffers)
+                        glDeleteFramebuffers(1, &fbo);
+                    for (ColorFbo& target : m_colorTargets)
+                        DestroyColorFbo(target);
                 }
                 ScenarioTest::TearDown();
             }
@@ -270,7 +269,8 @@ void main() { o_color = vec4(1.0); }
                 const std::string appended = LibraryLogSince(m_logBefore);
                 EXPECT_NE(appended.find("draws into one command buffer; submitting it"), std::string::npos)
                     << "MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER=" << budget << " and this case recorded more "
-                    << "than " << kFillers << " draws in one frame, but DirectVulkan never reported splitting the "
+                    << "than " << kFillers
+                    << " draws in one frame, but DirectVulkan never reported splitting the "
                        "recording. A renderer that does not split grows a single command buffer without bound "
                        "(rd12 on Adreno: ~40k driver mappings, then SIGABRT). See "
                        "VulkanRenderer::SplitOversizedRecording. Log appended by this case:\n"
@@ -338,7 +338,7 @@ void main() { o_color = vec4(1.0); }
                 return ReadPixels(kSide, kSide);
             }
 
-            std::uintmax_t m_logBefore = 0;
+            PipeStatsWindow::LogMark m_logBefore{};
             GLuint m_vao = 0;
             GLuint m_vbo = 0;
             GLuint m_rectProgram = 0;
@@ -353,7 +353,7 @@ void main() { o_color = vec4(1.0); }
     } // namespace
 
     // kDraws single-pixel quads into a fresh target, one uniform value per draw, with no
-    // readback, flush or rebind in between. Every pixel must hold its own draw's colour.
+    // readback, flush or rebind in between. Every pixel must hold its own draw's color.
     TEST_F(OversizedRecordingSplitScenario, EveryDrawOfTheFrameLandsAcrossCommandBufferSplits) {
         if (!Ready()) return;
 

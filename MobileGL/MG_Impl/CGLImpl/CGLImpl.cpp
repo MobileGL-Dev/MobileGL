@@ -104,9 +104,7 @@ namespace MobileGL::MG_Impl::CGLImpl {
             }
         }
 
-        void ApplyPixelFormatAttribute(PixelFormatObject& pixelFormat,
-                                       CGLPixelFormatAttribute attrib,
-                                       GLint value) {
+        void ApplyPixelFormatAttribute(PixelFormatObject& pixelFormat, CGLPixelFormatAttribute attrib, GLint value) {
             switch (attrib) {
             case kCGLPFADoubleBuffer:
                 pixelFormat.DoubleBuffer = true;
@@ -163,14 +161,22 @@ namespace MobileGL::MG_Impl::CGLImpl {
             EGLImpl::BindAPI(EGL_OPENGL_API);
 
             const EGLint attribs[] = {
-                EGL_RED_SIZE, 8,
-                EGL_GREEN_SIZE, 8,
-                EGL_BLUE_SIZE, 8,
-                EGL_ALPHA_SIZE, std::max(pixelFormat->AlphaSize, 0),
-                EGL_DEPTH_SIZE, std::max(pixelFormat->DepthSize, 0),
-                EGL_STENCIL_SIZE, std::max(pixelFormat->StencilSize, 0),
-                EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
-                EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+                EGL_RED_SIZE,
+                8,
+                EGL_GREEN_SIZE,
+                8,
+                EGL_BLUE_SIZE,
+                8,
+                EGL_ALPHA_SIZE,
+                std::max(pixelFormat->AlphaSize, 0),
+                EGL_DEPTH_SIZE,
+                std::max(pixelFormat->DepthSize, 0),
+                EGL_STENCIL_SIZE,
+                std::max(pixelFormat->StencilSize, 0),
+                EGL_SURFACE_TYPE,
+                EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
+                EGL_RENDERABLE_TYPE,
+                EGL_OPENGL_BIT,
                 EGL_NONE,
             };
 
@@ -191,9 +197,7 @@ namespace MobileGL::MG_Impl::CGLImpl {
             }
 
             const EGLint contextAttribs[] = {
-                EGL_CONTEXT_MAJOR_VERSION, 3,
-                EGL_CONTEXT_MINOR_VERSION, 3,
-                EGL_NONE,
+                EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3, EGL_NONE,
             };
             EGLContext eglContext = EGLImpl::CreateContext(display, config, shareContext, contextAttribs);
             if (eglContext == EGL_NO_CONTEXT) {
@@ -246,12 +250,12 @@ namespace MobileGL::MG_Impl::CGLImpl {
                 object.Surface = EGL_NO_SURFACE;
             }
             const EGLAttrib attribs[] = {
-                EGL_WIDTH, std::max<GLint>(object.SurfaceBackingSize[0], 1),
+                EGL_WIDTH,  std::max<GLint>(object.SurfaceBackingSize[0], 1),
                 EGL_HEIGHT, std::max<GLint>(object.SurfaceBackingSize[1], 1),
                 EGL_NONE,
             };
-            EGLSurface surface = EGLImpl::CreatePlatformWindowSurface(object.Display, object.Config,
-                                                                      object.MetalLayer, attribs);
+            EGLSurface surface =
+                EGLImpl::CreatePlatformWindowSurface(object.Display, object.Config, object.MetalLayer, attribs);
             if (surface == EGL_NO_SURFACE) {
                 object.HasDrawable = false;
                 return kCGLBadDrawable;
@@ -265,10 +269,9 @@ namespace MobileGL::MG_Impl::CGLImpl {
             if (object.Surface == EGL_NO_SURFACE) {
                 return kCGLBadDrawable;
             }
-            return EGLImpl::ResizePlatformWindowSurface(
-                       object.Display, object.Surface,
-                       std::max<GLint>(object.SurfaceBackingSize[0], 1),
-                       std::max<GLint>(object.SurfaceBackingSize[1], 1))
+            return EGLImpl::ResizePlatformWindowSurface(object.Display, object.Surface,
+                                                        std::max<GLint>(object.SurfaceBackingSize[0], 1),
+                                                        std::max<GLint>(object.SurfaceBackingSize[1], 1))
                        ? kCGLNoError
                        : kCGLBadDrawable;
         }
@@ -528,8 +531,7 @@ namespace MobileGL::MG_Impl::CGLImpl {
             object->SwapInterval = params[0];
             EGLImpl::SwapInterval(object->Display, object->SwapInterval);
             return kCGLNoError;
-        case kCGLCPSurfaceBackingSize:
-        {
+        case kCGLCPSurfaceBackingSize: {
             const GLint width = std::max<GLint>(params[0], 1);
             const GLint height = std::max<GLint>(params[1], 1);
             if (object->SurfaceBackingSize[0] == width && object->SurfaceBackingSize[1] == height) {

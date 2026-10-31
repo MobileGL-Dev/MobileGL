@@ -63,7 +63,7 @@
 // These cases therefore stay as what they honestly are: end-to-end regression
 // tests for resident index-buffer freshness across frame boundaries, and the
 // standing tripwire for change (1). The moment anyone memoises the streamed or
-// promoted index path - the natural next step for the same optimisation - these
+// promoted index path - the natural next step for the same optimization - these
 // stop being redundant and start failing. Each case says below what it covers.
 
 #include <cstdio>
@@ -106,7 +106,7 @@ void main() { oColor = vec4(vColor, 1.0); }
 
         std::vector<V> Scene() {
             return {{-1, -1, 1, 0, 0}, {0, -1, 1, 0, 0}, {0, 1, 1, 0, 0}, {-1, 1, 1, 0, 0},
-                    {0, -1, 0, 1, 0},  {1, -1, 0, 1, 0}, {1, 1, 0, 1, 0},  {0, 1, 0, 1, 0}};
+                    {0, -1, 0, 1, 0},  {1, -1, 0, 1, 0}, {1, 1, 0, 1, 0}, {0, 1, 0, 1, 0}};
         }
 
         class ResidentIndexScenario : public ScenarioTest {
@@ -144,8 +144,7 @@ void main() { oColor = vec4(vColor, 1.0); }
                 unsigned int vbo = 0;
                 glGenBuffers(1, &vbo);
                 glBindBuffer(GL_ARRAY_BUFFER, vbo);
-                glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(vertices.size() * sizeof(V)), vertices.data(),
-                             GL_STATIC_DRAW);
+                glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(vertices.size() * sizeof(V)), vertices.data(), GL_STATIC_DRAW);
                 return vbo;
             }
 
@@ -192,9 +191,9 @@ void main() { oColor = vec4(vColor, 1.0); }
                 GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT | GL_DYNAMIC_STORAGE_BIT;
             glBufferStorage(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(sizeof(kLeft)), kLeft, storageFlags);
             if (FirstGLError() != GL_NO_ERROR) GTEST_SKIP() << "no immutable storage";
-            auto* map = static_cast<unsigned char*>(glMapBufferRange(
-                GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(sizeof(kLeft)),
-                GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT));
+            auto* map = static_cast<unsigned char*>(
+                glMapBufferRange(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(sizeof(kLeft)),
+                                 GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT));
             ASSERT_NE(map, nullptr);
             const unsigned int vao = MakeVao(vbo, ebo);
 

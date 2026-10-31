@@ -29,6 +29,18 @@ subprojects {
                 }
                 externalNativeBuild {
                     cmake {
+                        // P5 trace A/B: :MobileGL owns libMobileGL.so, not :app's replay runner.
+                        // Both flavors ship the render server, so the split shape is on by default
+                        // (-Pmobilegl.buildDisaggregated=OFF or MOBILEGL_BUILD_DISAGGREGATED=OFF opts
+                        // out); INPROC follows it, as in MobileGL/build.gradle.
+                        val disaggregated = project.findProperty("mobilegl.buildDisaggregated")
+                            ?: System.getenv("MOBILEGL_BUILD_DISAGGREGATED") ?: "ON"
+                        val disaggregatedInproc = project.findProperty("mobilegl.buildDisaggregatedInproc")
+                            ?: System.getenv("MOBILEGL_BUILD_DISAGGREGATED_INPROC") ?: disaggregated
+                        arguments += listOf(
+                            "-DMOBILEGL_BUILD_DISAGGREGATED=$disaggregated",
+                            "-DMOBILEGL_BUILD_DISAGGREGATED_INPROC=$disaggregatedInproc",
+                        )
                         mobileGlCmakeCompilerLauncher().takeIf(String::isNotEmpty)?.let { compilerLauncher ->
                             arguments += listOf(
                                 "-DCMAKE_C_COMPILER_LAUNCHER=$compilerLauncher",

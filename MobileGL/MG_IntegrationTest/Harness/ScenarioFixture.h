@@ -23,11 +23,16 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <fstream>
 #include <string>
+#if defined(__linux__)
+#include <unistd.h>
+#endif
 
 #include <gtest/gtest.h>
 
 #include "HeadlessGL.h"
+#include "SplitLane.h"
 
 namespace MGITest {
 
@@ -51,7 +56,11 @@ namespace MGITest {
     // QueryEnvQuirkOverride / IsTruthyValue): unset is Auto - device auto-detection or a
     // built-in default, i.e. a value only the implementation knows - a truthy value is
     // On, and anything else that IS set ("0", "false", "") is Off.
-    enum class AmbientQuirk { Auto, On, Off };
+    enum class AmbientQuirk {
+        Auto,
+        On,
+        Off
+    };
 
     inline AmbientQuirk AmbientQuirkFromEnvironment(const char* name) {
         const char* value = std::getenv(name);
@@ -66,6 +75,33 @@ namespace MGITest {
 
     class ScenarioTest : public ::testing::Test {
     protected:
+        // THE BEHAVIORAL HALF OF THE SPLIT LANE'S CLAIM, and it is in the DESTRUCTOR rather than
+        // in TearDown() on purpose: gtest calls only the MOST DERIVED TearDown, and every scenario
+        // that overrides it would have to remember to chain here. The fixture destructor always
+        // runs, and it runs before the test result is finalized, so ADD_FAILURE() is recorded.
+        //
+        // What it asserts: a case that ran in an ARMED split lane must have moved the client
+        // encoder's record ordinal. Everything else in the lane - the pixels, the readbacks, the
+        // arm assertion - is equally true of a monolith run of the same workload; this is the one
+        // statement that is only true if records crossed the ring. An emit table that resolves the
+        // transport and then falls through to the driver passes every other assertion in the file
+        // and fails exactly here.
+        ~ScenarioTest() override {
+            if (!m_splitAssertionsArmed) return;
+            if (IsSkipped() || HasFailure()) return;
+            const SplitRuntimeState after = PeekSplitRuntime();
+            if (after.emitSeq <= m_emitSeqAtSetUp) {
+                ADD_FAILURE() << "this case ran in an armed DirectGLES.Split. lane and the client "
+                                 "encoder's record ordinal did not move: EmitSeq was "
+                              << m_emitSeqAtSetUp << " at SetUp and is " << after.emitSeq
+                              << " now. The workload drew, cleared and read pixels, so records were "
+                                 "due - a sequence that did not advance means the emit table "
+                                 "resolved the transport and then did not put anything on the wire, "
+                                 "which every other assertion in this lane is blind to because a "
+                                 "monolith run of the same workload produces the same pixels.";
+            }
+        }
+
         void SetUp() override {
             m_ready = false;
             HeadlessGL& gl = HeadlessGL::Get();
@@ -95,6 +131,61 @@ namespace MGITest {
                 FAIL() << "MOBILEGL_ITEST_REQUIRE_HARDWARE_GPU is set but the context landed on a software "
                        << "rasterizer: " << gl.RendererString();
             }
+            // One context per process: a case run after another in the same process inherits
+            // whatever that one left bound (ScenarioIsolationScenario). Before the split lane's
+            // baseline below, so these calls are not counted as the case's own records.
+            ResetStateBetweenScenarios();
+            // P5's DirectGLES.Split. lanes, in ONE place rather than in each scenario they point
+            // at - the Split family also points at ClearThenReadPixelsScenario, which is target A
+            // of the reduced path and predates P5, and any later Split lane gets the same
+            // guarantee without anyone having to remember it.
+            //
+            // THE ARMING QUESTION IS ASKED OF THE PROCESS, not of the source tree. Until a real
+            // client session exists, MOBILEGL_TRANSPORT=inproc is parsed and then nothing consumes
+            // it, so every case in the lane would go GREEN against the monolith path under a name
+            // that says it tested the split one. The first version of this guard answered the
+            // question with a CMake grep over c0's stub files, and review finding M-1 falsified it
+            // by renaming one string: eleven lanes armed and eight went green. Harness/
+            // SplitRuntimePeek.h now answers it from MG_Config::Transport, ClientSession::Active()
+            // and ImplementedVerbCount(), none of which a message edit can move. Registrations are
+            // never deleted (gate G14); they skip, naming exactly which fact is not true.
+            if (SplitLane::IsSplitLane()) {
+                if (const std::string splitSkip = SplitLane::SkipReasonForSplitOnlyAssertions(); !splitSkip.empty()) {
+                    GTEST_SKIP() << splitSkip;
+                }
+                // Armed. Take the wire's baseline, so the destructor can require that this case
+                // actually PUT SOMETHING THROUGH IT (review finding N-5: ten of the eleven Split
+                // entries had no runtime evidence of anything, and their green meant only "the
+                // same GL workload passed").
+                const SplitRuntimeState state = PeekSplitRuntime();
+                // The transport the registration claims must be the one this process resolved,
+                // served where it says: a thread here for inproc, a process of its own for spawn
+                // and tcp. A lane that ran some other transport fails here, by name.
+                const std::string claimMismatch = SplitLane::TransportClaimMismatch(
+                    SplitLane::MarkerValue("MOBILEGL_TRANSPORT"), SplitLane::MarkerValue("MOBILEGL_IPC_CONTROL"),
+                    state.transportName, state.peerServerPid, state.selfPid);
+                if (!claimMismatch.empty()) {
+                    FAIL() << claimMismatch;
+                }
+                m_splitAssertionsArmed = true;
+                m_emitSeqAtSetUp = state.emitSeq;
+                RecordProperty("split_transport", state.transportName);
+                RecordProperty("split_implemented_verbs", static_cast<int>(state.implementedVerbs));
+                RecordProperty("split_emit_seq_at_setup", static_cast<int>(state.emitSeq));
+                RecordProperty("split_peer_server_pid", std::to_string(state.peerServerPid));
+#if defined(__linux__)
+                if (std::getenv("MGITEST_TCP_LANE")) {
+                    // Connect must never silently launch a local server. The
+                    // companion log gate proves the remote Welcome pid/endpoint.
+                    std::ifstream children("/proc/self/task/" + std::to_string(::getpid()) + "/children");
+                    ASSERT_TRUE(children.good()) << "TCP topology proof cannot read /proc children";
+                    int child = 0;
+                    ASSERT_FALSE(static_cast<bool>(children >> child))
+                        << "Dial=Connect created a local server child: " << child;
+                    RecordProperty("tcp_local_children", 0);
+                }
+#endif
+            }
             // A scenario starts from a clean slate but shares the context (and so
             // the renderer's memos) with every other scenario in this process -
             // which is exactly the situation both shipped bugs needed.
@@ -122,6 +213,8 @@ namespace MGITest {
         }
 
         bool m_ready = false;
+        bool m_splitAssertionsArmed = false;
+        unsigned long long m_emitSeqAtSetUp = 0;
     };
 
 } // namespace MGITest

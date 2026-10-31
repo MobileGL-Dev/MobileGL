@@ -165,15 +165,13 @@ namespace {
         void SetUp() override {
             MobileGL::Initialize();
             // A fresh context per case: the state model under test is cumulative, so a leftover
-            // VAO binding from a neighbour would silently change what "default state" means.
+            // VAO binding from a neighbor would silently change what "default state" means.
             MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
             GenVertexArrays(1, &m_vao);
             BindVertexArray(m_vao);
         }
 
-        void TearDown() override {
-            EXPECT_EQ(GetError(), GL_NO_ERROR) << "test left an unconsumed GL error behind";
-        }
+        void TearDown() override { EXPECT_EQ(GetError(), GL_NO_ERROR) << "test left an unconsumed GL error behind"; }
 
         GLuint CreateVbo(GLsizeiptr size) {
             GLuint vbo = 0;
@@ -185,8 +183,7 @@ namespace {
         }
 
         static void DrainErrors() {
-            for (int i = 0; i < 16 && GetError() != GL_NO_ERROR; ++i) {
-            }
+            for (int i = 0; i < 16 && GetError() != GL_NO_ERROR; ++i) {}
         }
 
         GLuint m_vao = 0;

@@ -113,7 +113,7 @@ namespace MGITest {
             }
 
             // A trivial 1x1x1 array-to-array copy: it exercises the entry point without depending
-            // on any of the behaviour under test, so a driver (or a backend function table) that
+            // on any of the behavior under test, so a driver (or a backend function table) that
             // simply does not have the call skips instead of failing every case below.
             bool CopyImageSubDataUsable() {
                 GLuint probe[2] = {0, 0};
@@ -123,10 +123,9 @@ namespace MGITest {
                     glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, 1, 1, 1);
                 }
                 glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-                while (glGetError() != GL_NO_ERROR) {
-                }
-                glCopyImageSubData(probe[0], GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, probe[1], GL_TEXTURE_2D_ARRAY, 0, 0, 0,
-                                   0, 1, 1, 1);
+                while (glGetError() != GL_NO_ERROR) {}
+                glCopyImageSubData(probe[0], GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, probe[1], GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0,
+                                   1, 1, 1);
                 const bool usable = glGetError() == GL_NO_ERROR;
                 glDeleteTextures(2, probe);
                 return usable;
@@ -152,8 +151,7 @@ namespace MGITest {
                 for (int level = 0; level < levels; ++level) {
                     const int levelWidth = kWidth << (levels - 1 - level);
                     const int levelHeight = kHeight << (levels - 1 - level);
-                    const int levelSlices =
-                        target == GL_TEXTURE_3D ? (kSlices << (levels - 1 - level)) : kSlices;
+                    const int levelSlices = target == GL_TEXTURE_3D ? (kSlices << (levels - 1 - level)) : kSlices;
                     for (int slice = 0; slice < levelSlices; ++slice) {
                         const Rgba8 color = colorForSlice(slice % kSlices);
                         std::vector<Rgba8> texels(static_cast<size_t>(levelWidth) * levelHeight, color);
@@ -194,16 +192,15 @@ namespace MGITest {
 
             // The assertion every case ends with: slices inside [dstZ, dstZ + depth) hold the
             // source slice they were fed, and every slice outside it still holds its own fill.
-            void ExpectCopied(GLuint destination, int level, int width, int height, int sliceCount, int srcZ,
-                              int dstZ, int depth, const char* what) {
+            void ExpectCopied(GLuint destination, int level, int width, int height, int sliceCount, int srcZ, int dstZ,
+                              int depth, const char* what) {
                 for (int slice = 0; slice < sliceCount; ++slice) {
                     const bool inRange = slice >= dstZ && slice < dstZ + depth;
-                    const Rgba8 expected =
-                        inRange ? SourceColor(srcZ + (slice - dstZ)) : DestinationFill(slice);
+                    const Rgba8 expected = inRange ? SourceColor(srcZ + (slice - dstZ)) : DestinationFill(slice);
                     const Rgba8 actual = ReadSlice(destination, level, slice, width, height);
                     EXPECT_TRUE(actual == expected)
-                        << what << ": destination slice " << slice << (inRange ? " (copied)" : " (untouched)")
-                        << " is " << Describe(actual) << ", expected " << Describe(expected);
+                        << what << ": destination slice " << slice << (inRange ? " (copied)" : " (untouched)") << " is "
+                        << Describe(actual) << ", expected " << Describe(expected);
                 }
             }
 
@@ -230,7 +227,7 @@ namespace MGITest {
         // The same pair with the layer ranges offset differently on the two sides: the shape that
         // separates "copies more than slice 0" from "copies the RIGHT slices". A backend that read
         // the source range but wrote from layer 0 (or vice versa) passes the case above.
-        TEST_F(CopyImageLayeredScenario, ArrayToArrayHonoursDifferentLayerOffsets) {
+        TEST_F(CopyImageLayeredScenario, ArrayToArrayHonorsDifferentLayerOffsets) {
             if (!Ready() || IsSkipped()) return;
 
             const GLuint source = MakeTexture(GL_TEXTURE_2D_ARRAY, 1, SourceColor);
@@ -250,7 +247,7 @@ namespace MGITest {
 
         // 3d -> 3d. Neither endpoint has array layers at all: the depth travels on extent.depth and
         // the offsets on srcOffset.z/dstOffset.z, with both layer counts pinned to 1.
-        TEST_F(CopyImageLayeredScenario, VolumeToVolumeHonoursNonZeroZ) {
+        TEST_F(CopyImageLayeredScenario, VolumeToVolumeHonorsNonZeroZ) {
             if (!Ready() || IsSkipped()) return;
 
             const GLuint source = MakeTexture(GL_TEXTURE_3D, 1, SourceColor);
@@ -285,8 +282,7 @@ namespace MGITest {
                                kDstZ, kWidth, kHeight, kDepth);
             ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "glCopyImageSubData raised an error";
 
-            ExpectCopied(destination, kLevel, kWidth, kHeight, kSlices, kSrcZ, kDstZ, kDepth,
-                         "3d->3d at mip level 1");
+            ExpectCopied(destination, kLevel, kWidth, kHeight, kSlices, kSrcZ, kDstZ, kDepth, "3d->3d at mip level 1");
         }
 
         // 2d_array -> 3d. The mixed shape: the source counts its slices as layers, the destination

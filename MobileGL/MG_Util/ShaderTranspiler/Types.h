@@ -74,11 +74,63 @@ namespace MobileGL {
             // advertised binding point and binds them all in one glBindBuffersRange, so it must
             // stay a multiple of, and comfortably larger than, four times the binding count.
             inline constexpr Int MAX_ATOMIC_COUNTER_BUFFER_SIZE = 16384;
-            // GL_MAX_{FRAGMENT,COMPUTE,COMBINED}_ATOMIC_COUNTER_BUFFERS and the matching
-            // _ATOMIC_COUNTERS. Eight is the GL 4.6 core minimum for the compute stage
-            // (table 23.45) and every other stage this implementation serves counters on.
-            inline constexpr Int MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE = 8;
-            inline constexpr Int MAX_ATOMIC_COUNTERS_PER_STAGE = 8;
+            // The ceilings of GL_MAX_<STAGE>_ATOMIC_COUNTER_BUFFERS and _ATOMIC_COUNTERS for a
+            // stage that can hold a counter buffer at all; ResolveAtomicCounterLimits below turns
+            // them into the advertised numbers. A stage can never use more counter buffers than
+            // there are counter bindings, and a counter is one uint of a lowered storage block, so
+            // the only bound on the counter count is how many fit in one buffer.
+            inline constexpr Int MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE = MAX_ATOMIC_COUNTER_BUFFER_BINDINGS;
+            inline constexpr Int MAX_ATOMIC_COUNTERS_PER_STAGE = MAX_ATOMIC_COUNTER_BUFFER_SIZE / 4;
+
+            // Index order of AtomicCounterLimits' per-stage arrays.
+            inline constexpr SizeT ATOMIC_COUNTER_STAGE_COUNT = 6; // VS, TCS, TES, GS, FS, CS
+
+            struct AtomicCounterLimits {
+                Int stageBuffers[ATOMIC_COUNTER_STAGE_COUNT] = {};
+                Int stageCounters[ATOMIC_COUNTER_STAGE_COUNT] = {};
+                Int combinedBuffers = 0;
+                Int combinedCounters = 0;
+            };
+
+            // THE one derivation of every per-stage and combined atomic-counter limit, read by
+            // glGetIntegerv, by BuildTBuiltInResource (the gl_Max*AtomicCounter* constants) and by
+            // the link-time check, so the three cannot disagree. Both backends serve a counter in
+            // ANY stage the same way - glslang lowers it onto a storage block - so a stage's
+            // counter-buffer budget is its storage-block budget (as GL_MAX_<STAGE>_SHADER_STORAGE_
+            // BLOCKS clamps it), and a stage with none has no counters either. That is also why
+            // the pre-fragment stages are no longer a flat 0: they get exactly what the backend
+            // can host, and 0 only where it really cannot (a driver without vertex-stage storage
+            // blocks still answers 0, and the conformance suite skips the stage).
+            inline AtomicCounterLimits ResolveAtomicCounterLimits(const MG_Backend::DynamicBackendParameters& p) {
+                const Int storageBindings = std::max(p.MaxShaderStorageBufferBindings, 0);
+                const auto clampStorage = [storageBindings](Int limit) {
+                    return std::min(std::max(limit, 0), storageBindings);
+                };
+                const Int stageStorageBlocks[ATOMIC_COUNTER_STAGE_COUNT] = {
+                    p.MaxVertexShaderStorageBlocks,         p.MaxTessControlShaderStorageBlocks,
+                    p.MaxTessEvaluationShaderStorageBlocks, p.MaxGeometryShaderStorageBlocks,
+                    p.MaxFragmentShaderStorageBlocks,       p.MaxComputeShaderStorageBlocks};
+                AtomicCounterLimits limits;
+                Int bufferSum = 0;
+                for (SizeT stage = 0; stage < ATOMIC_COUNTER_STAGE_COUNT; ++stage) {
+                    const Int buffers =
+                        std::min(MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE, clampStorage(stageStorageBlocks[stage]));
+                    limits.stageBuffers[stage] = buffers;
+                    limits.stageCounters[stage] = buffers > 0 ? MAX_ATOMIC_COUNTERS_PER_STAGE : 0;
+                    bufferSum += buffers;
+                    limits.combinedCounters += limits.stageCounters[stage];
+                }
+                // A buffer two stages use counts once per stage (GL 4.6 7.7), so the combined
+                // ceiling is the stage sum, bounded by the combined storage-block budget the
+                // lowered blocks really draw from.
+                limits.combinedBuffers = std::min(bufferSum, clampStorage(p.MaxCombinedShaderStorageBlocks));
+                return limits;
+            }
+
+            // GL_MAX_{VERTEX,TESS_CONTROL,TESS_EVALUATION,GEOMETRY,FRAGMENT}_UNIFORM_BLOCKS. No
+            // built-in constant expands from these, but the link fails a program that uses more
+            // (ProgramLinkTask's block-count check), so the getter and the check share one number.
+            inline constexpr Int MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS = 14;
 
             // ---- Tessellation per-stage resource limits ----
             //
@@ -165,11 +217,11 @@ namespace MobileGL {
             // Zero or negative means "no ceiling to enforce for this kind" - a backendless
             // environment, which every unit test and the pre-init preload path run in.
             struct ResourceBindingLimits {
-                Int MaxSamplerBindings = 0;              // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS
-                Int MaxImageBindings = 0;                // GL_MAX_IMAGE_UNITS
-                Int MaxUniformBufferBindings = 0;        // GL_MAX_UNIFORM_BUFFER_BINDINGS
-                Int MaxShaderStorageBufferBindings = 0;  // GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS
-                Int MaxAtomicCounterBufferBindings = 0;  // GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS
+                Int MaxSamplerBindings = 0;             // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS
+                Int MaxImageBindings = 0;               // GL_MAX_IMAGE_UNITS
+                Int MaxUniformBufferBindings = 0;       // GL_MAX_UNIFORM_BUFFER_BINDINGS
+                Int MaxShaderStorageBufferBindings = 0; // GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS
+                Int MaxAtomicCounterBufferBindings = 0; // GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS
             };
 
             struct ProgramAttrib {

@@ -283,8 +283,7 @@ void main() { gl_Position = u_vsOnly; }
     UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
     ASSERT_EQ(GetError(), GL_NO_ERROR);
     UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
-    ASSERT_EQ(GetError(), GL_INVALID_OPERATION)
-        << "a program not linked as separable is not a legal pipeline stage";
+    ASSERT_EQ(GetError(), GL_INVALID_OPERATION) << "a program not linked as separable is not a legal pipeline stage";
     {
         const auto& pipelineObject = MG_State::pGLContext->MaterializeProgramPipelineObject(pipeline);
         ASSERT_NE(pipelineObject, nullptr);
@@ -454,8 +453,7 @@ TEST_F(ProgramPipelineCompositeTest, ASamplerWritePerDrawDoesNotRebuildTheCompos
         Uniform1i(sampler, unit);
         const auto composite = DrawProgram();
         ASSERT_NE(composite, nullptr);
-        EXPECT_EQ(composite.get(), first.get())
-            << "the composite was rebuilt by a sampler-unit write at unit " << unit;
+        EXPECT_EQ(composite.get(), first.get()) << "the composite was rebuilt by a sampler-unit write at unit " << unit;
         EXPECT_EQ(composite->GetLifetimeId(), firstLifetime) << "the composite's identity changed at unit " << unit;
         // The value still has to ARRIVE - the whole point is that the mirror carries it now that
         // the rebuild no longer does.
@@ -555,20 +553,159 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); EndPrimitive(); }
     ASSERT_FALSE(composite->HasLinkedShaderStage(ShaderStage::Vertex));
 
     DrawArrays(GL_POINTS, 0, 1);
-    EXPECT_EQ(GetError(), GL_INVALID_OPERATION)
-        << "a geometry stage with no vertex stage must refuse the draw";
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "a geometry stage with no vertex stage must refuse the draw";
 
     // A dispatch shares the same "is there a program, did it link" helper and legitimately has no
     // vertex stage; the rule must not have leaked onto it. There is no compute stage here, so the
     // error is the compute check's own - what matters is that the draw rule did not fire first
     // with a different meaning.
-    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
-    }
+    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {}
 
     BindProgramPipeline(0);
     DeleteProgramPipelines(1, &pipeline);
-    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
+    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {}
+}
+
+// GL 4.6 core 7.3: only a SEPARABLE program may have a geometry (or tessellation) stage without a
+// vertex stage - KHR-GL4x.geometry_shader.linking.incomplete_program_objects. The pipeline
+// composite assembled from such a separable program has to keep linking, which the case above
+// already pins.
+TEST_F(ProgramPipelineCompositeTest, OnlyASeparableProgramMayLinkAGeometryStageWithoutAVertexStage) {
+    const char* kGs = R"(#version 430 core
+layout(points) in;
+layout(points, max_vertices = 1) out;
+void main() { gl_Position = vec4(0.0); EmitVertex(); EndPrimitive(); }
+)";
+    const auto link = [&](Bool separable, Bool withFragment) {
+        const GLuint program = CreateProgram();
+        if (separable) ProgramParameteri(program, GL_PROGRAM_SEPARABLE, GL_TRUE);
+        const auto attach = [program](GLenum stage, const char* source) {
+            const GLuint shader = CreateShader(stage);
+            ShaderSource(shader, 1, &source, nullptr);
+            CompileShader(shader);
+            AttachShader(program, shader);
+        };
+        attach(GL_GEOMETRY_SHADER, kGs);
+        if (withFragment) attach(GL_FRAGMENT_SHADER, kSharedUniformFs);
+        LinkProgram(program);
+        GLint linked = -1;
+        GetProgramiv(program, GL_LINK_STATUS, &linked);
+        DeleteProgram(program);
+        return linked == GL_TRUE;
+    };
+    EXPECT_FALSE(link(false, false));
+    EXPECT_FALSE(link(false, true));
+    EXPECT_TRUE(link(true, false));
+    EXPECT_TRUE(link(true, true));
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// GL 4.6 core 11.1.3.11, the shapes es31cSeparateShaderObjsTests' PipelineApi and
+// StateInteraction check: glValidateProgramPipeline and a draw through the pipeline must agree,
+// and a missing stage is NOT one of the failures.
+TEST_F(ProgramPipelineCompositeTest, PipelineValidationAndDrawsAgreeOnTheSpecRules) {
+    const char* kVf = R"(#version 430 core
+out gl_PerVertex { vec4 gl_Position; };
+void main() { gl_Position = vec4(0.0); }
+)";
+    // One separable program carrying BOTH the vertex and the fragment stage.
+    const GLuint both = CreateProgram();
+    ProgramParameteri(both, GL_PROGRAM_SEPARABLE, GL_TRUE);
+    for (const auto& [stage, source] :
+         {std::pair{GL_VERTEX_SHADER, kVf}, std::pair{GL_FRAGMENT_SHADER, kSharedUniformFs}}) {
+        const GLuint shader = CreateShader(stage);
+        ShaderSource(shader, 1, &source, nullptr);
+        CompileShader(shader);
+        AttachShader(both, shader);
     }
+    LinkProgram(both);
+    GLint linked = GL_FALSE;
+    GetProgramiv(both, GL_LINK_STATUS, &linked);
+    ASSERT_EQ(linked, GL_TRUE);
+    const GLuint fs = MakeSeparableProgram(GL_FRAGMENT_SHADER, kSharedUniformFs);
+
+    GLuint pipeline = 0;
+    GenProgramPipelines(1, &pipeline);
+    BindProgramPipeline(pipeline);
+    const auto validates = [pipeline] {
+        ValidateProgramPipeline(pipeline);
+        GLint status = -1;
+        GetProgramPipelineiv(pipeline, GL_VALIDATE_STATUS, &status);
+        return status == GL_TRUE;
+    };
+
+    EXPECT_FALSE(validates()) << "an empty pipeline does not validate";
+    GLint logLength = 0;
+    GetProgramPipelineiv(pipeline, GL_INFO_LOG_LENGTH, &logLength);
+    EXPECT_GT(logLength, 0) << "a failed validation says why";
+
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT | GL_FRAGMENT_SHADER_BIT, both);
+    EXPECT_TRUE(validates());
+
+    // Bound to only one of the two stages it was linked with.
+    UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+    EXPECT_FALSE(validates());
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    DrawArrays(GL_TRIANGLES, 0, 3);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "a draw through an invalid pipeline";
+
+    // A missing stage is fine: no vertex stage at all, only a fragment program.
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, 0);
+    EXPECT_TRUE(validates());
+
+    // A stage program relinked as NOT separable can no longer serve.
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT | GL_FRAGMENT_SHADER_BIT, both);
+    ASSERT_TRUE(validates());
+    ProgramParameteri(both, GL_PROGRAM_SEPARABLE, GL_FALSE);
+    LinkProgram(both);
+    EXPECT_FALSE(validates());
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    DrawArrays(GL_TRIANGLES, 0, 3);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+
+    BindProgramPipeline(0);
+    DeleteProgramPipelines(1, &pipeline);
+    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {}
+}
+
+// KHR-GL4x.geometry_shader.api.program_pipeline_vs_gs_capture: a vertex-only separable program
+// and a geometry-only one. Link() gives the vertex-only program MobileGL's default fragment shader
+// (neither backend runs a vertex-only program), and the "active for some but not all of its linked
+// stages" rule must not count that stage, or every such pipeline fails validation and its draws.
+TEST_F(ProgramPipelineCompositeTest, AVertexOnlyStageProgramValidatesWithoutAFragmentStage) {
+    const char* kVs = R"(#version 430 core
+out gl_PerVertex { vec4 gl_Position; };
+flat out int vertexID;
+void main() { vertexID = gl_VertexID; gl_Position = vec4(0.0); }
+)";
+    const char* kGs = R"(#version 430 core
+in gl_PerVertex { vec4 gl_Position; } gl_in[];
+out gl_PerVertex { vec4 gl_Position; };
+layout(points) in;
+layout(points, max_vertices = 1) out;
+flat in int vertexID[];
+out vec4 color;
+void main() { color = vec4(vertexID[0]); gl_Position = vec4(0.0); EmitVertex(); }
+)";
+    const GLuint vs = MakeSeparableProgram(GL_VERTEX_SHADER, kVs);
+    const GLuint gs = MakeSeparableProgram(GL_GEOMETRY_SHADER, kGs);
+
+    GLuint pipeline = 0;
+    GenProgramPipelines(1, &pipeline);
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+    UseProgramStages(pipeline, GL_GEOMETRY_SHADER_BIT, gs);
+    BindProgramPipeline(pipeline);
+    ValidateProgramPipeline(pipeline);
+    GLint status = -1;
+    GetProgramPipelineiv(pipeline, GL_VALIDATE_STATUS, &status);
+    EXPECT_EQ(status, GL_TRUE);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    DrawArrays(GL_POINTS, 0, 1);
+    EXPECT_EQ(GetError(), GL_NO_ERROR) << "a draw through the valid pipeline";
+
+    BindProgramPipeline(0);
+    DeleteProgramPipelines(1, &pipeline);
+    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {}
 }
 
 // ---------------------------------------------------------------------------------------------

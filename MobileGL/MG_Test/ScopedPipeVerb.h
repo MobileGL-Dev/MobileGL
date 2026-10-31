@@ -1,0 +1,65 @@
+// MobileGL - MobileGL/MG_Test/ScopedPipeVerb.h
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+#pragma once
+#include <MG_Pipe/MGPipe.h>
+#include <MG_Impl/Pipe/PipeFill.h>
+
+namespace MobileGL::MG_Test {
+    // "This test is standing inside verb X."
+    //
+    // A unit test that constructs a GLContext by hand and then calls a BACKEND helper
+    // directly enters through no GL entry point, so no MGP_FILL ever fires (P1 brief D7) and
+    // in a push build the PipeInputs block the helper's gPipeInputs reads is empty and unstamped:
+    // its first accessor read is Fatal{UnmigratedPipeInput, "Field@<none>"}. The test is
+    // right and the poison is right - what was missing is the verb, and this object is how a
+    // test states it. Constructing it runs the real filler for `verb`, exactly the call
+    // MG_Impl makes before that verb reaches a backend; destroying it leaves the verb again.
+    //
+    // It is not an escape hatch and it weakens nothing:
+    //   - it fills exactly kMGPipeClassFieldMask[class of verb] out of the live GLContext, so
+    //     a read of a field that verb does not fill is still Fatal, naming the field and this
+    //     verb - the fill table stays the only thing that says what a verb may read;
+    //   - leaving the scope re-arms the poison. The exit fill is a kQuery verb, whose class
+    //     mask is a single field, so every field this scope stamped goes stale the moment the
+    //     scope ends. That matters when the suite runs as one process (a developer running
+    //     the test binary directly, rather than one ctest entry per case): without it, one
+    //     case's declaration would cover a later case that forgot to make one;
+    //   - it is a no-op in the pull build, where gPipeInputs is the live context and there is
+    //     nothing to fill, so the pull build stays byte-identical.
+    //
+    // Place it the way MGP_FILL is placed in production (P1 brief D7): immediately BEFORE the
+    // backend call, after every frontend mutation that call is meant to see. A test that
+    // drives the helper again with frontend state changed in between issues a second verb -
+    // Renew() - because that is what a second GL entry point would have done. A test that
+    // drives a helper of a DIFFERENT verb class opens a nested scope for it.
+    class ScopedPipeVerb {
+    public:
+        explicit ScopedPipeVerb([[maybe_unused]] MG_Pipe::MGPipeVerb verb) : m_verb(verb) {
+            MG_Pipe::MGPipeValidateForVerb(m_verb);
+        }
+
+        ScopedPipeVerb(const ScopedPipeVerb&) = delete;
+        ScopedPipeVerb& operator=(const ScopedPipeVerb&) = delete;
+
+        // A second verb of the same kind begins: re-fill and re-stamp, so a helper driven
+        // again after the test moved frontend state sees the new values, the way the next GL
+        // entry point's MGP_FILL would.
+        void Renew() { MG_Pipe::MGPipeValidateForVerb(m_verb); }
+
+        // Leaving bumps the serial and puts the current verb back to "none": every field
+        // this scope stamped goes stale, and a later test that forgets its own declaration
+        // aborts with "<Field>@<none>" rather than with the name of a verb it never issued.
+        // That matters when the suite runs as one process (a developer running the test
+        // binary directly, rather than one ctest entry per case).
+        ~ScopedPipeVerb() { MG_Pipe::MGPipeLeaveVerb(); }
+
+    private:
+        MG_Pipe::MGPipeVerb m_verb;
+    };
+} // namespace MobileGL::MG_Test

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# MobileGL - tools/anland-mobilegl-plasma/scripts/build-android.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
+# build-android.sh - build the Android SERVER libMobileGL.so (NDK, arm64-v8a) that the anland APK embeds.
+# Output: $MGL_WORKTREE/build-android/libMobileGL.so (RelWithDebInfo, unstripped, ~320 MB; keep it for
+# llvm-addr2line, it is what cyc.sh pushes).  Stamp = worktree HEAD, so the container client
+# (xbuild.sh, same stamp) and the server agree on the build ("compatible wire with different build"
+# WARN otherwise).  Env: MGL_WORKTREE, ANDROID_NDK, BUILD_DIR (default build-android), JOBS (12).
+# Log level is compiled to INFO.  android-30 = the APK's minSdk: thread_local is then the platform's
+# own TLS rather than the emulated one (which cost 7-12% of an apply thread on the API 26 build).
+set -euo pipefail
+. "$(dirname "$0")/env.sh"
+W=$MGL_WORKTREE
+B=$W/${BUILD_DIR:-build-android}
+STAMP=$(git -C "$W" rev-parse HEAD)
+if [ ! -f "$B/build.ninja" ]; then
+cmake -S "$W" -B "$B" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DMOBILEGL_PIPE_PUSH=ON -DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON \
+  -DMOBILEGL_BUILD_TEST=OFF -DMOBILEGL_BUILD_BENCHMARK=OFF \
+  -DCMAKE_CXX_FLAGS=-DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
+  -DMOBILEGL_BUILD_STAMP="$STAMP"
+else
+cmake "$B" -DMOBILEGL_BUILD_STAMP="$STAMP" >/dev/null
+fi
+cmake --build "$B" --target MobileGL -j"${JOBS:-12}"
+ls -la "$B/libMobileGL.so"

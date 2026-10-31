@@ -97,10 +97,11 @@ namespace {
         return Props(program, iface, index, props);
     }
 
-    GLenum TakeError() { return GetError(); }
+    GLenum TakeError() {
+        return GetError();
+    }
     void ClearErrors() {
-        for (int i = 0; i < 32 && TakeError() != GL_NO_ERROR; ++i) {
-        }
+        for (int i = 0; i < 32 && TakeError() != GL_NO_ERROR; ++i) {}
     }
 
     const char* kSimpleVs = R"(#version 430
@@ -221,12 +222,9 @@ void main(void)
                                            GL_REFERENCED_BY_VERTEX_SHADER,
                                            GL_LOCATION,
                                            GL_IS_PER_PATCH};
-        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "a", props),
-                  (std::vector<GLint>{2, GL_FLOAT_MAT4, 1, 0, 0, 1, 0, 0}));
-        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "c[0]", props),
-                  (std::vector<GLint>{5, GL_FLOAT, 2, 0, 0, 1, 5, 0}));
-        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "d", props),
-                  (std::vector<GLint>{5, GL_FLOAT_MAT2x3, 2, 0, 0, 1, 7, 0}));
+        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "a", props), (std::vector<GLint>{2, GL_FLOAT_MAT4, 1, 0, 0, 1, 0, 0}));
+        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "c[0]", props), (std::vector<GLint>{5, GL_FLOAT, 2, 0, 0, 1, 5, 0}));
+        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "d", props), (std::vector<GLint>{5, GL_FLOAT_MAT2x3, 2, 0, 0, 1, 7, 0}));
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
 
@@ -271,10 +269,10 @@ void main() {
             EXPECT_EQ(GetProgramResourceLocationIndex(p, GL_PROGRAM_OUTPUT, name), 0) << name;
         }
 
-        const std::vector<GLenum> props = {GL_NAME_LENGTH, GL_TYPE,     GL_ARRAY_SIZE, GL_REFERENCED_BY_FRAGMENT_SHADER,
-                                           GL_LOCATION,    GL_IS_PER_PATCH, GL_LOCATION_INDEX};
-        EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "a", props),
-                  (std::vector<GLint>{5, GL_FLOAT_VEC3, 2, 1, 0, 0, 0}));
+        const std::vector<GLenum> props = {
+            GL_NAME_LENGTH, GL_TYPE,         GL_ARRAY_SIZE,    GL_REFERENCED_BY_FRAGMENT_SHADER,
+            GL_LOCATION,    GL_IS_PER_PATCH, GL_LOCATION_INDEX};
+        EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "a", props), (std::vector<GLint>{5, GL_FLOAT_VEC3, 2, 1, 0, 0, 0}));
         EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "d", props), (std::vector<GLint>{5, GL_INT, 2, 1, 5, 0, 0}));
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
@@ -299,8 +297,8 @@ void main(void) { gl_FragDepth = 0.1; gl_SampleMask[0] = 1; }
         EXPECT_EQ(GetProgramResourceLocationIndex(p, GL_PROGRAM_OUTPUT, "gl_FragDepth"), -1);
         EXPECT_EQ(GetProgramResourceLocationIndex(p, GL_PROGRAM_OUTPUT, "gl_SampleMask[0]"), -1);
 
-        const std::vector<GLenum> props = {GL_NAME_LENGTH, GL_TYPE, GL_ARRAY_SIZE, GL_REFERENCED_BY_FRAGMENT_SHADER,
-                                           GL_LOCATION,    GL_LOCATION_INDEX};
+        const std::vector<GLenum> props = {
+            GL_NAME_LENGTH, GL_TYPE, GL_ARRAY_SIZE, GL_REFERENCED_BY_FRAGMENT_SHADER, GL_LOCATION, GL_LOCATION_INDEX};
         EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "gl_FragDepth", props),
                   (std::vector<GLint>{13, GL_FLOAT, 1, 1, -1, -1}));
         EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "gl_SampleMask[0]", props),
@@ -377,9 +375,9 @@ void main() { color = vec4(0, 1, 0, 1) + recolor; }
                                            GL_REFERENCED_BY_FRAGMENT_SHADER,
                                            GL_REFERENCED_BY_VERTEX_SHADER,
                                            GL_LOCATION};
-        EXPECT_EQ(PropsOf(p, GL_UNIFORM, "repos", props),
-                  (std::vector<GLint>{6, GL_FLOAT_VEC4, 1, -1, -1, -1, -1, 0, -1, 0, 0, 1,
-                                      GetUniformLocation(p, "repos")}));
+        EXPECT_EQ(
+            PropsOf(p, GL_UNIFORM, "repos", props),
+            (std::vector<GLint>{6, GL_FLOAT_VEC4, 1, -1, -1, -1, -1, 0, -1, 0, 0, 1, GetUniformLocation(p, "repos")}));
         EXPECT_EQ(PropsOf(p, GL_UNIFORM, "recolor", props),
                   (std::vector<GLint>{8, GL_FLOAT_VEC4, 1, -1, -1, -1, -1, 0, -1, 0, 1, 0,
                                       GetUniformLocation(p, "recolor")}));
@@ -439,9 +437,9 @@ void main(void) {
                                            GL_ATOMIC_COUNTER_BUFFER_INDEX,
                                            GL_REFERENCED_BY_VERTEX_SHADER,
                                            GL_LOCATION};
-        EXPECT_EQ(PropsOf(p, GL_UNIFORM, "a[2][1]", props),
-                  (std::vector<GLint>{11, GL_FLOAT_VEC4, 5, -1, -1, -1, -1, 0, -1, 1,
-                                      GetUniformLocation(p, "a[2][1]")}));
+        EXPECT_EQ(
+            PropsOf(p, GL_UNIFORM, "a[2][1]", props),
+            (std::vector<GLint>{11, GL_FLOAT_VEC4, 5, -1, -1, -1, -1, 0, -1, 1, GetUniformLocation(p, "a[2][1]")}));
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
 
@@ -796,10 +794,10 @@ void main() {
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
 
-    // Two counters that share a binding AND an offset must fail to link. glslang's own check
-    // lives in fixOffset(), which the Vulkan-relaxed parse never reaches - it folds the
-    // atomic_uint into a storage block and returns from declareVariable() first - so the pair
-    // used to link cleanly and then increment the same four bytes.
+    // Two counters that share a binding AND an offset must not make a program. Within one
+    // shader that is a compile error (the relaxed parse now places counters the way fixOffset()
+    // does); the link-time check is what still catches the pair when they come from two shaders
+    // of one stage, so the link must fail either way.
     TEST_F(ProgramInterfaceTest, OverlappingAtomicCounterOffsetsFailToLink) {
         const char* fs = R"(#version 430
 out vec4 color;
@@ -807,14 +805,22 @@ layout (binding = 0, offset = 0) uniform atomic_uint a;
 layout (binding = 0, offset = 0) uniform atomic_uint b;
 void main() { color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrement(b))); }
 )";
+        const GLuint fsShader = CreateShader(GL_FRAGMENT_SHADER);
+        ShaderSource(fsShader, 1, &fs, nullptr);
+        CompileShader(fsShader);
+        GLint compiled = -1;
+        GetShaderiv(fsShader, GL_COMPILE_STATUS, &compiled);
+        EXPECT_EQ(compiled, GL_FALSE);
+        char shaderLog[4096] = "";
+        GetShaderInfoLog(fsShader, sizeof(shaderLog), nullptr, shaderLog);
+        EXPECT_NE(std::string(shaderLog).find("same offset"), std::string::npos) << "info log was: " << shaderLog;
+        DeleteShader(fsShader);
+
         const GLuint p = MakeProgram(kSimpleVs, fs);
         LinkProgram(p);
         GLint status = -1;
         GetProgramiv(p, GL_LINK_STATUS, &status);
         EXPECT_EQ(status, GL_FALSE);
-        char log[4096] = "";
-        GetProgramInfoLog(p, sizeof(log), nullptr, log);
-        EXPECT_NE(std::string(log).find("overlap"), std::string::npos) << "info log was: " << log;
         ClearErrors();
 
         // Distinct offsets at one binding, and the same offset at two different bindings, are
@@ -831,6 +837,231 @@ void main() {
         const GLuint legal = MakeProgram(kSimpleVs, legalFs);
         LinkProgram(legal);
         ExpectLinked(legal);
+        ClearErrors();
+    }
+
+    // GLSL 4.60 4.4.6.3: a counter without an offset qualifier takes its binding's offset
+    // cursor - set by a default declaration, advanced by every counter at that binding - not
+    // whatever the synthesized block's packing would give it. Covers the CTS's ac-binding
+    // examples 1 and 2.
+    TEST_F(ProgramInterfaceTest, ImplicitAtomicCounterOffsetsFollowTheBindingCursor) {
+        const char* fs = R"(#version 430
+out vec4 color;
+layout(binding = 2, offset = 4) uniform atomic_uint;
+layout(binding = 2) uniform atomic_uint a;
+layout(binding = 3, offset = 4) uniform atomic_uint b;
+layout(binding = 1) uniform atomic_uint c;
+layout(binding = 3) uniform atomic_uint d;
+layout(binding = 1) uniform atomic_uint e[2];
+layout(binding = 1) uniform atomic_uint f;
+void main() {
+    color = vec4(float(atomicCounter(a) + atomicCounter(b) + atomicCounter(c) + atomicCounter(d) +
+                       atomicCounter(e[1]) + atomicCounter(f)));
+}
+)";
+        const GLuint p = MakeProgram(kSimpleVs, fs);
+        LinkProgram(p);
+        ExpectLinked(p);
+        ClearErrors();
+        const struct {
+            const char* name;
+            GLint offset;
+        } expected[] = {{"a", 4}, {"b", 4}, {"c", 0}, {"d", 8}, {"e[0]", 4}, {"f", 12}};
+        for (const auto& counter : expected) {
+            const std::vector<GLint> offset = PropsOf(p, GL_UNIFORM, counter.name, {GL_OFFSET});
+            ASSERT_EQ(offset.size(), 1u) << counter.name;
+            EXPECT_EQ(offset[0], counter.offset) << counter.name;
+        }
+        EXPECT_EQ(TakeError(), GL_NO_ERROR);
+    }
+
+    // The rest of fixOffset()'s rules, raised where the relaxed parse folds the counter: an
+    // unsized counter array, a counter with no binding (there is no default binding - only a
+    // default offset), and a counter placed on top of an earlier one. Plus a location qualifier,
+    // which an atomic counter cannot take (KHR-GL4x.layout_location.invalid_cases) and which the
+    // relaxed parse used to drop with only a warning.
+    TEST_F(ProgramInterfaceTest, IllegalAtomicCounterDeclarationsFailToCompile) {
+        const auto compiles = [](const char* source) {
+            const GLuint sh = CreateShader(GL_FRAGMENT_SHADER);
+            ShaderSource(sh, 1, &source, nullptr);
+            CompileShader(sh);
+            GLint status = -1;
+            GetShaderiv(sh, GL_COMPILE_STATUS, &status);
+            DeleteShader(sh);
+            return status == GL_TRUE;
+        };
+        EXPECT_FALSE(compiles(R"(#version 430
+out vec4 color;
+layout(binding = 0, offset = 4) uniform atomic_uint ac[];
+void main() { color = vec4(float(atomicCounterIncrement(ac[0]))); }
+)")) << "unsized atomic_uint array";
+        EXPECT_FALSE(compiles(R"(#version 430
+out vec4 color;
+layout(binding = 2, offset = 4) uniform atomic_uint;
+layout(offset = 8) uniform atomic_uint ac;
+void main() { color = vec4(float(atomicCounterIncrement(ac))); }
+)")) << "no binding";
+        EXPECT_FALSE(compiles(R"(#version 430
+out vec4 color;
+layout(binding = 0, offset = 4) uniform atomic_uint a;
+layout(binding = 0, offset = 0) uniform atomic_uint b[2];
+void main() { color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrement(b[1]))); }
+)")) << "array overlapping an earlier counter";
+        EXPECT_FALSE(compiles(R"(#version 430
+out vec4 color;
+layout(location = 2, binding = 0) uniform atomic_uint ac;
+void main() { color = vec4(float(atomicCounterIncrement(ac))); }
+)")) << "location on an atomic counter";
+        EXPECT_TRUE(compiles(R"(#version 430
+out vec4 color;
+layout(binding = 0, offset = 0) uniform atomic_uint a;
+layout(binding = 1, offset = 0) uniform atomic_uint b;
+layout(binding = 0) uniform atomic_uint c[3];
+void main() { color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrement(b) + atomicCounterIncrement(c[2]))); }
+)")) << "legal layout";
+        ClearErrors();
+    }
+
+    // GL 4.6 core 7.7 fails the link when a stage uses more atomic counter buffers than
+    // GL_MAX_<STAGE>_ATOMIC_COUNTER_BUFFERS. Nothing counted them, so a geometry stage with more
+    // counter buffers than advertised linked cleanly. Sized off the ADVERTISED limits, which
+    // follow the active backend's geometry-stage storage-block budget.
+    TEST_F(ProgramInterfaceTest, AtomicCounterBuffersOverAStageLimitFailToLink) {
+        GLint maxGeometryBuffers = -1;
+        GLint maxBindings = -1;
+        GetIntegerv(GL_MAX_GEOMETRY_ATOMIC_COUNTER_BUFFERS, &maxGeometryBuffers);
+        GetIntegerv(GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, &maxBindings);
+        ClearErrors();
+        ASSERT_GE(maxGeometryBuffers, 0);
+
+        // One counter per binding 0..buffers-1, each its own buffer.
+        const auto link = [](GLint buffers, std::string& log) {
+            std::string gs = R"(#version 430
+layout(points) in;
+layout(points, max_vertices = 1) out;
+)";
+            std::string body;
+            for (GLint i = 0; i < buffers; ++i) {
+                gs += "layout(binding = " + std::to_string(i) + ") uniform atomic_uint c" + std::to_string(i) + ";\n";
+                body += "    atomicCounterIncrement(c" + std::to_string(i) + ");\n";
+            }
+            gs += "void main() {\n" + body + "    gl_Position = vec4(0.0);\n    EmitVertex();\n}\n";
+            const char* gsSource = gs.c_str();
+            const GLuint p = MakeProgram(kSimpleVs, kSimpleFs);
+            const GLuint sh = CreateShader(GL_GEOMETRY_SHADER);
+            ShaderSource(sh, 1, &gsSource, nullptr);
+            CompileShader(sh);
+            AttachShader(p, sh);
+            LinkProgram(p);
+            GLint status = -1;
+            GetProgramiv(p, GL_LINK_STATUS, &status);
+            char buffer[4096] = "";
+            GetProgramInfoLog(p, sizeof(buffer), nullptr, buffer);
+            log = buffer;
+            return status == GL_TRUE;
+        };
+
+        std::string log;
+        if (maxGeometryBuffers + 1 <= maxBindings) {
+            EXPECT_FALSE(link(maxGeometryBuffers + 1, log)) << "one buffer over the advertised limit must not link";
+            EXPECT_NE(log.find("GL_MAX_GEOMETRY_ATOMIC_COUNTER_BUFFERS"), std::string::npos) << "info log was: " << log;
+        }
+        if (maxGeometryBuffers > 0) {
+            EXPECT_TRUE(link(maxGeometryBuffers, log)) << "exactly the advertised limit must link: " << log;
+        }
+        ClearErrors();
+    }
+
+    // ESSL 3.10 4.3.9 makes a variable index into a shader storage (or uniform) block array a
+    // compile error; desktop GLSL and ESSL 3.20 do not. An `es` source is compiled through a
+    // rewrite to desktop 460, so the rule is kept only for the sources that declared `es` -
+    // KHR-GL4x.es_31_compatibility.shader_storage_buffer_object.negative-glsl-compileTime.
+    TEST_F(ProgramInterfaceTest, EsslBlockArraysNeedAConstantIndexOnlyInEsslBelow320) {
+        std::string log;
+        const auto compiles = [&log](const std::string& version) {
+            const std::string source = version + R"(
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Input { float data0; } g_input[4];
+layout(std430, binding = 4) buffer Output { float data0; } g_output[4];
+void main() {
+    for (int i = 0; i < 4; ++i) g_output[i].data0 = g_input[i].data0;
+}
+)";
+            const char* sourcePtr = source.c_str();
+            const GLuint sh = CreateShader(GL_COMPUTE_SHADER);
+            ShaderSource(sh, 1, &sourcePtr, nullptr);
+            CompileShader(sh);
+            GLint status = -1;
+            GetShaderiv(sh, GL_COMPILE_STATUS, &status);
+            char buffer[4096] = "";
+            GetShaderInfoLog(sh, sizeof(buffer), nullptr, buffer);
+            log = buffer;
+            DeleteShader(sh);
+            return status == GL_TRUE;
+        };
+        EXPECT_FALSE(compiles("#version 310 es"));
+        EXPECT_NE(log.find("constant integral expression"), std::string::npos) << "info log was: " << log;
+        EXPECT_TRUE(compiles("#version 320 es"));
+        EXPECT_TRUE(compiles("#version 430"));
+
+        const char* constantIndex = R"(#version 310 es
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Input { float data0; } g_input[4];
+void main() { g_input[3].data0 = g_input[0].data0; }
+)";
+        const GLuint sh = CreateShader(GL_COMPUTE_SHADER);
+        ShaderSource(sh, 1, &constantIndex, nullptr);
+        CompileShader(sh);
+        GLint status = -1;
+        GetShaderiv(sh, GL_COMPILE_STATUS, &status);
+        EXPECT_EQ(status, GL_TRUE) << "a constant index stays legal";
+        DeleteShader(sh);
+        ClearErrors();
+    }
+
+    // ES 3.1 fixes an image uniform's unit at its binding qualifier, so every Uniform* on one is
+    // INVALID_OPERATION in a program built from `es` sources - while a desktop program sets the
+    // unit with glUniform1i. KHR-GL4x.es_31_compatibility.shader_image_load_store.negative-uniform.
+    TEST_F(ProgramInterfaceTest, ImageUniformsOfEsProgramsCannotBeSet) {
+        const auto imageProgram = [](const char* version) {
+            const std::string vs = std::string(version) + R"(
+layout(location = 0) in vec4 i_position;
+void main() { gl_Position = i_position; }
+)";
+            const std::string fs = std::string(version) + R"(
+layout(rgba32f, binding = 0) writeonly uniform highp image2D g_image;
+void main() {
+    imageStore(g_image, ivec2(gl_FragCoord.xy), vec4(0.0));
+    discard;
+}
+)";
+            const GLuint p = MakeProgram(vs.c_str(), fs.c_str());
+            LinkProgram(p);
+            return p;
+        };
+
+        const GLuint es = imageProgram("#version 310 es");
+        ExpectLinked(es);
+        ClearErrors();
+        const GLint esLocation = GetUniformLocation(es, "g_image");
+        ASSERT_GE(esLocation, 0);
+        UseProgram(es);
+        Uniform1i(esLocation, 1);
+        EXPECT_EQ(TakeError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+        const GLint unit = 1;
+        Uniform1iv(esLocation, 1, &unit);
+        EXPECT_EQ(TakeError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+        UseProgram(0);
+        ProgramUniform1i(es, esLocation, 1);
+        EXPECT_EQ(TakeError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+
+        const GLuint desktop = imageProgram("#version 430");
+        ExpectLinked(desktop);
+        ClearErrors();
+        const GLint desktopLocation = GetUniformLocation(desktop, "g_image");
+        ASSERT_GE(desktopLocation, 0);
+        ProgramUniform1i(desktop, desktopLocation, 1);
+        EXPECT_EQ(TakeError(), static_cast<GLenum>(GL_NO_ERROR));
         ClearErrors();
     }
 
@@ -856,7 +1087,8 @@ void main() {
             const std::string n = std::to_string(count);
             const std::string source = std::string(R"(#version 430
 out vec4 color;
-layout(r32i) uniform iimage2D u_image[)") + n + R"(];
+layout(r32i) uniform iimage2D u_image[)") +
+                                       n + R"(];
 void main() {
     int value = 1;
     for (int i = 0; i < )" + n + R"(; ++i) {
@@ -905,6 +1137,194 @@ void main() {
         }
     }
 
+    // The same rule for blocks (GL 4.6 core 7.6.2 / 7.8): a stage using more shader storage
+    // blocks than GL_MAX_<STAGE>_SHADER_STORAGE_BLOCKS fails the link. glslang does not count
+    // them, so a fragment stage with eight blocks against an advertised four reported
+    // LINK_STATUS = TRUE and then failed inside the backend. Sized off the advertised limit.
+    TEST_F(ProgramInterfaceTest, StorageBlocksOverAStageLimitFailToLink) {
+        GLint maxFragmentBlocks = 0;
+        GLint maxCombinedBlocks = 0;
+        GetIntegerv(GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS, &maxFragmentBlocks);
+        GetIntegerv(GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS, &maxCombinedBlocks);
+        ClearErrors();
+        ASSERT_GT(maxFragmentBlocks, 0);
+
+        // Bindings wrap at the limit: two blocks may share a binding point, and a binding past
+        // GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS would fail for a different reason.
+        const auto linkWithFragmentBlocks = [maxFragmentBlocks](GLint count) {
+            std::string source = "#version 430\nout vec4 color;\n";
+            std::string sum = "0.0";
+            for (GLint i = 0; i < count; ++i) {
+                const std::string n = std::to_string(i);
+                source += "layout(std430, binding = " + std::to_string(i % maxFragmentBlocks) + ") buffer B" + n +
+                          " { float v" + n + "; };\n";
+                sum += " + v" + n;
+            }
+            source += "void main() { color = vec4(" + sum + "); }\n";
+            return MakeProgram(kSimpleVs, source.c_str());
+        };
+
+        const GLuint over = linkWithFragmentBlocks(maxFragmentBlocks + 1);
+        LinkProgram(over);
+        GLint status = -1;
+        GetProgramiv(over, GL_LINK_STATUS, &status);
+        EXPECT_EQ(status, GL_FALSE);
+        char log[4096] = "";
+        GetProgramInfoLog(over, sizeof(log), nullptr, log);
+        EXPECT_NE(std::string(log).find("GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS"), std::string::npos)
+            << "info log was: " << log;
+        ClearErrors();
+
+        if (maxFragmentBlocks <= maxCombinedBlocks) {
+            const GLuint atLimit = linkWithFragmentBlocks(maxFragmentBlocks);
+            LinkProgram(atLimit);
+            ExpectLinked(atLimit);
+            ClearErrors();
+        }
+    }
+
+    // glGetAttribLocation("name[N]") on an attribute array answers element N's location
+    // (KHR-GL4x.cull_distance.functional_* feed `in float culldistance_data[N]` element by element).
+    TEST_F(ProgramInterfaceTest, AttribLocationResolvesArrayElements) {
+        const char* vs = R"(#version 430
+in vec4 position;
+in float data[4];
+in mat2 m[2];
+out float v;
+void main(void) {
+    v = data[0] + data[1] + data[2] + data[3] + m[0][0][0] + m[1][1][1];
+    gl_Position = position;
+}
+)";
+        const GLuint p = MakeProgram(vs, kSimpleFs);
+        LinkProgram(p);
+        ExpectLinked(p);
+        ClearErrors();
+
+        const GLint data = GetAttribLocation(p, "data");
+        ASSERT_GE(data, 0);
+        EXPECT_EQ(GetAttribLocation(p, "data[0]"), data);
+        EXPECT_EQ(GetAttribLocation(p, "data[1]"), data + 1);
+        EXPECT_EQ(GetAttribLocation(p, "data[3]"), data + 3);
+        EXPECT_EQ(GetAttribLocation(p, "data[4]"), -1);
+        EXPECT_EQ(GetAttribLocation(p, "data[01]"), -1);
+        EXPECT_EQ(GetAttribLocation(p, "data[ 1]"), -1);
+
+        // A matrix element occupies one location per column.
+        const GLint m = GetAttribLocation(p, "m");
+        ASSERT_GE(m, 0);
+        EXPECT_EQ(GetAttribLocation(p, "m[1]"), m + 2);
+        EXPECT_EQ(GetAttribLocation(p, "m[2]"), -1);
+
+        // A subscript on a non-array names nothing.
+        ASSERT_GE(GetAttribLocation(p, "position"), 0);
+        EXPECT_EQ(GetAttribLocation(p, "position[0]"), -1);
+        EXPECT_EQ(TakeError(), GL_NO_ERROR);
+    }
+
+    // The same rule for the tessellation stages, whose limits come from the backend like the
+    // others (they used to be hard-coded zeros). Sized off the advertised limit for the same
+    // reason as above: one image over it must fail and name the limit, and exactly at it must
+    // link whenever the limit is non-zero.
+    TEST_F(ProgramInterfaceTest, TessellationImageUniformsAreCheckedAgainstTheirOwnLimit) {
+        GLint maxTesImages = -1;
+        GetIntegerv(GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS, &maxTesImages);
+        ASSERT_EQ(TakeError(), GL_NO_ERROR);
+        ASSERT_GE(maxTesImages, 0);
+
+        const auto linkWithTesImages = [](GLint count) {
+            const std::string n = std::to_string(count);
+            const std::string tcs = R"(#version 430
+layout(vertices = 3) out;
+void main() {
+    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
+    gl_TessLevelOuter[0] = 1.0; gl_TessLevelOuter[1] = 1.0; gl_TessLevelOuter[2] = 1.0;
+    gl_TessLevelInner[0] = 1.0;
+}
+)";
+            const std::string tes = std::string(R"(#version 430
+layout(triangles) in;
+layout(r32i) uniform iimage2D u_tesImage[)") +
+                                    n + R"(];
+void main() {
+    int value = 1;
+    for (int i = 0; i < )" + n + R"(; ++i) {
+        value = imageAtomicAdd(u_tesImage[i], ivec2(0), value);
+    }
+    gl_Position = gl_in[0].gl_Position * float(value);
+}
+)";
+            const GLuint program = CreateProgram();
+            const auto attach = [program](GLenum stage, const char* source) {
+                const GLuint sh = CreateShader(stage);
+                ShaderSource(sh, 1, &source, nullptr);
+                CompileShader(sh);
+                GLint compiled = 0;
+                GetShaderiv(sh, GL_COMPILE_STATUS, &compiled);
+                EXPECT_EQ(compiled, GL_TRUE) << "stage " << stage << " must compile";
+                AttachShader(program, sh);
+            };
+            attach(GL_VERTEX_SHADER, kSimpleVs);
+            attach(GL_TESS_CONTROL_SHADER, tcs.c_str());
+            attach(GL_TESS_EVALUATION_SHADER, tes.c_str());
+            attach(GL_FRAGMENT_SHADER, kSimpleFs);
+            LinkProgram(program);
+            return program;
+        };
+
+        const GLuint over = linkWithTesImages(maxTesImages + 1);
+        GLint status = -1;
+        GetProgramiv(over, GL_LINK_STATUS, &status);
+        EXPECT_EQ(status, GL_FALSE);
+        char log[4096] = "";
+        GetProgramInfoLog(over, sizeof(log), nullptr, log);
+        EXPECT_NE(std::string(log).find("GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS"), std::string::npos)
+            << "info log was: " << log;
+        ClearErrors();
+
+        if (maxTesImages > 0) {
+            ExpectLinked(linkWithTesImages(maxTesImages));
+            ClearErrors();
+        }
+    }
+
+    // Uniform blocks are counted the same way, and the synthesized block that carries the
+    // default-block uniforms is not one of them.
+    TEST_F(ProgramInterfaceTest, UniformBlocksOverAStageLimitFailToLink) {
+        GLint maxFragmentBlocks = 0;
+        GetIntegerv(GL_MAX_FRAGMENT_UNIFORM_BLOCKS, &maxFragmentBlocks);
+        ClearErrors();
+        ASSERT_GT(maxFragmentBlocks, 0);
+
+        const auto linkWithFragmentBlocks = [](GLint count) {
+            std::string source = "#version 430\nout vec4 color;\nuniform float loose;\n";
+            std::string sum = "loose";
+            for (GLint i = 0; i < count; ++i) {
+                const std::string n = std::to_string(i);
+                source += "layout(std140) uniform U" + n + " { float u" + n + "; };\n";
+                sum += " + u" + n;
+            }
+            source += "void main() { color = vec4(" + sum + "); }\n";
+            return MakeProgram(kSimpleVs, source.c_str());
+        };
+
+        const GLuint over = linkWithFragmentBlocks(maxFragmentBlocks + 1);
+        LinkProgram(over);
+        GLint status = -1;
+        GetProgramiv(over, GL_LINK_STATUS, &status);
+        EXPECT_EQ(status, GL_FALSE);
+        char log[4096] = "";
+        GetProgramInfoLog(over, sizeof(log), nullptr, log);
+        EXPECT_NE(std::string(log).find("GL_MAX_FRAGMENT_UNIFORM_BLOCKS"), std::string::npos)
+            << "info log was: " << log;
+        ClearErrors();
+
+        const GLuint atLimit = linkWithFragmentBlocks(maxFragmentBlocks);
+        LinkProgram(atLimit);
+        ExpectLinked(atLimit);
+        ClearErrors();
+    }
+
     // glGetProgramiv(GL_ACTIVE_ATOMIC_COUNTER_BUFFERS) and glGetActiveAtomicCounterBufferiv are
     // the pre-4.3 spelling of the interface above, and the spec requires the two to agree.
     // Neither did: the first counted glslang's atomic counter UNIFORMS - zero, because the
@@ -938,8 +1358,8 @@ void main() {
         for (GLuint index = 0; index < static_cast<GLuint>(bufferCount); ++index) {
             const std::vector<GLint> viaInterface =
                 Props(p, GL_ATOMIC_COUNTER_BUFFER, index,
-                      {GL_BUFFER_BINDING, GL_BUFFER_DATA_SIZE, GL_NUM_ACTIVE_VARIABLES,
-                       GL_REFERENCED_BY_VERTEX_SHADER, GL_REFERENCED_BY_FRAGMENT_SHADER});
+                      {GL_BUFFER_BINDING, GL_BUFFER_DATA_SIZE, GL_NUM_ACTIVE_VARIABLES, GL_REFERENCED_BY_VERTEX_SHADER,
+                       GL_REFERENCED_BY_FRAGMENT_SHADER});
             ASSERT_EQ(viaInterface.size(), 5u);
             EXPECT_EQ(activeBufferiv(index, GL_ATOMIC_COUNTER_BUFFER_BINDING), viaInterface[0]);
             EXPECT_EQ(activeBufferiv(index, GL_ATOMIC_COUNTER_BUFFER_DATA_SIZE), viaInterface[1]);
@@ -992,16 +1412,15 @@ void main(void) {
 
         EXPECT_EQ(Interfaceiv(p, GL_TRANSFORM_FEEDBACK_VARYING, GL_ACTIVE_RESOURCES), 6);
         EXPECT_EQ(Interfaceiv(p, GL_TRANSFORM_FEEDBACK_VARYING, GL_MAX_NAME_LENGTH), 5);
-        for (const char* name : varyings) ExpectResource(p, GL_TRANSFORM_FEEDBACK_VARYING, name, name);
+        for (const char* name : varyings)
+            ExpectResource(p, GL_TRANSFORM_FEEDBACK_VARYING, name, name);
 
         const std::vector<GLenum> props = {GL_NAME_LENGTH, GL_TYPE, GL_ARRAY_SIZE};
-        EXPECT_EQ(PropsOf(p, GL_TRANSFORM_FEEDBACK_VARYING, "a", props),
-                  (std::vector<GLint>{2, GL_INT_VEC4, 1}));
+        EXPECT_EQ(PropsOf(p, GL_TRANSFORM_FEEDBACK_VARYING, "a", props), (std::vector<GLint>{2, GL_INT_VEC4, 1}));
         EXPECT_EQ(PropsOf(p, GL_TRANSFORM_FEEDBACK_VARYING, "b[0]", props), (std::vector<GLint>{5, GL_FLOAT, 1}));
         EXPECT_EQ(PropsOf(p, GL_TRANSFORM_FEEDBACK_VARYING, "c", props),
                   (std::vector<GLint>{2, GL_UNSIGNED_INT_VEC2, 1}));
-        EXPECT_EQ(PropsOf(p, GL_TRANSFORM_FEEDBACK_VARYING, "e", props),
-                  (std::vector<GLint>{2, GL_FLOAT_VEC3, 2}));
+        EXPECT_EQ(PropsOf(p, GL_TRANSFORM_FEEDBACK_VARYING, "e", props), (std::vector<GLint>{2, GL_FLOAT_VEC3, 2}));
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
 
@@ -1027,7 +1446,8 @@ void main(void) {
         EXPECT_EQ(Interfaceiv(p, GL_TRANSFORM_FEEDBACK_VARYING, GL_MAX_NAME_LENGTH), 19);
 
         std::vector<std::string> names;
-        for (GLuint i = 0; i < 11; ++i) names.push_back(ResourceName(p, GL_TRANSFORM_FEEDBACK_VARYING, i));
+        for (GLuint i = 0; i < 11; ++i)
+            names.push_back(ResourceName(p, GL_TRANSFORM_FEEDBACK_VARYING, i));
         const auto indexOf = [&names](const std::string& name) -> GLuint {
             for (GLuint i = 0; i < names.size(); ++i) {
                 if (names[i] == name) return i;
@@ -1188,17 +1608,16 @@ void main() {
         // A non-fragment stage's outputs are varyings: no color number, so no color index.
         EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "gl_Position", {GL_LOCATION_INDEX}), (std::vector<GLint>{-1}));
 
-        const std::vector<GLenum> stageProps = {
-            GL_NAME_LENGTH,
-            GL_TYPE,
-            GL_ARRAY_SIZE,
-            GL_REFERENCED_BY_COMPUTE_SHADER,
-            GL_REFERENCED_BY_FRAGMENT_SHADER,
-            GL_REFERENCED_BY_GEOMETRY_SHADER,
-            GL_REFERENCED_BY_TESS_CONTROL_SHADER,
-            GL_REFERENCED_BY_TESS_EVALUATION_SHADER,
-            GL_REFERENCED_BY_VERTEX_SHADER,
-            GL_IS_PER_PATCH};
+        const std::vector<GLenum> stageProps = {GL_NAME_LENGTH,
+                                                GL_TYPE,
+                                                GL_ARRAY_SIZE,
+                                                GL_REFERENCED_BY_COMPUTE_SHADER,
+                                                GL_REFERENCED_BY_FRAGMENT_SHADER,
+                                                GL_REFERENCED_BY_GEOMETRY_SHADER,
+                                                GL_REFERENCED_BY_TESS_CONTROL_SHADER,
+                                                GL_REFERENCED_BY_TESS_EVALUATION_SHADER,
+                                                GL_REFERENCED_BY_VERTEX_SHADER,
+                                                GL_IS_PER_PATCH};
         EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "gl_PerVertex.gl_Position", stageProps),
                   (std::vector<GLint>{25, GL_FLOAT_VEC4, 1, 0, 0, 1, 0, 0, 0, 0}));
         EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "gl_Position", stageProps),
@@ -1517,9 +1936,9 @@ void main() { color = u + v; }
         ASSERT_NE(neverLinked, 0u);
         ClearErrors();
 
-        for (const GLenum pname : {GL_ACTIVE_ATTRIBUTES, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, GL_ACTIVE_UNIFORMS,
-                                   GL_ACTIVE_UNIFORM_MAX_LENGTH, GL_ACTIVE_UNIFORM_BLOCKS,
-                                   GL_ACTIVE_ATOMIC_COUNTER_BUFFERS}) {
+        for (const GLenum pname :
+             {GL_ACTIVE_ATTRIBUTES, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, GL_ACTIVE_UNIFORMS, GL_ACTIVE_UNIFORM_MAX_LENGTH,
+              GL_ACTIVE_UNIFORM_BLOCKS, GL_ACTIVE_ATOMIC_COUNTER_BUFFERS}) {
             GLint value = -1;
             GetProgramiv(neverLinked, pname, &value);
             ClearErrors();
@@ -1547,15 +1966,15 @@ void main() { color = u + v; }
         GetProgramiv(brokenSource, GL_COMPUTE_WORK_GROUP_SIZE, localSize);
         const GLenum computeError = TakeError();
         ClearErrors();
-        EXPECT_TRUE(computeError == GL_INVALID_OPERATION || (localSize[0] == 0 && localSize[1] == 0 &&
-                                                             localSize[2] == 0))
+        EXPECT_TRUE(computeError == GL_INVALID_OPERATION ||
+                    (localSize[0] == 0 && localSize[1] == 0 && localSize[2] == 0))
             << "either the query is refused, or it answers the initial value - never both untouched "
                "and unreported";
     }
 
     // ------------------------------------------------------------- length on every path ----
     // glGetProgramResourceiv's *length is the caller's only signal for how many entries params
-    // holds, and callers are entitled to leave it uninitialised: the CTS declares `GLsizei
+    // holds, and callers are entitled to leave it uninitialized: the CTS declares `GLsizei
     // length;` next to a 1000-entry stack array and then loops `for (i = 0; i < length; ++i)`
     // (gl4cProgramInterfaceQueryTests.cpp:2172). Leaving it untouched on an error path therefore
     // does not "return nothing" - it hands the caller whatever was on its stack and makes it walk
@@ -1578,8 +1997,8 @@ void main() { color = u + v; }
         const GLenum compatibleSubroutinesProp = GL_COMPATIBLE_SUBROUTINES;
         const GLenum notAProp = GL_TEXTURE_2D;
 
-        const auto lengthAfter = [&](GLuint program, GLenum iface, GLuint index, GLsizei propCount,
-                                     const GLenum* props, GLsizei bufSize, GLint* out) {
+        const auto lengthAfter = [&](GLuint program, GLenum iface, GLuint index, GLsizei propCount, const GLenum* props,
+                                     GLsizei bufSize, GLint* out) {
             GLsizei length = kPoison;
             GetProgramResourceiv(program, iface, index, propCount, props, bufSize, &length, out);
             ClearErrors();

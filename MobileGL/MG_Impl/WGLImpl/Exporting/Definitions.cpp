@@ -28,8 +28,7 @@ extern "C" int WINAPI wglChoosePixelFormat(HDC hdc, CONST PIXELFORMATDESCRIPTOR*
     return WGL::ChoosePixelFormat(hdc, ppfd);
 }
 
-extern "C" int WINAPI wglDescribePixelFormat(HDC hdc, int iPixelFormat, UINT nBytes,
-                                                   LPPIXELFORMATDESCRIPTOR ppfd) {
+extern "C" int WINAPI wglDescribePixelFormat(HDC hdc, int iPixelFormat, UINT nBytes, LPPIXELFORMATDESCRIPTOR ppfd) {
     return WGL::DescribePixelFormat(hdc, iPixelFormat, nBytes, ppfd);
 }
 
@@ -141,14 +140,12 @@ extern "C" BOOL WINAPI wglUseFontBitmapsW(HDC, DWORD, DWORD, DWORD) {
     return FALSE;
 }
 
-extern "C" BOOL WINAPI wglUseFontOutlinesA(HDC, DWORD, DWORD, DWORD, FLOAT, FLOAT, int,
-                                                 LPGLYPHMETRICSFLOAT) {
+extern "C" BOOL WINAPI wglUseFontOutlinesA(HDC, DWORD, DWORD, DWORD, FLOAT, FLOAT, int, LPGLYPHMETRICSFLOAT) {
     MGLOG_W_ONCE("wglUseFontOutlinesA is not supported");
     return FALSE;
 }
 
-extern "C" BOOL WINAPI wglUseFontOutlinesW(HDC, DWORD, DWORD, DWORD, FLOAT, FLOAT, int,
-                                                 LPGLYPHMETRICSFLOAT) {
+extern "C" BOOL WINAPI wglUseFontOutlinesW(HDC, DWORD, DWORD, DWORD, FLOAT, FLOAT, int, LPGLYPHMETRICSFLOAT) {
     MGLOG_W_ONCE("wglUseFontOutlinesW is not supported");
     return FALSE;
 }

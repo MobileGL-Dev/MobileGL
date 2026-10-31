@@ -136,43 +136,62 @@ namespace MobileGL {
                 ImageFormatWidening WideningOfSpirvImageFormat(spv::ImageFormat format) {
                     switch (format) {
                     // Float.
-                    case spv::ImageFormat::Rg32f: return {spv::ImageFormat::Rgba32f, 2};
-                    case spv::ImageFormat::Rg16f: return {spv::ImageFormat::Rgba16f, 2};
-                    case spv::ImageFormat::R16f: return {spv::ImageFormat::Rgba16f, 1};
+                    case spv::ImageFormat::Rg32f:
+                        return {spv::ImageFormat::Rgba32f, 2};
+                    case spv::ImageFormat::Rg16f:
+                        return {spv::ImageFormat::Rgba16f, 2};
+                    case spv::ImageFormat::R16f:
+                        return {spv::ImageFormat::Rgba16f, 1};
                     // Not a channel widening but a lossless re-encoding - see above. Three
                     // channels, so the fourth reads as the 1 GL defines for a format without one.
-                    case spv::ImageFormat::R11fG11fB10f: return {spv::ImageFormat::Rgba16f, 3};
+                    case spv::ImageFormat::R11fG11fB10f:
+                        return {spv::ImageFormat::Rgba16f, 3};
                     // Unsigned normalized.
-                    case spv::ImageFormat::Rg8: return {spv::ImageFormat::Rgba8, 2};
-                    case spv::ImageFormat::R8: return {spv::ImageFormat::Rgba8, 1};
+                    case spv::ImageFormat::Rg8:
+                        return {spv::ImageFormat::Rgba8, 2};
+                    case spv::ImageFormat::R8:
+                        return {spv::ImageFormat::Rgba8, 1};
                     // Signed normalized.
-                    case spv::ImageFormat::Rg8Snorm: return {spv::ImageFormat::Rgba8Snorm, 2};
-                    case spv::ImageFormat::R8Snorm: return {spv::ImageFormat::Rgba8Snorm, 1};
+                    case spv::ImageFormat::Rg8Snorm:
+                        return {spv::ImageFormat::Rgba8Snorm, 2};
+                    case spv::ImageFormat::R8Snorm:
+                        return {spv::ImageFormat::Rgba8Snorm, 1};
                     // Signed integer.
-                    case spv::ImageFormat::Rg32i: return {spv::ImageFormat::Rgba32i, 2};
-                    case spv::ImageFormat::Rg16i: return {spv::ImageFormat::Rgba16i, 2};
-                    case spv::ImageFormat::R16i: return {spv::ImageFormat::Rgba16i, 1};
-                    case spv::ImageFormat::Rg8i: return {spv::ImageFormat::Rgba8i, 2};
-                    case spv::ImageFormat::R8i: return {spv::ImageFormat::Rgba8i, 1};
+                    case spv::ImageFormat::Rg32i:
+                        return {spv::ImageFormat::Rgba32i, 2};
+                    case spv::ImageFormat::Rg16i:
+                        return {spv::ImageFormat::Rgba16i, 2};
+                    case spv::ImageFormat::R16i:
+                        return {spv::ImageFormat::Rgba16i, 1};
+                    case spv::ImageFormat::Rg8i:
+                        return {spv::ImageFormat::Rgba8i, 2};
+                    case spv::ImageFormat::R8i:
+                        return {spv::ImageFormat::Rgba8i, 1};
                     // Unsigned integer.
-                    case spv::ImageFormat::Rg32ui: return {spv::ImageFormat::Rgba32ui, 2};
-                    case spv::ImageFormat::Rg16ui: return {spv::ImageFormat::Rgba16ui, 2};
-                    case spv::ImageFormat::R16ui: return {spv::ImageFormat::Rgba16ui, 1};
-                    case spv::ImageFormat::Rg8ui: return {spv::ImageFormat::Rgba8ui, 2};
-                    case spv::ImageFormat::R8ui: return {spv::ImageFormat::Rgba8ui, 1};
+                    case spv::ImageFormat::Rg32ui:
+                        return {spv::ImageFormat::Rgba32ui, 2};
+                    case spv::ImageFormat::Rg16ui:
+                        return {spv::ImageFormat::Rgba16ui, 2};
+                    case spv::ImageFormat::R16ui:
+                        return {spv::ImageFormat::Rgba16ui, 1};
+                    case spv::ImageFormat::Rg8ui:
+                        return {spv::ImageFormat::Rgba8ui, 2};
+                    case spv::ImageFormat::R8ui:
+                        return {spv::ImageFormat::Rgba8ui, 1};
                     // FOUR channels, so there is no surplus channel to mask and no access is
                     // rewritten - 10, 10, 10 and 2 bits of unsigned integer all fit in sixteen.
-                    case spv::ImageFormat::Rgb10a2ui: return {spv::ImageFormat::Rgba16ui, 4};
+                    case spv::ImageFormat::Rgb10a2ui:
+                        return {spv::ImageFormat::Rgba16ui, 4};
                     // Unsigned normalized, carried as codes in [0, 2^b - 1].
                     case spv::ImageFormat::Rgba16:
-                        return {spv::ImageFormat::Rgba16ui, 4,
-                                {kUnorm16Max, kUnorm16Max, kUnorm16Max, kUnorm16Max}, false};
+                        return {
+                            spv::ImageFormat::Rgba16ui, 4, {kUnorm16Max, kUnorm16Max, kUnorm16Max, kUnorm16Max}, false};
                     case spv::ImageFormat::Rg16:
-                        return {spv::ImageFormat::Rgba16ui, 2,
-                                {kUnorm16Max, kUnorm16Max, kUnorm16Max, kUnorm16Max}, false};
+                        return {
+                            spv::ImageFormat::Rgba16ui, 2, {kUnorm16Max, kUnorm16Max, kUnorm16Max, kUnorm16Max}, false};
                     case spv::ImageFormat::R16:
-                        return {spv::ImageFormat::Rgba16ui, 1,
-                                {kUnorm16Max, kUnorm16Max, kUnorm16Max, kUnorm16Max}, false};
+                        return {
+                            spv::ImageFormat::Rgba16ui, 1, {kUnorm16Max, kUnorm16Max, kUnorm16Max, kUnorm16Max}, false};
                     // The one entry whose channels are not all the same width, which is the whole
                     // reason ChannelMax is per channel rather than one number.
                     case spv::ImageFormat::Rgb10A2:
@@ -181,14 +200,14 @@ namespace MobileGL {
                     // 2^(b-1) - 1]. The carrier's channel is UNSIGNED, so the code's sixteen bits
                     // are stored verbatim and sign-extended again on the way out.
                     case spv::ImageFormat::Rgba16Snorm:
-                        return {spv::ImageFormat::Rgba16ui, 4,
-                                {kSnorm16Max, kSnorm16Max, kSnorm16Max, kSnorm16Max}, true};
+                        return {
+                            spv::ImageFormat::Rgba16ui, 4, {kSnorm16Max, kSnorm16Max, kSnorm16Max, kSnorm16Max}, true};
                     case spv::ImageFormat::Rg16Snorm:
-                        return {spv::ImageFormat::Rgba16ui, 2,
-                                {kSnorm16Max, kSnorm16Max, kSnorm16Max, kSnorm16Max}, true};
+                        return {
+                            spv::ImageFormat::Rgba16ui, 2, {kSnorm16Max, kSnorm16Max, kSnorm16Max, kSnorm16Max}, true};
                     case spv::ImageFormat::R16Snorm:
-                        return {spv::ImageFormat::Rgba16ui, 1,
-                                {kSnorm16Max, kSnorm16Max, kSnorm16Max, kSnorm16Max}, true};
+                        return {
+                            spv::ImageFormat::Rgba16ui, 1, {kSnorm16Max, kSnorm16Max, kSnorm16Max, kSnorm16Max}, true};
                     default:
                         return {};
                     }
@@ -200,45 +219,84 @@ namespace MobileGL {
                 // order, as BakeImageFormatsPass::SpirvImageFormatFromGLInternalFormat.
                 spv::ImageFormat SpirvImageFormatOfGL(Uint glInternalFormat) {
                     switch (glInternalFormat) {
-                    case 0x8814: /*GL_RGBA32F*/ return spv::ImageFormat::Rgba32f;
-                    case 0x881A: /*GL_RGBA16F*/ return spv::ImageFormat::Rgba16f;
-                    case 0x8230: /*GL_RG32F*/ return spv::ImageFormat::Rg32f;
-                    case 0x822F: /*GL_RG16F*/ return spv::ImageFormat::Rg16f;
-                    case 0x8C3A: /*GL_R11F_G11F_B10F*/ return spv::ImageFormat::R11fG11fB10f;
-                    case 0x822E: /*GL_R32F*/ return spv::ImageFormat::R32f;
-                    case 0x822D: /*GL_R16F*/ return spv::ImageFormat::R16f;
-                    case 0x8D70: /*GL_RGBA32UI*/ return spv::ImageFormat::Rgba32ui;
-                    case 0x8D76: /*GL_RGBA16UI*/ return spv::ImageFormat::Rgba16ui;
-                    case 0x8D7C: /*GL_RGBA8UI*/ return spv::ImageFormat::Rgba8ui;
-                    case 0x906F: /*GL_RGB10_A2UI*/ return spv::ImageFormat::Rgb10a2ui;
-                    case 0x823C: /*GL_RG32UI*/ return spv::ImageFormat::Rg32ui;
-                    case 0x823A: /*GL_RG16UI*/ return spv::ImageFormat::Rg16ui;
-                    case 0x8238: /*GL_RG8UI*/ return spv::ImageFormat::Rg8ui;
-                    case 0x8236: /*GL_R32UI*/ return spv::ImageFormat::R32ui;
-                    case 0x8234: /*GL_R16UI*/ return spv::ImageFormat::R16ui;
-                    case 0x8232: /*GL_R8UI*/ return spv::ImageFormat::R8ui;
-                    case 0x8D82: /*GL_RGBA32I*/ return spv::ImageFormat::Rgba32i;
-                    case 0x8D88: /*GL_RGBA16I*/ return spv::ImageFormat::Rgba16i;
-                    case 0x8D8E: /*GL_RGBA8I*/ return spv::ImageFormat::Rgba8i;
-                    case 0x823B: /*GL_RG32I*/ return spv::ImageFormat::Rg32i;
-                    case 0x8239: /*GL_RG16I*/ return spv::ImageFormat::Rg16i;
-                    case 0x8237: /*GL_RG8I*/ return spv::ImageFormat::Rg8i;
-                    case 0x8235: /*GL_R32I*/ return spv::ImageFormat::R32i;
-                    case 0x8233: /*GL_R16I*/ return spv::ImageFormat::R16i;
-                    case 0x8231: /*GL_R8I*/ return spv::ImageFormat::R8i;
-                    case 0x8058: /*GL_RGBA8*/ return spv::ImageFormat::Rgba8;
-                    case 0x805B: /*GL_RGBA16*/ return spv::ImageFormat::Rgba16;
-                    case 0x8059: /*GL_RGB10_A2*/ return spv::ImageFormat::Rgb10A2;
-                    case 0x822B: /*GL_RG8*/ return spv::ImageFormat::Rg8;
-                    case 0x822C: /*GL_RG16*/ return spv::ImageFormat::Rg16;
-                    case 0x8229: /*GL_R8*/ return spv::ImageFormat::R8;
-                    case 0x822A: /*GL_R16*/ return spv::ImageFormat::R16;
-                    case 0x8F97: /*GL_RGBA8_SNORM*/ return spv::ImageFormat::Rgba8Snorm;
-                    case 0x8F9B: /*GL_RGBA16_SNORM*/ return spv::ImageFormat::Rgba16Snorm;
-                    case 0x8F95: /*GL_RG8_SNORM*/ return spv::ImageFormat::Rg8Snorm;
-                    case 0x8F99: /*GL_RG16_SNORM*/ return spv::ImageFormat::Rg16Snorm;
-                    case 0x8F94: /*GL_R8_SNORM*/ return spv::ImageFormat::R8Snorm;
-                    case 0x8F98: /*GL_R16_SNORM*/ return spv::ImageFormat::R16Snorm;
+                    case 0x8814: /*GL_RGBA32F*/
+                        return spv::ImageFormat::Rgba32f;
+                    case 0x881A: /*GL_RGBA16F*/
+                        return spv::ImageFormat::Rgba16f;
+                    case 0x8230: /*GL_RG32F*/
+                        return spv::ImageFormat::Rg32f;
+                    case 0x822F: /*GL_RG16F*/
+                        return spv::ImageFormat::Rg16f;
+                    case 0x8C3A: /*GL_R11F_G11F_B10F*/
+                        return spv::ImageFormat::R11fG11fB10f;
+                    case 0x822E: /*GL_R32F*/
+                        return spv::ImageFormat::R32f;
+                    case 0x822D: /*GL_R16F*/
+                        return spv::ImageFormat::R16f;
+                    case 0x8D70: /*GL_RGBA32UI*/
+                        return spv::ImageFormat::Rgba32ui;
+                    case 0x8D76: /*GL_RGBA16UI*/
+                        return spv::ImageFormat::Rgba16ui;
+                    case 0x8D7C: /*GL_RGBA8UI*/
+                        return spv::ImageFormat::Rgba8ui;
+                    case 0x906F: /*GL_RGB10_A2UI*/
+                        return spv::ImageFormat::Rgb10a2ui;
+                    case 0x823C: /*GL_RG32UI*/
+                        return spv::ImageFormat::Rg32ui;
+                    case 0x823A: /*GL_RG16UI*/
+                        return spv::ImageFormat::Rg16ui;
+                    case 0x8238: /*GL_RG8UI*/
+                        return spv::ImageFormat::Rg8ui;
+                    case 0x8236: /*GL_R32UI*/
+                        return spv::ImageFormat::R32ui;
+                    case 0x8234: /*GL_R16UI*/
+                        return spv::ImageFormat::R16ui;
+                    case 0x8232: /*GL_R8UI*/
+                        return spv::ImageFormat::R8ui;
+                    case 0x8D82: /*GL_RGBA32I*/
+                        return spv::ImageFormat::Rgba32i;
+                    case 0x8D88: /*GL_RGBA16I*/
+                        return spv::ImageFormat::Rgba16i;
+                    case 0x8D8E: /*GL_RGBA8I*/
+                        return spv::ImageFormat::Rgba8i;
+                    case 0x823B: /*GL_RG32I*/
+                        return spv::ImageFormat::Rg32i;
+                    case 0x8239: /*GL_RG16I*/
+                        return spv::ImageFormat::Rg16i;
+                    case 0x8237: /*GL_RG8I*/
+                        return spv::ImageFormat::Rg8i;
+                    case 0x8235: /*GL_R32I*/
+                        return spv::ImageFormat::R32i;
+                    case 0x8233: /*GL_R16I*/
+                        return spv::ImageFormat::R16i;
+                    case 0x8231: /*GL_R8I*/
+                        return spv::ImageFormat::R8i;
+                    case 0x8058: /*GL_RGBA8*/
+                        return spv::ImageFormat::Rgba8;
+                    case 0x805B: /*GL_RGBA16*/
+                        return spv::ImageFormat::Rgba16;
+                    case 0x8059: /*GL_RGB10_A2*/
+                        return spv::ImageFormat::Rgb10A2;
+                    case 0x822B: /*GL_RG8*/
+                        return spv::ImageFormat::Rg8;
+                    case 0x822C: /*GL_RG16*/
+                        return spv::ImageFormat::Rg16;
+                    case 0x8229: /*GL_R8*/
+                        return spv::ImageFormat::R8;
+                    case 0x822A: /*GL_R16*/
+                        return spv::ImageFormat::R16;
+                    case 0x8F97: /*GL_RGBA8_SNORM*/
+                        return spv::ImageFormat::Rgba8Snorm;
+                    case 0x8F9B: /*GL_RGBA16_SNORM*/
+                        return spv::ImageFormat::Rgba16Snorm;
+                    case 0x8F95: /*GL_RG8_SNORM*/
+                        return spv::ImageFormat::Rg8Snorm;
+                    case 0x8F99: /*GL_RG16_SNORM*/
+                        return spv::ImageFormat::Rg16Snorm;
+                    case 0x8F94: /*GL_R8_SNORM*/
+                        return spv::ImageFormat::R8Snorm;
+                    case 0x8F98: /*GL_R16_SNORM*/
+                        return spv::ImageFormat::R16Snorm;
                     default:
                         return spv::ImageFormat::Unknown;
                     }
@@ -246,16 +304,26 @@ namespace MobileGL {
 
                 Uint GLInternalFormatOfSpirvImageFormat(spv::ImageFormat format) {
                     switch (format) {
-                    case spv::ImageFormat::Rgba32f: return 0x8814; // GL_RGBA32F
-                    case spv::ImageFormat::Rgba16f: return 0x881A; // GL_RGBA16F
-                    case spv::ImageFormat::Rgba8: return 0x8058;   // GL_RGBA8
-                    case spv::ImageFormat::Rgba8Snorm: return 0x8F97; // GL_RGBA8_SNORM
-                    case spv::ImageFormat::Rgba32i: return 0x8D82; // GL_RGBA32I
-                    case spv::ImageFormat::Rgba16i: return 0x8D88; // GL_RGBA16I
-                    case spv::ImageFormat::Rgba8i: return 0x8D8E;  // GL_RGBA8I
-                    case spv::ImageFormat::Rgba32ui: return 0x8D70; // GL_RGBA32UI
-                    case spv::ImageFormat::Rgba16ui: return 0x8D76; // GL_RGBA16UI
-                    case spv::ImageFormat::Rgba8ui: return 0x8D7C;  // GL_RGBA8UI
+                    case spv::ImageFormat::Rgba32f:
+                        return 0x8814; // GL_RGBA32F
+                    case spv::ImageFormat::Rgba16f:
+                        return 0x881A; // GL_RGBA16F
+                    case spv::ImageFormat::Rgba8:
+                        return 0x8058; // GL_RGBA8
+                    case spv::ImageFormat::Rgba8Snorm:
+                        return 0x8F97; // GL_RGBA8_SNORM
+                    case spv::ImageFormat::Rgba32i:
+                        return 0x8D82; // GL_RGBA32I
+                    case spv::ImageFormat::Rgba16i:
+                        return 0x8D88; // GL_RGBA16I
+                    case spv::ImageFormat::Rgba8i:
+                        return 0x8D8E; // GL_RGBA8I
+                    case spv::ImageFormat::Rgba32ui:
+                        return 0x8D70; // GL_RGBA32UI
+                    case spv::ImageFormat::Rgba16ui:
+                        return 0x8D76; // GL_RGBA16UI
+                    case spv::ImageFormat::Rgba8ui:
+                        return 0x8D7C; // GL_RGBA8UI
                     default:
                         // Only the carriers need the reverse direction, and every carrier is one
                         // of the four-channel core formats above.
@@ -336,20 +404,21 @@ namespace MobileGL {
 
                 BufferImageSplit SplitOfBufferImageFormat(spv::ImageFormat format) {
                     switch (format) {
-                    case spv::ImageFormat::Rg32f: return {spv::ImageFormat::R32f, 2};
-                    case spv::ImageFormat::Rg32i: return {spv::ImageFormat::R32i, 2};
-                    case spv::ImageFormat::Rg32ui: return {spv::ImageFormat::R32ui, 2};
+                    case spv::ImageFormat::Rg32f:
+                        return {spv::ImageFormat::R32f, 2};
+                    case spv::ImageFormat::Rg32i:
+                        return {spv::ImageFormat::R32i, 2};
+                    case spv::ImageFormat::Rg32ui:
+                        return {spv::ImageFormat::R32ui, 2};
                     default:
                         return {};
                     }
                 }
 
-                Bool IsSplittableBufferImageType(const Instruction* type,
-                                                 bool onlyFormatsSpirvCrossRefusesToPrint) {
+                Bool IsSplittableBufferImageType(const Instruction* type, bool onlyFormatsSpirvCrossRefusesToPrint) {
                     if (type == nullptr || type->opcode() != spv::Op::OpTypeImage) return false;
                     if (type->GetSingleWordInOperand(kImageSampledOperand) != kSampledStorageImage) return false;
-                    if (static_cast<spv::Dim>(type->GetSingleWordInOperand(kImageDimOperand)) !=
-                        spv::Dim::Buffer) {
+                    if (static_cast<spv::Dim>(type->GetSingleWordInOperand(kImageDimOperand)) != spv::Dim::Buffer) {
                         return false;
                     }
                     const auto format =
@@ -365,8 +434,7 @@ namespace MobileGL {
                     return true;
                 }
 
-                Bool IsWidenableStorageImageType(const Instruction* type,
-                                                 bool onlyFormatsSpirvCrossRefusesToPrint) {
+                Bool IsWidenableStorageImageType(const Instruction* type, bool onlyFormatsSpirvCrossRefusesToPrint) {
                     if (type == nullptr || type->opcode() != spv::Op::OpTypeImage) return false;
                     if (type->GetSingleWordInOperand(kImageSampledOperand) != kSampledStorageImage) return false;
                     // A BUFFER image is never widened, whatever its format. Widening works because
@@ -384,8 +452,7 @@ namespace MobileGL {
                     // the application's buffer. It is SPLIT instead where its format allows
                     // (IsSplittableBufferImageType), which addresses the same bytes rather than
                     // restriding them, and left alone where it does not.
-                    if (static_cast<spv::Dim>(type->GetSingleWordInOperand(kImageDimOperand)) ==
-                        spv::Dim::Buffer) {
+                    if (static_cast<spv::Dim>(type->GetSingleWordInOperand(kImageDimOperand)) == spv::Dim::Buffer) {
                         return false;
                     }
                     const auto format =
@@ -432,18 +499,18 @@ namespace MobileGL {
                 // longer describes the function bodies.
                 struct NormalizedCarrierMaterial {
                     uint32_t Glsl450Id = 0;
-                    uint32_t FloatTypeId = 0;  // the component types, kept only so the declaration
-                    uint32_t IntTypeId = 0;    // order below can put each vector after its own
-                    uint32_t UintTypeId = 0;   // component - and the last is the image's new Sampled Type
-                    uint32_t UvecTypeId = 0;   // uvec4: what an OpImageRead of the carrier yields
-                    uint32_t IvecTypeId = 0;   // ivec4: the sign-extended snorm code
-                    uint32_t FvecTypeId = 0;   // vec4: what the shader asked for
-                    uint32_t ShiftWidthId = 0; // ivec4(16), the snorm sign extension
+                    uint32_t FloatTypeId = 0;   // the component types, kept only so the declaration
+                    uint32_t IntTypeId = 0;     // order below can put each vector after its own
+                    uint32_t UintTypeId = 0;    // component - and the last is the image's new Sampled Type
+                    uint32_t UvecTypeId = 0;    // uvec4: what an OpImageRead of the carrier yields
+                    uint32_t IvecTypeId = 0;    // ivec4: the sign-extended snorm code
+                    uint32_t FvecTypeId = 0;    // vec4: what the shader asked for
+                    uint32_t ShiftWidthId = 0;  // ivec4(16), the snorm sign extension
                     uint32_t LowWordMaskId = 0; // uvec4(0xFFFF)
-                    uint32_t ZeroId = 0;       // vec4(0.0)
-                    uint32_t OneId = 0;        // vec4(1.0)
-                    uint32_t MinusOneId = 0;   // vec4(-1.0)
-                    uint32_t HalfId = 0;       // vec4(0.5)
+                    uint32_t ZeroId = 0;        // vec4(0.0)
+                    uint32_t OneId = 0;         // vec4(1.0)
+                    uint32_t MinusOneId = 0;    // vec4(-1.0)
+                    uint32_t HalfId = 0;        // vec4(0.5)
 
                     explicit operator bool() const { return UvecTypeId != 0u; }
                 };
@@ -465,13 +532,12 @@ namespace MobileGL {
                 uint32_t MakeScalarConstant(IRContext* context, analysis::Type* scalarType, uint32_t word) {
                     const analysis::Constant* constant = context->get_constant_mgr()->GetConstant(scalarType, {word});
                     if (constant == nullptr) return 0u;
-                    const Instruction* definition =
-                        context->get_constant_mgr()->GetDefiningInstruction(constant);
+                    const Instruction* definition = context->get_constant_mgr()->GetDefiningInstruction(constant);
                     return definition == nullptr ? 0u : definition->result_id();
                 }
 
-                uint32_t MakeSplatVec4Constant(IRContext* context, uint32_t vectorTypeId,
-                                               analysis::Type* scalarType, uint32_t word) {
+                uint32_t MakeSplatVec4Constant(IRContext* context, uint32_t vectorTypeId, analysis::Type* scalarType,
+                                               uint32_t word) {
                     const uint32_t scalarId = MakeScalarConstant(context, scalarType, word);
                     if (scalarId == 0u) return 0u;
                     const uint32_t componentIds[4] = {scalarId, scalarId, scalarId, scalarId};
@@ -567,8 +633,8 @@ namespace MobileGL {
                     if (floatReg == nullptr) return 0u;
                     uint32_t componentIds[4] = {0u, 0u, 0u, 0u};
                     for (uint32_t i = 0; i < 4; ++i) {
-                        componentIds[i] = MakeScalarConstant(context, floatReg,
-                                                             FloatBits(static_cast<float>(channelMax[i])));
+                        componentIds[i] =
+                            MakeScalarConstant(context, floatReg, FloatBits(static_cast<float>(channelMax[i])));
                         if (componentIds[i] == 0u) return 0u;
                     }
                     return MakeVec4Constant(context, material.FvecTypeId, componentIds);
@@ -576,32 +642,32 @@ namespace MobileGL {
             } // namespace
 
             Uint WidenImageFormatsPass::WidenedCoreEsslImageFormat(Uint glInternalFormat) {
-                const ImageFormatWidening widening =
-                    WideningOfSpirvImageFormat(SpirvImageFormatOfGL(glInternalFormat));
+                const ImageFormatWidening widening = WideningOfSpirvImageFormat(SpirvImageFormatOfGL(glInternalFormat));
                 if (!widening) return 0;
                 return GLInternalFormatOfSpirvImageFormat(widening.Carrier);
             }
 
             Uint WidenImageFormatsPass::SplitCoreEsslBufferImageFormat(Uint glInternalFormat) {
-                const BufferImageSplit split =
-                    SplitOfBufferImageFormat(SpirvImageFormatOfGL(glInternalFormat));
+                const BufferImageSplit split = SplitOfBufferImageFormat(SpirvImageFormatOfGL(glInternalFormat));
                 if (!split) return 0;
                 switch (split.Base) {
-                case spv::ImageFormat::R32f: return 0x822E;  // GL_R32F
-                case spv::ImageFormat::R32i: return 0x8235;  // GL_R32I
-                case spv::ImageFormat::R32ui: return 0x8236; // GL_R32UI
+                case spv::ImageFormat::R32f:
+                    return 0x822E; // GL_R32F
+                case spv::ImageFormat::R32i:
+                    return 0x8235; // GL_R32I
+                case spv::ImageFormat::R32ui:
+                    return 0x8236; // GL_R32UI
                 default:
                     return 0;
                 }
             }
 
-            bool WidenImageFormatsPass::NormalizedImageCarrierCodes(Uint glInternalFormat,
-                                                                    Uint32 (&outChannelMax)[4],
+            bool WidenImageFormatsPass::NormalizedImageCarrierCodes(Uint glInternalFormat, Uint32 (&outChannelMax)[4],
                                                                     bool& outSignedNormalized) {
-                const ImageFormatWidening widening =
-                    WideningOfSpirvImageFormat(SpirvImageFormatOfGL(glInternalFormat));
+                const ImageFormatWidening widening = WideningOfSpirvImageFormat(SpirvImageFormatOfGL(glInternalFormat));
                 if (!widening || !widening.CarriesNormalizedCodes()) return false;
-                for (Uint i = 0; i < 4; ++i) outChannelMax[i] = widening.ChannelMax[i];
+                for (Uint i = 0; i < 4; ++i)
+                    outChannelMax[i] = widening.ChannelMax[i];
                 outSignedNormalized = widening.SignedNormalized;
                 return true;
             }
@@ -610,8 +676,8 @@ namespace MobileGL {
                 return ChannelsOfSpirvImageFormat(SpirvImageFormatOfGL(glInternalFormat));
             }
 
-            bool WidenImageFormatsPass::DeclaresWidenableImageFormat(
-                IRContext* context, const bool onlyFormatsSpirvCrossRefusesToPrint) {
+            bool WidenImageFormatsPass::DeclaresWidenableImageFormat(IRContext* context,
+                                                                     const bool onlyFormatsSpirvCrossRefusesToPrint) {
                 if (context == nullptr) {
                     return false;
                 }
@@ -624,8 +690,8 @@ namespace MobileGL {
                 return false;
             }
 
-            bool WidenImageFormatsPass::DeclaresWidenableImageFormat(
-                const Vector<Uint32>& binary, const bool onlyFormatsSpirvCrossRefusesToPrint) {
+            bool WidenImageFormatsPass::DeclaresWidenableImageFormat(const Vector<Uint32>& binary,
+                                                                     const bool onlyFormatsSpirvCrossRefusesToPrint) {
                 std::unique_ptr<IRContext> context = spvtools::BuildModule(
                     SPV_ENV_VULKAN_1_1, [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
                     binary.data(), binary.size());
@@ -670,11 +736,10 @@ namespace MobileGL {
                         static_cast<spv::ImageFormat>(type->GetSingleWordInOperand(kImageFormatOperand));
                     const ImageFormatWidening widening = WideningOfSpirvImageFormat(format);
                     anyNormalizedCarrier = anyNormalizedCarrier || widening.CarriesNormalizedCodes();
-                    widenedByTypeId.emplace(
-                        type->result_id(),
-                        WidenedImage{widening.Carrier, widening.Channels,
-                                     type->GetSingleWordInOperand(kImageSampledTypeOperand), 0u,
-                                     widening.SignedNormalized});
+                    widenedByTypeId.emplace(type->result_id(),
+                                            WidenedImage{widening.Carrier, widening.Channels,
+                                                         type->GetSingleWordInOperand(kImageSampledTypeOperand), 0u,
+                                                         widening.SignedNormalized});
                 }
 
                 // Collect the accesses BEFORE anything is mutated, and refuse the whole rewrite if
@@ -689,10 +754,8 @@ namespace MobileGL {
                 // stage that addresses one image right and the other wrong.
                 std::map<uint32_t, BufferImageSplit> splitByTypeId;
                 for (Instruction* type : bufferSplitTypes) {
-                    splitByTypeId.emplace(
-                        type->result_id(),
-                        SplitOfBufferImageFormat(
-                            static_cast<spv::ImageFormat>(type->GetSingleWordInOperand(kImageFormatOperand))));
+                    splitByTypeId.emplace(type->result_id(), SplitOfBufferImageFormat(static_cast<spv::ImageFormat>(
+                                                                 type->GetSingleWordInOperand(kImageFormatOperand))));
                 }
 
                 std::vector<Instruction*> reads;
@@ -701,8 +764,8 @@ namespace MobileGL {
                 std::vector<Instruction*> splitWrites;
                 std::vector<Instruction*> splitSizeQueries;
                 Bool rewritable = true;
-                for (auto funcIt = irContext->module()->begin();
-                     funcIt != irContext->module()->end() && rewritable; ++funcIt) {
+                for (auto funcIt = irContext->module()->begin(); funcIt != irContext->module()->end() && rewritable;
+                     ++funcIt) {
                     funcIt->ForEachInst([&](Instruction* inst) {
                         if (!rewritable) return;
                         switch (inst->opcode()) {
@@ -728,12 +791,18 @@ namespace MobileGL {
                         }
                         if (splitByTypeId.count(imageTypeId) != 0) {
                             switch (inst->opcode()) {
-                            case spv::Op::OpImageRead: splitReads.push_back(inst); return;
-                            case spv::Op::OpImageWrite: splitWrites.push_back(inst); return;
+                            case spv::Op::OpImageRead:
+                                splitReads.push_back(inst);
+                                return;
+                            case spv::Op::OpImageWrite:
+                                splitWrites.push_back(inst);
+                                return;
                             // imageSize() has to be halved with everything else: the ES view has
                             // twice the texels the application's format describes, and a shader
                             // that walks the buffer by its own size would run off the end of it.
-                            case spv::Op::OpImageQuerySize: splitSizeQueries.push_back(inst); return;
+                            case spv::Op::OpImageQuerySize:
+                                splitSizeQueries.push_back(inst);
+                                return;
                             default:
                                 rewritable = false;
                                 return;
@@ -787,15 +856,14 @@ namespace MobileGL {
 
                     uint32_t oneWord = 0;
                     std::unique_ptr<analysis::Type> component;
-                    if (sampledType->opcode() == spv::Op::OpTypeFloat &&
-                        sampledType->GetSingleWordInOperand(0) == 32) {
+                    if (sampledType->opcode() == spv::Op::OpTypeFloat && sampledType->GetSingleWordInOperand(0) == 32) {
                         component = spvtools::MakeUnique<analysis::Float>(32);
                         oneWord = 0x3F800000u; // 1.0f
                     } else if (sampledType->opcode() == spv::Op::OpTypeInt &&
                                sampledType->GetSingleWordInOperand(0) == 32) {
                         // OpTypeInt in-operands: 0 width, 1 signedness.
-                        component = spvtools::MakeUnique<analysis::Integer>(
-                            32, sampledType->GetSingleWordInOperand(1) != 0);
+                        component =
+                            spvtools::MakeUnique<analysis::Integer>(32, sampledType->GetSingleWordInOperand(1) != 0);
                         oneWord = 1u;
                     } else {
                         return false;
@@ -823,9 +891,9 @@ namespace MobileGL {
                     if (vectorReg == nullptr) return false;
                     // A vector constant's "literal words" are the IDS of its components
                     // (ConstantManager::CreateConstant -> GetConstantsFromIds).
-                    const analysis::Constant* zeroOne = constantMgr->GetConstant(
-                        vectorReg, {zeroInst->result_id(), zeroInst->result_id(), zeroInst->result_id(),
-                                    oneInst->result_id()});
+                    const analysis::Constant* zeroOne =
+                        constantMgr->GetConstant(vectorReg, {zeroInst->result_id(), zeroInst->result_id(),
+                                                             zeroInst->result_id(), oneInst->result_id()});
                     if (zeroOne == nullptr) return false;
                     const Instruction* zeroOneInst = constantMgr->GetDefiningInstruction(zeroOne);
                     if (zeroOneInst == nullptr) return false;
@@ -845,8 +913,7 @@ namespace MobileGL {
                     std::vector<Operand> components;
                     components.reserve(4);
                     for (uint32_t i = 0; i < 4; ++i) {
-                        components.push_back(
-                            {SPV_OPERAND_TYPE_LITERAL_INTEGER, {i < channels ? i : 4u + i}});
+                        components.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {i < channels ? i : 4u + i}});
                     }
                     return components;
                 };
@@ -925,8 +992,7 @@ namespace MobileGL {
                                                  {SPV_OPERAND_TYPE_ID, {componentsId}}}));
                     before->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpIAdd, coord->type_id(), secondId,
-                        Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {firstId}},
-                                                 {SPV_OPERAND_TYPE_ID, {oneId}}}));
+                        Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {firstId}}, {SPV_OPERAND_TYPE_ID, {oneId}}}));
                     outFirst = firstId;
                     outSecond = secondId;
                     return true;
@@ -951,8 +1017,8 @@ namespace MobileGL {
                 for (Instruction* type : bufferSplitTypes) {
                     uint32_t unusedConstantId = 0;
                     uint32_t unusedVec4TypeId = 0;
-                    if (!resolveMaskMaterial(type->GetSingleWordInOperand(kImageSampledTypeOperand),
-                                             unusedConstantId, unusedVec4TypeId)) {
+                    if (!resolveMaskMaterial(type->GetSingleWordInOperand(kImageSampledTypeOperand), unusedConstantId,
+                                             unusedVec4TypeId)) {
                         return Status::SuccessWithoutChange;
                     }
                 }
@@ -1016,11 +1082,10 @@ namespace MobileGL {
                     // just exist. See HoistTypeDeclarationsBefore: the type manager appends, and
                     // the image type that names the new uint32 is already further up.
                     if (firstNormalizedImageType != nullptr) {
-                        HoistTypeDeclarationsBefore(
-                            irContext, firstNormalizedImageType,
-                            {normalizedMaterial.FloatTypeId, normalizedMaterial.IntTypeId,
-                             normalizedMaterial.UintTypeId, normalizedMaterial.FvecTypeId,
-                             normalizedMaterial.IvecTypeId, normalizedMaterial.UvecTypeId});
+                        HoistTypeDeclarationsBefore(irContext, firstNormalizedImageType,
+                                                    {normalizedMaterial.FloatTypeId, normalizedMaterial.IntTypeId,
+                                                     normalizedMaterial.UintTypeId, normalizedMaterial.FvecTypeId,
+                                                     normalizedMaterial.IvecTypeId, normalizedMaterial.UvecTypeId});
                     }
                 }
 
@@ -1047,20 +1112,19 @@ namespace MobileGL {
                 // two-channel format does not have: the mask shuffle runs on the float side either
                 // way, so whatever the surplus channels hold is discarded on the way out and
                 // written as the format's own 0 and 1 on the way in.
-                auto insertUnpack = [&](Instruction* before, const WidenedImage& widened,
-                                        uint32_t rawId) -> uint32_t {
+                auto insertUnpack = [&](Instruction* before, const WidenedImage& widened, uint32_t rawId) -> uint32_t {
                     const auto emit = [&](spv::Op opcode, uint32_t typeId,
                                           Instruction::OperandList operands) -> uint32_t {
                         const uint32_t resultId = irContext->TakeNextId();
                         if (resultId == 0u) return 0u;
-                        before->InsertBefore(spvtools::MakeUnique<Instruction>(irContext, opcode, typeId, resultId,
-                                                                               Move(operands)));
+                        before->InsertBefore(
+                            spvtools::MakeUnique<Instruction>(irContext, opcode, typeId, resultId, Move(operands)));
                         return resultId;
                     };
                     // The raw texel through an OpCopyObject before anything reads it, which costs
                     // nothing in SPIR-V and is load-bearing in the ESSL: SPIRV-Cross emits a copy
                     // of a non-opaque value as a real `uvec4 _n = imageLoad(...);` statement,
-                    // where the read's own result is FORWARDED into whatever consumes it. Mesa's
+                    // where the read's own result is FORWARDED into whatever consumes it. The
                     // llvmpipe compiler miscompiles the forwarded form - `vec4(imageLoad(img, c))`
                     // written straight into an expression comes back as zeroes, and 0xFFFF comes
                     // back as a NaN, while the identical arithmetic on a named uvec4 is correct.
@@ -1069,19 +1133,16 @@ namespace MobileGL {
                     // the emitter does; the copy is the cheapest way to stay out of it, and every
                     // other driver folds it away.
                     const uint32_t texelId =
-                        emit(spv::Op::OpCopyObject, normalizedMaterial.UvecTypeId,
-                             {{SPV_OPERAND_TYPE_ID, {rawId}}});
+                        emit(spv::Op::OpCopyObject, normalizedMaterial.UvecTypeId, {{SPV_OPERAND_TYPE_ID, {rawId}}});
                     if (texelId == 0u) return 0u;
                     uint32_t codeId = 0;
                     if (widened.SignedNormalized) {
                         const uint32_t asIntId =
-                            emit(spv::Op::OpBitcast, normalizedMaterial.IvecTypeId,
-                                 {{SPV_OPERAND_TYPE_ID, {texelId}}});
+                            emit(spv::Op::OpBitcast, normalizedMaterial.IvecTypeId, {{SPV_OPERAND_TYPE_ID, {texelId}}});
                         if (asIntId == 0u) return 0u;
-                        const uint32_t shiftedUpId =
-                            emit(spv::Op::OpShiftLeftLogical, normalizedMaterial.IvecTypeId,
-                                 {{SPV_OPERAND_TYPE_ID, {asIntId}},
-                                  {SPV_OPERAND_TYPE_ID, {normalizedMaterial.ShiftWidthId}}});
+                        const uint32_t shiftedUpId = emit(spv::Op::OpShiftLeftLogical, normalizedMaterial.IvecTypeId,
+                                                          {{SPV_OPERAND_TYPE_ID, {asIntId}},
+                                                           {SPV_OPERAND_TYPE_ID, {normalizedMaterial.ShiftWidthId}}});
                         if (shiftedUpId == 0u) return 0u;
                         const uint32_t signExtendedId =
                             emit(spv::Op::OpShiftRightArithmetic, normalizedMaterial.IvecTypeId,
@@ -1108,30 +1169,27 @@ namespace MobileGL {
                                  {SPV_OPERAND_TYPE_ID, {normalizedMaterial.MinusOneId}}});
                 };
 
-                auto insertPack = [&](Instruction* before, const WidenedImage& widened,
-                                      uint32_t valueId) -> uint32_t {
+                auto insertPack = [&](Instruction* before, const WidenedImage& widened, uint32_t valueId) -> uint32_t {
                     const auto emit = [&](spv::Op opcode, uint32_t typeId,
                                           Instruction::OperandList operands) -> uint32_t {
                         const uint32_t resultId = irContext->TakeNextId();
                         if (resultId == 0u) return 0u;
-                        before->InsertBefore(spvtools::MakeUnique<Instruction>(irContext, opcode, typeId, resultId,
-                                                                               Move(operands)));
+                        before->InsertBefore(
+                            spvtools::MakeUnique<Instruction>(irContext, opcode, typeId, resultId, Move(operands)));
                         return resultId;
                     };
                     const uint32_t lowBoundId =
                         widened.SignedNormalized ? normalizedMaterial.MinusOneId : normalizedMaterial.ZeroId;
-                    const uint32_t clampedId =
-                        emit(spv::Op::OpExtInst, normalizedMaterial.FvecTypeId,
-                             {{SPV_OPERAND_TYPE_ID, {normalizedMaterial.Glsl450Id}},
-                              {SPV_OPERAND_TYPE_EXTENSION_INSTRUCTION_NUMBER, {kGlslFClamp}},
-                              {SPV_OPERAND_TYPE_ID, {valueId}},
-                              {SPV_OPERAND_TYPE_ID, {lowBoundId}},
-                              {SPV_OPERAND_TYPE_ID, {normalizedMaterial.OneId}}});
+                    const uint32_t clampedId = emit(spv::Op::OpExtInst, normalizedMaterial.FvecTypeId,
+                                                    {{SPV_OPERAND_TYPE_ID, {normalizedMaterial.Glsl450Id}},
+                                                     {SPV_OPERAND_TYPE_EXTENSION_INSTRUCTION_NUMBER, {kGlslFClamp}},
+                                                     {SPV_OPERAND_TYPE_ID, {valueId}},
+                                                     {SPV_OPERAND_TYPE_ID, {lowBoundId}},
+                                                     {SPV_OPERAND_TYPE_ID, {normalizedMaterial.OneId}}});
                     if (clampedId == 0u) return 0u;
                     const uint32_t scaledId =
                         emit(spv::Op::OpFMul, normalizedMaterial.FvecTypeId,
-                             {{SPV_OPERAND_TYPE_ID, {clampedId}},
-                              {SPV_OPERAND_TYPE_ID, {widened.DenominatorId}}});
+                             {{SPV_OPERAND_TYPE_ID, {clampedId}}, {SPV_OPERAND_TYPE_ID, {widened.DenominatorId}}});
                     if (scaledId == 0u) return 0u;
                     uint32_t biasId = normalizedMaterial.HalfId;
                     if (widened.SignedNormalized) {
@@ -1142,9 +1200,9 @@ namespace MobileGL {
                                                       {SPV_OPERAND_TYPE_EXTENSION_INSTRUCTION_NUMBER, {kGlslFSign}},
                                                       {SPV_OPERAND_TYPE_ID, {scaledId}}});
                         if (signId == 0u) return 0u;
-                        biasId = emit(spv::Op::OpFMul, normalizedMaterial.FvecTypeId,
-                                      {{SPV_OPERAND_TYPE_ID, {signId}},
-                                       {SPV_OPERAND_TYPE_ID, {normalizedMaterial.HalfId}}});
+                        biasId =
+                            emit(spv::Op::OpFMul, normalizedMaterial.FvecTypeId,
+                                 {{SPV_OPERAND_TYPE_ID, {signId}}, {SPV_OPERAND_TYPE_ID, {normalizedMaterial.HalfId}}});
                         if (biasId == 0u) return 0u;
                     }
                     const uint32_t roundedId =
@@ -1161,9 +1219,9 @@ namespace MobileGL {
                     const uint32_t asUintId = emit(spv::Op::OpBitcast, normalizedMaterial.UvecTypeId,
                                                    {{SPV_OPERAND_TYPE_ID, {signedCodeId}}});
                     if (asUintId == 0u) return 0u;
-                    return emit(spv::Op::OpBitwiseAnd, normalizedMaterial.UvecTypeId,
-                                {{SPV_OPERAND_TYPE_ID, {asUintId}},
-                                 {SPV_OPERAND_TYPE_ID, {normalizedMaterial.LowWordMaskId}}});
+                    return emit(
+                        spv::Op::OpBitwiseAnd, normalizedMaterial.UvecTypeId,
+                        {{SPV_OPERAND_TYPE_ID, {asUintId}}, {SPV_OPERAND_TYPE_ID, {normalizedMaterial.LowWordMaskId}}});
                 };
 
                 // Masks first, while every image type still carries its ORIGINAL format: the
@@ -1201,8 +1259,8 @@ namespace MobileGL {
                         for (const Operand& component : maskComponents(widened->Channels)) {
                             shuffleOperands.push_back(component);
                         }
-                        write->InsertBefore(spvtools::MakeUnique<Instruction>(
-                            irContext, spv::Op::OpVectorShuffle, vec4TypeId, maskedId, shuffleOperands));
+                        write->InsertBefore(spvtools::MakeUnique<Instruction>(irContext, spv::Op::OpVectorShuffle,
+                                                                              vec4TypeId, maskedId, shuffleOperands));
                         storedId = maskedId;
                     }
                     // The pack goes AFTER the mask, so the carrier's surplus channels are written
@@ -1246,8 +1304,8 @@ namespace MobileGL {
                         readOperands.push_back(read->GetInOperand(i));
                     }
                     read->InsertBefore(spvtools::MakeUnique<Instruction>(
-                        irContext, spv::Op::OpImageRead,
-                        normalized ? normalizedMaterial.UvecTypeId : vec4TypeId, rawReadId, readOperands));
+                        irContext, spv::Op::OpImageRead, normalized ? normalizedMaterial.UvecTypeId : vec4TypeId,
+                        rawReadId, readOperands));
                     uint32_t loadedId = rawReadId;
                     if (normalized) {
                         loadedId = insertUnpack(read, *widened, rawReadId);
@@ -1308,8 +1366,8 @@ namespace MobileGL {
                         shuffleOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {4u}});
                         shuffleOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {4u}});
                         shuffleOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {7u}});
-                        write->InsertBefore(spvtools::MakeUnique<Instruction>(
-                            irContext, spv::Op::OpVectorShuffle, vec4TypeId, maskedId, shuffleOperands));
+                        write->InsertBefore(spvtools::MakeUnique<Instruction>(irContext, spv::Op::OpVectorShuffle,
+                                                                              vec4TypeId, maskedId, shuffleOperands));
                         componentTexelIds[component] = maskedId;
                     }
                     // The FIRST component's write is the inserted one and the second is the
@@ -1321,8 +1379,8 @@ namespace MobileGL {
                     }
                     firstWriteOperands[kImageAccessCoordinateOperand] = {SPV_OPERAND_TYPE_ID, {firstCoordId}};
                     firstWriteOperands[kImageWriteTexelOperand] = {SPV_OPERAND_TYPE_ID, {componentTexelIds[0]}};
-                    write->InsertBefore(spvtools::MakeUnique<Instruction>(
-                        irContext, spv::Op::OpImageWrite, 0, 0, firstWriteOperands));
+                    write->InsertBefore(
+                        spvtools::MakeUnique<Instruction>(irContext, spv::Op::OpImageWrite, 0, 0, firstWriteOperands));
                     write->SetInOperand(kImageAccessCoordinateOperand, {secondCoordId});
                     write->SetInOperand(kImageWriteTexelOperand, {componentTexelIds[1]});
                 }
@@ -1368,8 +1426,8 @@ namespace MobileGL {
                     gatherOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {4u}});
                     gatherOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}});
                     gatherOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}});
-                    read->InsertBefore(spvtools::MakeUnique<Instruction>(
-                        irContext, spv::Op::OpVectorShuffle, vec4TypeId, gatheredId, gatherOperands));
+                    read->InsertBefore(spvtools::MakeUnique<Instruction>(irContext, spv::Op::OpVectorShuffle,
+                                                                         vec4TypeId, gatheredId, gatherOperands));
 
                     read->SetOpcode(spv::Op::OpVectorShuffle);
                     Instruction::OperandList maskOperands{{SPV_OPERAND_TYPE_ID, {gatheredId}},
@@ -1398,12 +1456,10 @@ namespace MobileGL {
                     for (uint32_t i = 0; i < query->NumInOperands(); ++i) {
                         queryOperands.push_back(query->GetInOperand(i));
                     }
-                    query->InsertBefore(spvtools::MakeUnique<Instruction>(
-                        irContext, spv::Op::OpImageQuerySize, query->type_id(), rawSizeId, queryOperands));
-                    query->SetOpcode(resultType->GetSingleWordInOperand(1) != 0 ? spv::Op::OpSDiv
-                                                                                : spv::Op::OpUDiv);
-                    query->SetInOperands({{SPV_OPERAND_TYPE_ID, {rawSizeId}},
-                                          {SPV_OPERAND_TYPE_ID, {componentsId}}});
+                    query->InsertBefore(spvtools::MakeUnique<Instruction>(irContext, spv::Op::OpImageQuerySize,
+                                                                          query->type_id(), rawSizeId, queryOperands));
+                    query->SetOpcode(resultType->GetSingleWordInOperand(1) != 0 ? spv::Op::OpSDiv : spv::Op::OpUDiv);
+                    query->SetInOperands({{SPV_OPERAND_TYPE_ID, {rawSizeId}}, {SPV_OPERAND_TYPE_ID, {componentsId}}});
                 }
 
                 for (Instruction* type : bufferSplitTypes) {

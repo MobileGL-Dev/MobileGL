@@ -1,5 +1,5 @@
 ﻿################################################################################
-# 此 .gitignore 文件已由 Microsoft(R) Visual Studio 自动创建。
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
 ################################################################################
 
 /build
@@ -28,3 +28,4 @@ tools/trace_replay/work/
 __pycache__/
 *.py[cod]
 /.gradle
+/.trace-work/

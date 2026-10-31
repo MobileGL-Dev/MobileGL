@@ -9,38 +9,24 @@
 #include "BufferState.h"
 
 namespace MobileGL::MG_State::GLState {
-    BufferState::BufferState() : m_indexGenerator(1024, 1) {
+    BufferState::BufferState() {
+        m_bindingSlotIndex.fill(-1);
         for (SizeT i = 0; i < m_bindingSlots.size(); ++i) {
             m_bindingSlots[i] = BindingSlot<BufferObject>(GlobalBufferTargets[i]);
+            const auto target = static_cast<SizeT>(GlobalBufferTargets[i]);
+            if (target < m_bindingSlotIndex.size()) m_bindingSlotIndex[target] = static_cast<Int16>(i);
         }
+        ++m_contextValuesGeneration;
         for (SizeT i = 0; i < m_touchedBindPointCount.size(); ++i) {
             m_touchedBindPointCount[i] = 0;
         }
     }
 
-    const SharedPtr<BufferObject>& BufferState::GetBufferObject(Uint index) {
-        auto it = m_bufferObjects.find(index);
-        if (it != m_bufferObjects.end()) {
-            return it->second;
-        }
-        static SharedPtr<BufferObject> nullBufferObject = nullptr;
-        return nullBufferObject;
-    }
-
-    void BufferState::GenerateNames(Uint number, Vector<Uint>& buffers) {
-        buffers.resize(number);
-        m_indexGenerator.Generate(number, buffers.data());
-    }
-
-    const SharedPtr<BufferObject>& BufferState::CreateBufferObject(Uint index) {
-        auto& bufferObj = m_bufferObjects[index];
-        if (!bufferObj) {
-            bufferObj = MakeShared<BufferObject>(index);
-        }
-        return bufferObj;
-    }
-
     BindingSlot<BufferObject>& BufferState::GetBindingSlot(BufferTarget target) {
+        // O(1) through the index the constructor built (every draw asks for several targets).
+        const auto index = static_cast<SizeT>(target);
+        if (index < m_bindingSlotIndex.size() && m_bindingSlotIndex[index] >= 0)
+            return m_bindingSlots[static_cast<SizeT>(m_bindingSlotIndex[index])];
         for (auto& bindingSlot : m_bindingSlots) {
             if (bindingSlot.GetTarget() == target) {
                 return bindingSlot;
@@ -50,41 +36,31 @@ namespace MobileGL::MG_State::GLState {
         return m_bindingSlots[0];
     }
 
-    void BufferState::MarkBufferObjectForDeletion(Uint index) {
-        if (m_indexGenerator.IsValid(index)) {
-            auto it = m_bufferObjects.find(index);
-            if (it != m_bufferObjects.end()) {
-                for (auto& bindingSlot : m_bindingSlots) {
-                    if (bindingSlot.GetBoundObject() == it->second) {
-                        bindingSlot.Bind(nullptr);
-                    }
-                }
-                for (auto& bindingPointArray : m_bufferBindPointTargets) {
-                    for (auto& bindingPoint : bindingPointArray) {
-                        if (bindingPoint.GetBoundObject() == it->second) {
-                            bindingPoint.Bind(nullptr);
-                            bindingPoint.ClearRange();
-                        }
-                    }
-                }
-                // Erase through the iterator already in hand: erase(key) would repeat the
-                // find() above, and the successor scan that once made key-based
-                // erase the cheaper of the two no longer happens here - erase(iterator)
-                // hands back an unconverted proxy, and the scan is what converting it
-                // would cost. The unbind loops above touch only the binding arrays, so
-                // `it` is still live.
-                m_bufferObjects.erase(it);
+    void BufferState::UnbindBufferObject(const SharedPtr<BufferObject>& bufferObject) {
+        if (!bufferObject) return;
+        for (auto& bindingSlot : m_bindingSlots) {
+            if (bindingSlot.GetBoundObject() == bufferObject) {
+                bindingSlot.Bind(nullptr);
             }
-            m_indexGenerator.Delete(index);
         }
-    }
-
-    Bool BufferState::ValidateName(Uint index) const {
-        return m_indexGenerator.IsValid(index);
-    }
-
-    Bool BufferState::ValidateBufferObject(Uint index) const {
-        return m_bufferObjects.find(index) != m_bufferObjects.end();
+        for (auto& bindingPointArray : m_bufferBindPointTargets) {
+            for (auto& bindingPoint : bindingPointArray) {
+                if (bindingPoint.GetBoundObject() == bufferObject) {
+                    bindingPoint.Bind(nullptr);
+                    bindingPoint.ClearRange();
+                    // An UNBIND, and the one writer of an indexed point that is not an
+                    // entry point (GL_Buffer.cpp's BindBuffer{Base,Range}_State and
+                    // Core.cpp's transform-feedback writers bump their own): without the
+                    // bump the target's window is never re-sent, the server goes on naming
+                    // this buffer's handle, and once its slot is reused at a newer
+                    // generation the next draw or dispatch that walks the window asks the
+                    // backend for the dead one - Espryt dies with Fatal{ProtocolCorruption,
+                    // "BackendSlotTable.Generation"} (DeletedBoundBufferScenario).
+                    NoteBindPointChanged(BufferBindPointTargets[static_cast<SizeT>(&bindingPointArray -
+                                                                                   m_bufferBindPointTargets.data())]);
+                }
+            }
+        }
     }
 
     BindingSlotRange1D<BufferObject>& BufferState::GetBindingPoint(BufferTarget target, Uint index) {

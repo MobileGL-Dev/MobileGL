@@ -9,6 +9,7 @@
 #pragma once
 #include <Includes.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
+#include <MG_Backend/DirectVulkan/Renderer/WireDepthResolveArm.h>
 
 namespace MobileGL::MG_Util::SelfTest {
     // ===================== KNOWN DRIVER BUGS =====================
@@ -24,7 +25,7 @@ namespace MobileGL::MG_Util::SelfTest {
     // The inventory comes from CAMPAIGN FINDINGS, not from anything the driver reports.
     //
     // EVERY PROBE MUST CARRY A CONTROL. The geometry entry below is why the rule is written
-    // down: the same defect was first characterised as "this driver drops all geometry-stage
+    // down: the same defect was first characterized as "this driver drops all geometry-stage
     // storage-buffer writes", which would have justified withdrawing
     // GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS entirely. A control showed geometry-stage writes
     // land perfectly well when they precede EmitVertex(), so the limit is not a lie and
@@ -33,14 +34,15 @@ namespace MobileGL::MG_Util::SelfTest {
     //
     // ADDING A SIBLING IS ONE FUNCTION: write an `Optional<DriverBugFinding> ProbeXxx(gl)`
     // that returns nullopt when the driver is not affected, and add it to the table in
-    // CollectGlesKnownDriverBugs().
+    // CollectGlesKnownDriverBugs(). A Vulkan probe takes a VulkanDriverBugProbeContext instead
+    // and goes in CollectVulkanKnownDriverBugs()'s table (bottom of this file).
 
     // What MobileGL can do about a bug this device HAS. There is deliberately no "not
     // affected" member: a driver that passes the probe produces no finding at all, so the
     // report only ever lists bugs actually present on this device.
     enum class DriverBugVerdict : Uint8 {
         // A MobileGL quirk repairs or substitutes for the defect and the application sees
-        // correct behaviour.
+        // correct behavior.
         Fixed,
         // There is no substitute. `detail` says what MobileGL does defensively instead, and
         // what an application can still rely on.
@@ -59,10 +61,10 @@ namespace MobileGL::MG_Util::SelfTest {
     struct LocatedIoBlockMeasurement {
         // The driver delivers nothing through an inter-stage interface block that carries an
         // explicit layout(location=) once a geometry stage is in the pipeline. The only field
-        // any caller's behaviour depends on.
+        // any caller's behavior depends on.
         Bool detected = false;
         // ...and it does the same WITHOUT a geometry stage, i.e. between a vertex and a
-        // fragment stage. False on the device this was characterised on, and reported because
+        // fragment stage. False on the device this was characterized on, and reported because
         // DirectGLES's repair is scoped to tessellation/geometry programs: a driver that
         // answered true here would be losing block payloads the repair does not reach.
         Bool alsoAffectsVertexToFragment = false;
@@ -98,13 +100,13 @@ namespace MobileGL::MG_Util::SelfTest {
     // while the control lands correctly.
     //
     // Adreno 830 writes to layer 0 whatever layer the DRAW framebuffer's
-    // glFramebufferTextureLayer attachment names, for colour and depth alike, and raises no
+    // glFramebufferTextureLayer attachment names, for color and depth alike, and raises no
     // error. Everything else about the layer works on the same driver, which is what makes this
     // a blit defect rather than a layered-attachment one.
     //
     // THE CONTROL is the same blit onto destination layer 0. It passes on every implementation
     // that can blit between array layers at all, and because the value it looks for exists only
-    // on the SOURCE's layer 1 it also proves the source layer is honoured - so a driver with no
+    // on the SOURCE's layer 1 it also proves the source layer is honored - so a driver with no
     // working glFramebufferTextureLayer reaches no verdict instead of being reported as this.
     //
     // Returns false when an entry point is missing, when the probe's own framebuffers come back
@@ -182,11 +184,35 @@ namespace MobileGL::MG_Util::SelfTest {
     // ProbeGeometryStageSsboWriteAfterEmitDropped(), evaluated at most once per process.
     Bool GeometryStageSsboWriteAfterEmitDropped(const MG_External::GLESFunctionsTable& gl);
 
+    // Every invocation of a 32-wide compute workgroup stores 1 into its shared slot, barrier(),
+    // reads slot 0, barrier(), stores 7, barrier(), reads slot 0 again, and writes both reads
+    // to its own result word: the second read must see 7. The Adreno ES compiler treats ordinary shared loads as pure -
+    // it hands back the first read (and, with other addresses, moves a read past a later store) - while an atomicAdd(x,
+    // 0u) read of the same words is kept in place. That atomic twin is the control: the verdict is "stale" only when
+    // the plain program goes wrong while the atomic one stays right. Deterministic (a compiler transform), so latched;
+    // false when compute shaders or an entry point are missing or anything fails to set up. Restores the GL state it
+    // touches.
+    Bool ProbeSharedMemoryLoadsGoStale(const MG_External::GLESFunctionsTable& gl);
+
+    // ProbeSharedMemoryLoadsGoStale(), evaluated at most once per process.
+    Bool SharedMemoryLoadsGoStale(const MG_External::GLESFunctionsTable& gl);
+
+    // A compute shader loads texel (0, 0) of an rgba8 image unit twice: once with a zeroed 1x1
+    // texture bound (the control, which must read 0) and once with the unit EMPTY (the subject).
+    // GL 4.6 8.26 makes the empty load return zero; Adreno returns alpha 1 (0xff000000). True
+    // only when the subject reads nonzero while the control reads zero. Deterministic, so
+    // latched; false when compute shaders or an entry point are missing or anything fails to
+    // set up. Restores the GL state it touches.
+    Bool ProbeEmptyImageUnitsReadNonzero(const MG_External::GLESFunctionsTable& gl);
+
+    // ProbeEmptyImageUnitsReadNonzero(), evaluated at most once per process.
+    Bool EmptyImageUnitsReadNonzero(const MG_External::GLESFunctionsTable& gl);
+
     // Samples one R32F GL_TEXTURE_2D_MULTISAMPLE texel through a swizzled alpha channel, twice,
     // with a separately linked program each time. Returns true only when the swizzled read goes
     // wrong while every control read stays right.
     //
-    // Adreno 830 returns uninitialised memory - a different value every run - for
+    // Adreno 830 returns uninitialized memory - a different value every run - for
     // texelFetch(sampler2DMS, ..., sampleIndex != 0).w on an R32F multisample texture whose
     // GL_TEXTURE_SWIZZLE_A is not the default, from the SECOND such program in the context
     // onward. The first program reads correctly, which is why the probe links two.
@@ -198,7 +224,7 @@ namespace MobileGL::MG_Util::SelfTest {
     // simply cannot render R32F, or cannot sample multisample textures at all, would be
     // reported as having this very specific corruption.
     //
-    // Returns false when the driver cannot host the shape (no multisample R32F colour target,
+    // Returns false when the driver cannot host the shape (no multisample R32F color target,
     // fewer than two samples, a missing entry point, an incomplete framebuffer): an
     // inconclusive probe must never be reported as a bug. Restores every piece of GL state it
     // touches.
@@ -282,7 +308,7 @@ namespace MobileGL::MG_Util::SelfTest {
     // "unfixable". Probing only the shape MobileGL emits today (`coherent` plus
     // memoryBarrierImage()) reports a bug on drivers where simply adding `volatile` makes the
     // read correct, which is a defect MobileGL could fix rather than one it cannot: measured on
-    // Mesa llvmpipe, the emitted shape misses every texel while the `volatile` shape misses
+    // llvmpipe, the emitted shape misses every texel while the `volatile` shape misses
     // none. Only a driver that fails even the strongest shape has no in-shader substitute left.
     //
     // The control is the same dependency split across TWO draws with a glMemoryBarrier and a
@@ -292,12 +318,10 @@ namespace MobileGL::MG_Util::SelfTest {
     //
     // `detected` is false unless the strongest shape is dirty AND the control is clean. The
     // shape MobileGL emits is measured either way, so the report can say what applications get.
-    ImageCoherencyResidualMeasurement ProbeImageWriteReadCoherencyResidual(
-        const MG_External::GLESFunctionsTable& gl);
+    ImageCoherencyResidualMeasurement ProbeImageWriteReadCoherencyResidual(const MG_External::GLESFunctionsTable& gl);
 
     // ProbeImageWriteReadCoherencyResidual(), evaluated at most once per process.
-    const ImageCoherencyResidualMeasurement& ImageWriteReadCoherencyResidual(
-        const MG_External::GLESFunctionsTable& gl);
+    const ImageCoherencyResidualMeasurement& ImageWriteReadCoherencyResidual(const MG_External::GLESFunctionsTable& gl);
 
     // Copies one known GL_UNSIGNED_SHORT_5_5_5_1 word out of both mip levels of a GL_RGB5_A1
     // 2D array into plain 2D images with glCopyImageSubData and reads the landed texels back
@@ -342,4 +366,33 @@ namespace MobileGL::MG_Util::SelfTest {
     // Every known driver bug this GLES driver actually has. Bugs it does not have are absent,
     // so an unaffected device renders an empty section rather than a wall of "not affected".
     Vector<DriverBugFinding> CollectGlesKnownDriverBugs(const MG_External::GLESFunctionsTable& gl);
+
+    // ===================== KNOWN VULKAN DRIVER BUGS =====================
+    //
+    // The DirectVulkan (Magma) backend's table, under the rules above: a control per probe, an
+    // inconclusive probe is never a finding, a clean one contributes nothing. A probe gets the
+    // POST's throwaway instance and the physical device it picked, and creates whatever device it
+    // needs itself.
+    //
+    // DISAGGREGATED BUILDS ONLY, for now: its one row is a defect of the Magma WIRE arm, which the
+    // monolith never records, and the pull build's image must not move (P7 gate G1). A row about a
+    // path the monolith takes moves this guard into the table.
+    struct VulkanDriverBugProbeContext {
+        PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
+        VkInstance instance = VK_NULL_HANDLE;
+        VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+        Uint32 graphicsQueueFamilyIndex = 0;
+        const Vector<VkExtensionProperties>* deviceExtensions = nullptr;
+    };
+
+    // The row for the multisample depth/stencil resolve probe
+    // (MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.h), a pure function of its
+    // measurement: nullopt unless the verdict is the defect. FIXED where the shader substitute
+    // can write every aspect (VK_EXT_shader_stencil_export present), UNFIXABLE otherwise - a
+    // stencil resolve then still lands on the render pass that writes nothing.
+    Optional<DriverBugFinding> DescribeDepthStencilResolvePassBug(
+        const MG_Backend::DirectVulkan::WireDepthResolveProbeMeasurement& measurement, Bool shaderStencilExport);
+
+    // Every known driver bug this Vulkan driver actually has.
+    Vector<DriverBugFinding> CollectVulkanKnownDriverBugs(const VulkanDriverBugProbeContext& context);
 } // namespace MobileGL::MG_Util::SelfTest

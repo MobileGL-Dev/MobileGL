@@ -16,6 +16,22 @@
 #include <MG_State/GLState/TextureState/TextureObject.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
+#include "SlotTables.h"
+// The client-memory fetch plan: which elements of an application-owned array a draw reads.
+// The monolith arm answers it here (SyncClientSideAttributesForDraw) and the wire arm asks
+// the same question of the same header (MG_Impl/Pipe/OwnedDrawInputs.h). UNGUARDED, because
+// the monolith arm is not a split-arm fallback: it is the arm the pull, verify and push
+// builds run, so the declaration below compiles in every flavor (see ClientFetchPlan.h).
+#include <MG_Impl/Pipe/ClientFetchPlan.h>
+// P3a: the vertex-input payload views the handle arm of the VAO twin consumes.
+#include <MG_Pipe/MGPipeTypes.h>
+// P4a: the RECORDS the five re-keyed twins read instead of the frontend object. The readers
+// below hand back pointers to them, and MGPipeResourceRecord::PendingUpload is a nested type,
+// so a forward declaration would not do. Push-only, like everything else P4a adds to this
+// header, so the pull build's include graph is unchanged (D-P).
+#include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeSessionFail.h> // P13 W5: the slot tables' handle refusals, in every build
+#include "NarrowIntegerSeeds.h"
 
 namespace MobileGL::MG_Backend::DirectGLES {
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType);
@@ -58,6 +74,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // flag while the process is very much alive.
     Bool InProcessTeardown();
     void EnsureProcessTeardownSentinel();
+    // The exit() half of InProcessTeardown alone, for an object whose release needs only the
+    // display, not a current context (an EGLImage): a server session's twin teardown has no
+    // context current but a live display, and skipping the release there would leak the image.
+    Bool InProcessExit();
 
     // Generation of the backend ES context that owns the driver ids currently handed
     // out. Bumped exactly once per DestroyEGLContext. Every backend twin that owns a
@@ -178,7 +198,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLenum IndexType() const { return m_indexType; }
 
     private:
-        // Declared before m_capOverride so it is initialised first (members initialise in
+        // Declared before m_capOverride so it is initialized first (members initialize in
         // declaration order): the whole decision is made once, and both the cap override and the
         // constructor body read the same answer.
         RestartSubstitutionKind m_kind = RestartSubstitutionKind::None;
@@ -228,7 +248,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Indices whose whole state tuple (viewport rectangle, scissor rectangle, scissor-test enable,
     // depth range) is identical share ONE pass, so the overwhelmingly common case - every index
     // still holding what glViewport/glScissor/glDepthRange broadcast to all sixteen - collapses
-    // to a single pass with an all-ones gate mask, i.e. one draw and no behaviour change at all.
+    // to a single pass with an all-ones gate mask, i.e. one draw and no behavior change at all.
     //
     // Whether emulation runs. Off only under MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION falsy, which
     // restores the pre-emulation path as a negative control.
@@ -267,135 +287,387 @@ namespace MobileGL::MG_Backend::DirectGLES {
         EndViewportRoutingPasses(passCount);
     }
 
-    template <typename StateObject, typename BackendObject>
+    // The backend twin table: BackendSlotTable buckets keyed on MGPipeHandle{Slot, Gen} (see
+    // SlotTables.h for what that buys). P13 deleted the legacy arm - an UnorderedMap keyed on
+    // the frontend heap ADDRESS with a garbage sweep as its only death signal - together with
+    // every frontend-keyed entry (GetOrCreate(object), Find(object), HandleOf, the per-handle
+    // state note, the lifetime-id death walk): a twin is resolved only by the handle a record
+    // carried.
+    //
+    // The kind is a template parameter ONLY in the push build. G1 requires the pull build's
+    // symbol set to be byte-for-byte the pre-P2 one, and a third template argument changes
+    // every instantiation's mangled name - so in the pull build the parameter, like the arm it
+    // selects, does not exist. The macro below spells that one difference; it is #undef'd
+    // straight after the class, and the twelve declaration and definition sites name the
+    // registry through the TwinRegistry alias instead, which swallows the kind in the pull
+    // build. (An alias template may have a parameter it does not use, and an alias emits no
+    // symbol of its own, so the pull build's mangled names are unchanged.)
+#define MGB_TWIN_KIND_PARAM , MG_Pipe::MGPipeKind kKind
+
+    template <typename StateObject, typename BackendObject MGB_TWIN_KIND_PARAM>
     class StateBackendObjectRegistry {
     public:
-
-        using StatePtr = SharedPtr<StateObject>;
-        using StateWeakPtr = std::weak_ptr<StateObject>;
         using BackendPtr = SharedPtr<BackendObject>;
+        using SlotTable = BackendSlotTable<StateObject, BackendObject, kKind>;
+        // P14 S6: the ONE bucket of this kind the calling thread is in. Every handle-keyed entry
+        // below resolves through it, so the six twin registries answer per {session, share
+        // group} without a single call site naming a bucket.
+        using SlotTables = SlotTableRegistry<StateObject, BackendObject, kKind>;
+        using TwinKey = DirectGLES::TwinKey;
 
-        // The backend twin and the weak reference that decides whether the raw key still
-        // names the state object the twin was built for. Both live in one entry: a
-        // separate liveness map answered nothing the backend probe had not already found
-        // and cost a second hash lookup on every Find, which the draw path runs ~10 times.
-        struct Entry {
-            BackendPtr backend;
-            StateWeakPtr stateRef;
-        };
-        using BackendMap = UnorderedMap<StateObject*, Entry>;
-        using iterator = typename BackendMap::iterator;
-        using const_iterator = typename BackendMap::const_iterator;
-
-        BackendPtr& GetOrCreate(const StatePtr& stateObj) {
-            MOBILEGL_ASSERT(stateObj != nullptr, "State object must not be null");
-
-            // Twin creation is the moment a driver-owned id starts needing a guarded
-            // destructor; cold path, so the once-guard costs nothing per draw.
-            EnsureProcessTeardownSentinel();
-            // Sweep BEFORE the entry reference below exists: the map is open-addressed and an
-            // erase relocates the rest of the probe cluster, so collecting once that reference
-            // is taken would invalidate it. The sweep is therefore owed from an earlier call
-            // rather than triggered by this one.
-            if (m_creationTick >= kCreationGCInterval) {
-                m_creationTick = 0;
-                CollectGarbage();
+        // The twin at a handle, or null when the slot is free or its Gen has moved on. This is
+        // the lookup a backend memo that already holds a handle wants: no lifetime-id probe.
+        BackendPtr* FindByHandle(MG_Pipe::MGPipeHandle handle) {
+            if (EsprytSlotTablesEnabled()) {
+                return m_slotTables.FindByHandle(handle);
             }
-            const SizeT entryCountBeforeInsert = m_entries.size();
-            auto& entry = m_entries[stateObj.get()];
-            if (m_entries.size() != entryCountBeforeInsert) {
-                // A key the registry has never held. Nothing tells the backend that a texture or
-                // renderbuffer was DELETED - the twin, and the driver storage it owns, lives
-                // until a collection - and CollectGarbageIfNeeded is ticked only from the
-                // per-draw sync paths, which a CTS-shaped workload runs about ten times per
-                // case. 1024 of those ticks then span ~100 cases, so ~100 cases' worth of dead
-                // (and, for this suite, gigabyte-sized) objects stay allocated at once. Object
-                // CHURN rather than draw count is what makes the sweep urgent, so a twin the
-                // registry has never seen ticks it too - and it does so on the path that is
-                // about to allocate, which is exactly when the memory is needed.
-                ++m_creationTick;
-            }
-            if (entry.stateRef.expired()) {
-                // The previous owner of this address is gone and the allocator handed it
-                // to a new object: its twin describes ids the new state object never made.
-                entry.backend.reset();
-            }
-            entry.stateRef = stateObj;
-            return entry.backend;
+            return nullptr;
         }
 
-        // Null when no live state object owns this key. The result points into the map, so
-        // it stays valid only until the next GetOrCreate/Find/CollectGarbage on this registry.
-        // Take that literally, including for Find: the map is open-addressed and erases by
-        // shifting the rest of the probe cluster into the hole, so an erase relocates entries
-        // OTHER than the erased one - and Find erases, whenever it lands on a key whose state
-        // object has expired. Callers that need the twin across another registry call must copy
-        // the BackendPtr out (or keep only the pointee, which is heap-allocated and never moves).
-        BackendPtr* Find(StateObject* stateObj) {
-            const auto entryIt = m_entries.find(stateObj);
-            if (entryIt == m_entries.end()) {
-                return nullptr;
+        // P4a (D-B1): resolve-or-create BY THE HANDLE THE CALL CARRIED. This is the shape P3a
+        // already runs for the buffer family through BackendBufferResourceTable, lifted onto
+        // the five registries that still mint their own handles off a frontend lifetime id -
+        // the debt SlotTables.h records against itself at the top of that file.
+        //
+        // POINTER, not the reference GetOrCreate(StatePtr) returns, and that is deliberate:
+        // this call has THREE ways to decline and every one of them has to be visible to the
+        // caller rather than answered with a parked twin.
+        //   * the legacy arm is running, so there is no slot table to index;
+        //   * the slot is past the table's sanity bound (a corrupt 32-bit slot must not decide
+        //     a vector resize);
+        //   * the generation is BEHIND the live entry's. SlotTables.h:301-321 is the whole
+        //     argument: forward is a recycle and resets the twin, BACKWARD is refused, because
+        //     adopting it would destroy the incumbent LIVE twin's driver ids and then stamp the
+        //     slot back to the dead object's generation - the shape commit d7655247 fixed.
+        // The refusal is SILENT here and gets its release-build voice at the per-kind resolver
+        // in Managers.cpp, exactly as GetOrCreateBufferResourceForHandle gives P3a's.
+        BackendPtr* GetOrCreateByHandle(MG_Pipe::MGPipeHandle handle) {
+            if (!EsprytSlotTablesEnabled()) return nullptr;
+            if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
+            if (handle.Slot >= SlotTable::kMaxHandleSlot) {
+                MG_Pipe::MGPipeRecordFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
+                    MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
+                    "GetOrCreateByHandle named slot %u, past this table's %u bound",
+                    handle.Slot, SlotTable::kMaxHandleSlot);
             }
-            if (entryIt->second.stateRef.expired()) {
-                m_entries.erase(entryIt);
-                return nullptr;
+            const Uint32 liveGen = m_slotTables.LiveGenAt(handle.Slot);
+            if (liveGen != 0 && liveGen > handle.Gen) {
+                MG_Pipe::MGPipeRecordFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
+                    MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
+                    "GetOrCreateByHandle named generation %u at slot %u, behind live generation %u",
+                    handle.Gen, handle.Slot, liveGen);
             }
-            return &entryIt->second.backend;
+            return &m_slotTables.GetOrCreate(handle);
         }
 
-        const BackendPtr* Find(StateObject* stateObj) const {
-            return const_cast<StateBackendObjectRegistry*>(this)->Find(stateObj);
+        // The generation of the LIVE entry at this slot, or 0. It exists so a caller can
+        // DIAGNOSE, in a release build where MOBILEGL_ASSERT is inert, the refusal above
+        // performs silently.
+        Uint32 LiveGenAt(Uint32 slot) const {
+            if (!EsprytSlotTablesEnabled()) return 0;
+            return m_slotTables.LiveGenAt(slot);
         }
 
-        iterator begin() { return m_entries.begin(); }
-        const_iterator begin() const { return m_entries.begin(); }
-        iterator end() { return m_entries.end(); }
-        const_iterator end() const { return m_entries.end(); }
+        // NO ReleaseByHandle HERE THROUGH P5, AND THAT WAS A DECISION (review M-4). The death
+        // half of GetOrCreateByHandle existed only for a kind whose announcement is its own
+        // destroy CALL rather than the shared death notice - which was the BUFFER family
+        // (BackendBufferResourceTable::ReleaseByHandle, SlotTables.h, called from
+        // resource_destroy) and none of the five kinds this registry serves: every one of
+        // them died through DestroyByLifetimeId below, because P4a added no server-side
+        // destroy arm for a texture, a renderbuffer, a framebuffer, a sampler CSO or a shader
+        // CSO. P5c (ct) is the commit that gives the wrapper its caller: object_death carries
+        // the dead object's HANDLE on the wire (CONTRACT-P5C.md §5.2), and the static
+        // ReleaseByHandle below is what the sink's per-kind dispatch calls.
 
-        void CollectGarbageIfNeeded() {
-            ++m_gcTick;
-            if (m_gcTick < kGCInterval) {
-                return;
+        // P5c (ct), CONTRACT-P5C.md §5.2: the wrapper M-4 below deferred, given its caller by
+        // object_death. The record carried the handle, so the release is keyed by it and the
+        // client's allocator is never asked from this side (rule E); every holder of the kind
+        // lets go, exactly as DestroyByLifetimeId walks them. What this does NOT do is the
+        // allocator Free the notice arm performs - the slot's owner is the client, which
+        // already returned it after the record went out. STATIC for the same reason
+        // DestroyByLifetimeId is: a death is about an object, not a table instance.
+        static Bool ReleaseByHandle(MG_Pipe::MGPipeHandle handle) {
+            if (EsprytSlotTablesEnabled()) {
+                return SlotTable::ReleaseTwinByHandle(handle);
             }
-            CollectGarbage();
-            m_gcTick = 0;
+            return false;
         }
 
-        void CollectGarbageNow() { CollectGarbage(); }
+        // P5e (id), CONTRACT-P5E §4.1: fn(MGPipeHandle, const BackendPtr& twin) over every live
+        // entry of the HANDLE ARM, and of that arm only.
+        //
+        // IT NO LONGER SERVES THE LEGACY ARM, and that is a narrowing rather than a loss. The
+        // legacy map is keyed by the raw frontend address and has no handle to hand over - a
+        // synthesised null one would be a lie the callee could not tell from a real answer -
+        // and its one caller (ScopedDetachedTextureFramebufferAttachments) has always had its
+        // own `#if MOBILEGL_PIPE_LEGACY_MEMOS` begin()/end() walk beside the call, because the
+        // legacy entry needs its stateRef.expired() test done by hand. So the arm check here
+        // was answering a question no caller asked, and leaving it would have meant inventing a
+        // second signature for a walk the P5e rule exists to delete.
+        template <typename Fn>
+        void ForEachLive(Fn&& fn) const {
+            if (EsprytSlotTablesEnabled()) {
+                m_slotTables.ForEachLive(fn);
+            }
+        }
+
+        // ---- P14 S6: the KEYED shape's own controls ----------------------------------------
+        //
+        // Everything above is the shape a CALL SITE sees, and it is deliberately the shape it
+        // saw before the rekey. These four are the shape only a caller that has to reason about
+        // buckets needs: the teardown of a session, a test asking whether two contexts landed in
+        // two namespaces, and a diagnostic.
+        //
+        // THE ONE BUCKET THIS THREAD RESOLVES TO. A by-value copy of it is exactly what a
+        // fixture's saved registry was, and it is what makes `= {}` and "put it back" both mean
+        // something under a key.
+        SlotTable& BucketForCallingThread() {
+            if (EsprytSlotTablesEnabled()) return m_slotTables.ForCallingThread();
+            // The legacy arm has no buckets; the empty table's Reset() is the only honest
+            // answer, and no shipping path asks (the arm is compiled out or the bit is clear).
+            return m_legacyEmptyTable;
+        }
+
+        Vector<SharedPtr<SlotTable>> BucketSnapshot() const {
+            if (EsprytSlotTablesEnabled()) return m_slotTables.Snapshot();
+            return {};
+        }
+        SizeT BucketCount() const { return EsprytSlotTablesEnabled() ? m_slotTables.BucketCount() : 0; }
+        // Drop one {session, share group}. Answers whether such a bucket existed.
+        Bool DropBucket(const TwinKey& key) { return EsprytSlotTablesEnabled() && m_slotTables.Drop(key); }
+        // Drop every bucket of one session - the difference between "this session's twins go"
+        // and "the process's do" - and answer how many groups that took with it.
+        Uint32 DropBucketsOfSession(Uint64 sessionKey) {
+            return EsprytSlotTablesEnabled() ? m_slotTables.DropSession(sessionKey) : 0;
+        }
+        // Empty every bucket. The teardown of a process-shaped world, where the key is {0, 0}.
+        void ResetBuckets() {
+            if (EsprytSlotTablesEnabled()) m_slotTables.Reset();
+        }
+        // Every bucket, walked with its key.
+        template <typename Fn>
+        void ForEachBucket(Fn&& fn) const {
+            if (EsprytSlotTablesEnabled()) m_slotTables.ForEachBucket(fn);
+        }
 
     private:
-        void CollectGarbage() {
-            if (m_isCollecting) {
-                return;
-            }
-
-            m_isCollecting = true;
-
-            Vector<StateObject*> staleKeys;
-            staleKeys.reserve(m_entries.size());
-            for (const auto& [stateKey, entry] : m_entries) {
-                if (entry.stateRef.expired()) {
-                    staleKeys.push_back(stateKey);
-                }
-            }
-
-            for (auto* stateKey : staleKeys) {
-                m_entries.erase(stateKey);
-            }
-
-            m_isCollecting = false;
-        }
-
-    private:
-        static constexpr Uint32 kGCInterval = 1024;
-        // Creations are far rarer than draws, so this counts in a much smaller unit than
-        // kGCInterval does.
-        static constexpr Uint32 kCreationGCInterval = 64;
-        BackendMap m_entries;
-        Uint32 m_gcTick = 0;
-        Uint32 m_creationTick = 0;
-        Bool m_isCollecting = false;
+        // P14 S6: the ONE bucket per {session, share group}, hidden behind the same member names
+        // the single table had, so every handle-keyed call site above and every caller below is
+        // unchanged. See SlotTables.h's SlotTableRegistry for the resolution chain.
+        SlotTables m_slotTables;
+        // The legacy arm's stand-in for BucketForCallingThread(). Never read after a Reset and
+        // never populated: the two entries that could write it are the handle-keyed ones, which
+        // return early on that arm.
+        SlotTable m_legacyEmptyTable;
     };
+
+#undef MGB_TWIN_KIND_PARAM
+
+    // One spelling for the twin registry at every declaration and definition site. In the push
+    // build the kind is the registry's third template argument; in the pull build the alias
+    // drops it, so the mangled name is the pre-P2 two-argument one.
+    template <typename StateObject, typename BackendObject, MG_Pipe::MGPipeKind kKind>
+    using TwinRegistry = StateBackendObjectRegistry<StateObject, BackendObject, kKind>;
+
+    // ---- P4a (D-K3): one arm resolver per family, beside BufferImpl's two ----
+    //
+    // Four bits and therefore four resolvers, for P3a's reason one level out: a framebuffer
+    // path that regressed, a texture path that regressed, a sampler path that regressed and a
+    // program path that regressed are four different findings, and clearing one must not
+    // disarm the other three.
+    //
+    // THE RESOLUTION IS LAZY, at the first use, and never at bring-up. Backend context creation
+    // runs inside eglMakeCurrent and the integration harness pre-flights exactly that sequence
+    // in a FORKED CHILD; a child that dies on a signal is reported as "no usable GPU" and every
+    // scenario in the lane is SKIPPED - the lane goes green having run nothing, on the very
+    // pair of env vars the A/B is driven with, which is what ARCHITECTURE.md §13.2 forbids. So a stop
+    // has to land in a test body, i.e. at the first lookup. That is what the inline latches
+    // below give: a guard-variable load and a perfectly-predicted branch per consult, and the
+    // arm dispatch folds into the caller (SlotTables.h's EsprytSlotTablesEnabled argument
+    // verbatim - every one of these is consulted on the per-draw path).
+    //
+    // ALL FOUR CAN REACH NoArm and all four STOP there rather than skipping green, because
+    // every one of the four legacy arms is compiled under MOBILEGL_PIPE_LEGACY_MEMOS:
+    //   framebuffer  - the four g_fboSynced* arrays and StampSyncedFBO;
+    //   texture      - the twin's m_prevTextureInfo / m_syncedContentVersion cheap-gate trio;
+    //   samplers     - UnitSamplerLookupMemo's WeakPtr arm and SamplerPassMemo's raw
+    //                  BackendSamplerObject* rows;
+    //   programs     - g_programTwinLookupMemo.
+    //
+    // THE DEPENDENCY ROWS ARE IN MG_Pipe/SubsystemDeps.def, ONCE (P3b/P4b R-5), and the four
+    // resolvers below READ them through MGPipeSubsystemDependenciesAreSet rather than carrying a
+    // copy: a dependency the table declares is diagnosed and REFUSED here rather than half-run,
+    // the bit-8-requires-bit-7 shape ResolveVertexInputSubsystemArm already ships.
+    //
+    // THIS COMMENT USED TO RESTATE THE ROWS AND WAS WRONG IN TWO WAYS THAT NOTHING COULD FAIL,
+    // in the header of the file that IMPLEMENTS the refusal. It said "THREE OF THEM CARRY A
+    // DEPENDENCY" when there are six rows (bits 8 and 13 were the two it did not know about),
+    // and it listed "10 without 11" among the mirror pairs that are FINE - when 10-without-11 is
+    // precisely D-K2's FOURTH row (ID-14/ID-15), refused twenty lines below by
+    // ResolveTextureResourceSubsystemArm and withheld by the client at PipeFill.cpp's own gate.
+    // MGPipe.h carried the identical pair of defects and lost them with the table; this copy was
+    // left behind because Managers.h belonged to a package in flight. The rows are not restated
+    // here again: the file that states them is the one the code reads.
+    //
+    // The mirror pairs that really ARE fine are stated in MGPipe.h beside the table, because an
+    // absence is not a row - and because that is the one place where saying it cannot drift away
+    // from the rows it is the complement of.
+    //
+    // ResolveFramebufferSubsystemArm additionally carries D-C3's bring-up refusal: the wire
+    // array is MGPFramebufferState::Color[8] and GetDynamicParameters().MaxColorAttachments is
+    // the driver's RAW ES cap, which is not clamped to 8 on this path. A driver reporting more
+    // would silently truncate the record, so the bit is refused with one MGLOG_E naming the cap
+    // and the legacy arm runs. Widening the payload is a wire change nobody has evidence for;
+    // truncating silently is the bug class this phase is closing.
+    Bool ResolveFramebufferSubsystemArm();
+    Bool ResolveTextureResourceSubsystemArm();
+    Bool ResolveSamplerSubsystemArm();
+    Bool ResolveProgramSubsystemArm();
+    // P13 W6: every family runs the record arm - the frontend arms these resolvers used to choose
+    // between are gone, so no draw-path site asks them any more (the integration peeks still read
+    // the latches). The one refusal a running process can still meet - a driver whose color-
+    // attachment cap exceeds the wire's width - is checked once, at capability bring-up.
+    void ResolveRecordArmFamilies();
+
+    inline Bool FramebufferSubsystemEnabled() {
+        static const Bool enabled = ResolveFramebufferSubsystemArm();
+        return enabled;
+    }
+    inline Bool SamplerSubsystemEnabled() {
+        static const Bool enabled = ResolveSamplerSubsystemArm();
+        return enabled;
+    }
+    inline Bool ProgramSubsystemEnabled() {
+        static const Bool enabled = ResolveProgramSubsystemArm();
+        return enabled;
+    }
+
+    // P5e (pg), CONTRACT-P5E.md §5.8 / ruling 1 (ID-81): THE HANDLE ARM'S SELECTOR for the
+    // program family. Transport AND the family bit, in that order and both required:
+    //
+    //   * `Transport != Monolith` because the push-MONOLITH build keeps its frontend arms token
+    //     for token - the verify comparator needs them, and it is what makes
+    //     MOBILEGL_IPC_RUN_AHEAD=0 a pure wait-rule A/B on identical server code rather than a
+    //     comparison of two different backends;
+    //   * the family bit because the A/B that switches this family off has to switch off the
+    //     arm too, not only the emission - a server reading records nobody sends would draw
+    //     with no program at all.
+    //
+    // NOT LATCHED, unlike the four above: Transport is configuration read once at bring-up and
+    // ProgramSubsystemEnabled() already latches, so this is one load and one test, and a latch
+    // here would only hide which half answered.
+    inline Bool ProgramHandleArm() {
+        return ProgramSubsystemEnabled();
+    }
+
+    // ---- P4a: what the twins read INSTEAD of the frontend object ----
+    //
+    // One reader per record kind, all const, all null-on-miss, and all bounds-checked against
+    // the applier's own dense table rather than against a constant: a slot at or above the
+    // table's size simply has no record, which is the same answer as "not live" and is not a
+    // protocol error on THIS side (the applier already refused and counted the call that would
+    // have created it - PipeApply.h's RefusedObjectCalls).
+    //
+    // A NULL ANSWER IS NOT A FALL-BACK TO THE FRONTEND. On a family's handle arm, quietly
+    // reaching into the frontend object again would hide a missing record behind a picture that
+    // still looks right, which is exactly what the subsystem A/B exists to expose
+    // (MarkBufferGpuWritten's note, P3a). Every caller below either declines the work with a
+    // named MGLOG_E_ONCE or runs its family's LEGACY arm, decided by the family latch and
+    // never per record.
+    //
+    // The returned pointer is into a Vector the applier may grow, so it is valid only until the
+    // next applier call - the same rule the legacy arm's map-into pointers carried, and every
+    // caller here reads what it needs and lets go.
+    const MG_Pipe::MGPipeResourceRecord* PipeTextureRecordForHandle(MG_Pipe::MGPipeHandle res);
+    const MG_Pipe::MGPipeResourceRecord* PipeRenderbufferRecordForHandle(MG_Pipe::MGPipeHandle res);
+    const MG_Pipe::MGPipeSamplerCsoRecord* PipeSamplerCsoRecordForHandle(MG_Pipe::MGPipeHandle cso);
+    const MG_Pipe::MGPipeSamplerViewRecord* PipeSamplerViewRecordForHandle(MG_Pipe::MGPipeHandle view);
+    // ShaderCso is the one kind whose slot space is split in two on the CLIENT side - the
+    // composite band lives in its own dense table so a single program-pipeline composite does
+    // not grow a 983040-entry vector (contract D13). The server never learns a handle is a
+    // composite: this reader hides the split behind one lookup, exactly as the wire does.
+    const MG_Pipe::MGPipeShaderCsoRecord* PipeShaderCsoRecordForHandle(MG_Pipe::MGPipeHandle cso);
+
+    // P3b/P4b (wave 2-D, package D3): THE STORAGE RECORD BEHIND A TEXTURE RECORD - the record of
+    // the texture it views for a glTextureView, and itself for every other texture.
+    //
+    // WHY THERE IS A SECOND READER. A view owns no texels, and the client keeps ONE emission
+    // cursor per storage: an upload through a view's own name is remapped onto its storage owner
+    // before it is emitted (MG_Impl/Pipe/TextureEmit.h, `ViewOf names the storage owner, and ONE
+    // HOP always reaches storage`), so every resource_subdata for either name is keyed on the
+    // OWNER and the applier moves the OWNER's Serial and PendingUploads alone
+    // (MG_Pipe/PipeApply.cpp, ApplyTextureUpload). A view therefore has a Serial that no upload
+    // ever moves, and the two STORAGE clauses of its draw-path clean gate have to be asked of
+    // this record instead of its own - which is what the monolith gate gets for free, because
+    // GetContentVersion() through a view is forwarded to the owner
+    // (MG_State/GLState/TextureState/TextureObjectView.cpp:100-102). CONTRACT-P5E.md §5.2 states
+    // the rule; without it a view that has been sampled once never sees another owner write.
+    //
+    // NULL IS "ASK AGAIN", NEVER "CLEAN". Every caller treats a null answer as a reason to RUN
+    // the sync, which is the direction that re-uploads rather than the direction that shows stale
+    // texels, and it raises nothing: a missing record is PipeTextureRecordForHandle's own
+    // null-on-miss answer one level up, not a protocol refusal.
+    //
+    // BOUNDED, THOUGH ONE HOP IS ALWAYS ENOUGH. glTextureView composes a view-of-a-view onto the
+    // ROOT at creation - the spec's additive min-level rule - and TextureObjectView's invariant
+    // is that its owner "is never a view itself", so Desc.ViewOf already names storage. The walk
+    // is written transitively anyway and gives up after a fixed number of hops, because THIS side
+    // may not depend on a client invariant to terminate: a chain the wire could make cyclic ends
+    // as a null answer rather than as a hang.
+    //
+    // DELETION ORDERING: THE LIVE/GEN TEST IS THE GUARANTEE, NOT THE EMIT ORDER. A view holds a
+    // strong SharedPtr to its storage owner (TextureObjectView::m_storageOwner) and the client
+    // emits resource_destroy from the DESTRUCTOR - "the last SharedPtr to this object dropping,
+    // not the glDelete* that only marks the name and leaves a still-bound object very much alive"
+    // (MG_State/GLState/TextureState/TextureObject.cpp:63). So the owner's storage cannot go away
+    // under a live view, whatever order the application deletes the two names in. But the two
+    // destroys are emitted back to back from one destructor chain, and when the view holds the
+    // owner's LAST reference the member is destroyed before the view's base destructor runs, so
+    // the wire carries resource_destroy(owner) and then resource_destroy(view): for one apply the
+    // view record is live with Desc.ViewOf naming a freed slot. No draw can land in between, and
+    // PipeTextureRecordForHandle tests Live and Gen, so that window answers null (= not clean)
+    // rather than a recycled stranger's record.
+    const MG_Pipe::MGPipeResourceRecord* PipeTextureStorageRecordForRecord(const MG_Pipe::MGPipeResourceRecord& record);
+
+    // P5e (fb): the texture's own TARGET, from its descriptor. The image-unit bind needs it
+    // (glBindImageTexture's layered/format rules are per target) and MGPImageView has no room
+    // for it - 24 bytes, no pad - so it is read off the resource record instead of being added
+    // to the wire. TextureTarget::Unknown when the handle names no live texture record, which
+    // every caller treats as "decline", never as a default.
+    MobileGL::TextureTarget PipeTextureTargetForHandle(MG_Pipe::MGPipeHandle res);
+
+    // The sample count the backend really allocates for the multisample texture this handle
+    // names - the requested count clamped by ClampSamplesToBackendSupport, exactly as the
+    // storage allocation clamps it - or 0 when the handle names no live multisample texture.
+    // What a usampler2DMS fetch's runtime bound (ClampUnsignedMultisampleFetches) is set from.
+    Int PipeTextureBackendSampleCountForHandle(MG_Pipe::MGPipeHandle res);
+
+    // The pending-upload entry the applier accumulated for this (uploadTarget, level) of this
+    // texture record, or null (D-D5). SERVER-SIDE STATE, and that is the whole point: the
+    // client clears its own dirty flags at EMISSION for the levels the applier accepted, while
+    // Espryt's upload loop has bail arms - an incomplete texture returns early, a multisample
+    // target refreshes and skips - that today leave the frontend flag set. A naive move of the
+    // clear to the client would lose exactly those texels. The set survives any number of
+    // bails; ConsumePipeTextureUpload below is called ONLY where the level actually uploaded.
+    //
+    // `uploadTarget` is static_cast<Uint16>(MobileGL::TextureUploadTarget) - the HALF, not the
+    // packed field. The stored key is MGPSubData::Target whole (low byte MGPipeResourceTarget,
+    // high byte TextureUploadTarget, ID-12) and both functions decode it with
+    // MGPipeSubDataUploadTargetOf; they are the only two places this package compares it.
+    const MG_Pipe::MGPipeResourceRecord::PendingUpload* FindPipeTextureUpload(
+        const MG_Pipe::MGPipeResourceRecord& record, Uint16 uploadTarget, Uint16 level);
+    void ConsumePipeTextureUpload(MG_Pipe::MGPipeHandle res, Uint16 uploadTarget, Uint16 level);
+
+    // THE SERVER'S OWN RE-DIRTY, armed in the applier's set instead of in the frontend's model
+    // (esprytobj review M-1). `packedTarget` is a full MGPSubData::Target built with
+    // MGPipePackSubDataTarget, because the entry this writes has to be indistinguishable from
+    // one the client emitted. Whole-level, no regions, merged with any entry already there;
+    // false (and one named log line) when the applier's pending set is at its bound. The three
+    // server-side MarkStorageDirty sites are enumerated at the definition.
+    Bool RearmPipeTextureLevelUpload(MG_Pipe::MGPipeHandle res, Uint16 packedTarget, Uint16 level,
+                                     const MG_Pipe::MGPBox& wholeLevel);
 
     namespace BufferImpl {
         const GLenum TempBufferTarget = GL_ARRAY_BUFFER;
@@ -436,6 +708,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // AcquirePersistentMap or (FLUSH_EXPLICIT) publish only via FlushMappedRange.
         Uint64 CurrentBufferMutationEpoch();
         void BumpBufferMutationEpoch();
+        // P5e (vi), CONTRACT-P5E §5.1's first pin: how many bumps came from a thread other than
+        // the apply thread WHILE an apply thread was running, under a live transport. The
+        // record arm's clean gate stamps this counter and skips its probes while the stamp
+        // holds, so "who may move it" is a question the phase has to answer with a number
+        // rather than with a reading of the call graph. Expected 0 for any session; the bump
+        // itself is Fatal on that path under the strict lane, and the answer at this head is
+        // that the only non-apply-thread bump in the tree happens at bring-up, BEFORE the apply
+        // thread exists (BackendObject_DirectGLES::Initialize's RegisterBufferBackendOps), and
+        // is therefore not counted here.
+        Uint64 BufferMutationEpochBumpsOffTheApplyThread();
+
+        // ---- P5e (vi): THE TWO SOURCE DECISIONS OF THE DRAW'S BUFFER SYNC ------------------
+        //
+        // CONTRACT-P5E §5.1 is, for this family, two substitutions and nothing else: the
+        // attribute walk's buffer set comes from st.VertexBuffers[Start..+Count) instead of the
+        // frontend VAO's GetAllAttributes(), and the index buffer comes from st.IndexBuffer.Res
+        // + IndexBufferSerial instead of the VAO's element slot. Both are lifted out of
+        // SyncNeccessaryBuffers' arms and given names HERE, and the reason is the red-once:
+        // these take the applier state AND NOTHING ELSE, so the only way to revert the
+        // substitution is to put a frontend read back inside one of them, and
+        // MG_Test/SanityTest.cpp drives exactly these two with a frontend VAO deliberately
+        // pointing somewhere else. A test that drove a copy of the decision instead would stay
+        // green through that revert, which is the fake-green ID-102 names.
+        //
+        // The ensure, the memo and the clean probe stay where they are: they need an ES context
+        // and are the integration lane's to exercise.
+        struct DrawVertexBufferRequest {
+            MG_Pipe::MGPipeHandle Res = MG_Pipe::kMGPipeNullHandle;
+            // MGPVertexBuffer::BindingIndex, carried for the memo's diagnostics only.
+            Uint32 BindingIndex = 0;
+        };
+        // The DISTINCT buffers the draw's enabled attributes fetch from, deduped on {slot, gen}.
+        // A null Res is skipped: it is a disabled slot below the window's high-water mark, or a
+        // client-memory array whose bytes have no store to ensure (P8 stages those).
+        Uint ResolveDrawVertexBuffersFromRecord(const MG_Pipe::MGPipeApplierState& st, DrawVertexBufferRequest* out,
+                                                Uint capacity);
+
+        struct DrawIndexBufferRequest {
+            MG_Pipe::MGPipeHandle Res = MG_Pipe::kMGPipeNullHandle;
+            // IndexBufferSerial, which joins the identity compare because this arm has no live
+            // frontend slot to re-read - see ResolvedDrawBuffers::iboSerial.
+            Uint64 Serial = 0;
+        };
+        DrawIndexBufferRequest ResolveDrawIndexBufferFromRecord(const MG_Pipe::MGPipeApplierState& st);
 
         // The DirectGLES storage behind one frontend buffer. Owned (refcounted) by
         // the frontend BufferObject; immediate BufferBackendOps keep it current, so
@@ -479,10 +795,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // matches, exactly like the per-VAO memo stamps.
             Uint64 drawCleanEpoch = 0;
             // Frame serial whose completion retires the last glCopyBufferSubData the upload
-            // ring staged INTO this store (FlushPendingRangesNow's ring tier); 0 = none. Until
-            // it retires, FlushPendingRangesNow keeps every partial range off the
-            // range-invalidating map: on Adreno 830 that map, on a store with a queued copy,
-            // loses the copy (see FlushPendingRangesNow). Draw thread only, like the flush.
+            // ring staged INTO this store (the flush ladder's ring tier: FlushPendingRangesNow
+            // on the pull arm, FlushPendingRangesFrom on the push arm); 0 = none. Until it
+            // retires, both keep every partial range off the range-invalidating map: on
+            // Adreno 830 that map, on a store with a queued copy, loses the copy (see
+            // FlushPendingRangesNow and InvalidateFlushAccessFor). Draw thread only, like the
+            // flush.
             Uint64 ringCopyRetireSerial = 0;
             // Zero-copy coherent persistent map (EXT_buffer_storage): the GL store is
             // immutable, persistently+coherently mapped, and persistentPtr is what the app
@@ -499,7 +817,239 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // no map, and a respecification then has to retire the id rather than hand it
             // to glBufferData, which the driver would silently refuse.
             Bool immutableStorage = false;
+            // P3a: the client's shadow base as the last content-carrying resource call left
+            // it. The handle-shaped ops carry `shadow + offset` beside their record, so the
+            // base is recovered by subtracting the record's own offset once, here.
+            //
+            // IT IS A RAW POINTER INTO AN ALLOCATION THIS SIDE DOES NOT OWN, so its lifetime
+            // rule is written here and enforced at the three events that end it - a cached
+            // base with no invalidation is a use-after-free waiting for an ordinary call:
+            //
+            //   * a content-carrying call (respecify / sub-data / flush-range) REFRESHES it;
+            //   * an ORPHANING respecify (HasDefinedContent clear) CLEARS it, because that is
+            //     also the call that resizes the shadow - reserve + resize reallocates and
+            //     frees the old block - and it brings no replacement base;
+            //   * a successful map_persistent CLEARS it, because the client then adopts the
+            //     coherent pointer and drops the shadow (PipeResource::AdoptPersistentMap does
+            //     clear() + shrink_to_fit()). For such a resource the bytes are persistentPtr.
+            //
+            // Every reader treats null as "no bytes to move". And any path that STILL HOLDS the
+            // frontend object - the ensure path does, because D-N keeps SyncPersistentMappedRange
+            // there for all of P3a - re-reads MappedData() instead of reading this, exactly as
+            // the legacy arm did; this member exists for the drains that have no object, which
+            // in P3a is the readback flush and the fp64 narrowing.
+            const Uint8* hostBytes = nullptr;
+            // P11 B2 (T0): the client's AHardwareBuffer this store IS - imported with
+            // glBufferStorageExternalEXT, so `id` is immutable, persistentMapped and
+            // persistentPtr is this server's own coherent map of the client's pages. The
+            // reference is this twin's own, released only after a fence that follows the
+            // store's last use has signaled (RetireT0Import). Survives an ES context loss:
+            // the next ensure re-imports it. Null for every store T0 did not adopt.
+            void* externalAhb = nullptr;
+            // P8-C: A SHADER WROTE THIS STORE ON THIS SIDE since the R-11 staged copy (or, for
+            // T0, the coherent map) was last known to match it - set by the draw / dispatch that
+            // bound it writable (storage block, atomic counter, writable buffer image), cleared
+            // by SplitHostBytesForCpuRead's refresh and by a respecify. Only the server's own
+            // CPU readers consult it; the client keeps its own set (GpuWritePending.h).
+            Bool serverGpuWritten = false;
+            // P13 W4a: content-carrying records (sub-data, flush-range) arrived since the last
+            // respecify. A copying store answers this with its coverage; an ALIASING one (monolith's
+            // record arm) keeps no coverage, so the twin says it - the streaming idiom (orphan, then
+            // glBufferSubData) defines content no descriptor declares.
+            Bool contentSinceRespecify = false;
         };
+
+        // P3a (D-A4): the SEVENTH Espryt slot table, and the first one keyed by a handle the
+        // CALL carried rather than one this backend minted off a frontend object's lifetime
+        // id. That is what discharges, for this kind, the debt SlotTables.h records against
+        // itself: GLESBufferResource stops hanging off PipeResource::m_backend and lives here
+        // instead, so the resource table is the server's own and a frontend heap reference is
+        // no longer part of resolving it.
+        //
+        // The StateObject parameter is BufferObject only because the template names one; not
+        // one member that touches it is instantiated on this table (no Find(StateObject*), no
+        // HandleOf, no ForEachLive), and the handle overloads never look at it. Death is
+        // announced by the family's own ResourceDestroy call, not by the shared death notice
+        // (D-L), and the slot is freed by the CLIENT after that call returns.
+        //
+        // P14 S6: A BUCKET REGISTRY, like the six TwinRegistry tables. A buffer twin owns a
+        // driver buffer id, so the SAME {slot, gen} in two contexts that do not share a group
+        // must be two resources - and it was one process-wide table until this slice. The
+        // handle-keyed member-for-member forwarding in SlotTables.h is what leaves every
+        // `g_backendBufferResources.X(...)` call site below untouched.
+        using BackendBufferResourceTable =
+            SlotTableRegistry<MG_State::GLState::BufferObject, GLESBufferResource, MG_Pipe::MGPipeKind::Buffer>;
+        extern BackendBufferResourceTable g_backendBufferResources;
+
+        // Resolve-or-create / resolve-only, by the handle the call carried. Neither touches
+        // MGPipeSlots(): the handle ARRIVED already minted by the side that owns minting.
+        GLESBufferResource* GetOrCreateBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
+        GLESBufferResource* FindBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
+
+        // P5c (hd): the staged-coverage assertion (StagedShadowStore::RequireCoverage) for a
+        // read of the server shadow outside the upload ladders - the indirect command-byte
+        // resolver. A no-op for a base that is not this resource's server shadow.
+        void RequireStagedCoverage(GLESBufferResource& resource, const Uint8* hostBase, SizeT start, SizeT end,
+                                   const char* site);
+
+        // P11 B2: THE CPU-READABLE BYTES OF A SPLIT SERVER'S BUFFER TWIN, for the handle-arm
+        // readers that have no frontend object (indirect commands, primitive-restart
+        // substitution, the multi-draw index rebase): the R-11 staged copy, or - for a T0 store,
+        // which has none - this server's own coherent map of the client's AHardwareBuffer, read
+        // exactly as the monolith arm reads the adopted map through MappedData().
+        inline const Uint8* SplitHostBytes(const GLESBufferResource& resource) {
+            if (resource.hostBytes != nullptr) return resource.hostBytes;
+            // P13 W4a: any coherent persistent store, not only T0's - monolith's record arm donates
+            // its maps in-process (Ops_H_MapPersistent), and such a store keeps no shadow at all.
+            // Under split the wire's map_persistent declines, so there this is still T0 alone.
+            return resource.persistentMapped && resource.persistentPtr != nullptr
+                       ? static_cast<const Uint8*>(resource.persistentPtr)
+                       : nullptr;
+        }
+
+        // P8-C: THE SAME BYTES, MADE CURRENT FIRST - for a reader that CONSUMES them (the restart
+        // rewrite, the multi-draw rebase, the *IndirectCount count, an indirect command's
+        // CPU-fed fields, the XFB scatter's pre-capture bytes). SplitHostBytes above is only
+        // "what uploads staged": a store a shader wrote on this side (serverGpuWritten) is
+        // refreshed from this server's own GL buffer - queued uploads flushed into it first,
+        // then the whole store read back into the staged copy, which also gives an orphaned
+        // store its first copy - and a T0 store lands its queued resident writes and finishes
+        // before its coherent map is read. A clean staged store costs one flag test.
+        // `res` names the record whose descriptor width the copy takes; `site` names the
+        // reader in the one-time diagnostic when the refresh cannot run.
+        const Uint8* SplitHostBytesForCpuRead(GLESBufferResource& resource, MG_Pipe::MGPipeHandle res,
+                                              const char* site);
+        // P8-C: bytes the SERVER itself put into a store's GL buffer and already holds on the CPU
+        // (an XFB capture it mapped for the client's writeback, a scatter it composed) go into
+        // the staged copy as well, so no refresh is owed for them. A T0 store has no copy.
+        void StageServerWrittenRange(GLESBufferResource& resource, MG_Pipe::MGPipeHandle res, const void* bytes,
+                                     SizeT offset, SizeT size);
+
+        // M-3's WHOLE-STORE predicate, and the GUARD every caller of RequireStagedCoverage over
+        // a whole-store read has to carry: true when the application DECLARED the store's
+        // content (glBufferData(size, data)), so a coverage gap is a missing record; false when
+        // it ORPHANED the store (glBufferData(size, NULL)), where every byte it has not staged
+        // since is undefined by its own declaration and the shadow's zero-fill is exactly what
+        // the monolith arm would have uploaded from MappedData(). Managers.cpp's pool-reuse
+        // ladder and DirectGLES.cpp's XFB scatter are its two callers and they must not be able
+        // to answer it differently.
+        Bool ResourceContentIsDeclared(MG_Pipe::MGPipeHandle res);
+
+        // TIER 1 OF THE THREE-TIER FLUSH LADDER, AS A PURE FUNCTION (P5 b1).
+        //
+        // `GL_MAP_INVALIDATE_RANGE_BIT` is not a hint, it is an ASSERTION THAT THE OLD BYTES
+        // ARE DEAD - and it is only true of the bytes this call is about to rewrite from the
+        // authoritative shadow. ManagersBuffers.cpp's FlushPendingRangesFrom records what happens when it is not:
+        // widening the map to page bounds "looked free and was not - the widened bytes
+        // clobbered GPU-written data (an SSBO counter beside the app's SubData) with the stale
+        // shadow". It fails SILENTLY, unlike tier 3, which only stalls.
+        //
+        // WHY IT IS A FUNCTION NOW, AND WHY IT TAKES THE MAP RANGE SEPARATELY FROM THE QUEUED
+        // ONE. Under split the bytes are not re-read at every use any more: the server may not
+        // hold a pointer into the client's shadow at all (R-11), so `hostBase` becomes a
+        // SNAPSHOT taken into SEG_STAGE at emission, and the window between the snapshot and
+        // the apply is new. A snapshot that covers less than the map does is exactly the
+        // widening that drew blood, with a thread boundary instead of a page alignment as the
+        // cause - so the two extents are separate parameters and a disagreement returns 0
+        // ("do not take tier 1"), which drops the range onto the staging ring and costs a copy
+        // rather than a corruption.
+        //
+        // `ringCopyInFlight`: the store still has an upload-ring glCopyBufferSubData queued that the
+        // GPU may not have run (GLESBufferResource::ringCopyRetireSerial not yet retired).
+        //
+        // Returns the glMapBufferRange access bits, or 0 when tier 1 must not be taken.
+        inline constexpr SizeT kEsprytInvalidateRangeMinBytes = 128u * 1024u;
+        constexpr GLbitfield InvalidateFlushAccessFor(SizeT queuedStart, SizeT queuedEnd, SizeT mapStart, SizeT mapEnd,
+                                                      SizeT limit, SizeT storageSize, Bool ringCopyInFlight) {
+            if (mapEnd <= mapStart) return 0u;
+            // THE WIDENING REFUSAL. Not >=, not "covers": exactly, in both directions. A map
+            // narrower than the queued range leaves bytes unwritten inside a range it has just
+            // declared dead, which is the same corruption read the other way round.
+            if (mapStart != queuedStart || mapEnd != queuedEnd) return 0u;
+            const SizeT size = mapEnd - mapStart;
+            const Bool wholeBuffer = mapStart == 0 && mapEnd == limit && limit == storageSize;
+            // A partial range below the threshold goes to the ring instead: the map's
+            // page-substitution fast path needs a page-coverable range to engage, and below it
+            // the driver falls back to waiting out the WAR hazard on the CPU.
+            if (!wholeBuffer && size < kEsprytInvalidateRangeMinBytes) return 0u;
+            // A partial range-invalidating map must not overtake a ring copy into this store the GPU
+            // has not run yet. Adreno 830 answers such a map on a store with a copy still queued by
+            // losing the copy (dev f973008c, the pull arm's FlushPendingRangesNow: create-instancing
+            // drew whole Embeddium terrain sections empty, SSIM 0.870). The range goes to the ring
+            // instead, GPU-ordered behind the copies. The whole-buffer orphan-map is exempt: it
+            // rewrites every byte from the shadow the queued copies were taken from.
+            if (!wholeBuffer && ringCopyInFlight) return 0u;
+            return GL_MAP_WRITE_BIT | (wholeBuffer ? GL_MAP_INVALIDATE_BUFFER_BIT : GL_MAP_INVALIDATE_RANGE_BIT);
+        }
+
+        // P15: WRITE RENAMING FOR A SMALL STORE. The draw-time drain sends a partial range below
+        // the tier-1 threshold through the upload ring, and every such range is one
+        // glCopyBufferSubData: a GPU copy job the driver builds on the render thread (FCL MC 1.21.5
+        // monolith on Adreno 830: 0.08 of the drain's 0.105 ms/frame) and then runs on the GPU
+        // timeline. Minecraft's immediate-mode batches rewrite a small per-format vertex buffer from
+        // offset 0 before each draw, so these ranges are partial writes of tiny stores (the
+        // 1.21.5 in-world trace: ~122 a frame, 81 of them into 288-byte stores). For such a store
+        // the drain rewrites the WHOLE store from the host bytes instead, which is tier 1's
+        // whole-buffer orphan-map: draws already recorded keep the old storage, draws after read the
+        // new one, and no copy job is recorded - the rename Magma's RenameBusyWireStore makes under
+        // the same 64 KiB bound.
+        //
+        // The bytes the rename moves that the queue did not ask for are bounded by
+        // kEsprytWholeStoreRenameMaxExtraBytes: a 128-byte write into a 53 KiB index store stays a
+        // ring copy rather than becoming a 53 KiB memcpy. On that trace the bound keeps 108 of the
+        // 122 renames for 101 KiB of extra host copying a frame; renaming every store up to 64 KiB
+        // would copy 811 KiB.
+        //
+        // Widening a map past the queued range is the edge that already drew blood (the note on
+        // InvalidateFlushAccessFor): it is only exact when the host bytes ARE the store, byte for
+        // byte, outside the queued ranges too. So every way the store can hold bytes the host
+        // copy does not is a refusal, and the caller passes them in as one flag: a shader write
+        // since the last whole readback (serverGpuWritten), queued resident writes, a coherent or
+        // imported store, immutable storage. `hostBytesCoverStore` is the host copy's own extent:
+        // the frontend shadow on monolith, the staged coverage under split. `mapUsable` is tier 1's
+        // own gate - without the map the whole range would just be a bigger ring copy.
+        //
+        // `queuedBytes` is the sum of the queued ranges clamped to the store (VecRange1D keeps them
+        // disjoint).
+        inline constexpr SizeT kEsprytWholeStoreRenameMaxBytes = 64u * 1024u;
+        inline constexpr SizeT kEsprytWholeStoreRenameMaxExtraBytes = 8u * 1024u;
+        constexpr Bool WholeStoreRenameApplies(SizeT storageSize, SizeT frontendSize, SizeT queuedBytes,
+                                               Bool hostBytesCoverStore, Bool storeHoldsBytesTheHostDoesNot,
+                                               Bool mapUsable) {
+            if (!mapUsable || !hostBytesCoverStore || storeHoldsBytesTheHostDoesNot) return false;
+            if (storageSize == 0 || storageSize > kEsprytWholeStoreRenameMaxBytes) return false;
+            if (frontendSize != storageSize || queuedBytes == 0 || queuedBytes > storageSize) return false;
+            return storageSize - queuedBytes <= kEsprytWholeStoreRenameMaxExtraBytes;
+        }
+
+        // The handle arms of the two draw-path entry points below. IsBufferDrawCleanByHandle
+        // asks the applier the same five questions IsBufferDrawClean asks the frontend object,
+        // with identical semantics (D-A4); EnsureBufferResourceForHandle is the ensure path
+        // driven by the applier's descriptor and the shadow base the call carried.
+        //
+        // `frontend` supplies the ONE question the applier's record cannot answer in P3a: an
+        // emulated (non-adopted) persistent map is written through its pointer with no call, so
+        // MGPipeResourceRecord::HasLiveHostWrites - the field that will carry it - is pinned
+        // false and the probe still has to ask the object. It retires with P5. See the long note
+        // at the definition; passing null means "no live map", not "unknown".
+        Bool IsBufferDrawCleanByHandle(MG_Pipe::MGPipeHandle res, const GLESBufferResource* resource,
+                                       const MG_State::GLState::BufferObject* frontend);
+        GLESBufferResource* EnsureBufferResourceForHandle(
+            const SharedPtr<MG_State::GLState::BufferObject>& bufferObject, MG_Pipe::MGPipeHandle res);
+
+        // The applier's stored extent for this resource, 0 when it has no record. The one
+        // thing outside BufferImpl that needs it is the fp64 narrowing, whose source extent
+        // used to be BufferObject::GetSize().
+        SizeT ResourceWidthForHandle(MG_Pipe::MGPipeHandle res);
+        // The applier's server-owned mutation serial for this resource, 0 when it has no
+        // record. It is what the narrowed-fp64 memo keys its freshness on now that the
+        // frontend change serial is gone from the backend's view.
+        Uint64 ResourceSerialForHandle(MG_Pipe::MGPipeHandle res);
+        // The ES context generation a twin's driver id must carry to be current. Its one
+        // consumer is the draw-clean probe's unit test, which has to build a twin that answers
+        // CLEAN to every question except the one under test - a case that cannot go red for
+        // that question otherwise. Push-only, like the rest of this block.
+        Uint CurrentBufferContextGeneration();
 
         // Registered as the frontend's BufferBackendOps at backend init and on
         // every MakeCurrent (the ES context can be destroyed and recreated, e.g.
@@ -508,30 +1058,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void UnregisterBufferBackendOps();
         // The ES context died: unregister ops, invalidate all outstanding GL ids
         // (they belonged to the dead context) and drop deferred deletes.
+        // P14: a server session ended while another session's native context is still alive (one
+        // process-wide share group): drops only the ending session's own staged bytes.
+        void OnServerSessionEndedWithOthersLive();
         void OnBackendContextDestroyed();
-
-        // Get-or-create the backend resource and bring its storage up to date
-        // (creates the GL buffer, replays pending ops, pushes persistent-mapped
-        // ranges). Requires the ES context to be current. Returns nullptr only
-        // for null input.
-        GLESBufferResource* EnsureBufferResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
-        // Existing resource or nullptr; performs no GL calls.
-        GLESBufferResource* GetBufferResource(MG_State::GLState::BufferObject* bufferObject);
-        // True when EnsureBufferResource(frontend) would provably fall straight through
-        // every branch and do no work — i.e. `resource` is still the frontend's own
-        // resource, its id belongs to the live ES context, and either it is the
-        // zero-copy coherent persistent store (draw-time sync is a no-op by design) or
-        // the storage is initialized at the right size with no pending ops and a synced
-        // change serial while the buffer is not mapped (an active map may owe a
-        // per-draw persistent-range push, so it always takes the full path).
-        // `frontend` must be non-null and alive; the caller guarantees that by holding
-        // (or shadowing something that holds) a SharedPtr to it. Enables the per-VAO
-        // resolved-buffers memo to skip EnsureBufferResource on clean static buffers.
-        Bool IsBufferDrawClean(const MG_State::GLState::BufferObject* frontend, const GLESBufferResource* resource);
 
         // Deletes GL buffers whose owning frontend objects died (possibly on a
         // thread without a current ES context). Called from draw-time sync.
         void ProcessDeferredBufferReleases();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P11 B2: the T0 half of that drain - run right after it (retired AHardwareBuffers).
+        void ProcessDeferredT0Retires();
+#endif
 
         // glBindBuffer with a redundant-bind cache for GL_ARRAY_BUFFER.
         void BindBufferId(GLenum target, Uint id);
@@ -559,15 +1097,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // its retained store) forever. Compared and stamped by
         // BackendVertexArrayObject::SyncToBackend.
         extern Uint64 g_bufferBackendIdGeneration;
-        // Redundant-bind cache for INDEXED buffer bindings (glBindBufferBase/Range on
-        // GL_UNIFORM_BUFFER / GL_SHADER_STORAGE_BUFFER / GL_TRANSFORM_FEEDBACK_BUFFER):
-        // skips the GL call when the (id, range) already at that index matches, like the
-        // array-buffer/texture/sampler caches already do. Invalidated on MakeCurrent
-        // (context may reset).
-        // Binds the transform feedback capture points [0, bufferCount) from the frontend
-        // state, and touches nothing else - in particular it never binds a zero the
-        // application did not ask for. See the definition for why that matters on Mali.
-        void SyncTransformFeedbackBindingPoints(SizeT bufferCount);
         void BindBufferBaseCached(GLenum glTarget, Uint index, Uint id);
         void BindBufferRangeCached(GLenum glTarget, Uint index, Uint id, GLintptr offset, GLsizeiptr size);
         void InvalidateIndexedBufferBindingCache();
@@ -605,8 +1134,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // frames, so re-referencing them would need per-bind pinning — rewriting
         // GetUBOSize() bytes once per program per frame is far cheaper.
         struct UboRingAllocation {
-            Uint32 contentVersion = ~0u; // frontend UBO content version held at `offset`
-            Uint32 ringGeneration = 0;   // ring identity the slot lives in (0 = never valid)
+            Uint32 contentVersion = ~0u;     // frontend UBO content version held at `offset`
+            Uint32 ringGeneration = 0;       // ring identity the slot lives in (0 = never valid)
             Uint64 frameSerial = ~Uint64{0}; // frame the slot was written in
             SizeT offset = 0;
         };
@@ -618,6 +1147,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Grows the ring (new GL store, generation bump) when the in-flight span
         // would be overrun. Returns false when storage (re)creation fails.
         Bool UboRingAllocate(SizeT size, SizeT& outOffset);
+        // The per-draw slot dance in ONE ring lookup (the ring is per native context, and each
+        // lookup of it is a thread-local probe): Unavailable when the ring cannot serve (the
+        // caller takes the in-place upload), Reused when `slot` already holds this content in
+        // this frame and ring generation, Allocated when a fresh slot was carved (`outWrite`
+        // is where its bytes go), Failed when allocation failed. `outBufferId` names the ring
+        // store for Reused and Allocated.
+        enum class UboRingSlotState : Uint8 {
+            Unavailable,
+            Reused,
+            Allocated,
+            Failed
+        };
+        UboRingSlotState UboRingPrepareSlot(UboRingAllocation& slot, Uint32 contentVersion, Uint64 frameSerial,
+                                            SizeT bindSize, void*& outWrite, Uint& outBufferId);
         void* UboRingMappedPtr();
         Uint UboRingBufferId();
         Uint32 UboRingGeneration();
@@ -682,9 +1225,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         public:
             BackendVertexArrayObject();
             ~BackendVertexArrayObject();
-            void SyncToBackend(const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject);
+            // PUBLIC AS OF P5e (vi), and the move is the point rather than a convenience: with
+            // a live transport there is no frontend VAO on this side to hand to the overload
+            // above, so VertexArrayImpl::SyncCurrentVAOFromRecords calls this ENTRY directly
+            // instead of passing a null SharedPtr into a function whose signature promises one.
+            // CONTRACT-P5E §4.1's rule ("the object parameter is deleted from the transport
+            // overload, not defaulted to null") is what this obeys. `plan`: IntegerAttributePlan.h.
+            void SyncToBackendFromApplier(const IntegerAttributePlan& plan);
+            // P14: the applier's buffer-set serials move whenever ANY VAO's set is published, so
+            // switching between two VAOs moves them although neither twin's buffers changed. Called
+            // before the draw's syncs: when the window this twin last emitted is the applier's
+            // window value for value, take the new serials as already synced (and carry the
+            // resolved-buffers memo along) instead of re-emitting a driver VAO that already holds
+            // exactly that. Only within the applier context the twin last synced against.
+            void AdoptUnchangedBufferSets(const MG_Pipe::MGPipeApplierState& st);
             void SyncClientSideAttributesForDrawArrays(
-                const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject, GLint first, GLsizei count);
+                const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject, GLint first, GLsizei count,
+                Uint32 fetchBaseInstance = 0);
             Uint GetBackendVertexArrayId() const { return m_backendVAOId; }
             void Bind() const;
 
@@ -702,9 +1259,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // and is not covered by the config version).
             struct ResolvedDrawBuffers {
                 struct Entry {
+                    // MONOLITH GLUE AFTER P5e (vi), CONTRACT-P5E §5.1: the RECORD arm
+                    // (SyncVaoAttributeBuffersByRecord) never writes this and never reads it -
+                    // it stores nullptr and hands nullptr to IsBufferDrawCleanByHandle, whose
+                    // frontend question is itself monolith-only (Managers.cpp's
+                    // askTheObjectWhetherItIsMapped). It stays DECLARED because the legacy arm
+                    // and the push-monolith arm still key on it and because moving it would
+                    // move sizeof(ResolvedDrawBuffers) in the pull build (G1). That also
+                    // retires, on the split arm, the dangling-pointer hazard the note below
+                    // has to state.
                     MG_State::GLState::BufferObject* frontend = nullptr;
+                    // A RAW TWIN POINTER, AND IT MAY DANGLE - the invariant that makes that safe
+                    // is stated here rather than left in the two callers (espryt-v3 §8, m8).
+                    //
+                    // Nothing tells this memo when a twin dies: on the handle arm a
+                    // resource_destroy takes the twin out of the slot table (ReleaseByHandle)
+                    // while this entry still holds its address, and on the legacy arm the same
+                    // is true of the registry's own release. So the rule is: THIS POINTER IS
+                    // ONLY EVER DEREFERENCED AFTER THE ENTRY'S IDENTITY HAS BEEN RE-RESOLVED IN
+                    // THE SAME PASS - FindByHandle(handle) on the handle arm, the frontend
+                    // identity compare on the legacy one - and a miss re-resolves through
+                    // EnsureBufferResource rather than trusting what is stored here. Both
+                    // consumers do that today; a third one that read `resource` straight out of
+                    // a "valid" memo would be reading freed memory, and no compare in this
+                    // struct would catch it. The pointer stays raw because the alternative -
+                    // owning a reference from a per-draw memo - is what keeps a dead driver
+                    // buffer alive, which is the leak class P2's death notice exists to remove.
                     BufferImpl::GLESBufferResource* resource = nullptr;
+                    // P5e (vi): on the record arm this is the BINDING index the applier's
+                    // vertex-buffer entry carried (MGPVertexBuffer::BindingIndex, which for
+                    // Espryt's resolved attributes IS the attribute index) and it is kept for
+                    // DIAGNOSTICS only - that arm's repair re-ensures by `handle`, never by
+                    // walking back into a frontend attribute slot.
                     Uint8 attribIndex = 0;
+                    // P3a re-key: the entry's identity on the handle arm. A {slot, gen} cannot
+                    // be reproduced by a recycled heap address, so the clean probe compares
+                    // this instead of the raw frontend pointer and never has to ask the
+                    // allocator for it again mid-draw.
+                    MG_Pipe::MGPipeHandle handle = MG_Pipe::kMGPipeNullHandle;
                 };
                 Bool valid = false;
                 Uint32 configVersion = 0;
@@ -712,6 +1304,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Array<Entry, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> entries;
                 MG_State::GLState::BufferObject* iboFrontend = nullptr;
                 BufferImpl::GLESBufferResource* iboResource = nullptr;
+                // P3a re-key of the memo's validity key: on the handle arm the frontend VAO's
+                // wrapping configuration version is replaced by the bound vertex-elements CSO
+                // (identity AND its server-owned content serial) plus the vertex-buffer set's
+                // own serial - three monotone Uint64s and a {slot, gen}, no wrap and no
+                // identity patch. The IBO entry keeps its separate key for the same reason it
+                // always had one: the index slot is not part of the configuration (D5).
+                MG_Pipe::MGPipeHandle elementsHandle = MG_Pipe::kMGPipeNullHandle;
+                Uint64 elementsSerial = 0;
+                Uint64 buffersSerial = 0;
+                MG_Pipe::MGPipeHandle iboHandle = MG_Pipe::kMGPipeNullHandle;
+                // P5e (vi), CONTRACT-P5E §5.1: the index slot's own server-owned serial, and
+                // the reason it has to join the identity compare is the one D5 gives for the
+                // slot version - the ELEMENT BUFFER IS NOT PART OF THE CONFIGURATION. The
+                // legacy and push-monolith arms re-read the frontend slot on every indexed
+                // draw and so notice a rebind for free; the record arm reads nothing, so
+                // "the applier was told about this index buffer again" has to be a value in
+                // the key. A rebind of the SAME handle still moves IndexBufferSerial
+                // (MGPipeApplySetIndexBuffer bumps unconditionally), which is exactly the
+                // case an identity-only compare would call a hit: a client that respecified
+                // the store behind an unchanged {slot, gen} re-emits set_index_buffer and
+                // this is what re-opens the ensure.
+                Uint64 iboSerial = 0;
                 // Buffer-mutation epoch (BufferImpl::CurrentBufferMutationEpoch) at which
                 // the LAST probe pass found every entry / the IBO clean; 0 = not stamped
                 // (epochs start at 1). While a stamp matches the pre-pass epoch read, the
@@ -735,8 +1349,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Uint32 configVersion = 0;
                 Uint32 activeMask = 0;
                 Uint32 pendingMask = 0;
+                // P5e (vi), CONTRACT-P5E §5.1: the record arm's half of the key. It replaces
+                // the frontend VAO's configuration version with the bound vertex-elements CSO's
+                // identity and its server-owned content serial, and the substitution is
+                // STRICTLY STRONGER rather than merely equivalent: GetConfigVersion() is a
+                // wrapping Uint16-derived counter shared by every VAO, while every
+                // configuration change re-creates the record on the same handle and ++s
+                // ContentSerial (PipeApply.h's MGPipeVertexElementsRecord), and a DIFFERENT VAO
+                // is a different {slot, gen} rather than another value of the same counter.
+                MG_Pipe::MGPipeHandle elementsHandle = MG_Pipe::kMGPipeNullHandle;
+                Uint64 elementsSerial = 0;
             };
             PendingAttribValueMask& GetPendingAttribValueMaskMemo() { return m_pendingAttribValueMask; }
+            // Attributes the configuration ENABLES but the last walk had to disable in the driver
+            // VAO (a GL_DOUBLE or GL_BGRA array whose converted stream could not be built). Those
+            // read the current generic value too, so the value sync pushes it for them as well -
+            // without that they read the driver's untouched (0,0,0,1) instead of what the
+            // application last set.
+            Uint32 GetDisabledEnabledAttribMask() const { return m_disabledEnabledAttribMask; }
 
         private:
             // Narrows one enabled GL_DOUBLE array into a tightly packed float32 stream held in
@@ -747,18 +1377,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // dropping it. Returns false when the stream cannot be built, in which case the
             // caller must DISABLE the array - leaving a 64-bit array enabled with no pointer is
             // what the Adreno driver turns into a SIGSEGV at the next draw.
-            Bool SyncFloat64AttributeAsFloat32(Uint attribIndex, const MG_State::GLState::VertexAttribute& attrib,
-                                               Uint32 fetchBaseInstance);
+            //
+            // The same stream carries the second format ES has no spelling for: a GL_BGRA-sized
+            // array (GL_UNSIGNED_BYTE or either 2_10_10_10_REV type) is swizzled into RGBA order
+            // element by element and declared as an ordinary size-4 array of its own type
+            // (KHR-GL43.vertex_attrib_binding.basic-input-case5). Passing GL_BGRA through is
+            // GL_INVALID_VALUE on ES, which left the array enabled with no pointer.
 
-            // What the converted float32 stream in m_convertedAttributeBufferIds[i] was built
-            // from. A hit skips the CPU conversion and the re-upload; the buffer's change serial
-            // is part of the key, so a glBufferSubData into the source invalidates it.
-            struct ConvertedFloat64Stream {
+            // The handle arm of the whole vertex-elements half. Everything it needs arrives in
+            // the applier's records - the bound CSO's two views, the vertex-buffer set, the
+            // index buffer and the resolved fetch base instance - so it takes no argument at
+            // all and touches no frontend type. The legacy arm above it is unchanged and both
+            // compile in every push build (ARCHITECTURE.md 9.6). DECLARED IN THE PUBLIC SECTION
+            // as of P5e (vi) - see the note there.
+            // Same narrowing, same memo, same Adreno disable; the source bytes are the shadow
+            // base the resource call carried and the memo key is the buffer's {slot, gen}.
+            Bool SyncConvertedAttributeByHandle(Uint attribIndex, const MGPVertexAttribWire& attrib,
+                                                const MG_Pipe::MGPVertexBuffer& binding, Uint32 fetchBaseInstance);
+
+            // What the converted stream in m_convertedAttributeBufferIds[i] was built from. A
+            // hit skips the CPU conversion and the re-upload; the buffer's change serial is part
+            // of the key, so a glBufferSubData into the source invalidates it.
+            struct ConvertedAttributeStream {
                 Bool valid = false;
-                Uint64 sourceLifetimeId = 0;
+                // What replaces it: the source buffer's {slot, gen}. It is the SAME identity
+                // the rest of the backend now keys on, it cannot be reproduced by a recycled
+                // frontend address, and it costs the walk no allocator probe - the handle is
+                // already in the vertex-buffer entry that named the source.
+                MG_Pipe::MGPipeHandle sourceHandle = MG_Pipe::kMGPipeNullHandle;
+                // On the handle arm this is the applier's server-owned Serial rather than the
+                // frontend change serial; both answer the same question - "have the source
+                // bytes moved since the conversion" - and neither is trusted for a
+                // persistently mapped buffer, which is written with no call at all.
                 Uint64 sourceChangeSerial = 0;
                 SizeT sourceOffset = 0;
                 SizeT sourceStride = 0;
+                // The conversion: a BGRA swizzle of `sourceType` elements, or the fp64 narrowing.
+                Bool bgra = false;
+                Uint32 sourceType = 0;
                 SizeT componentCount = 0;
                 SizeT elementCount = 0;
             };
@@ -767,47 +1423,106 @@ namespace MobileGL::MG_Backend::DirectGLES {
             PendingAttribValueMask m_pendingAttribValueMask;
             Uint m_backendVAOId = 0;
             Array<Uint, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> m_clientAttributeBufferIds;
-            // Scratch stores for the buffer-backed GL_DOUBLE narrowing. Deliberately separate
+            // Scratch stores for the buffer-backed GL_DOUBLE narrowing and BGRA swizzle. Deliberately separate
             // from m_clientAttributeBufferIds: that one holds the per-draw upload of a
             // CLIENT-MEMORY array, and an attribute index can carry both shapes over its life.
             Array<Uint, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> m_convertedAttributeBufferIds;
-            Array<ConvertedFloat64Stream, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS>
+            Array<ConvertedAttributeStream, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS>
                 m_convertedAttributeStreams;
             // True while at least one attribute of this VAO is fed by a converted stream. Such a
             // stream is derived from buffer CONTENT, which no VAO version covers, so the config
             // version early-out in SyncToBackend must not be trusted while it is set.
-            Bool m_hasConvertedFloat64Attribute = false;
+            Bool m_hasConvertedAttribute = false;
+            Uint32 m_disabledEnabledAttribMask = 0;
             Bool m_isInitialized = false;
-            Uint16 m_syncedIndexBufferVersion = 0;
-            // Identity of the buffer the version above was stamped against. Raw and never
-            // dereferenced: the slot version is a wrapping Uint16 (see the ResolvedDrawBuffers
-            // IBO memo and the packed_pixels postmortem at BindCurrentFBO), so the version
-            // alone would read a wrapped-back count with a different buffer bound as clean.
-            const MG_State::GLState::BufferObject* m_syncedIndexBufferObject = nullptr;
-            // Aggregate gate over the per-attribute walk below: the frontend bumps its config
-            // version on every per-attribute version bump (the three Bump*Version functions are
-            // its only writers), so an unchanged config version proves every per-attribute
-            // compare in SyncToBackend would come up clean. The index-buffer slot has its own
-            // version and is NOT covered. The Bool (not a sentinel value) marks "never synced".
-            Bool m_hasSyncedConfigVersion = false;
-            Uint32 m_syncedConfigVersion = 0;
-            Array<MG_State::GLState::VertexAttributeVersion, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS>
-                m_syncedAttributeVersions;
-            // Byte shift currently baked into the instanced arrays' offsets by the baseInstance
-            // emulation (see SetPendingFetchBaseInstance). It is draw state, not VAO state, so it
-            // is deliberately NOT covered by the config version: the frontend never bumps for it.
-            // Kept here because it describes what was last EMITTED, which is what the next sync
-            // has to correct.
+            // ---- what replaces them on the handle arm (D-G4) ---------------------------
+            // The bound vertex-elements CSO this twin last emitted, and the applier's
+            // server-owned content serial for it. Together they replace
+            // m_hasSyncedConfigVersion + m_syncedConfigVersion AND the whole per-attribute
+            // version array: the applier's stored Attributes[] IS what was last pushed, so a
+            // per-attribute compare has nothing left to prove and the walk re-emits.
+            MG_Pipe::MGPipeHandle m_syncedElementsHandle = MG_Pipe::kMGPipeNullHandle;
+            Uint64 m_syncedElementsSerial = 0;
+            Bool m_hasSyncedElements = false;
+            // The vertex-buffer set's own serial. Not in D-G4's table, and it has to be here:
+            // set_vertex_buffers is an independent call carrying the buffer identities, the
+            // offsets and the divisors this twin BAKES into the driver VAO, so a set that
+            // moved while the format did not must still re-emit them.
+            Uint64 m_syncedVertexBuffersSerial = 0;
+            // Replaces m_syncedIndexBufferVersion (a wrapping Uint16) AND
+            // m_syncedIndexBufferObject (the raw identity patch that closed its wrap hole):
+            // one monotone Uint64, no wrap, nothing to patch. This is the Track H re-key
+            // ARCHITECTURE.md 9.5 counts.
+            Uint64 m_syncedIndexSerial = 0;
+            // Byte shift baked into the instanced arrays' offsets by the baseInstance emulation:
+            // draw state, not VAO state, kept because the next sync has to correct what was EMITTED.
             Uint32 m_syncedFetchBaseInstance = 0;
+            // The integer arrays last issued with the other signedness (HeldIntegerRetype).
+            Uint32 m_syncedRetypeMask = 0;
             // BufferImpl::g_bufferBackendIdGeneration as of this twin's last emit. A
             // mismatch means some live buffer's driver id was re-minted since; the ids
             // baked into the driver VAO's attribute/element bindings may be dead even
             // though every frontend version matches, so the next sync re-emits them all.
             Uint64 m_syncedBufferIdGeneration = 0;
+            // P14: the last attribute walk sent every enabled attribute down the plain pointer
+            // path, so the driver VAO's enable flags are exactly the configuration's and a walk
+            // for a moved buffer set alone may skip them (SyncToBackendFromApplier).
+            Bool m_lastWalkWasPlain = false;
+            // P14: the vertex-buffer window and element buffer as last emitted into the driver
+            // VAO, for AdoptUnchangedBufferSets. Handles are {slot, gen}, never reused.
+            Array<MG_Pipe::MGPVertexBuffer, MG_Pipe::kMGPipeMaxVertexAttribs> m_syncedBuffers{};
+            Uint32 m_syncedBufferStart = 0, m_syncedBufferCount = 0, m_syncedBufferBaseInstance = 0;
+            Bool m_syncedBuffersValid = false;
+            // P15: WHAT THIS TWIN'S DRIVER VAO HOLDS, as the walk last set it. The walk re-emits
+            // a whole configuration whenever its record moves, and most of it equals what the
+            // driver VAO already has: on FCL MC 1.21.5, about 2870 of 3700 host calls a frame were
+            // enable/disable/divisor re-sets. The shadow lets the walk emit only differences. It
+            // is valid from creation (a new VAO is all-disabled with divisor 0). Anything that
+            // writes the VAO behind the walk (client-memory uploads, the fp64 narrowing, the
+            // binding-API zero stride, the BGRA swizzle) forgets the affected part. Pointer
+            // entries name driver buffer ids, so they also go when g_bufferBackendIdGeneration
+            // moves: an id can be re-minted.
+            struct HostAttribPointer {
+                Uint bufferId = 0;
+                Int32 size = 0;
+                Uint32 type = 0;
+                Int32 stride = 0;
+                SizeT offset = 0;
+                Bool normalized = false, integer = false, valid = false;
+            };
+            Uint32 m_hostEnabledMask = 0;
+            Uint32 m_hostEnabledKnownMask = ~0u;
+            Array<Uint32, MG_Pipe::kMGPipeMaxVertexAttribs> m_hostDivisor{};
+            Uint32 m_hostDivisorKnownMask = ~0u;
+            Array<HostAttribPointer, MG_Pipe::kMGPipeMaxVertexAttribs> m_hostPointer{};
+            Uint64 m_hostPointerBufferGeneration = 0;
+            void HostSetEnabled(Uint index, Bool enabled);
+            void HostSetDivisor(Uint index, Uint32 divisor);
+            void HostForgetAll();
+            MG_Pipe::MGPipeHandle m_syncedIndexRes = MG_Pipe::kMGPipeNullHandle;
+            Bool m_syncedIndexValid = false;
+            Uint64 m_syncedContextSerial = 0;
         };
 
-        extern StateBackendObjectRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject>
+        extern TwinRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject,
+                            MG_Pipe::MGPipeKind::VertexElementsCso>
             g_backendVertexArrayObjects;
+
+        // P5e (id), CONTRACT-P5E §4.1 / §4.2: THE VAO TWIN, RESOLVED BY THE HANDLE THE RECORD
+        // CARRIED - `MGPipeApplierState::BoundVertexElements` at a draw, never
+        // `Find(vao.get())`. One of the three resolvers the identity package lands so the
+        // per-family packages have a by-handle door from day one; SamplerImpl's
+        // ResolveSamplerCsoTwin is the shape all four share.
+        //
+        // WHAT IT DOES AND, AS IMPORTANTLY, WHAT IT DOES NOT. Record first (a handle with no
+        // applier record is a seam defect, and adopting a slot for it would leave a twin that
+        // syncs nothing), then AdoptTwinByHandle, then a twin if the slot is empty. It never
+        // touches a frontend object and never probes the client's slot allocator - those two
+        // absences ARE the deliverable - and it does not SYNC: which serials gate a VAO sync,
+        // and what the sync reads, is the vi package's, and a resolver that synced would have
+        // to know. Null, loudly, for a handle with no record or a generation behind the live
+        // twin's; null silently for the null handle.
+        BackendVertexArrayObject* ResolveVaoTwin(MG_Pipe::MGPipeHandle elements);
 
         // Shadowed glBindVertexArray: every backend VAO bind goes through here so a
         // draw's second bind of the same VAO (SyncToBackend, then PrepareForDraw's
@@ -822,21 +1537,42 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // instanced array at element "floor(instance / divisor) + baseInstance", and ES has no
         // way to say the "+ baseInstance" part - so it is folded into the attribute's own byte
         // offset (baseInstance * stride) for every divisor'd array, which is exactly equivalent.
-        // Must be set BEFORE PrepareForDraw so the VAO sync sees it, and cleared after the draw
-        // so the next one refetches from element 0; ScopedFetchBaseInstance does both.
-        void SetPendingFetchBaseInstance(Uint32 baseInstance);
-        Uint32 GetPendingFetchBaseInstance();
+        //
+        // P3a RETIRES THE AMBIENT GLOBAL (D-H2): an ambient process global cannot cross a
+        // pushed boundary, so on the handle arm the draw's RAW base instance rides in
+        // MGPVertexBuffers::BaseInstance and the SERVER decides whether to shift - the answer
+        // lands in MGPipeApplierState::VertexFetchBaseInstance and the VAO sync reads it there.
+        // The three declarations below and the three scopes in DirectGLES.cpp are the legacy
+        // arm's, kept compiled because a cleared subsystem bit has to run a real pre-handle
+        // path and because removing them would delete two symbols from the PULL build (G1).
 
-        class ScopedFetchBaseInstance {
-        public:
-            explicit ScopedFetchBaseInstance(Uint32 baseInstance) { SetPendingFetchBaseInstance(baseInstance); }
-            ~ScopedFetchBaseInstance() { SetPendingFetchBaseInstance(0); }
-            ScopedFetchBaseInstance(const ScopedFetchBaseInstance&) = delete;
-            ScopedFetchBaseInstance& operator=(const ScopedFetchBaseInstance&) = delete;
-        };
+        // The server-owned half of the same decision, and the reason the client never
+        // pre-shifts an offset: emulation ownership is the server's (ARCHITECTURE.md 5.7).
+        // True when the driver applies baseInstance to the vertex fetch itself, in which case
+        // the attribute-offset emulation must stay out of the way. Applied to whatever the
+        // applier stored, so the answer is the same whichever side resolved it first.
+        Bool BackendUsesNativeBaseInstance();
+
+        // ---- P5e SEAM (§4.2; declared by c0e, bodied by id/vi) ----
+        //
+        // THE VAO TWIN, RESOLVED FROM THE HANDLE THE RECORD CARRIED - MGPipeApplierState::
+        // BoundVertexElements - instead of from the frontend VertexArrayObject the draw's
+        // BARRIER_PULLED row hands over. The frontend overload above it stays as the
+        // monolith-glue half, in the shape ResolveSamplerCsoTwin already established for the
+        // sampler CSO family: two overloads, not an #if inside one body, so which arm a caller
+        // is on is visible at the call site.
+        //
+        // It is declared HERE, with a body that aborts by name, because the packages that fill
+        // it in land in parallel worktrees: id rekeys the registry under it, vi moves
+        // PrepareForDraw's call onto it, and neither may edit the other's file. A missing
+        // declaration would make that a merge conflict; a declaration with a quiet body would
+        // make it a null twin and a blank draw.
+        BackendVertexArrayObject* ResolveVaoTwin(MG_Pipe::MGPipeHandle vertexElements);
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {
+        // Drives the actual unpack save/restore helper without needing a texture upload.
+        void ExerciseDefaultUnpackScopeForTesting();
         inline Bool IsSupportedTextureTarget(TextureTarget target) {
             // Every desktop-only target is stored on an ES one; see MapToBackendTextureTarget.
             (void)target;
@@ -853,6 +1589,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             switch (target) {
             case TextureTarget::Texture1D:
             case TextureTarget::TextureRectangle:
+            case TextureTarget::External:
                 return TextureTarget::Texture2D;
             case TextureTarget::Texture1DArray:
                 return TextureTarget::Texture2DArray;
@@ -887,8 +1624,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         inline Bool IsMultisampleTextureTarget(TextureTarget target) {
-            return target == TextureTarget::Texture2DMultisample ||
-                   target == TextureTarget::Texture2DMultisampleArray;
+            return target == TextureTarget::Texture2DMultisample || target == TextureTarget::Texture2DMultisampleArray;
         }
 
         inline Bool SupportsWrapR(TextureTarget target) {
@@ -896,7 +1632,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         // Components per texel the frontend format's client data carries, for the three-channel
-        // formats that can be widened to a four-channel colour-renderable target; 0 for everything
+        // formats that can be widened to a four-channel color-renderable target; 0 for everything
         // else. See PrepareChannelWidenedUpload.
         Uint GetWidenableClientComponentCount(TextureInternalFormat format);
 
@@ -906,7 +1642,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool IsIntegerWidenableFormat(TextureInternalFormat format);
 
         // Repacks three-component client data as four components with an alpha of 1.0 in
-        // `uploadType`, for a format the backend widened to keep a colour attachment renderable.
+        // `uploadType`, for a format the backend widened to keep a color attachment renderable.
         // Returns `data` untouched when no widening applies. Pure CPU and context-free so a unit
         // test can exercise the exact packing the driver is handed; `widenedData` is the caller's
         // scratch buffer and has to outlive the returned pointer.
@@ -957,13 +1693,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BackendTextureObject(const BackendTextureObject&) = delete;
             BackendTextureObject& operator=(const BackendTextureObject&) = delete;
             void SyncMipmapsToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
-            // The storage half of the sync for a texture created by glTextureView. Instead of
-            // allocating storage and replaying uploads, it makes this object's ES name BE a view
-            // of the storage texture's ES name (EXT/OES_texture_view), which is what gives the
-            // two names one image and independent per-texture parameters at the same time. The
-            // parameter and sampler halves are unchanged and run on this name as on any other.
-            void SyncTextureViewToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+            // P5e SEAM (declared by c0e, bodied by tx2): the same storage sync keyed on the
+            // texture HANDLE, reading the applier's resource record and the server's staged
+            // store instead of the frontend object's levels and pending uploads. fb's
+            // attachment sync and the image sweep both call it, which is why it is declared
+            // once here rather than twice in two packages' worktrees.
+            void SyncMipmapsToBackendByHandle(MG_Pipe::MGPipeHandle texture);
             void StampViewSyncKeys(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+            // P5e (tx2). THE VIEW ARM UNDER A TRANSPORT, and what it can and cannot answer.
+            //
+            // `Desc.ViewOf` names the storage owner BY HANDLE, so the STEADY question - "is my ES
+            // name still a view of the same storage name" - is answered entirely server-side: sync
+            // the storage twin by handle, compare its id against m_viewSourceBackendTextureId,
+            // stamp the record's Serial. That is the per-draw cost of every already-synced view
+            // and it reads nothing from the client.
+            //
+            // Creation/recreation resolves record.ViewCso's complete view window
+            // and issues the native view call against that server-owned storage.
+            // No frontend texture is used to recover the level/layer range.
+            void SyncTextureViewToBackendByRecord(
+                MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPipeResourceRecord& record,
+                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             // The storage half of the sync for a texture created by glTextureView. Instead of
             // allocating storage and replaying uploads, it makes this object's ES name BE a view
             // of the storage texture's ES name (EXT/OES_texture_view), which is what gives the
@@ -971,12 +1721,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // parameter and sampler halves are unchanged and run on this name as on any other.
             void SyncBuiltinSamplerToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void SyncTextureParamsToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
-            // Marks the texture as one whose ES storage has to be image-bindable, which for a
-            // non-core image format means re-minting it in the widening's carrier. Takes the state
-            // object because the levels already uploaded have to be marked dirty again: the
-            // re-mint allocates fresh storage and only replays what the shadow still calls dirty.
-            void RequireImageBindableStorage(
-                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+            // Server-owned promotion: preserve an already image-bindable native
+            // allocation, or capture the old native contents, merge pending
+            // upload regions and re-arm the server's whole-level replay set.
+            // First allocations use staged bytes directly. No frontend dirty
+            // flag, allocator or pixel-store object participates. P9 W2: a level
+            // the driver does not hold (defined after the last sync) is never read
+            // back, and a readback the driver refuses falls back to the staged
+            // level when the store covers it.
+            void RequireImageBindableStorageByHandle(MG_Pipe::MGPipeHandle res,
+                                                     const MG_Pipe::MGPipeResourceRecord& record);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // SHARED IMAGES (MGPipeResourceRecord::SharedImageId). True when this call settled the
+            // storage - the ES name's level 0 IS the image (glEGLImageTargetTexture2DOES), or the
+            // image could not be bound and the name is left empty - and SyncMipmapsToBackend must
+            // not go on to allocate or upload. False when the record names no image: a twin that
+            // was bound to one has been told to re-mint, and the normal storage path takes over.
+            Bool SyncSharedImageStorage(const MG_Pipe::MGPipeResourceRecord& record);
+            // Pending sub-data written into the attached shared image (Managers.cpp).
+            void ReplaySharedImageUploads(const MG_Pipe::MGPipeResourceRecord& record);
+            // The attached image takes RGB texels only (an X format): uploads are converted.
+            Bool m_sharedImageUploadsRgb = false;
+#endif
             // Whether this texture's ES storage was minted in an image carrier rather than in the
             // frontend format's own layout - the readback has to ask, because for a NORMALIZED
             // carrier the storage is an integer texture holding codes and glGetTexImage still owes
@@ -1010,6 +1776,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             Bool IsDrawSyncClean(const MG_State::GLState::ITextureObject* t, Uint64 contextId,
                                  Uint64 samplingGeneration) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // A shared image's texels move with its producer's presents, which nothing here
+                // sees: every use goes through SyncMipmapsToBackend's shared-image arm, which waits
+                // for a write that landed since the last one (SharedImageImpl::AcquireForSampling).
+                if (m_sharedImage != nullptr) return false;
+#endif
                 if (!m_isInitialized || m_syncedShapeContextId == 0 || m_syncedShapeContextId != contextId ||
                     m_syncedShapeGeneration != samplingGeneration) {
                     return false;
@@ -1027,6 +1799,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 return t->GetStorageType() == TextureStorageType::Mipmap;
             }
+
+            // P5e (tx2), CONTRACT-P5E §5.2. THE SAME AGGREGATE GATE WITH NO FRONTEND OBJECT IN
+            // IT, and it is EXACTLY the conjunction of the three handle-arm prologues' own
+            // early-outs - the relation IsDrawSyncClean states above for the frontend versions,
+            // restated over the server's serials:
+            //
+            //   SyncMipmapsToBackend        m_isInitialized && m_syncedResourceSerial == Serial
+            //                               && PendingUploads.empty()
+            //   SyncTextureParamsToBackend  m_syncedParamsSerial == ParamsSerial
+            //                               && !Params.ForceResync && !m_forceTextureParamsResync
+            //   SyncBuiltinSamplerToBackend m_syncedBuiltinSampler == Params.BuiltinSampler
+            //                               && m_syncedBuiltinSamplerSerial == that CSO's Serial
+            //                               && !Params.SamplerResync && !m_forceSamplerResync
+            //
+            // plus the storage-kind restriction the frontend gate carries, answered from
+            // Desc.StorageKind. No new member and no new wire field: every input already
+            // exists, which is the whole reason the memo-HIT path can stop being frontend-bound.
+            //
+            // BOTH SIDES OF THE RESYNC PAIR ARE READ AND NEITHER CLEARS THE OTHER'S (D-E2, now
+            // load-bearing for a GATE rather than only for a push, scout R4). `Params.ForceResync`
+            // and `Params.SamplerResync` are the CLIENT's bits: the server reads them, acts on
+            // them and never writes them back. `m_forceTextureParamsResync`/`m_forceSamplerResync`
+            // are the SERVER's: set by RecreateBackendTexture / RequireImageBindableStorage and
+            // cleared only by the prologue that consumed them. A gate that read one side would
+            // skip the sync the other side is asking for, which for the sampler half is not
+            // mis-filtering but an INCOMPLETE texture sampling (0,0,0,1).
+            //
+            // The contextId / samplingGeneration arguments are GONE: the applier's ContextSerial
+            // and TextureShutterSerial are what the caller's keys already carry.
+            Bool IsDrawSyncCleanByRecord(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPipeResourceRecord& record) const;
 
         private:
             void RecreateBackendTexture();
@@ -1068,6 +1870,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool m_isInitialized = false;
             Bool m_imageBindableStorageRequired = false;
             Bool m_backendStorageImmutable = false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // The shared image the ES name's level 0 was last bound to (0 = none; image ids are
+            // never reused, so this is a lifetime key), and the EGLImage that binding went through,
+            // which holds the image for as long as the name samples it. Null with a nonzero id when
+            // the image could not be bound: the name is left empty until the record moves.
+            Uint64 m_sharedImageId = 0;
+            SharedImageImpl::EglImageRef m_sharedImage;
+#endif
             // Whether the driver texture may hold texels the shadow never saw. Set the first time
             // anything other than a texel upload can write it - an application framebuffer
             // attachment, a writable image binding, a copy or blit into it, a driver-side mipmap
@@ -1094,10 +1904,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // unconditionally bumps it), the content version on every CPU pixel mutation, and
             // the params version covers SetSamples/SetFixedSampleLocations, which bump neither
             // of the other two but feed the shape probe. The context id pins the generation to
-            // the context that produced it - generations restart at 0 with a new context, and a
-            // texture is owned by exactly one context (share groups are not implemented), so a
-            // mutation can never happen under a context this key does not name. 0 = never
-            // stamped (real context ids start at 1). Backend-side invalidation rides on
+            // the context that produced it - generations restart at 0 with a new context, so the
+            // id is part of the key. IT IS NOT AN OWNERSHIP CLAIM: a texture belongs to a SHARE
+            // GROUP (P14 S3/S6 - share groups ARE implemented, `ShareGroupState` holds the object
+            // tables and the twin tables are keyed by {session, share group}), so two contexts of
+            // one group both legitimately mutate this texture. What the id buys is only the
+            // cheaper half of the gate: a mutation made under a context sharing this texture
+            // stamps a different id and re-derives the shape, which is a spurious re-derivation
+            // (safe, and only on a shape mutation) rather than a missed one - the per-mutation
+            // versions below are what actually catch a change, and they are group-independent.
+            // 0 = never stamped (real context ids start at 1). Backend-side invalidation rides on
             // m_isInitialized: RequireImageBindableStorage and RecreateBackendTexture clear it.
             Uint64 m_syncedShapeContextId = 0;
             Uint64 m_syncedShapeGeneration = 0;
@@ -1105,7 +1921,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             SamplerParameters m_cacheSamplerParameters;
             UintVec2 m_cacheLodRange = {0, 1000};
             // All three representations plus the form, because none of them alone identifies the
-            // border colour the driver texture is holding: two integer borders can share one float
+            // border color the driver texture is holding: two integer borders can share one float
             // (anything differing above 2^24), and a Float -> Int transition can leave every number
             // unchanged while still needing a different driver entry point.
             FloatVec4 m_cacheBorderColor = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -1118,7 +1934,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // texture that never asks for the stencil aspect never emits the call. The
             // depth/stencil readback and replicate-blit emulations also write this parameter
             // raw, but only ever on their own scratch textures (never on an application
-            // texture), so they cannot desynchronise this cache.
+            // texture), so they cannot desynchronize this cache.
             GLenum m_cacheDepthStencilTextureMode = GL_DEPTH_COMPONENT;
             Uint16 m_syncedSamplerVersion = 0;
             Uint16 m_syncedTextureParamsVersion = 0;
@@ -1135,24 +1951,174 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // single-level texture with a mipmapping filter), and an incomplete texture samples
             // (0, 0, 0, 1) rather than its contents.
             Bool m_forceSamplerResync = false;
+            // ---- P4a's handle arm: the two prologues that decide WHETHER there is work and
+            // WHERE the values come from. Both answer null for "nothing to do", which covers
+            // three cases the caller treats identically and the callee names individually in
+            // the log: the record's serial has not moved, this texture has no record at all,
+            // or its params name a sampler CSO the applier does not hold.
+            //
+            // NEITHER FALLS BACK TO THE FRONTEND. On this arm the texture family is switched
+            // over, and quietly re-reading the object would hide a missing record behind a
+            // picture that still looks right - which is precisely what the subsystem A/B exists
+            // to expose (MarkBufferGpuWritten's note, P3a).
+            //
+            // P5e (tx2): the HANDLE comes from m_pushedSyncHandle when the caller adopted this
+            // twin by handle, and only then from the client allocator - which is what retires
+            // the two `HandleOf` probes this pair used to make on every feature path. The record
+            // is resolved once by ResolveOwnRecord below and passed to the sampler half rather
+            // than looked up twice.
+            const MG_Pipe::MGPipeResourceRecord* ResolveOwnRecord(
+                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) const;
+            const SamplerParameters* ResolvePushedBuiltinSampler(
+                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject,
+                const MG_Pipe::MGPipeResourceRecord* record);
+            // Hands back the whole RECORD rather than its Params, because the parameter push
+            // reads two things from beside them: Desc.InternalFormat, which decides the two
+            // channel-widening swizzle compositions, and Params.BuiltinSampler, which is where
+            // the border color lives (it is sampler state, GL 4.6 table 23.18, and P4a does
+            // not duplicate it onto MGPTextureParams).
+            const MG_Pipe::MGPipeResourceRecord* ResolvePushedTextureParams(
+                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+
+            // ---- P4a's handle arm (D-B3). Three server-owned serials that REPLACE, on their
+            // own arm, the six frontend-version memos above; the legacy members still sit beside
+            // them, but the MOBILEGL_PIPE_LEGACY_MEMOS switch and the pre-handle arm it compiled
+            // are retired (ARCHITECTURE.md §9.6): clearing the family's bit is a named startup refusal.
+            //
+            // 0 is never a real serial - the applier's counters start at 1 and only ever
+            // advance, including across a make-current (PipeApply.cpp's three-way argument) -
+            // so a zeroed memo is a guaranteed miss and a fresh twin owes a full sync.
+
+            // The resource record's Serial at the last completed mipmap sync. It replaces the
+            // whole cheap-gate trio (m_syncedShapeContextId / m_syncedShapeGeneration /
+            // m_syncedShapeParamsVersion) AND m_syncedContentVersion: the applier bumps it on
+            // every respecify and every sub-data it applies to this resource, which is exactly
+            // the union those four covered, without the coarse "any texture's churn re-opens
+            // every gate" behavior the sampling-resolution generation had.
+            Uint64 m_syncedResourceSerial = 0;
+            // The record's ParamsSerial at the last SyncTextureParamsToBackend. Replaces
+            // m_syncedTextureParamsVersion; MGPTextureParams::ForceResync replaces
+            // m_forceTextureParamsResync and is consumed the same way - read, acted on, and
+            // NOT written back, because the client never clears a server flag and the server
+            // never clears the client's (D-E2, the D-D5 inversion applied to two bits).
+            Uint64 m_syncedParamsSerial = 0;
+            // The BuiltinSampler CSO record's Serial at the last SyncBuiltinSamplerToBackend,
+            // plus the handle it was read through - a texture whose params name a DIFFERENT
+            // CSO than last time has had its sampling state replaced wholesale even if the new
+            // CSO's serial happens to match, which is a real sequence under content addressing
+            // (two textures sharing one CSO, then one of them diverging).
+            Uint64 m_syncedBuiltinSamplerSerial = 0;
+            MG_Pipe::MGPipeHandle m_syncedBuiltinSampler = MG_Pipe::kMGPipeNullHandle;
+
+            // P5e (tx2), CONTRACT-P5E §4.1's `m_handle` (the m_pushedSyncHandle pattern the
+            // framebuffer twin already carries). THE HANDLE THIS TWIN WAS ADOPTED FOR.
+            //
+            // It is what replaces `g_backendTextureObjects.HandleOf(stateTextureObject.get())`
+            // in the three sync prologues: the by-handle entry point knows the handle before it
+            // knows anything else, so the prologues stop probing the client allocator to
+            // re-derive an answer the caller already had. It is ALSO the arm selector - a twin
+            // with a handle noted syncs from the record and tolerates a null frontend object,
+            // one without it is the monolith-glue half and reads the object as it always did.
+            //
+            // Stamped by SyncTextureToBackendByHandle and SyncMipmapsToBackendByHandle - the two
+            // entries that HAVE a handle - and never cleared afterwards:
+            // a slot recycled to {s, g+1} RESETS the twin (SlotTables.h's forward-Gen rule), so
+            // a stale handle cannot outlive the object it names.
+            MG_Pipe::MGPipeHandle m_pushedSyncHandle = MG_Pipe::kMGPipeNullHandle;
+
+        public:
+            void NotePushedSyncHandle(MG_Pipe::MGPipeHandle res) { m_pushedSyncHandle = res; }
+            MG_Pipe::MGPipeHandle PushedSyncHandle() const { return m_pushedSyncHandle; }
+
+        private:
         };
 
         void ActivateTextureUnit(Uint unit);
         void UnbindTexture(Uint unit, GLenum target);
-        extern StateBackendObjectRegistry<MG_State::GLState::ITextureObject, BackendTextureObject>
+        extern TwinRegistry<MG_State::GLState::ITextureObject, BackendTextureObject, MG_Pipe::MGPipeKind::Texture>
             g_backendTextureObjects;
-        SharedPtr<BackendTextureObject>& SyncTextureObjectToBackend(
-            const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
-            Bool imageBindableStorageRequired = false);
-        // Every path that lets the DRIVER write a texture's texels calls this (see
-        // BackendTextureObject::m_driverMayHoldGpuWrites): an application framebuffer attachment,
-        // a writable image binding, a copy, blit or mipmap generation into it. A view writes its
-        // storage texture's image, so the storage texture is the one marked.
-        void NoteDriverSideTextureWrite(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject);
+
+        // P5e (id), CONTRACT-P5E §4.1 / §4.2: THE TEXTURE TWIN BY HANDLE - the handle a record
+        // carried (`BoundSamplerViews[u].Texture`, `BoundShaderImages[u].Res`, a framebuffer
+        // record's `MGPSurface::Res`, `VerbMipRes`, `VerbCopyTexDst`, `MGPCopyImage`'s two
+        // endpoints), never `Find(textureObject.get())`. Same shape and the same three
+        // absences as VertexArrayImpl::ResolveVaoTwin: record first, no frontend touch, no
+        // allocator probe, and NO SYNC - the three texture syncs and the clean condition that
+        // gates them are the tx2 package's.
+        //
+        // The by-value twin copy plus second Find that SyncTextureObjectToBackend pays today
+        // (the registry's Find could relocate its own return) is not reproduced here: the slot
+        // table's answer is an array element and only a GetOrCreate that GROWS the table moves
+        // it, which this function has already done by the time it returns.
+        BackendTextureObject* ResolveTextureTwin(MG_Pipe::MGPipeHandle res);
+        // ---- P5e SEAM (the contract §4.2, §5.2; declared by c0e, bodied by
+        // id/tx2) --------------------------------------------------------------------------
+        //
+        // EVERY DRAW-PATH TEXTURE ENTRY, BY HANDLE. The caller holds a Texture handle - a
+        // sampler view's Texture, an image unit's Res, a framebuffer surface's Res, VerbMipRes,
+        // VerbCopyTexDst, a copy-image endpoint - and the sync resolves the RECORD first and the
+        // twin by GetOrCreateByHandle, so nothing on the apply thread dereferences a frontend
+        // ITextureObject. The frontend overload above stays as the monolith-glue half.
+        //
+        // ResolveTextureTwin is the lookup without the sync, for the callers that need the twin
+        // to answer a shape question (an image bind's target and storage format come off the
+        // twin, not off a new wire field) after tx2's sync has already run this frame.
+        SharedPtr<BackendTextureObject>& SyncTextureToBackendByHandle(MG_Pipe::MGPipeHandle texture,
+                                                                      Bool imageBindableStorageRequired = false);
+        BackendTextureObject* ResolveTextureTwin(MG_Pipe::MGPipeHandle texture);
+        // NoteDriverSideTextureWrite's HANDLE ARM, for the same paths when the caller holds a
+        // Texture handle (a framebuffer surface's Res, an image unit's Res, VerbMipRes,
+        // VerbCopyTexDst, a copy-image endpoint): the twin the handle's record names is marked, or
+        // its storage owner's (Desc.ViewOf) for a view. Nothing on the apply thread reads a
+        // frontend object for it.
+        //
+        // P8-E: under a transport the same storage owner's staged store is marked driver-written
+        // too (StagedTextureStore::MarkDriverWritten), so a refused readback does not answer from
+        // bytes the driver has since overwritten - unless `storeFollowsTheWrite`, which only
+        // glCopyImageSubData passes: it tries FollowCopyImageInStagedStore first and marks the store
+        // itself when that fails.
+        void NoteDriverSideTextureWriteByHandle(MG_Pipe::MGPipeHandle texture, Bool storeFollowsTheWrite = false);
+        // P8-E: make glCopyImageSubData's texel-block move in the server's staged
+        // store too (StagedTextureStore::FollowCopy), so the destination level's bytes stay its
+        // content. Box in each image's own texel grid. False when the store cannot follow: a cube
+        // map or 1D array endpoint (copy-image puts faces / layers on z, the store does not), a view,
+        // two different internal formats, a level whose bytes did not all cross, a source the
+        // driver has written, or a monolith arm.
+        Bool FollowCopyImageInStagedStore(MG_Pipe::MGPipeHandle source, Uint32 sourceLevel, const IntVec3& sourceOrigin,
+                                          MG_Pipe::MGPipeHandle destination, Uint32 destinationLevel,
+                                          const IntVec3& destinationOrigin, const IntVec3& size);
+        // A re-upload into storage the driver already holds is a copy the driver may run on a path
+        // of its own that the next shader's image loads and stores do not wait for. On Adreno, a
+        // compute dispatch that imageStore()s over a texture whose re-upload the same Prepare had
+        // just issued read back with up to 2.4k of 4096 texels wrong, while the same dispatch over
+        // freshly created textures was exact (KHR-GL43.compute_shader.resource-image). The two
+        // differ in exactly two ways: the fresh ones are allocated and filled from client memory,
+        // the re-uploads go through the unpack ring as a buffer-to-texture copy; and the fresh
+        // ones were never used by the GPU. Both are covered - every in-place level upload is
+        // noted, ring-sourced or not.
+        //
+        // GL orders a texture update ahead of every later shader access without a barrier, so
+        // the application has nothing to fix this with - and its own barriers could not reach it
+        // anyway: the upload is applied lazily, at the dispatch that consumes it, after any
+        // barrier the application issued. So the shader-access sites that can see such a texture
+        // through an image unit - every dispatch, and a draw whose image units were just
+        // re-synced - issue ONE barrier ahead of the shader, and only when an in-place upload was
+        // issued since the last one. Sampled access from a draw does not take it: that is the
+        // order every driver keeps on its own, and it is the per-draw hot path.
+        void NoteInPlaceTextureUpload();
+        // The barrier bits owed for the uploads noted since the last call (0 when none), and
+        // the note cleared: the caller issues them, folded into any barrier of its own.
+        GLbitfield TakeInPlaceTextureUploadBarrierBits();
         // Brings every texture the next draw reads - the touched units' bindings and the draw
         // FBO's texture attachments - onto the backend, through the two borrowed-pair memos
         // documented at their definitions. Declared here so tests can drive those memos directly.
         void SyncNeccessaryTextures();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Every texture of this session bound to a shared image with sub-data still pending is
+        // synced now, so the uploads are in the images before a flush publishes them (an X
+        // server's PutImage into a window pixmap no later draw of its own samples).
+        void WritePendingSharedImageUploads();
+#endif
         extern Array<Array<BackendTextureObject*, (SizeT)TextureTarget::TextureTargetCount>,
                      MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;
@@ -1171,12 +2137,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ~BackendFramebufferObject();
             BackendFramebufferObject(const BackendFramebufferObject&) = delete;
             BackendFramebufferObject& operator=(const BackendFramebufferObject&) = delete;
-            void SyncToBackend(const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject,
-                               FramebufferTarget asTarget);
-            // Apply only this FBO's read buffer (glReadBuffer) to the backend. Split out so it can
-            // still run when SyncCurrentFBO skips the READ-target sync because the same GL FBO is
-            // bound as both draw and read (otherwise glReadBuffer changes would be silently dropped).
-            void SyncReadBufferToBackend(const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject);
+            // P5e SEAM (§5.4; declared by c0e, bodied by fb): the same
+            // sync keyed on the framebuffer HANDLE. The record's eleven surfaces ARE the point
+            // set - the emitter refuses a point at or above the wire width - so the attachment
+            // walk needs no frontend FramebufferObject and no m_pushedSyncHandle handshake: the
+            // handle is the argument. An OVERLOAD rather than a changed signature, so the
+            // monolith arm and the pull build see no token move.
+            void SyncToBackendByHandle(MG_Pipe::MGPipeHandle fbo, FramebufferTarget asTarget);
+            // P5e (fb, §5.4): the same read-buffer push keyed on the handle, for the one path
+            // that applies a read buffer without doing the rest of the sync - SyncCurrentFBO's
+            // "one object is bound to BOTH bindings" skip, where the DRAW pass already did the
+            // attachment work and only glReadBuffer is READ-target-specific.
+            void SyncReadBufferToBackendByHandle(MG_Pipe::MGPipeHandle fbo);
+            // P5c (hd, CONTRACT-P5C §3.2): the framebuffer handle the CURRENT sync is keyed on.
+            // A caller applying a record sets it before SyncToBackend / SyncReadBufferToBackend,
+            // which then read the applier's record for THAT handle instead of probing the
+            // client's slot allocator for the frontend object's lifetime id (T2). Read only
+            // with an active transport; monolith resolves through HandleOf as it always did.
+            MG_Pipe::MGPipeHandle m_pushedSyncHandle = MG_Pipe::kMGPipeNullHandle;
             void InvalidateSyncedState();
             Uint GetBackendFramebufferId() const { return m_backendFBOId; }
             void Bind(FramebufferTarget target) const;
@@ -1202,14 +2180,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
              */
             GLenum m_backendDrawBuffers[MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS] = {GL_NONE};
 
-            static constexpr Uint MAX_COLOR_ATTACHMENT_SLOTS =
-                static_cast<Uint>(FramebufferAttachmentType::Color31) -
-                static_cast<Uint>(FramebufferAttachmentType::Color0) + 1;
+            static constexpr Uint MAX_COLOR_ATTACHMENT_SLOTS = static_cast<Uint>(FramebufferAttachmentType::Color31) -
+                                                               static_cast<Uint>(FramebufferAttachmentType::Color0) + 1;
             /* Where each frontend GL_COLOR_ATTACHMENTn image physically lives in the backend ES
                framebuffer, as a GL_COLOR_ATTACHMENTm enum. ES only accepts glDrawBuffers bufs[s] ==
                GL_COLOR_ATTACHMENTs, so a GL draw-buffer slot s naming attachment a forces a's image
                under backend slot s. This table is the single owner of that decision and is kept a
-               PERMUTATION of the backend colour slots: every other attachment keeps its identity
+               PERMUTATION of the backend color slots: every other attachment keeps its identity
                slot when that slot survived, and is parked on the lowest free slot when it did not.
                Deriving the point per-query from the draw-buffer array instead handed the identity
                point to any attachment that was not a draw buffer - i.e. exactly the point a
@@ -1232,33 +2209,121 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // mismatch means some backend texture id was re-minted since, and any of this
             // twin's attachment points may still hold the dead id even though the frontend
             // attachment versions match - so the walk re-attaches everything first.
+            //
+            // SERVER-OWNED AND IT SURVIVES P4a (D-B3). It answers "did *I* re-mint a driver
+            // texture id", which no client-side version can answer; dropping it would
+            // reintroduce exactly the class of bug commit d7655247 fixed on the buffer side.
             Uint64 m_syncedBackendIdGeneration = 0;
+            // P4a (D-C4): MGPFramebufferState::ContentHash as of this twin's last sync on the
+            // OBJECT arm (SyncToBackend), PER TARGET IT WAS SYNCED AS, and it is the second of
+            // the hash's two jobs - "the server's render-pass memo key, and the CLIENT's emission
+            // suppressor". It replaces m_syncedFrontendAttachmentVersions AS A KEY (the array
+            // stays: it is what the legacy arm compares, and re-arming it is what a miss here
+            // does). The handle arm reads neither slot of this one - it has its own key below.
+            //
+            // The hash covers every field the record carries - Fbo included, so a recycled
+            // framebuffer handle whose successor happens to carry an identical attachment set
+            // can never be suppressed against its predecessor, and DrawBuffers[8] included, so
+            // a suppressed record provably means the draw-buffer array did not move, which
+            // provably means the fragColor broadcast count did not move.
+            //
+            // PER TARGET rather than one, and it stays that way under ID-19's per-OBJECT record,
+            // but ONLY because the arm that reads it uses this memo as a re-arm TRIGGER and not as
+            // a claim: a miss re-arms every point, and a hit still leaves the per-point versions
+            // underneath to decide what the walk touches. The split there says how narrowly one
+            // target re-arms; it never means "the driver's attachments are this record". 0 is
+            // never a live hash (a computed 0 is remapped to 1 by the client's suppressor), so a
+            // zeroed memo is a guaranteed miss.
+            Array<Uint64, SizeT(FramebufferTarget::FramebufferTargetCount)> m_syncedRecordHashes = {0};
+            // P5e (fb): the HANDLE arm's key, and the ContentHash of the record whose attachments
+            // this twin last APPLIED through SyncToBackendByHandle. Unlike the array above, this
+            // one IS a claim: nothing narrower sits under it, because that arm walks the record
+            // and has no frontend attachment array to compare against.
+            //
+            // ONE FOR THE OBJECT, NOT ONE PER TARGET, and that is the difference that matters.
+            // Attachments belong to the driver FBO OBJECT: glFramebufferTexture2D and
+            // glFramebufferRenderbuffer write the object behind whichever binding happens to be
+            // current, so a walk run for Draw and a walk run for Read write the SAME attachment
+            // points on it. Per-target slots let the two keep separate, individually true and jointly
+            // false accounts of one physical state: a composite framebuffer synced as DRAW in a
+            // depth pre-pass detaches the points its other attachment state attaches, and the
+            // end-of-frame sync of that same record on the READ side then found its own slot
+            // already stamped by an earlier identical sync, walked nothing, left the color point
+            // detached, and the driver refused the following glBlitFramebuffer with
+            // INVALID_OPERATION. Keying on the object is what makes "this hash is applied" mean
+            // "these points are on the driver now".
+            Uint64 m_syncedAttachmentRecordHash = 0;
+            // The ARB_framebuffer_no_attachments defaults (width, height, layers, samples,
+            // fixed sample locations) last pushed to the driver FBO with glFramebufferParameteri.
+            // Like the attachments they belong to the driver OBJECT, so one memo, not per target.
+            Array<Int, 5> m_syncedNoAttachmentDefaults = {0, 0, 0, 0, 0};
+            Bool m_syncedNoAttachmentDefaultsValid = false;
+            // P5e (fb): the read-buffer decision, taken from the record alone. Both
+            // SyncReadBufferToBackend overloads funnel through it, so the rule lives in one
+            // place and the object form is visibly the half that only finds the handle.
+            // glNameForDiag is 0 on the handle arm, which reads as "the record did not say".
+            void ApplyReadBufferFromRecord(const MG_Pipe::MGPFramebufferState& record, Uint glNameForDiag);
         };
 
-        extern StateBackendObjectRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject>
+        extern TwinRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject,
+                            MG_Pipe::MGPipeKind::Framebuffer>
             g_backendFramebufferObjects;
+
+        // P4a (D-C2 as corrected by ID-19): the applier's record for THE FRAMEBUFFER OBJECT this
+        // handle names, or null.
+        //
+        // v1 asked the applier for its two BOUND-target working records and answered null unless
+        // one of them happened to name this twin - which meant every DSA entry point
+        // (BlitNamedFramebuffer, the four ClearNamedFramebuffer*) drove a framebuffer that is
+        // bound to neither target, found no record, declined, and then had the clear or blit
+        // issued against a driver FBO that never got its attachments. The record is now keyed by
+        // the framebuffer HANDLE (MGPipeApplierState::FramebufferRecords, wire v3), so a record
+        // that comes back is this framebuffer's by construction and it comes back whether the
+        // object is bound to Draw, to Read, to both or to neither. A null here means "no emission
+        // has ever described this framebuffer, or the handle's generation is stale" - both of
+        // them seam defects on an integrated tree, never a binding question.
+        //
+        // `fbo` is the handle the caller resolved for this twin; passing it in rather than
+        // resolving it here keeps the monolith-glue lookup at one site per sync.
+        const MG_Pipe::MGPFramebufferState* PushedFramebufferRecord(MG_Pipe::MGPipeHandle fbo);
+
+        // ---- P5e (fb, CONTRACT-P5E.md §5.4): the reverse index, texture -> framebuffers ------
+        //
+        // "Which framebuffers currently have this texture attached." The detach walk
+        // (ScopedDetachedTextureFramebufferAttachments) used to answer it by iterating every
+        // live twin and reading each one's FRONTEND attachment array, which is the last place
+        // the server held a frontend framebuffer across records - id re-typed ForEachLive and
+        // named this package as the one that replaces the read. The relation is maintained
+        // where the record is consumed (SyncToBackendByHandle's attachment walk), because the
+        // record's eleven surfaces already say it.
+        //
+        // The index answers about a TEXTURE SLOT and returns whole FRAMEBUFFER handles, so a
+        // recycled framebuffer slot never answers for its predecessor. See the definition for
+        // why nothing prunes a dead row.
+        void NoteFramebufferTextureAttachments(MG_Pipe::MGPipeHandle fbo, const MG_Pipe::MGPFramebufferState& record);
+        // The record's surface for an attachment POINT, or null when this record does not
+        // describe that point at all (Color8..Color31, and the default framebuffer's FRONT/BACK
+        // tokens). MGPFramebufferState carries Color[8] + Depth + Stencil, which is every point
+        // a framebuffer can hold on the handle arm - D-C3 refuses bit 9 outright on a driver
+        // reporting more than 8 color attachments. P5e (fb) exports it: the twin's attachment
+        // walk, the named blit's aspect plan and the detach walk all ask the same question of
+        // the same record, and a second copy of the Color/Depth/Stencil dispatch beside each of
+        // them is how one of them ends up describing a point differently from the others.
+        const MG_Pipe::MGPSurface* PushedSurfaceForAttachment(const MG_Pipe::MGPFramebufferState& record,
+                                                              FramebufferAttachmentType point);
         // True when the read buffer names a fixed-point (norm/snorm) attachment that the
         // backend actually stores in a floating-point format. GL clamps a read from a
-        // fixed-point colour buffer to [0,1] (GL_CLAMP_READ_COLOR defaults to
+        // fixed-point color buffer to [0,1] (GL_CLAMP_READ_COLOR defaults to
         // GL_FIXED_ONLY); the substituted float storage would not, so the readback path
         // has to apply the clamp itself.
         Bool IsFixedPointFallbackReadAttachment();
 
         // True when the read buffer names a three-channel attachment the backend actually stores
-        // in a four-channel format (the colour-renderable widening). A format without alpha reads
+        // in a four-channel format (the color-renderable widening). A format without alpha reads
         // back as 1.0, so the readback path has to overwrite the alpha the draw left behind -
         // unconditionally, since this is the format's own semantics rather than the
         // GL_CLAMP_READ_COLOR rule the clamp above implements.
         Bool IsAlphaWidenedFallbackReadAttachment();
-
-        // True when this attachment's storage carries an alpha channel its frontend format does
-        // not (the three-channel colour-renderable widening).
-        Bool IsAlphaWidenedColorAttachment(const MG_State::GLState::FramebufferAttachmentObject& attachmentObject);
-
-        // Bit i set = DRAW BUFFER i of `fbo` resolves to a colour attachment the backend widened
-        // from three channels to four. Indexed by draw-buffer slot, not by attachment point,
-        // because that is what glColorMaski / glClearBufferfv address.
-        Uint32 ComputeAlphaWidenedDrawBufferMask(const MG_State::GLState::FramebufferObject& fbo);
 
         // The same mask for whatever is currently bound to GL_DRAW_FRAMEBUFFER, recomputed by
         // SyncCurrentFBO (BackendFramebufferObject::SyncToBackend for the DRAW target, and reset
@@ -1272,19 +2337,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // driver where no interception is possible. So the stored alpha is kept at 1.0 instead:
         // a clear touching a widened buffer writes alpha 1.0, and every draw into it has its
         // alpha write mask forced off, so nothing can ever move it again. The application's own
-        // colour mask is untouched - glGet(GL_COLOR_WRITEMASK) still reports what it set.
+        // color mask is untouched - glGet(GL_COLOR_WRITEMASK) still reports what it set.
         extern Uint32 g_alphaWidenedDrawBufferMask;
 
-        // Bit i set = DRAW BUFFER i of the framebuffer bound as DRAW resolves to a colour
+        // Bit i set = DRAW BUFFER i of the framebuffer bound as DRAW resolves to a color
         // attachment with an INTEGER format. Recomputed beside the mask above and for its sake:
-        // glClearBufferfv on an integer colour buffer is GL_INVALID_OPERATION, so the
+        // glClearBufferfv on an integer color buffer is GL_INVALID_OPERATION, so the
         // per-draw-buffer clear route the widening needs has to stand down when one is present.
-        // (glClear on an integer colour buffer is left undefined by ES in the first place, and
+        // (glClear on an integer color buffer is left undefined by ES in the first place, and
         // an application that wants a defined answer has to call glClearBufferuiv/iv - which does
         // carry the widened alpha substitution.)
         extern Uint32 g_integerColorDrawBufferMask;
 
-        // The colour a clear has to hand the driver for one draw buffer: the application's value,
+        // The color a clear has to hand the driver for one draw buffer: the application's value,
         // except that a widened attachment's alpha is replaced by the 1.0 its three-channel
         // format implies. `one` is 1.0 encoded in the clear call's own component type - the
         // integer clears carry the integer 1, the float clear carries 1.0f.
@@ -1330,6 +2395,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the driver FBO would keep the deleted texture name attached forever. The
         // SyncCurrentFBO gate compares this generation (below) to re-enter the sync,
         // and each twin re-arms its per-attachment memo on a mismatch (SyncToBackend).
+        //
+        // AND WHENEVER AN ATTACHABLE OBJECT'S DRIVER STORAGE IS REDEFINED IN PLACE (P4a fable
+        // seam F-3): a mutable texture regenerated on the same id, a renderbuffer re-storaged
+        // on the same id. The id did not move, but the four cross-object masks SyncToBackend
+        // computes from the attachment's format did, and nothing else the FBO memo reads sees
+        // a respecify of an attached object. So "did I change something under an attachment
+        // point that no frontend version can tell the framebuffer about" is what this counts,
+        // and the re-mint is one case of it. The in-place bumps are compiled under
+        // MOBILEGL_PIPE_PUSH: G1 keeps the pull library byte-identical to the P4a baseline,
+        // so the pull build keeps the pre-P4a hole until they land on dev on their own.
         extern Uint64 g_attachmentBackendIdGeneration;
         // What g_attachmentBackendIdGeneration was when SyncCurrentFBO last stamped each
         // target; part of the synced tuple above.
@@ -1344,6 +2419,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // GL_FRAMEBUFFER binds both targets.
         void BindFramebufferId(GLenum fbTarget, Uint id);
         Uint CurrentFramebufferBinding(FramebufferTarget target);
+        // THE HANDLE ARM'S OWN FRAMEBUFFER MEMOS, AND THEY ARE PACKAGE E's STORAGE
+        // (DirectGLES.cpp: g_fboSyncedSerials, g_fboRecordsTrusted). E's review MAJOR-4 handed
+        // this to D because InvalidateFramebufferBindingCache is in THIS file and has three
+        // callers E cannot reach - MG_Test/SanityTest.cpp's ScopedStateGuardMocks::ResetShadows
+        // and ScopedBackendTwinMocks' constructor and destructor - which clear the pre-handle
+        // trio and would leave the handle-arm memos claiming a target is synced across a GLES
+        // function-table swap. Calling it from INSIDE InvalidateFramebufferBindingCache is what
+        // makes forgetting impossible, and that call is written below.
+        //
+        // IT IS GATED, AND HERE IS THE HANDSHAKE, because the definition is `static` in E's file
+        // on the tree this package was built against (esprytdraw v2; now in DirectGLESInternal.h) and an
+        // internal-linkage function cannot be called from Managers.cpp. E's verification round
+        // drops that one keyword; D's verification round flips this constant to 1, in this file,
+        // one line. Neither side can do it silently: the flip has no other reader and the
+        // declaration below has no other definition.
+#define MOBILEGL_ESPRYT_FBO_HANDLE_ARM_MEMOS_LINKED 0
+#if MOBILEGL_ESPRYT_FBO_HANDLE_ARM_MEMOS_LINKED
+        void InvalidateFramebufferHandleArmMemos();
+#endif
         void InvalidateFramebufferBindingCache();
         // A driver framebuffer id is about to be deleted: ES reverts every target that
         // currently binds it to 0, so the binding shadow has to follow or the next
@@ -1370,7 +2464,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint depthTex = 0;
             GLenum depthTarget = 0;
             GLint depthLevel = 0;
+            // >= 0 => attached via glFramebufferTextureLayer.
+            GLint depthLayer = -1;
             Bool depthHasStencil = false;
+            // The point holds a STENCIL_INDEX texture, so it was made at
+            // GL_STENCIL_ATTACHMENT - a third attach point that neither depth form
+            // may be deduped against.
+            Bool depthIsStencilOnly = false;
             // Per-FBO read/draw buffer state (0 = unknown, set on first use).
             GLenum readBuffer = 0;
             GLenum drawBuffer = 0;
@@ -1388,9 +2488,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void EnsureColorAttachment2D(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLenum texTarget, GLint level);
         void EnsureColorAttachmentLayer(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLint level, GLint layer);
         void EnsureDepthAttachment2D(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLenum texTarget, GLint level,
-                                     Bool withStencil);
-        void EnsureNoColorAttachment(ScratchFramebuffer& fb, GLenum fbTarget);
-        void EnsureNoDepthAttachment(ScratchFramebuffer& fb, GLenum fbTarget);
+                                     Bool withStencil, Bool stencilOnly = false);
+        void EnsureDepthAttachmentLayer(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLint level, GLint layer);
         void EnsureReadBuffer(ScratchFramebuffer& fb, GLenum readBuffer);
         void EnsureDrawBuffer(ScratchFramebuffer& fb, GLenum drawBuffer);
         // A 1x1 RGBA8-renderbuffer-complete FBO (GenerateMipmap needs a complete
@@ -1433,7 +2532,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace SamplerImpl {
         class BackendSamplerObject; // for PrgramImpl's sampler-pass memo rows below
-    }
+    } // namespace SamplerImpl
 
     // Image uniforms take their unit from the layout(binding=N) qualifier baked into
     // the transpiled ESSL; unlike samplers they must not (and in ES cannot) be
@@ -1493,6 +2592,162 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Defined further down, next to CollectImageFormatBakeInputs; only referenced here.
         struct ImageFormatBakeInputs;
 
+        // ---- P5e (pg), CONTRACT-P5E.md §5.5: THE ONE SOURCE A PROGRAM BUILD READS ----------
+        //
+        // WHY THIS TYPE EXISTS AT ALL. Building a driver program asks the frontend
+        // ProgramObject sixteen distinct questions and asks its reflection tables thousands of
+        // times, and EVERY ONE OF THEM used to be a read of client-owned memory on the apply
+        // thread. Under run-ahead that is not a race to be careful about, it is wrong by
+        // construction: ProgramObject::Link() REPLACES m_artifacts and m_spirv in place, and by
+        // the time the server builds, the client may be several links past the one the record
+        // describes. So the build reads THIS instead, and the two arms differ only in where it
+        // points.
+        //
+        // AND IT IS DELIBERATELY NOT A SECOND ProgramObject. Nothing here constructs a frontend
+        // object on the apply thread - ID-102's lesson, learned by id: a ProgramObject's own
+        // constructor mints a lifetime id, so an "object" built server-side would trip the very
+        // guards this phase installs and would make a red-once falsely green.
+        //
+        // THE OVERLAY IS THE OTHER HALF. Three reflection fields - the block-to-point map, the
+        // sampler unit per uniform LOCATION and the name-keyed storage-block override set - are
+        // members of LinkArtifacts that glUniformBlockBinding, glUniform1i and
+        // glShaderStorageBlockBinding move AFTER the link that produced the archive, without
+        // relinking. On the handle arm the record's set_program_bindings tails are the whole
+        // truth for all three (whole-set replacement, not a merge) and the archive's link-time
+        // values are shadowed; on the monolith arm there is no overlay because the "archive"
+        // IS the frontend's live table.
+        //
+        // THE ACCESSORS BELOW MIRROR ProgramObject's, one for one, and that duplication is
+        // deliberate rather than lazy: MG_Backend includes nothing from MG_State's program
+        // internals beyond the archive structs themselves, and ProgramObject's own forms are
+        // non-static members over Artifacts(). The three that ARE already static over
+        // LinkArtifacts (IsValidUniformLocation, UniformAtIn, GetUniformArraySizeByTIndex) are
+        // called rather than copied, which is where the boundary sits.
+        struct ProgramArchiveSource {
+            using LinkArtifacts = MG_State::GLState::LinkArtifacts;
+            using SpirvArtifacts = MG_State::GLState::SpirvArtifacts;
+            using UniformReflection = MG_State::GLState::ResourceReflection;
+            using TypeFacts = MG_State::GLState::TypeFacts;
+            using XfbVarying = MG_State::GLState::XfbVarying;
+
+            // Both are non-null for the whole lifetime of a source; a source is a local of the
+            // build that made it and never outlives the record or the object it points into.
+            const LinkArtifacts* Link = nullptr;
+            const SpirvArtifacts* Spirv = nullptr;
+
+            // WHAT A LOG LINE NAMES. The frontend's GL program name on the monolith arm; the
+            // ShaderCso slot on the handle arm, because the server does not know GL names and
+            // must not learn them (the handle is the identity the whole phase speaks in).
+            Uint Identity = 0;
+            // True when Identity is a handle slot rather than a GL name, so a message can say
+            // which it printed instead of leaving a reader to guess.
+            Bool IdentityIsHandleSlot = false;
+
+            Bool Linked = false;
+            Bool SpirvUsable = false;
+            Bool SpirvValidationEnabled = false;
+            Bool PointSizeWasDemoted = false;
+            Uint GlobalUboSize = 0;
+
+            // One entry per Spirv->generatedSpirv module, at the same index. Owned rather than
+            // referenced because the monolith arm builds it (GetLinkedShaderStages() returns by
+            // value) and the handle arm converts the frame's Uint32 words.
+            Vector<ShaderStage> LinkedStages;
+
+            // The post-link overlay. Governs iff OverlayGoverns; see the type comment.
+            Bool OverlayGoverns = false;
+            const Vector<Int32>* BlockBindingOverlay = nullptr;
+            const Vector<MG_Pipe::MGPProgramSamplerUnit>* SamplerUnitOverlay = nullptr;
+            // Built once per build from whichever side owns it, because TranspileSpirvToEssl
+            // takes the map by const reference and the record carries a vector.
+            UnorderedMap<String, Int> StorageOverrides;
+            // The client's commutative hash on the handle arm, ComputeShaderStorageBlockBinding-
+            // Signature's on the monolith one. Same function, computed on whichever side owns
+            // the map (MG_Impl/Pipe/ProgramEmit.h names its twin).
+            Uint64 StorageOverrideSignature = 0;
+
+            // ---- the archive's own answers ----
+            //
+            // EVERY NAME HERE IS ProgramObject's NAME, and that is load-bearing rather than
+            // tidy: the build body below is written once against `src`, whose TYPE is the
+            // build's (ProgramBuildSource), so the pull build compiles the very same text
+            // against a ProgramObject and G1's byte identity survives.
+            Uint GetExternalIndex() const { return Identity; }
+            Bool GetLinkStatus() const { return Linked; }
+            Bool GetSpirvStatus() const { return SpirvUsable; }
+            Bool GetSpirvValidationEnabled() const { return SpirvValidationEnabled; }
+            Bool PointSizeDemoted() const { return PointSizeWasDemoted; }
+            Uint GetUBOSize() const { return GlobalUboSize; }
+            const Vector<ShaderStage>& GetLinkedShaderStages() const { return LinkedStages; }
+            const UnorderedMap<String, Int>& GetShaderStorageBlockBindingOverrides() const { return StorageOverrides; }
+            // THE DEBUG LOG IS DELETED ON THIS ARM (CONTRACT-P5E §5.5). The snapshot is
+            // GL-thread-owned ShaderObject SharedPtrs - the exact shape rule C forbids an
+            // applier entry point to reach - and its one consumer in the build is an MGLOG_D
+            // dump of each stage's original GLSL, which the server does not have and does not
+            // need. An empty list makes that loop a no-op rather than a special case.
+            const Vector<MG_State::GLState::ProgramObject::LinkedShaderRef>& GetLinkedShaderSnapshot() const {
+                static const Vector<MG_State::GLState::ProgramObject::LinkedShaderRef> kNone;
+                return kNone;
+            }
+
+            Uint GetMaxUniformLocation() const { return Link->maxUniformLocation; }
+            Bool IsValidUniformLocation(Int location) const {
+                return MG_State::GLState::ProgramObject::IsValidUniformLocation(*Link, location);
+            }
+            const UniformReflection& UniformAt(Int tIndex) const {
+                return MG_State::GLState::ProgramObject::UniformAtIn(*Link, tIndex);
+            }
+            // Bounds-checked, exactly as ProgramObject::GetUniformName is not: the frontend's
+            // form indexes uniformIndexInTProgram raw because every caller there has already
+            // walked a legal location, and this one is reached from a handle arm where the
+            // location space comes off a record.
+            const String& GetUniformName(Uint location) const {
+                static const String kEmpty;
+                if (location >= Link->uniformIndexInTProgram.size()) return kEmpty;
+                return UniformAt(Link->uniformIndexInTProgram[location]).name;
+            }
+            GLenum GetUniformType(Uint location) const {
+                if (location >= Link->uniformIndexInTProgram.size()) return 0;
+                return UniformAt(Link->uniformIndexInTProgram[location]).glDefineType;
+            }
+            const TypeFacts& GetUniformTypeFacts(Uint location) const {
+                static const TypeFacts kEmpty{};
+                if (location >= Link->uniformIndexInTProgram.size()) return kEmpty;
+                return UniformAt(Link->uniformIndexInTProgram[location]).type;
+            }
+            Bool UniformLocationsAliasSameUniform(Int a, Int b) const {
+                if (!IsValidUniformLocation(a) || !IsValidUniformLocation(b)) return false;
+                return Link->uniformIndexInTProgram[a] == Link->uniformIndexInTProgram[b];
+            }
+            // ProgramObject::GetUniformLocation, reproduced over the archive. The array rules
+            // are the whole body: reflection keys an array under "arr[0]" at its base location,
+            // a bare "arr" resolves to that, an "arr[k]" resolves to base + k, and an array of
+            // arrays is keyed by its full "[0]"-terminated spelling - which is why the
+            // suffixed lookup is tried before the trailing subscript is read as an index.
+            Int GetUniformLocation(const String& name) const;
+            Int GetActiveUniformBlocksCount() const { return static_cast<Int>(Link->glBlockIndexToTProgram.size()); }
+            const String& GetUniformBlockName(Uint index) const;
+
+            GLenum GetTransformFeedbackBufferMode() const { return Link->xfbBufferMode; }
+            SizeT GetTransformFeedbackVaryingCount() const { return Link->xfbVaryings.size(); }
+            const Vector<XfbVarying>& GetTransformFeedbackVaryings() const { return Link->xfbVaryings; }
+            const Vector<Vector<unsigned>>& GetGeneratedSpirv() const { return Spirv->generatedSpirv; }
+
+            // ---- the three the overlay governs ----
+            Uint GetUniformBlockBinding(Uint index) const;
+            Int GetUniformSamplerOrImageUnitIndex(Uint location) const;
+
+            // The handle arm: the record's own archive, with its three tails overlaid.
+            static ProgramArchiveSource FromRecord(MG_Pipe::MGPipeHandle cso,
+                                                   const MG_Pipe::MGPipeShaderCsoRecord& record);
+        };
+
+        // THE BUILD'S SOURCE TYPE, per build. This alias is what lets the program build have one
+        // body: in a push build it is the record-or-frontend view above, in a pull build it is
+        // the frontend object the body always read, spelled through the same name so the text
+        // does not move (G1).
+        using ProgramBuildSource = ProgramArchiveSource;
+
         class BackendProgramObjectImpl {
         public:
             // Per-link cache of a sampler-style uniform's backend location: built once in
@@ -1510,6 +2765,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // so an unbiased shader issues no per-draw glUniform1f at all.
                 Int lodBiasLocation = -1;
                 Float lastAssignedLodBias = 0.0f;
+                // Location of this sampler's runtime sample-index bound
+                // (PrgramImpl::ClampUnsignedMultisampleFetches), -1 when the shader has none;
+                // lastAssignedMsSampleMax mirrors the value the program holds (0 after link).
+                Int msSampleMaxLocation = -1;
+                Int lastAssignedMsSampleMax = 0;
             };
 
             // Memo of the whole per-draw sampler-uniform pass (glUniform1i unit
@@ -1551,7 +2811,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             BackendProgramObjectImpl();
             ~BackendProgramObjectImpl();
-            void SyncToBackend(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
+            // P5e (pg), CONTRACT-P5E.md §5.5: the same sync keyed on the ShaderCso HANDLE and
+            // answered from the record - the archive the create carries and the three binding
+            // tails set_program_bindings carries. It is an OVERLOAD beside the frontend one,
+            // which stays as the monolith-glue half, so the pull build's mangled names do not
+            // move (ruling 1 / ID-81: two overloads, not an #if inside one body).
+            void SyncToBackendByHandle(MG_Pipe::MGPipeHandle cso);
             void Use();
             void SetBaseInstance(Uint32 baseInstance) const;
             void SetBaseInstanceWordIndex(Int32 wordIndex) const;
@@ -1563,6 +2828,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Same for gl_BaseVertex: only a program that reads it pays for the per-draw
             // uniform write, and only such a program needs the reset after one.
             Bool ReadsBaseVertex() const { return m_baseVertexUniformLocation >= 0; }
+            // P8-C: same for the gl_BaseInstance uniform - which an indirect draw feeds from the
+            // command on the CPU only when the mg_IndirectParams view is absent.
+            Bool ReadsBaseInstance() const { return m_baseInstanceUniformLocation >= 0; }
             // Which viewport indices the next draw's fragments may keep, one bit each. Written
             // once per replay pass; see ForEachViewportRoutingPass.
             void SetViewportPassMask(Uint32 indexMask) const;
@@ -1577,6 +2845,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // shader failed to transpile or compile, or the link itself failed). Use()
             // must not leave the previously bound program current in that case.
             Bool IsBackendProgramUsable() const { return m_backendProgramUsable; }
+            NarrowIntegerSeedState& NarrowIntegerSeeds() { return m_narrowIntegerSeeds; }
             Uint GetBackendGlobalUBOId() const { return m_backendGlobalUBOId; }
             Uint32 GetSnormFallbackClampOutputMask() const { return m_snormFallbackClampOutputMask; }
             Uint32 GetUnormFallbackClampOutputMask() const { return m_unormFallbackClampOutputMask; }
@@ -1599,20 +2868,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // `layout(vertices = N) out`, so a program built for one patch size is stale for
             // another and the draw path has to say so. -1 compares equal to itself for every
             // program that has a control stage of its own, i.e. for all but a handful.
-            Int GetPassthroughTessControlPatchVertices() const {
-                return m_passthroughTessControlPatchVertices;
-            }
+            Int GetPassthroughTessControlPatchVertices() const { return m_passthroughTessControlPatchVertices; }
             // GL_PATCH_DEFAULT_{OUTER,INNER}_LEVEL the same synthesized stage was built with, for
             // the same reason: ES has neither the state nor an entry point to forward it to, so
             // glPatchParameterfv's values are compiled in as literals and a program built with one
             // set is stale for another. Meaningless (and never read) when the patch-vertices field
             // above is -1, which is the gate the draw path tests first.
-            const FloatVec4& GetPassthroughTessControlOuterLevel() const {
-                return m_passthroughTessControlOuterLevel;
-            }
-            const FloatVec2& GetPassthroughTessControlInnerLevel() const {
-                return m_passthroughTessControlInnerLevel;
-            }
+            const FloatVec4& GetPassthroughTessControlOuterLevel() const { return m_passthroughTessControlOuterLevel; }
+            const FloatVec2& GetPassthroughTessControlInnerLevel() const { return m_passthroughTessControlInnerLevel; }
 
             Bool HasGlobalUboBlock() const { return m_globalUboBackendBlockIndex >= 0; }
             const Vector<Int>& GetUniformBlockBackendIndices() const { return m_uniformBlockBackendIndices; }
@@ -1635,6 +2898,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // stale as one built before a relink - while the sampler half, which really is
             // re-issued per draw, needs nothing of the sort.
             Uint32 GetSyncedImageUnitVersion() const { return m_syncedImageUnitVersion; }
+            // P4a (D-B3, D-H5): the ShaderCso record's Serial this backend program was built
+            // from. It is what the draw path's nine-clause rebuild condition reads on the handle
+            // arm INSTEAD OF the two frontend versions above - one server-owned counter that
+            // moves on every create_shader_state the applier applies to this handle, including a
+            // RE-create on the same handle, which is how a relink travels (Gen moves only on slot
+            // reuse, never on a respecify).
+            //
+            // THE CLAUSE COUNT DOES NOT SHRINK, and a brief that treated create_shader_state as
+            // self-contained would produce a per-draw rebuild: the other eight inputs - the draw
+            // FBO's snorm/unorm clamp masks, the fragColor broadcast count, the storage-block
+            // binding signature, the atomic-counter set, the live image formats and the patch
+            // parameters - are all still specialized at the verb, from state this backend holds.
+            // 0 means "never stamped", which is a guaranteed miss (applier serials start at 1).
+            Uint64 GetSyncedShaderCsoSerial() const { return m_syncedShaderCsoSerial; }
+            // P5e (pg): the SECOND server-owned key, and it replaces GetImageUnitVersion() on
+            // the handle arm rather than duplicating the one above. A glUniform1i on an IMAGE
+            // uniform is BAKED into the generated ESSL (ES forbids the call outright), so the
+            // record that carries the new unit has to force a rebuild; BindingsSerial moves on
+            // every applied set_program_bindings, which is exactly when one can have changed.
+            // 0 means "never stamped", a guaranteed miss, because applier serials start at 1.
+            Uint64 GetSyncedBindingsSerial() const { return m_syncedBindingsSerial; }
             // Whether the (unit, bound format) pairs this program's FORMAT-LESS image uniforms
             // resolve to are still the ones its ESSL was generated against.
             //
@@ -1659,17 +2943,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 ComputeImageUnitFormatSignature() const;
 
         private:
-            void CacheResourceLocations(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
+            // The one body both public heads feed; see its definition for why it is a worker in
+            // a push build and IS SyncToBackend in a pull build.
+            void SyncToBackendFromSource(const ProgramBuildSource& src);
+            void CacheResourceLocations(const ProgramBuildSource& src);
 
             // Builds, compiles and attaches the pass-through tessellation control stage GL 4.6
             // core 11.2.2 describes, for a program that has an evaluation stage and none of its
             // own - which ES 3.2 rejects outright. Called from SyncToBackend after every real
             // stage has been attached and before the link; see the definition for why it cannot
             // regress a program that works today.
-            void AttachPassthroughTessControlStage(
-                const MG_State::GLState::ProgramObject& stateProgramObject, Int tessEvalShaderIndex,
-                const Vector<Vector<unsigned int>>& shaderSpirvs, const String& vertexStageEssl,
-                const String& tessEvalStageEssl);
+            void AttachPassthroughTessControlStage(const ProgramBuildSource& src, Int tessEvalShaderIndex,
+                                                   const Vector<Vector<unsigned int>>& shaderSpirvs,
+                                                   const String& vertexStageEssl, const String& tessEvalStageEssl);
 
             // One stage's SPIR-V through the DirectGLES pass chain and SPIRV-Cross, producing
             // the raw emitted ESSL and the interface blocks this stage's XFB flattening
@@ -1682,10 +2968,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       const ImageFormatBakeInputs& imageFormatBake,
                                       const UnorderedMap<String, Int>& storageBlockBindingOverrides,
                                       const std::map<String, String>& inputBlockRenames,
-                                      const std::map<String, String>& outputBlockRenames,
-                                      Bool stripInputBlockLocations, Bool stripOutputBlockLocations,
-                                      Int atomicCounterEsslBindingTop, Bool enableSpirvValidation,
-                                      String& outSource,
+                                      const std::map<String, String>& outputBlockRenames, Bool stripInputBlockLocations,
+                                      Bool stripOutputBlockLocations, Int atomicCounterEsslBindingTop,
+                                      Bool narrowIntegerSeedsArmed, Bool enableSpirvValidation, String& outSource,
                                       std::set<String>& outFlattenedXfbBlockNames,
                                       Vector<Int>& outAtomicCounterGlBindings, String& outError) const;
 
@@ -1734,6 +3019,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BufferImpl::UboRingAllocation m_globalUboRingAllocation;
             Uint32 m_syncedLinkVersion = ~0u;
             Uint32 m_syncedImageUnitVersion = ~0u;
+            // P4a's replacement for the two above on the handle arm; see GetSyncedShaderCsoSerial.
+            Uint64 m_syncedShaderCsoSerial = 0;
+            Uint64 m_syncedBindingsSerial = 0;
             // Image units addressed by the program's FORMAT-LESS image uniforms, and the digest
             // of the (unit, format) pairs the generated ESSL baked. Empty/0 for every program
             // that declares a format on all of its images, which is the overwhelming majority -
@@ -1741,6 +3029,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Vector<Int> m_formatlessImageUnits;
             Uint64 m_imageUnitFormatSignature = 0;
             SamplerPassMemo m_samplerPassMemo;
+            NarrowIntegerSeedState m_narrowIntegerSeeds;
         };
 
         extern Uint32 g_snormFallbackClampOutputMask;
@@ -1753,8 +3042,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // skip redundant rebinds. Reset to 0 wherever glUseProgram(0) is issued or the
         // ES context is recreated.
         extern Uint g_lastUsedBackendProgramId;
-        extern StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl>
+        extern TwinRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl, MG_Pipe::MGPipeKind::ShaderCso>
             g_backendProgramObjects;
+
+        // P5e (id), CONTRACT-P5E §4.1 / §4.2: THE PROGRAM TWIN BY HANDLE - `st.DrawProgram` at
+        // a draw, `st.DispatchProgram` at a dispatch, `st.BoundShaderCso` at a bind - never
+        // `Find(currentProgram.get())` and never the raw-pointer stash. Same shape and the same
+        // three absences as the VAO and texture resolvers beside it: record first, no frontend
+        // touch, no allocator probe, no sync (the nine-clause clean condition and what feeds it
+        // are the pg package's).
+        //
+        // THE BAND IS WHY THIS ONE MATTERS MOST. A program-pipeline composite's ShaderCso slot
+        // is >= kMGPipeShaderCsoCompositeSlotBase, and before P5e the by-handle path would have
+        // grown g_backendProgramObjects to ~983k entries to reach it. SlotTables.h's m_band
+        // lands in this package for exactly that reason - the rekey makes the composite the
+        // ordinary path, so the band is a prerequisite and not a follow-up. The record reader
+        // (PipeShaderCsoRecordForHandle) has been band-aware since P4a.
+        BackendProgramObjectImpl* ResolveProgramTwin(MG_Pipe::MGPipeHandle cso);
 
         // Points one shader storage block of an ALREADY-LINKED backend program at
         // `binding`. `blockName` is the frontend interface-query spelling; the real
@@ -1774,16 +3078,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // program that was just built - best effort, on the same "only where the driver has
         // the entry point" terms as ApplyShaderStorageBlockBinding above. Mirrors
         // DirectVulkan's reseed-on-rebuild in BuildProgramResourceCache.
-        void ReseedShaderStorageBlockBindings(Uint backendProgramId,
-                                              const MG_State::GLState::ProgramObject& stateProgramObject);
+        void ReseedShaderStorageBlockBindings(Uint backendProgramId, const ProgramBuildSource& src);
         // Order-independent digest of the program's glShaderStorageBlockBinding overrides.
         // The generated ESSL carries them (ES has no way to move a storage block's binding
         // after link), so a program built against a different set is stale and the draw path
         // has to rebuild it. Computed from the values, so re-setting a block to the binding it
         // already has costs nothing. 0 when nothing was ever rebound.
-        Uint64 ComputeShaderStorageBlockBindingSignature(
-            const MG_State::GLState::ProgramObject& stateProgramObject);
-
+        Uint64 ComputeShaderStorageBlockBindingSignature(const ProgramBuildSource& src);
         // Everything the image-format bake needs from one walk of a program's uniform
         // reflection. GLSL ES requires a format layout qualifier on every image uniform;
         // desktop GLSL lets a writeonly (or readonly) declaration omit one, and the only
@@ -1823,8 +3124,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // keeps the module it already had.
             Bool declaresWidenableImageFormat = false;
         };
-        ImageFormatBakeInputs CollectImageFormatBakeInputs(
-            const MG_State::GLState::ProgramObject& stateProgramObject);
+        ImageFormatBakeInputs CollectImageFormatBakeInputs(const ProgramBuildSource& src);
+
+        // ---- P5e SEAM (the contract §4.2, §5.5; declared by c0e, bodied by
+        // id/pg) ---------------------------------------------------------------------------
+        //
+        // THE PROGRAM TWIN, RESOLVED FROM MGPipeApplierState::DrawProgram / DispatchProgram /
+        // BoundShaderCso instead of from GetProgramForDraw()'s frontend SharedPtr - the second
+        // unconditional pointer read of every draw, and one of the two rows whose retirement is
+        // what P5e is for. Composite pipeline programs resolve through the same call: their
+        // slots come out of the allocator's composite band, which the server's slot table gains
+        // a band for so the ordinary table does not grow to a million entries.
+        //
+        // Null, loudly, when the handle names no record or cannot be adopted - the shape
+        // ResolveSamplerCsoTwin set - and null silently for the null handle, which is the legal
+        // "nothing bound".
+        BackendProgramObjectImpl* ResolveProgramTwin(MG_Pipe::MGPipeHandle cso);
+
+        // P5e (pg): the two PER-DRAW reads of set_program_bindings' tails, as free functions
+        // rather than through a ProgramArchiveSource - building a source per draw would copy the
+        // override map for a question that is one indexed read. Both answer exactly what their
+        // frontend twins do when the record carries no bindings yet: the archive's own link-time
+        // value, which for an untouched program IS the right answer.
+        //
+        // The block binding is dense in the BLOCK index space; the sampler unit is sparse and
+        // ascending by LOCATION, so it is a binary search (a program has thousands of locations
+        // and a handful of samplers, and a linear scan per sampler would be quadratic).
+        Uint ProgramBlockBindingFromRecord(const MG_Pipe::MGPipeShaderCsoRecord& record, Int blockIndex);
+        Int ProgramSamplerUnitFromRecord(const MG_Pipe::MGPipeShaderCsoRecord& record, Uint location);
     } // namespace PrgramImpl
 
     namespace SamplerImpl {
@@ -1837,7 +3164,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ~BackendSamplerObject();
             BackendSamplerObject(const BackendSamplerObject&) = delete;
             BackendSamplerObject& operator=(const BackendSamplerObject&) = delete;
-            void SyncToBackend(const SharedPtr<MG_State::GLState::SamplerObject>& stateSamplerObject);
+            // THE SAMPLER CSO HANDLE IS CARRIED BY THE CALLER, and it has to be, because a
+            // SamplerCso is CONTENT-ADDRESSED on the client (D-F1) while this twin is keyed on
+            // the frontend OBJECT. g_backendSamplerObjects mints a SamplerCso slot off the
+            // SamplerObject's lifetime id - that handle is this twin's identity and is what
+            // FindByHandle memos index - but the client's cache allocates its handles by
+            // CONTENT (MGPipeSlots().Allocate, SamplerEmit.h), so no create_sampler_state ever
+            // lands at the identity handle and looking a record up by it can only ever miss.
+            // The carried fact that DOES name the right record is the applier's own
+            // MGPipeApplier().BoundSamplerStates[unit], which the client writes per unit at
+            // bind_sampler_states; the caller that knows the unit passes it here.
+            //
+            // Defaulted so a caller that has no unit - the backend's OWN raw-depth-fetch
+            // sampler (GetRawDepthFetchSampler no longer calls this), a SamplerObject the client has never seen and for
+            // which no record can exist - keeps working: that arm reads the object, which is
+            // the authority for server-owned state. An APPLICATION sampler reaching here
+            // without a handle is the E-side call-site gap and says so once.
+            //
+            // Push-only spelling on purpose: a defaulted parameter is still part of the
+            // signature, so widening it unconditionally would rename this symbol in the PULL
+            // build and P4a's admitted-change set is EMPTY (D-P/G1).
+            void SyncToBackend(const SharedPtr<MG_State::GLState::SamplerObject>& stateSamplerObject,
+                               MG_Pipe::MGPipeHandle pushedCso = MG_Pipe::kMGPipeNullHandle);
             void Bind(Uint unit);
             Uint GetBackendSamplerId() const;
 
@@ -1847,15 +3195,110 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool m_isInitialized = false;
             SamplerParameters m_cacheSamplerParameters;
             Uint16 m_syncedSamplerVersion = 0;
+            // P4a (D-B3): the SamplerCso record's Serial at the last completed sync. It replaces
+            // m_syncedSamplerVersion, which is still declared beside it but no longer read: the
+            // pre-handle arm and its MOBILEGL_PIPE_LEGACY_MEMOS switch are retired (ARCHITECTURE.md §9.6).
+            //
+            // The two are not interchangeable and that is the point: the frontend version is per
+            // OBJECT, while the serial is per CONTENT-ADDRESSED CSO, and two frontend samplers
+            // with identical parameters share one CSO and therefore one serial - so under the
+            // handle arm the second of them costs no driver call at all.
+            Uint64 m_syncedSamplerSerial = 0;
         };
 
         void UnbindSampler(Uint unit);
 
         extern Array<BackendSamplerObject*, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundSamplersCache;
-        extern StateBackendObjectRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject>
+        extern TwinRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject, MG_Pipe::MGPipeKind::SamplerCso>
             g_backendSamplerObjects;
+
+        // P4a FABLE SEAM F-4: THE TWIN FOR A CONTENT-ADDRESSED SamplerCso HANDLE.
+        //
+        // bind_sampler_states carries, per unit, the handle of a CSO the client allocated BY
+        // CONTENT (SamplerEmit.h: MGPipeSlots().Allocate with no lifetime id), while every twin
+        // in g_backendSamplerObjects was minted off a SamplerObject's lifetime id - two disjoint
+        // slot families out of one allocator. So `g_backendSamplerObjects.FindByHandle(
+        // BoundSamplerStates[unit])` (the record arm of BindCurrentUnitSamplers, E's S4) could
+        // never find a twin, the record arm bound nothing on every draw, and every glBindSampler
+        // reached the driver only through the pre-handle program pass - S-1's confusion one
+        // loop over, and exactly what ARCHITECTURE.md §2.3.1 forbids (a backend must NOT key a
+        // sampler twin on a SamplerObject's lifetime id; the twin's life is
+        // create_sampler_state -> delete_sampler_state).
+        //
+        // This is the twin keyed the way the record is: resolved-or-created AT THE CSO HANDLE
+        // (GetOrCreateByHandle, the same slot table, a slot the identity family can never hold)
+        // and synced from the record it names, serial-gated. Two callers bind it - the record
+        // arm of BindCurrentUnitSamplers and the program pass's sampler override - so the two
+        // cannot ping-pong the unit between an identity twin and a CSO twin. Its death is the
+        // slot's recycle: the client's LRU eviction drops the record and frees the slot, and
+        // the next handout at that slot arrives with a moved generation, which GetOrCreate(
+        // handle) answers by resetting the twin (the driver sampler goes with it). A twin for
+        // an evicted CSO therefore lives until its slot is reused - bounded by the cache's
+        // capacity, never by draw count - and there is no delete_sampler_state hook to retire it
+        // earlier; the ops table carries none for this kind.
+        //
+        // Null, loudly, when the handle names no record (a client seam) or cannot be adopted
+        // (a generation behind the slot's live entry); null silently for the null handle. The
+        // pre-handle arm - a twin keyed on the frontend object - is untouched and still serves
+        // the raw-depth-fetch sampler and every caller that carries no handle.
+        BackendSamplerObject* ResolveSamplerCsoTwin(MG_Pipe::MGPipeHandle cso);
     } // namespace SamplerImpl
+
+    namespace SamplerViewImpl {
+        // P4a (D-F2/D-F3): the SIXTH Espryt twin table, and the only one of the six whose kind
+        // has no frontend object at all. MobileGL has no sampler-view class: GL binds a texture
+        // to a unit and the sampler uniform's type, the mipmap-completeness predicates and
+        // IsUndefinedDefaultTexture decide what the shader sees. Binding one sampler view per slot IS
+        // that resolved form, the resolution moves to the CLIENT (ARCHITECTURE.md §5.5), and
+        // create_sampler_view carries the restrictions the resolution had to read.
+        //
+        // So this twin owns NO DRIVER ID. There is nothing in ES to create for a view; the id
+        // the unit binds is the texture's, and it lives on BackendTextureObject. What this twin
+        // is, is the server's MEMO of one resolved view: the record it was built from, keyed on
+        // that record's serial, plus the two BACKEND-SPECIFIC POST-PROCESSINGS
+        // ARCHITECTURE.md §5.5 keeps on the server and which act on the already-resolved set.
+        // Espryt's is the raw-depth-fetch sampler substitution; Magma's feedback-loop detection
+        // is its own and is not here.
+        //
+        // A twin with no driver id still earns a table: it is what turns "re-derive the
+        // substitution decision for every sampled unit of every draw" into one serial compare,
+        // and it is the slot space the client's per-texture SamplerViewCso handle indexes.
+        // There is deliberately no destructor: nothing here owns a GPU object, so the teardown
+        // sentinel's whole reason (a twin destructor must not call into an unloaded driver)
+        // does not apply and the default one is correct in every teardown order.
+        struct BackendSamplerViewObject {
+            // The view record as last synced, verbatim. Reading it here rather than re-asking
+            // the applier is what lets a caller hold the twin across another applier call.
+            MG_Pipe::MGPSamplerView View{};
+            // The applier record's Serial this memo was built from. 0 = never synced, and 0 is
+            // never a real serial (the applier's counters start at 1), so a zeroed memo is a
+            // guaranteed miss.
+            Uint64 SyncedSerial = 0;
+            // Espryt's post-processing, decided from the RESOLVED set: the view's
+            // InternalFormat answers IsDepthFormatInternalFormat and the sampler CSO record's
+            // SamplerParameters answer compareMode / minFilter / mipmapMode / magFilter. The
+            // decision is re-derived when either serial moves; the sampler serial is kept
+            // beside it so a sampler mutation alone re-derives it.
+            Uint64 SyncedSamplerSerial = 0;
+            Bool NeedsRawDepthFetchSampler = false;
+        };
+
+        // Handle-keyed ONLY, exactly like P3a's BackendBufferResourceTable: the StateObject
+        // parameter names ITextureObject because the template names one and because the view is
+        // minted off the TEXTURE's lifetime id (D-F2: one view per ITextureObject), which is
+        // what makes HandleOf below resolve at all. Not one member that would dereference it is
+        // instantiated - no Find(StateObject*), no ForEachLive - and the handle overloads never
+        // look at it.
+        // P14 S6: and a bucket registry for the same reason the buffer one above is - a sampler
+        // view's twin is a driver object of the texture's group.
+        using BackendSamplerViewTable = SlotTableRegistry<MG_State::GLState::ITextureObject, BackendSamplerViewObject,
+                                                          MG_Pipe::MGPipeKind::SamplerViewCso>;
+        extern BackendSamplerViewTable g_backendSamplerViews;
+
+        BackendSamplerViewObject* FindSamplerViewForHandle(MG_Pipe::MGPipeHandle view);
+
+    } // namespace SamplerViewImpl
 
     namespace RenderbufferImpl {
         class BackendRenderbufferObject {
@@ -1866,7 +3309,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ~BackendRenderbufferObject();
             BackendRenderbufferObject(const BackendRenderbufferObject&) = delete;
             BackendRenderbufferObject& operator=(const BackendRenderbufferObject&) = delete;
-            void SyncToBackend(const SharedPtr<MG_State::GLState::RenderbufferObject>& stateRBOObject);
+            // P5e SEAM (declared by c0e, bodied by fb): the renderbuffer twin of the
+            // framebuffer overload above. MGPSurface::Res names the renderbuffer and the
+            // resource record already carries its format, extent and sample count (P4a), so the
+            // attachment sync needs no frontend RenderbufferObject - which is what deletes the
+            // one live identity probe left in the attachment path (Managers.cpp's renderbuffer
+            // cross-check, the sibling that never got the Transport == Monolith gate its
+            // texture counterpart has).
+            void SyncToBackendByHandle(MG_Pipe::MGPipeHandle renderbuffer);
             Uint GetBackendRenderbufferId() const { return m_backendRBOId; }
             void Bind() const;
 
@@ -1878,9 +3328,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Int m_cacheWidth = 0;
             Int m_cacheHeight = 0;
             Int m_cacheSamples = 0;
+            // P4a (D-D2/D-B3): the resource record's Serial at the last completed allocation.
+            // It replaces the four-field cache above AS A GATE - the four members stay, because
+            // they are also what the legacy arm compares and what the twin reports about the
+            // storage it actually holds - and it closes the publication hole D-D2 names:
+            // RenderbufferObject::{SetInternalFormat, AllocateStorage, SetSamples} bump no
+            // version and raise no notice, so `glBindRenderbuffer; glRenderbufferStorage(new)`
+            // on an ALREADY-ATTACHED renderbuffer moved nothing the framebuffer bit could see.
+            // The client now emits resource_respecify straight from those three mutators, the
+            // applier bumps this serial, and one compare here sees it.
+            Uint64 m_syncedResourceSerial = 0;
         };
 
-        extern StateBackendObjectRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject>
+        extern TwinRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject,
+                            MG_Pipe::MGPipeKind::Renderbuffer>
             g_backendRenderbufferObjects;
     } // namespace RenderbufferImpl
+
+    // P5c (ct), CONTRACT-P5C.md §5.2: object_death's per-kind release, one entry point for all
+    // seven kinds for the same reason the notice switch is one - the answer is the same for
+    // all of them: every holder of the kind's twin table lets go of the twin at this handle.
+    // Called from ServerVerbSink::OnObjectDeath ON THE APPLY THREAD, with the handle the
+    // record carried; the client's allocator is never consulted (rule E). Returns whether any
+    // table released a twin - false for a kind this backend does not twin (Buffer: its death
+    // crosses as resource_destroy) and for a handle no holder holds, which the kind's own
+    // delete opcode may already have released (the idempotent-second-path shape the notice
+    // arms document).
+    Bool ReleaseTwinsForWireObjectDeath(MG_Pipe::MGPipeHandle handle, MG_Pipe::MGPipeKind kind);
+
+    // P12 (on-screen server window): A SERVER SESSION ENDS IN A PROCESS THAT OUTLIVES IT.
+    //
+    // The twin tables above are process globals, and until P12 every server process served ONE
+    // session: the exec'd supervisor forks a child per session and the child exits with it, so the
+    // twins a session built died with its process (InProcessTeardown's deliberate leak). The
+    // in-process display server (mobilegl_server_serve_inprocess, the display Activity's process)
+    // runs sessions ONE AFTER ANOTHER IN ONE PROCESS, and the next session's client mints its
+    // handles from the same {slot, gen} space again. A twin the previous session left behind then
+    // answers for the new session's object: a program twin names a program of the DESTROYED
+    // context, so the link fails with an empty log and every draw no-ops (Espryt on Adreno and on
+    // llvmpipe alike), a stale VAO/buffer twin feeds the driver a dead name (a SIGSEGV inside
+    // Adreno's glDrawElements), and a stale live generation ahead of the new client's refuses its
+    // handle as ProtocolCorruption.
+    //
+    // So the server backend's destruction - the end of a session under a transport, on the apply
+    // thread, after DestroyEGLContext destroyed the context those ids belonged to - drops EVERY
+    // twin of every kind, with InProcessTeardown() answering true for the duration so no twin
+    // destructor calls into the driver (there is no current context, and the ids name nothing).
+    // A no-op once exit() has begun (the statics may already be gone). Monolith never calls it.
+    void DropEveryTwinForEndedServerSession();
 } // namespace MobileGL::MG_Backend::DirectGLES

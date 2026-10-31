@@ -13,6 +13,17 @@
 #include <MG_Util/Texture/TextureFormatProcessor.h>
 
 namespace MobileGL::MG_Backend::DirectGLES {
+    // C6 / ID-52 / CONTRACT-P5 table 3's pActiveBackendObject row. The format-capability cache of
+    // THIS ROLE's backend. Under an active transport the server's own private
+    // BackendObject_DirectGLES owns the context on the apply thread, so a backend-internal format
+    // lookup must read ITS probed cache - not pActiveBackendObject's, which under split is the
+    // CLIENT's BackendObject_Remote mirror (a caps snapshot, generation-lagged, and on an
+    // independent server not usable at all). Monolith build/transport: pActiveBackendObject, so a
+    // pull build never sees this symbol. Null when no backend is up. The seven table-3 reads
+    // (five in Utils.cpp, ClampSamplesToBackendSupport in BackendObject_DirectGLES.cpp) go through
+    // this instead of dereferencing pActiveBackendObject directly.
+    const FormatCapabilityCache* ActiveBackendFormatCaps();
+
     namespace DebugImpl {
         class ErrorLopper {
         public:
@@ -36,8 +47,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {
-        // Whether images on this format-capability target can back a colour attachment, and so
-        // need a colour-renderable storage format even when the frontend asked for a
+        // Whether images on this format-capability target can back a color attachment, and so
+        // need a color-renderable storage format even when the frontend asked for a
         // three-channel one ES never renders to. Shared by the capability probe (which passes the
         // capabilities it has just queried, before the globals are published) and by the
         // allocation path (which reads the active backend's), so the format the cache was probed
@@ -63,7 +74,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool ShouldUseCaveatTextureFormat(TextureInternalFormat internalFormat, TextureTarget target);
 
         // True when the format the image is actually created with has an alpha channel the
-        // frontend format does not (the three-channel colour-renderable widening). GL reads such
+        // frontend format does not (the three-channel color-renderable widening). GL reads such
         // a channel back as 1.0, so any swizzle source of ALPHA has to be answered with ONE and
         // any readback of the image has to overwrite the alpha the draw happened to leave there.
         Bool BackendTextureFormatAddsAlpha(TextureInternalFormat internalFormat, TextureTarget target);
@@ -94,7 +105,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // The widened triple REPLACES what GenerateTextureFormatInfo chose, including any
         // renderability substitution: an image that cannot be image-bound is useless whatever its
-        // attachment behaviour, so the image constraint wins. In practice that only bites
+        // attachment behavior, so the image constraint wins. In practice that only bites
         // RG8_SNORM/R8_SNORM on a driver without EXT_render_snorm, where the storage stays
         // signed-normalized instead of becoming the half float that fallback would have picked -
         // so an image-bound texture in one of those two formats is no longer attachable, and
@@ -104,11 +115,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // compiled at all, so nothing that works today is being given up.
         //
         // KNOWN GAP, for the same "all three layers move together" reason: a widened texture that
-        // is ALSO an FBO colour attachment gains one to three writable channels, and a draw into
+        // is ALSO an FBO color attachment gains one to three writable channels, and a draw into
         // it can leave values in channels GL says are 0 and 1. Sampling and imageLoad are covered
         // (the swizzle composition in SyncTextureParamsToBackend and the shader-side mask), but a
         // glReadPixels/glGetTexImage that asks for more channels than the frontend format has
-        // would see them. Closing it needs the per-draw-buffer colour mask the three-channel
+        // would see them. Closing it needs the per-draw-buffer color mask the three-channel
         // widening already carries (FramebufferImpl::g_alphaWidenedDrawBufferMask) generalized
         // from "alpha" to a channel count, which is its own change.
         // How the FRONTEND's CPU shadow for a widened format is laid out relative to the carrier's
@@ -182,69 +193,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace FramebufferImpl {} // namespace FramebufferImpl
 
-    // Pure CPU helpers of the client-format readback conversion (ReadPixels/GetTexImage repack a wide
-    // RGBA(_INTEGER) read into the caller's (format, type) layout). Kept context-free so unit tests can
-    // exercise the exact packing the GL CTS packed_pixels oracle compares against.
-    namespace ReadbackImpl {
-        struct ReadbackChannelMapping {
-            Int sourceChannel[4]; // RGBA source channel feeding each destination component
-            Int channelCount;     // destination component count
-            Bool isInteger;
-        };
-        Bool GetReadbackChannelMapping(GLenum format, ReadbackChannelMapping& outMapping);
-
-        // Byte size of one destination component of `type`; packed types report the packed word size.
-        // 0 = type not supported by the conversion path.
-        SizeT GetReadbackComponentSize(GLenum type);
-
-        // Bit-field layout of a GL packed pixel type. width/shift are indexed in the client format's
-        // component order (matching ReadbackChannelMapping); shift is the LSB position of the field in
-        // the packed word: non-REV types pack the first component from the MSB, *_REV types from the
-        // LSB (GL 3.3 table 3.6; field positions mirror the GL CTS glcPackedPixelsTests pack_* oracle).
-        struct PackedReadbackLayout {
-            Int fieldCount;     // format components stored in the packed word
-            Int width[4];       // bit width of each component's field
-            Int shift[4];       // LSB bit position of each component's field
-            SizeT byteSize;     // packed word size in bytes (1, 2 or 4)
-            Bool isFloatPacked; // 10F_11F_11F_REV / 5_9_9_9_REV: fields hold unsigned small floats
-        };
-        Bool GetPackedReadbackLayout(GLenum type, PackedReadbackLayout& out);
-
-        // Unsigned small-float encoders (EXT_packed_float / EXT_texture_shared_exponent semantics).
-        Uint32 EncodeFloatToUnsignedF11(Float value);
-        Uint32 EncodeFloatToUnsignedF10(Float value);
-        Uint32 EncodeSharedExponentRGB9E5(const Float rgb[3]);
-
-        // Destination bytes per pixel for a (format mapping, type) readback pair; 0 when the pair is
-        // not convertible (unknown type, packed field count != format component count, floating-point
-        // or packed-float type with an integer format).
-        SizeT GetReadbackDstPixelSize(const ReadbackChannelMapping& mapping, GLenum type);
-
-        // Repacks one row of wide RGBA(_INTEGER) texels (4 components of wideType each) into the
-        // client's (format, type) layout. src holds width * 4 * GetReadbackComponentSize(wideType)
-        // bytes, dst receives width * GetReadbackDstPixelSize(mapping, type) bytes.
-        void ConvertWideReadbackRow(const Uint8* src, Uint8* dst, SizeT width, GLenum wideType,
-                                    const ReadbackChannelMapping& mapping, GLenum type);
-
-        // Stores wide RGBA(_INTEGER) rows into the client pointer or the bound PACK pixel buffer,
-        // honoring the client-side PACK pixel-store parameters (row length, alignment, skips,
-        // swap-bytes, and - when applyPackImageParams - image height/skip images). Shared by the
-        // DirectGLES and DirectVulkan readback conversion paths.
-        Bool StoreWideRowsToClient(const Uint8* wide, GLenum wideType, GLsizei width, GLsizei sliceHeight,
-                                   GLsizei sliceCount, const ReadbackChannelMapping& mapping, GLenum type,
-                                   void* pixels, Bool applyPackImageParams);
-
-        // Stores packed 32-bit source words verbatim, with the same destination addressing, PACK
-        // parameters and pixel-pack-buffer handling as StoreWideRowsToClient. For the sources whose
-        // storage word already IS the client word (MG_Util::IsRawPackedPixelTransfer): routing those
-        // through the wide float intermediate re-encodes them, and the RGB9_E5 encoder canonicalizes
-        // the shared exponent, so glGetTexImage would answer with different bits than were stored.
-        // `srcWords` holds sliceHeight * sliceCount tightly stacked rows of `width` 32-bit words.
-        // False when `type` is not a 4-byte packed type.
-        Bool StorePackedWordsToClient(const Uint8* srcWords, GLsizei width, GLsizei sliceHeight, GLsizei sliceCount,
-                                      GLenum type, void* pixels, Bool applyPackImageParams);
-    } // namespace ReadbackImpl
-
     namespace PrgramImpl {
         String ProcessOutColorLocations(const String& glslCode);
         String ForceSupporterOutput(const String& glslCode);
@@ -263,8 +211,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // On a driver that advertises only GL_OES_texture_buffer that directive is a compile
         // error, so the name is retargeted in the emitted source. A no-op on every other tier:
         // ES 3.2 needs no directive at all and an EXT driver already has the right one.
-        String RetargetTextureBufferExtension(String glslCode,
-                                              MG_External::GLESCapabilities::TextureBufferTier tier);
+        String RetargetTextureBufferExtension(String glslCode, MG_External::GLESCapabilities::TextureBufferTier tier);
         // Adds `#extension GL_NV_image_formats : require` when the shader carries an image
         // format qualifier GLSL ES has no core spelling for. SPIRV-Cross prints the format and
         // asks for nothing, so the request has to be made here. `needed` is the caller's answer,
@@ -341,7 +288,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // That rewrite needs every k in the emitted text to be a LITERAL, and it is:
         // LegalizeResourceArrayIndexingForEssl has already folded or lowered every dynamic
         // image-array subscript in the module, because ESSL forbids one outright ("image arrays
-        // indexed with non-constant expressions are forbidden in GLSL ES", Mesa 26.1.4 at
+        // indexed with non-constant expressions are forbidden in GLSL ES", llvmpipe 26.1.4 at
         // ES 3.2, on a raw GLES probe with no MobileGL in the loop). The earlier shape here -
         // widening the array to cover the whole span of units and routing each subscript through
         // a `const highp int` offset table - was written before that pass covered images, and
@@ -372,9 +319,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Exists so BuildPassthroughTessControlEssl can MIRROR the stages it has to sit between
         // rather than guess at them. Whether SPIRV-Cross redeclares the built-in block, and with
         // which members, depends on what the application's shader touched; a synthesized stage
-        // that redeclares a different shape than its neighbours is an ES link error against a
+        // that redeclares a different shape than its neighbors is an ES link error against a
         // program that has no other problem.
         std::optional<String> ExtractPerVertexBlockMembers(const String& essl, Bool input);
+        // Moves the clip/cull distance OUTPUTS of a vertex, tessellation evaluation or geometry
+        // stage into a redeclared `out gl_PerVertex { ... };` block. SPIRV-Cross sizes the two
+        // arrays with a standalone `out float gl_ClipDistance[N];` - legal desktop GLSL, but an
+        // ES compiler may refuse it outright ("reserved built-in name"), and leaving the
+        // declaration out instead compiles but fails the link on an array-size mismatch against
+        // the fragment stage. A member of the redeclared block is the spelling ESSL accepts.
+        // gl_Position is always a member (every pre-rasterization stage has it), gl_PointSize
+        // only when the stage writes it, so the block never names a built-in the stage would
+        // otherwise not need. A stage-level `invariant gl_Position;` moves onto the member,
+        // because the bare re-qualification of a block member is not something ESSL allows.
+        // Fragment inputs and the control stage (whose block SPIRV-Cross already emits) are
+        // left alone; a stage without the standalone declarations comes back unchanged.
+        String RedeclareClipCullDistancesInPerVertexBlock(String glslCode, GLenum shaderType);
+        // The INPUT half of the same problem, for a tessellation control, tessellation evaluation
+        // or geometry stage that reads gl_in[i].gl_ClipDistance / gl_CullDistance. SPIRV-Cross
+        // never redeclares an ES input block, so the stage reads the implicitly sized built-in
+        // arrays - and a driver that packs cull distances after clip distances then places the
+        // cull array at the implicit clip size rather than at the size the previous stage wrote,
+        // reading the wrong component. Redeclares `in gl_PerVertex { ... } gl_in[]` with exactly
+        // the members of the previous stage's output block (`producerOutMembers`, from
+        // ExtractPerVertexBlockMembers), which is also the shape ES interface matching wants.
+        // Unchanged when the stage does not read either array, already declares its input block,
+        // reads a gl_in member the producer's block does not carry, or the producer has no block.
+        String RedeclareClipCullDistanceInputsInPerVertexBlock(String glslCode, GLenum shaderType,
+                                                               const String& producerOutMembers);
+        // Adds `#extension GL_EXT_clip_cull_distance : require` when `glslCode` names
+        // gl_ClipDistance or gl_CullDistance and does not request it yet. For the synthesized
+        // pass-through control stage, whose gl_in/gl_out member lists are mirrored from stages
+        // that may carry the clip/cull arrays: SPIRV-Cross requests the extension for the stages
+        // it emits, but nothing does for a stage built by hand.
+        String RequestClipCullDistanceExtension(String glslCode);
         // The pass-through tessellation control stage GL 4.6 core 11.2.2 describes: "the input
         // patch is passed through unmodified", the output patch has PATCH_VERTICES vertices, and
         // the levels come from the PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL state.
@@ -387,15 +365,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // bound in its place, and every draw silently renders nothing.
         //
         // `inPerVertexMembers` / `outPerVertexMembers` are the member lists to redeclare gl_in
-        // and gl_out with - normally taken from the neighbouring stages' own emitted ESSL via
+        // and gl_out with - normally taken from the neighboring stages' own emitted ESSL via
         // ExtractPerVertexBlockMembers, and empty to leave the driver's built-in declaration
-        // alone, which is what matching a neighbour that did not redeclare requires.
+        // alone, which is what matching a neighbor that did not redeclare requires.
         //
         // All four outer levels and both inner levels are written unconditionally: writing a
         // level the evaluation stage's domain does not use is legal and ignored, and it saves
         // this from having to know the domain. They are the GL_PATCH_DEFAULT_OUTER_LEVEL /
         // GL_PATCH_DEFAULT_INNER_LEVEL state, baked in as literals - ES has no such state and no
-        // glPatchParameterfv to forward to, so compiling them in is the only way to honour them.
+        // glPatchParameterfv to forward to, so compiling them in is the only way to honor them.
         // That makes them part of what a built program is stale against, exactly as PATCH_VERTICES
         // is: see the staleness clause in DirectGLES.cpp's SyncCurrentProgram, which compares both.
         //
@@ -405,10 +383,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // disagree on everything but the algorithm: desktop GLSL 450 against ESSL, a fixed
         // gl_PerVertex shape that Vulkan matches structurally against a mirrored one, and a
         // VkShaderModule against a driver shader object.
-        String BuildPassthroughTessControlEssl(Uint esslVersion, Uint patchVertices,
-                                               const String& inPerVertexMembers,
-                                               const String& outPerVertexMembers,
-                                               const FloatVec4& defaultOuterLevel,
+        String BuildPassthroughTessControlEssl(Uint esslVersion, Uint patchVertices, const String& inPerVertexMembers,
+                                               const String& outPerVertexMembers, const FloatVec4& defaultOuterLevel,
                                                const FloatVec2& defaultInnerLevel);
         // Prefix of the writeonly half a read+write image uniform is split into (see
         // SplitReadWriteImageUniforms); the suffix is the image's own (already access-tagged) name.
@@ -468,7 +444,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // linker answered "Error: Image Image location or component exceeds max allowed. Error:
         // Linking failed." - which, the frontend having already published LINK_STATUS = TRUE from
         // glslang's link, surfaced only as every draw silently doing nothing and the images
-        // reading back zero. Mali and Mesa link the same text, so nothing but a device gate
+        // reading back zero. Mali and a desktop GLES driver link the same text, so nothing but a device gate
         // catches this.
         //
         // A declaration SPIRV-Cross already tagged `readonly` or `writeonly` needs no qualifier
@@ -534,6 +510,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Off by default and only ever set on ANGLE + llvmpipe, where injecting the uniform
         // into a constant LOD crashes the driver (MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS).
         String EmulateTextureLodBias(const String& glslCode, Bool avoidExplicitLodBias = false);
+        // A depth-compare lookup at an explicit LOD of 0 on a samplerCubeArrayShadow - what
+        // texture() is outside the fragment stage - has no GLSL ES spelling: there is no
+        // textureLod or textureGrad overload for that sampler. SPIRV-Cross prints it as
+        // textureGrad(s, P, compare, vec3(0.0), vec3(0.0)) anyway; Adreno compiles that and
+        // returns wrong comparisons (KHR-GL4x.texture_cube_map_array.sampling, DEPTH32F, vertex/
+        // tessellation control/geometry/compute). Outside the fragment stage texture(s, P,
+        // compare) samples level 0 exactly (GLSL ES 3.20 8.9), so those calls are rewritten to
+        // it. The fragment stage is left alone: there texture() would pick its own level.
+        String LowerZeroGradCubeArrayShadowLookups(const String& glslCode, GLenum shaderType);
+        // Prefix of the per-sampler int uniform that carries the bound multisample texture's
+        // last real sample index into the shader (see ClampUnsignedMultisampleFetches); the
+        // suffix is the sampler's own name.
+        constexpr const char* MS_SAMPLE_MAX_UNIFORM_PREFIX = "mg_msSampleMax_";
+        // The runtime half of ClampMultisampleFetchPass's deferDirectUnsignedFetches. A
+        // usampler2DMS[Array] reads integer color textures, which the backend may allocate with
+        // fewer samples than MobileGL advertises, AND the stencil aspect of multisample
+        // depth/stencil textures, which it allocates under the (larger) depth ceiling - so no
+        // single compile-time bound is right for both. Declares one
+        // `uniform highp int mg_msSampleMax_<sampler>;` per non-arrayed unsigned multisample
+        // sampler and wraps the sample argument of every texelFetch that names it in
+        // min(sample, that uniform). Draws push the bound texture's real sample count - 1 into
+        // it (0, the program's initial value, when nothing multisampled is bound). Returns the
+        // source unchanged when there is nothing to rewrite.
+        String ClampUnsignedMultisampleFetches(const String& glslCode);
     } // namespace PrgramImpl
 
     namespace Utils {

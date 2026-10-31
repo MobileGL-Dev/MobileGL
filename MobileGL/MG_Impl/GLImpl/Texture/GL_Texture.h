@@ -19,7 +19,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     //
     // It answers a NARROWER contract than glGetTexImage's, and refuses what it cannot do rather than
     // answering wrongly. The copy is verbatim: it performs no format or type conversion, and it packs
-    // rows tightly, honouring only GL_PACK_SWAP_BYTES and the bitmap GL_PACK_LSB_FIRST path. A
+    // rows tightly, honoring only GL_PACK_SWAP_BYTES and the bitmap GL_PACK_LSB_FIRST path. A
     // request whose (format, type) texel size differs from the texture's own, or a pixel-store state
     // that adds row padding / a row-length override / a skip offset, is rejected with
     // GL_INVALID_OPERATION (see ValidateShadowReadbackLayout, which spells out why each is unsafe).
@@ -74,6 +74,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     void TextureBufferRange(GLuint texture, GLenum internalformat, GLuint buffer, GLintptr offset, GLsizeiptr size);
     void GetTextureSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
                             GLsizei height, GLsizei depth, GLenum format, GLenum type, GLsizei bufSize, void* pixels);
+    void GetCompressedTextureSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+                                      GLsizei width, GLsizei height, GLsizei depth, GLsizei bufSize, void* pixels);
     void GetTextureParameterfv(GLuint texture, GLenum pname, GLfloat* params);
     void GetTextureParameterIiv(GLuint texture, GLenum pname, GLint* params);
     void GetTextureParameterIuiv(GLuint texture, GLenum pname, GLuint* params);
@@ -86,10 +88,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     void TexStorage2D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height);
     void TexStorage3D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height,
                       GLsizei depth);
-    void TexStorage2DMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width,
-                                 GLsizei height, GLboolean fixedsamplelocations);
-    void TexStorage3DMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width,
-                                 GLsizei height, GLsizei depth, GLboolean fixedsamplelocations);
+    void TexStorage2DMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height,
+                                 GLboolean fixedsamplelocations);
+    void TexStorage3DMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height,
+                                 GLsizei depth, GLboolean fixedsamplelocations);
     void TexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
                        GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels);
     void TexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
@@ -111,6 +113,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                     GLint border, GLenum format, GLenum type, const void* pixels);
     void TexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border,
                     GLenum format, GLenum type, const void* pixels);
+    void EGLImageTargetTexture2DOES(GLenum target, GLeglImageOES image);
     void TexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format,
                     GLenum type, const GLvoid* pixels);
     void TexBuffer(GLenum target, GLenum internalformat, GLuint buffer);

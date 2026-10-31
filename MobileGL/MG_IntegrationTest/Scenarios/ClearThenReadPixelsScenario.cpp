@@ -12,7 +12,7 @@
 // loadOp. When nothing is drawn after the clear there is no render pass, and the readback path
 // used to materialize pending clears only for USER framebuffers - so a readback right after a
 // clear of the DEFAULT framebuffer blitted the untouched swapchain image and handed back the
-// previous frame's colour.
+// previous frame's color.
 //
 // That is the whole of KHR-GL40.draw_indirect.negative-* (12 Magma failures): each case clears,
 // issues a draw that correctly raises INVALID_OPERATION and therefore never executes, then reads
@@ -49,7 +49,7 @@ in vec2 aPos;
 void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
 )";
 
-        // The colour KHR-GL40.draw_indirect's fshSimple paints, so a stale readback shows up as
+        // The color KHR-GL40.draw_indirect's fshSimple paints, so a stale readback shows up as
         // the same value the conformance log reports.
         constexpr const char* kFS = R"(#version 330 core
 out vec4 o_color;
@@ -98,10 +98,10 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
         DrawFullViewportQuad(program);
         {
             const Image painted = ReadPixels(width, height);
-            const Rgba8 centre = painted.At(width / 2, height / 2);
-            ASSERT_NEAR(centre.r, 26, 2) << "the setup frame did not paint; the staleness test would be vacuous";
-            ASSERT_NEAR(centre.g, 51, 2);
-            ASSERT_NEAR(centre.b, 77, 2);
+            const Rgba8 center = painted.At(width / 2, height / 2);
+            ASSERT_NEAR(center.r, 26, 2) << "the setup frame did not paint; the staleness test would be vacuous";
+            ASSERT_NEAR(center.g, 51, 2);
+            ASSERT_NEAR(center.b, 77, 2);
         }
         gl.EndFrame();
 
@@ -128,11 +128,11 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
                 ++nonZero;
             }
         }
-        EXPECT_EQ(nonZero, 0) << "glClear(0,0,0,0) followed by glReadPixels with no draw returned " << nonZero
-                              << " of " << (width * height) << " non-zero pixels; first at (" << firstX << ", "
-                              << firstY << ") = (" << static_cast<int>(firstOffender.r) << ", "
-                              << static_cast<int>(firstOffender.g) << ", " << static_cast<int>(firstOffender.b)
-                              << ", " << static_cast<int>(firstOffender.a) << ")";
+        EXPECT_EQ(nonZero, 0) << "glClear(0,0,0,0) followed by glReadPixels with no draw returned " << nonZero << " of "
+                              << (width * height) << " non-zero pixels; first at (" << firstX << ", " << firstY
+                              << ") = (" << static_cast<int>(firstOffender.r) << ", "
+                              << static_cast<int>(firstOffender.g) << ", " << static_cast<int>(firstOffender.b) << ", "
+                              << static_cast<int>(firstOffender.a) << ")";
 
         gl.EndFrame();
         glDeleteProgram(program);
@@ -208,7 +208,7 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
         DrawFullViewportQuad(program);
 
         // Clear the DEFAULT framebuffer, then blit the source over it. The clear is white so a
-        // frame that lost the blit is unmistakable, and the blit's colour is fshSimple's.
+        // frame that lost the blit is unmistakable, and the blit's color is fshSimple's.
         BindDefaultFramebuffer();
         glViewport(0, 0, width, height);
         ClearTo(1.0f, 1.0f, 1.0f, 1.0f);
@@ -220,13 +220,13 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
 
         const Image blitted = ReadPixels(width, height);
         EXPECT_EQ(FirstGLError(), 0u);
-        const Rgba8 centre = blitted.At(width / 2, height / 2);
-        EXPECT_NEAR(centre.r, 26, 2) << "the blit into the default framebuffer did not survive the clear that "
-                                        "preceded it; read back rgba(" << static_cast<int>(centre.r) << ", "
-                                     << static_cast<int>(centre.g) << ", " << static_cast<int>(centre.b) << ", "
-                                     << static_cast<int>(centre.a) << ")";
-        EXPECT_NEAR(centre.g, 51, 2);
-        EXPECT_NEAR(centre.b, 77, 2);
+        const Rgba8 center = blitted.At(width / 2, height / 2);
+        EXPECT_NEAR(center.r, 26, 2) << "the blit into the default framebuffer did not survive the clear that "
+                                        "preceded it; read back rgba("
+                                     << static_cast<int>(center.r) << ", " << static_cast<int>(center.g) << ", "
+                                     << static_cast<int>(center.b) << ", " << static_cast<int>(center.a) << ")";
+        EXPECT_NEAR(center.g, 51, 2);
+        EXPECT_NEAR(center.b, 77, 2);
 
         DestroyColorFbo(source);
         gl.EndFrame();
@@ -292,9 +292,8 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
                                  << static_cast<int>(bottom.b) << ") - blue there means the resolve landed "
                                  << "in the mirrored band";
         EXPECT_LT(bottom.b, 60);
-        EXPECT_GT(top.b, 200) << "the top band should be blue after the resolve, got rgba("
-                              << static_cast<int>(top.r) << ", " << static_cast<int>(top.g) << ", "
-                              << static_cast<int>(top.b) << ")";
+        EXPECT_GT(top.b, 200) << "the top band should be blue after the resolve, got rgba(" << static_cast<int>(top.r)
+                              << ", " << static_cast<int>(top.g) << ", " << static_cast<int>(top.b) << ")";
         EXPECT_LT(top.r, 60);
 
         glDeleteRenderbuffers(1, &rbo);
@@ -324,10 +323,10 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
         EXPECT_EQ(FirstGLError(), 0u);
 
         const Image painted = ReadPixels(width, height);
-        const Rgba8 centre = painted.At(width / 2, height / 2);
-        EXPECT_NEAR(centre.r, 26, 2) << "the draw did not survive the clear that preceded it";
-        EXPECT_NEAR(centre.g, 51, 2);
-        EXPECT_NEAR(centre.b, 77, 2);
+        const Rgba8 center = painted.At(width / 2, height / 2);
+        EXPECT_NEAR(center.r, 26, 2) << "the draw did not survive the clear that preceded it";
+        EXPECT_NEAR(center.g, 51, 2);
+        EXPECT_NEAR(center.b, 77, 2);
 
         gl.EndFrame();
         glDeleteProgram(program);

@@ -49,7 +49,7 @@ namespace MGITest {
         // Two counters share binding 0 at DIFFERENT offsets and a third sits alone on binding 1.
         // The offsets are what separates "the buffer arrived" from "the buffer arrived and the
         // block is laid out the way GL says": a lowering that packed the members in declaration
-        // order without honouring `offset` would still pass a single-counter check.
+        // order without honoring `offset` would still pass a single-counter check.
         constexpr const char* kCounterComputeSource = R"(#version 430 core
 layout(local_size_x = 4) in;
 layout(binding = 0, offset = 0) uniform atomic_uint g_first;
@@ -135,9 +135,8 @@ void main() {
                 GLuint buffer = 0;
                 glGenBuffers(1, &buffer);
                 glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, buffer);
-                glBufferData(GL_ATOMIC_COUNTER_BUFFER,
-                             static_cast<GLsizeiptr>(seed.size() * sizeof(unsigned int)), seed.data(),
-                             GL_DYNAMIC_DRAW);
+                glBufferData(GL_ATOMIC_COUNTER_BUFFER, static_cast<GLsizeiptr>(seed.size() * sizeof(unsigned int)),
+                             seed.data(), GL_DYNAMIC_DRAW);
                 glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, binding, buffer);
                 glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, 0);
                 m_buffers.push_back(buffer);
@@ -222,7 +221,8 @@ void main() {
         values = ReadCounters(zero, 2);
         EXPECT_EQ(FirstGLError(), 0u);
         EXPECT_EQ(values[0], reseed[0] + kInvocations) << "the re-seeded value did not reach the shader";
-        EXPECT_EQ(values[1], reseed[1] + 2 * kInvocations) << "the re-seeded value at offset 4 did not reach the shader";
+        EXPECT_EQ(values[1], reseed[1] + 2 * kInvocations)
+            << "the re-seeded value at offset 4 did not reach the shader";
     }
 
     // A CPU glBufferSubData issued AFTER a dispatch, read back with NO further GPU work in
@@ -262,6 +262,40 @@ void main() {
         EXPECT_EQ(values[1], 2 * kInvocations)
             << "offset 4 read back " << values[1] << "; the SubData flush must leave bytes outside its "
             << "range untouched";
+    }
+
+    // The same partial SubData, but drained by the NEXT DISPATCH rather than by a readback: the
+    // counter buffer is ensured as a binding, which is the draw-time drain. DirectGLES renames a
+    // small store there - the whole store is rewritten from the host copy instead of the queued
+    // range being copied - and a store a shader wrote is exactly the one whose host copy is stale
+    // outside the range: offset 4 still holds the seed on the CPU side and the first dispatch's
+    // increments on the GPU. Renaming it would put the seed back and the second dispatch would
+    // count from there.
+    TEST_F(AtomicCounterScenario, APartialSubDataBetweenDispatchesKeepsTheShaderWrittenNeighbor) {
+        if (!Ready() || IsSkipped()) return;
+
+        const GLuint zero = MakeCounterBuffer(0, {0u, 0u});
+        MakeCounterBuffer(1, {0u});
+        ASSERT_EQ(FirstGLError(), 0u);
+
+        Dispatch();
+
+        const unsigned int reseed = 4242u;
+        glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, zero);
+        glBufferSubData(GL_ATOMIC_COUNTER_BUFFER, 0, sizeof(reseed), &reseed);
+        glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, 0);
+        ASSERT_EQ(FirstGLError(), 0u) << "re-seeding offset 0 raised a GL error";
+
+        Dispatch();
+
+        const std::vector<unsigned int> values = ReadCounters(zero, 2);
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_EQ(values[0], reseed + kInvocations)
+            << "offset 0 read back " << values[0] << "; the SubData did not reach the second dispatch";
+        EXPECT_EQ(values[1], 4 * kInvocations)
+            << "offset 4 read back " << values[1] << "; " << 2 * kInvocations
+            << " means the drain before the second dispatch rewrote the shader-written neighbor from the "
+            << "stale host copy";
     }
 
 } // namespace MGITest

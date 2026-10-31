@@ -19,7 +19,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     //  * glObjectLabel names a FRONTEND object. MobileGL's texture 5 is not the ES driver's
     //    texture 5 (and under DirectVulkan it is not a driver object at all), so forwarding the
     //    pair verbatim would label an unrelated object or a nonexistent one - worse than not
-    //    labelling.
+    //    labeling.
     //  * A debug GROUP is only meaningful if it brackets the commands the application issued
     //    inside it. Neither backend emits its work at the moment the GL call arrives: DirectGLES
     //    defers and reorders state sync and uploads around draws, and DirectVulkan is usually not
@@ -31,8 +31,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // specifies), and a label written with glObjectLabel comes back from glGetObjectLabel.
     void PushDebugGroup(GLenum source, GLuint id, GLsizei length, const GLchar* message);
     void PopDebugGroup();
-    void DebugMessageInsert(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length,
-                            const GLchar* buf);
+    void DebugMessageInsert(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* buf);
     void ObjectLabel(GLenum identifier, GLuint name, GLsizei length, const GLchar* label);
     void GetObjectLabel(GLenum identifier, GLuint name, GLsizei bufSize, GLsizei* length, GLchar* label);
 

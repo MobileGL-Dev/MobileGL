@@ -47,5 +47,5 @@ namespace MobileGL::MG_Impl::CGLImpl {
     CGLError AttachDrawable(CGLContextObj ctx, void* nsView, void* metalLayer, GLint width, GLint height);
     void* GetContextNSObject(CGLContextObj ctx);
     void SetContextNSObject(CGLContextObj ctx, void* nsObject);
-}
+} // namespace MobileGL::MG_Impl::CGLImpl
 #endif

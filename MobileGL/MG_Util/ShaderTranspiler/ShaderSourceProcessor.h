@@ -61,6 +61,21 @@ namespace MobileGL {
             // GetNormalizedVersionDirective records why that has not happened.
             String CollectEsPreambleMacroDefines(const String& preprocessedSource);
 
+            // What an ES-profile source declared before PreprocessShaderSource rewrote its
+            // #version to desktop - recovered from the marker the rewrite leaves on the directive -
+            // or nullopt for a source that did not declare an `es` version. The few rules ESSL has
+            // and desktop GLSL does not are enforced off this, and only for such sources.
+            struct EsOrigin {
+                Uint version = 0;        // 300, 310, 320
+                Bool gpuShader5 = false; // GL_EXT_gpu_shader5 / GL_OES_gpu_shader5 turned on
+            };
+            std::optional<EsOrigin> FindEsOrigin(const String& preprocessedSource);
+
+            // The uniforms a shader declared as samplerExternalOES (GL_OES_EGL_image_external),
+            // which PreprocessShaderSource turned into sampler2D and named in a marker: the
+            // reflection reports them as GL_SAMPLER_EXTERNAL_OES. Empty for every other shader.
+            Vector<String> ExternalSamplerUniformNames(const String& preprocessedSource);
+
             // GLSL reserves a few names glslang happily accepts as identifiers ("packed",
             // "row_major" outside a layout(...) list, the image*Shadow family). Returns the
             // compile-error text for the first violation, or nullopt for a clean source.

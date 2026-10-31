@@ -91,8 +91,10 @@ void main()
                 if (!Ready()) return;
                 glBindProgramPipeline(0);
                 glUseProgram(0);
-                for (GLuint p : m_programs) glDeleteProgram(p);
-                for (GLuint p : m_pipelines) glDeleteProgramPipelines(1, &p);
+                for (GLuint p : m_programs)
+                    glDeleteProgram(p);
+                for (GLuint p : m_pipelines)
+                    glDeleteProgramPipelines(1, &p);
                 m_programs.clear();
                 m_pipelines.clear();
             }
@@ -135,12 +137,11 @@ void main()
             // the whole span instead, which cost seven for those four elements and had to be
             // declined on a stage that could not afford them - hence the budget gate that used
             // to be here.) DirectVulkan needs no rewrite at all.
-            bool PerElementImageUnitsAreHonoured() const {
+            bool PerElementImageUnitsAreHonored() const {
                 if (Gl().BackendName() == "DirectVulkan") return true;
                 GLint maxFragmentImageUniforms = 0;
                 glGetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &maxFragmentImageUniforms);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 // One per element of the four-element array either fragment program declares.
                 return maxFragmentImageUniforms >= 4;
             }
@@ -150,8 +151,7 @@ void main()
             bool ImagesAreUsable() const {
                 GLint maxImageUnits = 0;
                 glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxImageUnits >= 8;
             }
 
@@ -172,7 +172,7 @@ void main()
     TEST_F(ImageLoadStoreSsoScenario, PerElementImageUnitsReachAPipelineDraw) {
         if (!Ready()) return;
         if (!ImagesAreUsable()) GTEST_SKIP() << "fewer than 8 image units";
-        if (!PerElementImageUnitsAreHonoured()) {
+        if (!PerElementImageUnitsAreHonored()) {
             GTEST_SKIP() << "fewer than 4 fragment image uniforms: the array under test does not fit";
         }
         HeadlessGL& gl = Gl();
@@ -277,7 +277,7 @@ void main()
     // the SPIR-V binding remap load-bearing.
     //
     // The remap (ProgramFactory::RemapDescriptorBindingsForVulkan) is what unifies bindings
-    // across stages and normalises every descriptor onto set 0; glslang hands it per-stage
+    // across stages and normalizes every descriptor onto set 0; glslang hands it per-stage
     // numbering that starts at 0 in EACH stage. It used to refuse any descriptor array that was
     // not a UBO, and its only complaint was an assert that compiles out above DEBUG - so a
     // release build carried on with the un-remapped numbering and a program holding an image
@@ -288,7 +288,7 @@ void main()
     // to collide with and skipping the remap is indistinguishable from running it. Hence this
     // one - an image array AND a uniform block in the same fragment program, with the block
     // supplying the value that gets stored, so a mis-assigned binding shows up as the wrong
-    // colour rather than as nothing at all.
+    // color rather than as nothing at all.
     TEST_F(ImageLoadStoreSsoScenario, AnImageArrayAlongsideAnotherDescriptorKeepsBothBindings) {
         if (!Ready()) return;
         if (!ImagesAreUsable()) GTEST_SKIP() << "fewer than 8 image units";

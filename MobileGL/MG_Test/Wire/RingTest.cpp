@@ -1,0 +1,853 @@
+// MobileGL - MobileGL/MG_Test/Wire/RingTest.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// The SEG_CMD/SEG_STAGE SPSC ring: layout of the shared control page, cursor
+// invariants, wrap-around, backpressure, the generation bump after a hard
+// drain, and a real two-thread producer/consumer run.
+
+#include <MG_Remote/Transport/Doorbell.h>
+#include <MG_Remote/Transport/Ring.h>
+// For MGPipeCallFlags. This file is the only place in the tree that sees BOTH flag
+// spaces: MG_Pipe is below MG_Remote and may not include Ring.h, so the cross-enum table
+// below cannot live in a generated .inc beside the call flags themselves.
+#include <MG_Pipe/MGPipe.h>
+
+#include <gtest/gtest.h>
+
+#include <atomic>
+#include <cstring>
+#include <thread>
+#include <vector>
+
+using namespace MobileGL::MG_Remote::Transport;
+
+namespace {
+
+    // A ring plus its control page, sized like a small SEG_CMD.
+    class RingFixture {
+    public:
+        explicit RingFixture(std::uint64_t capacity, RingCursorSet cursors = RingCursorSet::Cmd)
+            : m_bytes(static_cast<std::size_t>(capacity)), m_capacity(capacity) {
+            InitRingControl(m_control);
+            m_producer = RingProducer(&m_control, m_bytes.data(), capacity, cursors);
+            m_consumer = RingConsumer(&m_control, m_bytes.data(), capacity, cursors);
+            m_cursors = cursors;
+        }
+
+        RingControl& Control() { return m_control; }
+        RingProducer& Producer() { return m_producer; }
+        RingConsumer& Consumer() { return m_consumer; }
+        std::uint64_t Capacity() const { return m_capacity; }
+        bool Invariants() const { return RingCursorsValid(m_control, m_cursors, m_capacity); }
+
+        // Writes one record whose payload is `size` bytes of a recognizable
+        // pattern seeded by `seed`.
+        bool WriteRecord(std::uint16_t kind, std::uint64_t size, std::uint8_t seed) {
+            void* payload = m_producer.Reserve(kind, kRecNone, size);
+            if (payload == nullptr) {
+                return false;
+            }
+            auto* bytes = static_cast<std::uint8_t*>(payload);
+            for (std::uint64_t i = 0; i < size; ++i) {
+                bytes[i] = static_cast<std::uint8_t>(seed + i);
+            }
+            m_producer.Publish();
+            return true;
+        }
+
+        static bool CheckPattern(const RingRecordView& view, std::uint64_t size, std::uint8_t seed) {
+            const auto* bytes = static_cast<const std::uint8_t*>(view.payload);
+            for (std::uint64_t i = 0; i < size; ++i) {
+                if (bytes[i] != static_cast<std::uint8_t>(seed + i)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+    private:
+        alignas(4096) RingControl m_control{};
+        std::vector<std::uint8_t> m_bytes;
+        RingProducer m_producer;
+        RingConsumer m_consumer;
+        std::uint64_t m_capacity;
+        RingCursorSet m_cursors = RingCursorSet::Cmd;
+    };
+
+} // namespace
+
+TEST(RingTest, ControlPageLayoutIsTheSharedContract) {
+    // The page is mapped by two processes; its size and alignment are wire
+    // contract, not an implementation detail.
+    EXPECT_EQ(sizeof(RingControl), 4096u);
+    EXPECT_EQ(alignof(RingControl), 4096u);
+    EXPECT_EQ(sizeof(RingRecordHeader), 8u);
+
+    alignas(4096) RingControl control{};
+    InitRingControl(control);
+    // Zero is reserved for "uninitialized" on both generations.
+    EXPECT_EQ(control.serverEpoch.load(), 1u);
+    EXPECT_EQ(control.ringGeneration.load(), 1u);
+    EXPECT_EQ(control.cmdHead.load(), 0u);
+    EXPECT_EQ(control.stageHead.load(), 0u);
+    EXPECT_EQ(control.consumerParked.load(), 0u);
+    EXPECT_EQ(control.producerParked.load(), 0u);
+    EXPECT_EQ(control.eventRingFull.load(), 0u);
+    EXPECT_EQ(control.eventDropped.load(), 0u);
+
+    // Each contended group on its own cache line.
+    const auto offset = [&control](const void* member) {
+        return reinterpret_cast<const std::uint8_t*>(member) - reinterpret_cast<const std::uint8_t*>(&control);
+    };
+    EXPECT_EQ(offset(&control.cmdHead) % 64, 0);
+    EXPECT_EQ(offset(&control.cmdAppliedTail) % 64, 0);
+    EXPECT_EQ(offset(&control.stageHead) % 64, 0);
+    EXPECT_EQ(offset(&control.stageAppliedTail) % 64, 0);
+    EXPECT_EQ(offset(&control.Progress.appliedSeq) % 64, 0);
+    EXPECT_EQ(offset(&control.serverEpoch) % 64, 0);
+    // cmdHead and cmdAppliedTail are written by different processes: they must
+    // not share a line.
+    EXPECT_NE(offset(&control.cmdHead) / 64, offset(&control.cmdAppliedTail) / 64);
+
+    // lk (CONTRACT-P6 §8.3) regrouped this page BY WRITER, and submittedSeq is the field
+    // it moved. Assert that here rather than borrowing the claim from Ring.h's
+    // static_asserts: this test is named for the layout being a shared contract, and it
+    // said nothing about the one field the regroup touched.
+    EXPECT_EQ(offset(&control.submittedSeq) / 64, offset(&control.cmdHead) / 64)
+        << "submittedSeq is producer-written and belongs on the producer's line";
+    EXPECT_NE(offset(&control.submittedSeq) / 64, offset(&control.Progress.appliedSeq) / 64)
+        << "a producer-written field on the consumer's watermark line is what lk removed";
+
+    // The two event flags stay OUT of Progress on purpose: the client clears eventRingFull
+    // with an RMW on every drain, and Progress's line is the one the client spins on.
+    EXPECT_NE(offset(&control.eventRingFull) / 64, offset(&control.Progress.appliedSeq) / 64)
+        << "eventRingFull's per-drain RMW may not land on the spin line";
+    EXPECT_EQ(offset(&control.eventRingFull) / 64, offset(&control.serverEpoch) / 64)
+        << "the event flags live in the doorbell group, where mixed writers already are";
+}
+
+TEST(RingTest, RejectsANonPowerOfTwoCapacity) {
+    alignas(4096) RingControl control{};
+    InitRingControl(control);
+    std::vector<std::uint8_t> bytes(1000);
+    RingProducer producer(&control, bytes.data(), 1000, RingCursorSet::Cmd);
+    EXPECT_FALSE(producer.Valid());
+    EXPECT_EQ(producer.Reserve(1, kRecNone, 8), nullptr);
+}
+
+TEST(RingTest, RejectsACapacityTheRecordHeaderCannotDescribe) {
+    alignas(4096) RingControl control{};
+    InitRingControl(control);
+    // 4 GiB is a legal power of two, but RingRecordHeader::size is 32 bits and
+    // both a record's size and a wrap filler's size are bounded only by the
+    // capacity: they would be truncated on the way in and then bounds-checked
+    // in their truncated form on the way out. Nothing is mapped here - the
+    // constructor rejects before it ever touches the base pointer.
+    std::uint8_t dummy = 0;
+    constexpr std::uint64_t kFourGiB = 4ull * 1024 * 1024 * 1024;
+    EXPECT_GT(kFourGiB, kMaxRingCapacity);
+    RingProducer producer(&control, &dummy, kFourGiB, RingCursorSet::Cmd);
+    EXPECT_FALSE(producer.Valid());
+    RingConsumer consumer(&control, &dummy, kFourGiB, RingCursorSet::Cmd);
+    EXPECT_FALSE(consumer.Valid());
+
+    // The largest ring the header CAN describe stays accepted.
+    RingProducer biggest(&control, &dummy, 1ull << 31, RingCursorSet::Cmd);
+    EXPECT_TRUE(biggest.Valid());
+}
+
+TEST(RingTest, RoundTripsRecordsInOrder) {
+    RingFixture ring(4096);
+    ASSERT_TRUE(ring.WriteRecord(1, 16, 0x10));
+    ASSERT_TRUE(ring.WriteRecord(2, 24, 0x20));
+    EXPECT_TRUE(ring.Invariants());
+
+    RingRecordView view{};
+    bool corrupt = false;
+    ASSERT_TRUE(ring.Consumer().Pop(view, &corrupt));
+    EXPECT_FALSE(corrupt);
+    EXPECT_EQ(view.kind, 1u);
+    EXPECT_EQ(view.payloadSize, 16u);
+    EXPECT_TRUE(RingFixture::CheckPattern(view, 16, 0x10));
+
+    ASSERT_TRUE(ring.Consumer().Pop(view, &corrupt));
+    EXPECT_EQ(view.kind, 2u);
+    EXPECT_EQ(view.payloadSize, 24u);
+    EXPECT_TRUE(RingFixture::CheckPattern(view, 24, 0x20));
+
+    EXPECT_FALSE(ring.Consumer().Pop(view, &corrupt));
+    ring.Consumer().PublishRetired();
+    EXPECT_TRUE(ring.Invariants());
+    EXPECT_EQ(ring.Control().cmdAppliedTail.load(), ring.Control().cmdHead.load());
+    EXPECT_EQ(ring.Control().cmdRetiredTail.load(), ring.Control().cmdHead.load());
+}
+
+TEST(RingTest, PayloadIsPaddedToTheRecordAlignment) {
+    RingFixture ring(4096);
+    ASSERT_TRUE(ring.WriteRecord(7, 3, 0x77));
+    RingRecordView view{};
+    ASSERT_TRUE(ring.Consumer().Pop(view));
+    // 8 (header) + 3 rounded up to 16 -> 8 bytes of payload space.
+    EXPECT_EQ(view.payloadSize, 8u);
+    EXPECT_TRUE(RingFixture::CheckPattern(view, 3, 0x77));
+}
+
+TEST(RingTest, WrapsWithoutSplittingARecord) {
+    // Small ring, records that do not divide it evenly, so the wrap boundary
+    // lands mid-record and the pad path is exercised many times.
+    RingFixture ring(256);
+    std::uint8_t seed = 0;
+    for (int i = 0; i < 200; ++i) {
+        const std::uint64_t size = 24 + (i % 5) * 8;
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(1 + (i % 3)), size, seed)) << "record " << i;
+        RingRecordView view{};
+        bool corrupt = false;
+        ASSERT_TRUE(ring.Consumer().Pop(view, &corrupt)) << "record " << i;
+        ASSERT_FALSE(corrupt);
+        EXPECT_EQ(view.kind, static_cast<std::uint16_t>(1 + (i % 3)));
+        // Contiguity: the payload never straddles the end of the mapping.
+        EXPECT_TRUE(RingFixture::CheckPattern(view, size, seed)) << "record " << i;
+        ring.Consumer().PublishRetired();
+        ASSERT_TRUE(ring.Invariants());
+        seed = static_cast<std::uint8_t>(seed + 13);
+    }
+    // Cursors are monotonic byte counts, so they are far past the capacity.
+    EXPECT_GT(ring.Control().cmdHead.load(), ring.Capacity());
+}
+
+TEST(RingTest, FullRingRefusesAndRecoversWhenTheConsumerRetires) {
+    RingFixture ring(256);
+    int written = 0;
+    while (ring.WriteRecord(1, 24, static_cast<std::uint8_t>(written))) {
+        ++written;
+        ASSERT_LT(written, 100);
+    }
+    EXPECT_GT(written, 0);
+    // Backpressure, not corruption.
+    EXPECT_TRUE(ring.Invariants());
+    EXPECT_LT(ring.Producer().FreeBytes(), 32u);
+
+    RingRecordView view{};
+    ASSERT_TRUE(ring.Consumer().Pop(view));
+    // Applied alone does not free a slot that may still be borrowed by the GPU
+    // timeline: reclaim follows the retired cursor.
+    ring.Consumer().PublishApplied();
+    EXPECT_EQ(ring.Producer().FreeBytes(), 0u);
+    ring.Consumer().PublishRetired();
+    EXPECT_GT(ring.Producer().FreeBytes(), 0u);
+    EXPECT_TRUE(ring.WriteRecord(1, 24, 0xEE));
+}
+
+TEST(RingTest, RecordLargerThanTheRingIsRefused) {
+    RingFixture ring(256);
+    EXPECT_EQ(ring.Producer().Reserve(1, kRecNone, 4096), nullptr);
+    EXPECT_TRUE(ring.Invariants());
+}
+
+TEST(RingTest, RecordLargerThanHalfTheRingIsRefused) {
+    // 256-byte ring: the bound is 128 bytes of header + payload.
+    RingFixture ring(256);
+    EXPECT_EQ(ring.Producer().MaxRecordBytes(), 128u);
+    // 8 + 240 = 248: fits the whole ring, does not fit half of it.
+    EXPECT_EQ(ring.Producer().Reserve(1, kRecNone, 240), nullptr);
+    // 8 + 128 = 136: one step over the bound, refused the same way...
+    EXPECT_EQ(ring.Producer().Reserve(1, kRecNone, 128), nullptr);
+    // ...and 8 + 120 = 128, exactly the bound, is accepted.
+    EXPECT_NE(ring.Producer().Reserve(1, kRecNone, 120), nullptr);
+    EXPECT_TRUE(ring.Invariants());
+}
+
+// The scenario that motivated the bound, as the negative control. Whether a record
+// can be placed must not depend on where the head happens to be. With "total <=
+// capacity" as the only rule, a 248-byte record is accepted at head offset 0 of an
+// empty 256-byte ring and refused forever at head offset 16 of the same empty
+// ring - it would need a 240-byte wrap pad plus itself, 488 bytes - while
+// FreeBytes() reports 256 the whole time, so a producer waiting for FreeBytes()
+// >= 248 spins on nullptr with nothing logged. Both answers have to be the same
+// refusal, and it has to be the loud one.
+TEST(RingTest, RecordPlaceabilityDoesNotDependOnTheHeadOffset) {
+    RingFixture atOffsetZero(256);
+    void* atZero = atOffsetZero.Producer().Reserve(1, kRecNone, 240);
+
+    RingFixture atOffsetSixteen(256);
+    ASSERT_TRUE(atOffsetSixteen.WriteRecord(1, 8, 0x01)); // 8 + 8 = 16 bytes
+    RingRecordView view{};
+    ASSERT_TRUE(atOffsetSixteen.Consumer().Pop(view));
+    atOffsetSixteen.Consumer().PublishRetired();
+    ASSERT_EQ(atOffsetSixteen.Producer().LocalHead(), 16u);
+    ASSERT_EQ(atOffsetSixteen.Producer().FreeBytes(), 256u);
+    void* atSixteen = atOffsetSixteen.Producer().Reserve(1, kRecNone, 240);
+
+    EXPECT_EQ(atSixteen, nullptr);
+    EXPECT_EQ(atZero, nullptr)
+        << "a 248-byte record was accepted at head offset 0 but is unplaceable at head offset 16 of "
+           "the same empty ring: the emitter cannot tell a refusal it must chunk from a full ring it "
+           "must wait on";
+    EXPECT_TRUE(atOffsetZero.Invariants());
+    EXPECT_TRUE(atOffsetSixteen.Invariants());
+}
+
+// The positive half of the same argument: a record of exactly half the capacity is
+// placeable at EVERY head offset of an empty ring, because the wrap pad in front of
+// it costs at most total-8 bytes. Walk the head to each 8-byte offset with bare
+// header records and reserve the maximal record there.
+TEST(RingTest, HalfCapacityRecordFitsAtEveryHeadOffset) {
+    RingFixture ring(256);
+    const std::uint64_t mask = ring.Capacity() - 1;
+    const std::uint64_t maximal = ring.Producer().MaxRecordBytes() - sizeof(RingRecordHeader); // 120
+    for (std::uint64_t target = 0; target < ring.Capacity(); target += 8) {
+        // A bare header never straddles the boundary, so no pad appears on the way.
+        while ((ring.Producer().LocalHead() & mask) != target) {
+            ASSERT_TRUE(ring.WriteRecord(1, 0, 0));
+            RingRecordView filler{};
+            ASSERT_TRUE(ring.Consumer().Pop(filler));
+            ring.Consumer().PublishRetired();
+        }
+        ASSERT_EQ(ring.Producer().FreeBytes(), ring.Capacity()) << "head offset " << target;
+        void* payload = ring.Producer().Reserve(2, kRecNone, maximal);
+        ASSERT_NE(payload, nullptr) << "head offset " << target;
+        ring.Producer().Publish();
+        RingRecordView view{};
+        bool corrupt = false;
+        ASSERT_TRUE(ring.Consumer().Pop(view, &corrupt)) << "head offset " << target;
+        ASSERT_FALSE(corrupt);
+        EXPECT_EQ(view.kind, 2u);
+        EXPECT_EQ(view.payloadSize, maximal);
+        ring.Consumer().PublishRetired();
+        ASSERT_TRUE(ring.Invariants()) << "head offset " << target;
+    }
+}
+
+TEST(RingTest, RejectsARingTooSmallForTheSmallestRecord) {
+    alignas(4096) RingControl control{};
+    InitRingControl(control);
+    std::uint8_t bytes[16] = {};
+    // One header's worth of ring can carry nothing once a record may be at most
+    // half the ring; two headers' worth carries a bare header.
+    RingProducer tooSmall(&control, bytes, sizeof(RingRecordHeader), RingCursorSet::Cmd);
+    EXPECT_FALSE(tooSmall.Valid());
+    RingProducer smallest(&control, bytes, kMinRingCapacity, RingCursorSet::Cmd);
+    ASSERT_TRUE(smallest.Valid());
+    EXPECT_EQ(smallest.MaxRecordBytes(), sizeof(RingRecordHeader));
+    EXPECT_NE(smallest.Reserve(1, kRecNone, 0), nullptr);
+}
+
+TEST(RingTest, HardDrainBumpsTheGenerationOnlyWhenQuiesced) {
+    RingFixture ring(256);
+    ASSERT_TRUE(ring.WriteRecord(1, 32, 0x01));
+    const std::uint32_t before = ring.Control().ringGeneration.load();
+
+    // Records still in flight: the drain is refused and nothing changes.
+    EXPECT_EQ(HardDrainRing(ring.Control(), RingCursorSet::Cmd), MOBILEGL_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(ring.Control().ringGeneration.load(), before);
+
+    RingRecordView view{};
+    ASSERT_TRUE(ring.Consumer().Pop(view));
+    ring.Consumer().PublishRetired();
+    EXPECT_EQ(HardDrainRing(ring.Control(), RingCursorSet::Cmd), MOBILEGL_OK);
+    EXPECT_EQ(ring.Control().ringGeneration.load(), before + 1);
+    // Cursors stay monotonic across the drain - only the generation moves.
+    EXPECT_EQ(ring.Control().cmdHead.load(), ring.Control().cmdAppliedTail.load());
+    EXPECT_GT(ring.Control().cmdHead.load(), 0u);
+}
+
+TEST(RingTest, CorruptHeaderIsRefusedRatherThanDispatched) {
+    // SEG_CMD is written by the peer process, so a compile-time size assert on
+    // the record catalog proves nothing about what is actually in the
+    // mapping. Hand-build a ring whose first header is impossible (a size that
+    // is not a multiple of 8) and check the consumer refuses it instead of
+    // dispatching into undefined behavior.
+    alignas(4096) RingControl control{};
+    InitRingControl(control);
+    std::vector<std::uint8_t> bytes(256, 0);
+    RingRecordHeader bad{};
+    bad.kind = 5;
+    bad.flags = kRecNone;
+    bad.size = 13; // not 8-aligned
+    std::memcpy(bytes.data(), &bad, sizeof(bad));
+    control.cmdHead.store(64, std::memory_order_release);
+
+    RingConsumer consumer(&control, bytes.data(), bytes.size(), RingCursorSet::Cmd);
+    RingRecordView view{};
+    bool corrupt = false;
+    EXPECT_FALSE(consumer.Pop(view, &corrupt));
+    EXPECT_TRUE(corrupt);
+
+    // A record claiming more bytes than the producer has published is the same
+    // class of violation and is refused the same way.
+    bad.size = 128;
+    std::memcpy(bytes.data(), &bad, sizeof(bad));
+    RingConsumer second(&control, bytes.data(), bytes.size(), RingCursorSet::Cmd);
+    corrupt = false;
+    EXPECT_FALSE(second.Pop(view, &corrupt));
+    EXPECT_TRUE(corrupt);
+}
+
+TEST(RingTest, SpscProducerConsumerThreadsAgreeOnEveryRecord) {
+    constexpr int kRecords = 20000;
+    RingFixture ring(4096);
+
+    std::atomic<bool> failed{false};
+    std::atomic<int> consumed{0};
+
+    std::thread consumer([&] {
+        int next = 0;
+        while (next < kRecords) {
+            RingRecordView view{};
+            bool corrupt = false;
+            if (!ring.Consumer().Pop(view, &corrupt)) {
+                if (corrupt) {
+                    failed.store(true);
+                    return;
+                }
+                std::this_thread::yield();
+                continue;
+            }
+            const std::uint32_t expectedKind = static_cast<std::uint16_t>(1 + (next % 7));
+            if (view.kind != expectedKind || view.payloadSize < sizeof(std::uint32_t)) {
+                failed.store(true);
+                return;
+            }
+            std::uint32_t value = 0;
+            std::memcpy(&value, view.payload, sizeof(value));
+            if (value != static_cast<std::uint32_t>(next)) {
+                failed.store(true);
+                return;
+            }
+            ++next;
+            consumed.store(next, std::memory_order_relaxed);
+            // Retire as we go; a consumer that never retires would deadlock the
+            // producer, which is exactly the contract being pinned.
+            ring.Consumer().PublishRetired();
+        }
+    });
+
+    for (int i = 0; i < kRecords; ++i) {
+        const std::uint64_t payloadSize = sizeof(std::uint32_t) + (i % 4) * 8;
+        void* payload = nullptr;
+        while ((payload = ring.Producer().Reserve(static_cast<std::uint16_t>(1 + (i % 7)), kRecNone, payloadSize)) ==
+               nullptr) {
+            if (failed.load()) {
+                break;
+            }
+            std::this_thread::yield();
+        }
+        if (payload == nullptr) {
+            break;
+        }
+        const std::uint32_t value = static_cast<std::uint32_t>(i);
+        std::memcpy(payload, &value, sizeof(value));
+        ring.Producer().Publish();
+    }
+
+    consumer.join();
+    EXPECT_FALSE(failed.load());
+    EXPECT_EQ(consumed.load(), kRecords);
+    EXPECT_TRUE(ring.Invariants());
+    EXPECT_EQ(ring.Control().cmdRetiredTail.load(), ring.Control().cmdHead.load());
+}
+
+// The publish/park protocol end to end, in both directions: publish the
+// watermark, THEN NotifyIfParked; park with Doorbell::Wait. A lost wakeup on
+// either side shows up as a Wait that times out with work available rather
+// than as a hang, so the failure is a red test and not a stuck CI job.
+//
+// This cannot prove the seq_cst fence pairing (no test can - x86 needs the
+// store buffer to hold the release store across the flag read, and it usually
+// does not), but it does exercise the exact call order the fences assume, so a
+// future edit that rings the bell BEFORE publishing has somewhere to fail.
+TEST(RingTest, DoorbellHandoffWakesBothSidesOnEveryPublish) {
+    // 4 byte payloads: every record is exactly 16 bytes and 4096 is a multiple
+    // of that, so no wrap filler ever appears and "head != tail" is exactly
+    // "a record is waiting".
+    RingFixture ring(4096);
+    CondVarDoorbell consumerBell;
+    CondVarDoorbell producerBell;
+    std::atomic<bool> ok{true};
+    constexpr int kRecords = 2000;
+    constexpr std::uint64_t kRecordBytes = 16;
+
+    std::thread consumerThread([&] {
+        int seen = 0;
+        while (seen < kRecords) {
+            const bool woke = consumerBell.Wait(
+                ring.Control().consumerParked,
+                [&] { return ring.Control().cmdHead.load(std::memory_order_acquire) != ring.Consumer().LocalTail(); },
+                kDefaultSpinUs, 5000);
+            if (!woke) {
+                ok.store(false); // a wakeup was lost, or the producer stalled
+                return;
+            }
+            RingRecordView view{};
+            bool corrupt = false;
+            while (ring.Consumer().Pop(view, &corrupt)) {
+                std::uint32_t value = 0;
+                std::memcpy(&value, view.payload, sizeof(value));
+                if (value != static_cast<std::uint32_t>(seen)) {
+                    ok.store(false);
+                    return;
+                }
+                ++seen;
+            }
+            if (corrupt) {
+                ok.store(false);
+                return;
+            }
+            ring.Consumer().PublishRetired();
+            NotifyIfParked(producerBell, ring.Control().producerParked);
+        }
+    });
+
+    for (int i = 0; i < kRecords && ok.load(); ++i) {
+        void* payload = nullptr;
+        while ((payload = ring.Producer().Reserve(1, kRecNone, sizeof(std::uint32_t))) == nullptr) {
+            if (!ok.load()) {
+                break;
+            }
+            if (!producerBell.Wait(
+                    ring.Control().producerParked, [&] { return ring.Producer().FreeBytes() >= kRecordBytes; },
+                    kDefaultSpinUs, 5000)) {
+                ok.store(false);
+                break;
+            }
+        }
+        if (payload == nullptr) {
+            break;
+        }
+        const std::uint32_t value = static_cast<std::uint32_t>(i);
+        std::memcpy(payload, &value, sizeof(value));
+        // Publish first, ring second. The other order reopens the lost-wakeup
+        // window no matter how strong the flag's memory order is.
+        ring.Producer().Publish();
+        NotifyIfParked(consumerBell, ring.Control().consumerParked);
+    }
+
+    consumerThread.join();
+    EXPECT_TRUE(ok.load());
+    EXPECT_TRUE(ring.Invariants());
+}
+
+// ---------------------------------------------------------------------------
+// P5 R-9: the five watermarks and the pad rule, from Ring.h's header comment.
+//
+// Nothing in the tree advanced any of the five before P5 - InitRingControl zeroed
+// them and that was all - so these five cases pin the RULES against the sessions
+// that are about to start writing them, rather than testing today's (absent)
+// writers. Each one is the negative control for one sentence of that comment.
+// ---------------------------------------------------------------------------
+
+// R-9, sentence 0: all five start at zero, so "has not moved" and "moved to zero"
+// are the same state and a waiter that starts before its peer cannot be fooled by
+// a stale non-zero value left over from a previous session.
+TEST(RingTest, WatermarksAreAllZeroUntilSomeoneAdvancesThem) {
+    alignas(4096) RingControl control{};
+    InitRingControl(control);
+    EXPECT_EQ(control.submittedSeq.load(), 0u);
+    EXPECT_EQ(control.Progress.appliedSeq.load(), 0u);
+    EXPECT_EQ(control.Progress.retiredSeq.load(), 0u);
+    EXPECT_EQ(control.Progress.completedFrameSerial.load(), 0u);
+    EXPECT_EQ(control.Progress.presentAckSerial.load(), 0u);
+    // ... while the two GENERATIONS start at one, because for them zero means
+    // "uninitialized" and must never be a legal value. The two conventions are
+    // opposite on purpose and are next to each other in the same struct.
+    EXPECT_EQ(control.serverEpoch.load(), 1u);
+    EXPECT_EQ(control.ringGeneration.load(), 1u);
+}
+
+// R-9, "every wait is >=, never ==". Both sides advance in jumps - a consumer that
+// applies two records before republishing, a server that completes two frames in one
+// poll - so an equality test misses its wakeup and the waiter hangs until the next
+// coincidence. This case is that hang, made deterministic.
+TEST(RingTest, AWatermarkWaiterMustTestGreaterOrEqualRatherThanEqual) {
+    alignas(4096) RingControl control{};
+    InitRingControl(control);
+
+    const std::uint64_t mySeq = 7;
+    // The peer jumps straight past the value this waiter cares about.
+    control.Progress.appliedSeq.store(mySeq + 1, std::memory_order_release);
+
+    const std::uint64_t seen = control.Progress.appliedSeq.load(std::memory_order_acquire);
+    EXPECT_FALSE(seen == mySeq) << "an equality waiter is still asleep at this point";
+    EXPECT_TRUE(seen >= mySeq) << "the >= waiter this contract mandates has been released";
+}
+
+// R-9, appliedSeq's row: advanced by the consumer for EVERY SINGLE RECORD, and P5
+// forbids the 64-record batching the ring was designed for, because the verb barrier
+// and every reply wait read it. The invariant that must hold after each Pop is
+// `appliedSeq == records applied so far` - not "eventually", every time.
+TEST(RingTest, AppliedSeqAdvancesOncePerRecordAndIsNeverBatchedInP5) {
+    RingFixture ring(1024);
+    constexpr int kRecords = 12;
+    for (int i = 0; i < kRecords; ++i) {
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 1), 16, static_cast<std::uint8_t>(i)));
+    }
+
+    std::uint64_t applied = 0;
+    RingRecordView view{};
+    while (ring.Consumer().Pop(view)) {
+        ++applied;
+        ring.Control().Progress.appliedSeq.store(applied, std::memory_order_release);
+        // The reader's guarantee, checked at EVERY record rather than at the end:
+        // a batched watermark would sit at 0 here for 63 of every 64 iterations,
+        // and a client barrier reading it would block on work that already ran.
+        EXPECT_EQ(ring.Control().Progress.appliedSeq.load(std::memory_order_acquire), applied);
+    }
+    EXPECT_EQ(applied, static_cast<std::uint64_t>(kRecords));
+    EXPECT_TRUE(ring.Invariants());
+}
+
+// R-9, "batching may only make a watermark LATE, never early". retiredSeq is the one
+// the staging allocator reclaims behind, so a value published ahead of the actual
+// drain hands live bytes back to the producer. Late is merely slow; early is a
+// use-after-free that nothing on this ring checksums.
+TEST(RingTest, ALazyWatermarkMayTrailTheWorkButMustNeverLeadIt) {
+    RingFixture ring(1024);
+    constexpr int kRecords = 8;
+    for (int i = 0; i < kRecords; ++i) {
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 1), 16, static_cast<std::uint8_t>(i)));
+    }
+
+    std::uint64_t drained = 0;
+    RingRecordView view{};
+    while (ring.Consumer().Pop(view)) {
+        ++drained;
+        // A deliberately lazy publisher: only every third record. This is legal.
+        if (drained % 3 == 0) {
+            ring.Control().Progress.retiredSeq.store(drained, std::memory_order_release);
+        }
+        EXPECT_LE(ring.Control().Progress.retiredSeq.load(std::memory_order_acquire), drained)
+            << "retiredSeq ran ahead of the drain; those staged bytes are still live";
+    }
+    // Trailing at the end is fine and is what "late" means.
+    EXPECT_LE(ring.Control().Progress.retiredSeq.load(), static_cast<std::uint64_t>(kRecords));
+    EXPECT_TRUE(ring.Invariants());
+}
+
+// R-9's last sentence, and the one with no other detector: kRecPad DOES NOT ADVANCE
+// SEQ. A wrap filler is framing - no opcode, no payload, no reply slot - so a side
+// that counts it drifts from the side that does not, by one per wrap, for ever. And
+// because seq IS the reply-slot id (R-3), a drifted seq reads ANOTHER CALL'S ANSWER
+// instead of failing. Here the ring is sized so the last record cannot fit before the
+// wrap boundary, which forces the producer to emit a filler; the consumer must count
+// the records and not the filler.
+TEST(RingTest, AWrapFillerDoesNotAdvanceTheRecordSequence) {
+    RingFixture ring(256);
+    constexpr std::uint64_t kPayload = 56; // 8-byte header + 56 = 64 per record
+
+    // Three records fill 192 of 256 bytes; the fourth needs 64 and only 64 remain, so
+    // it lands exactly at the boundary. The fifth is what forces the filler.
+    std::uint64_t written = 0;
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 1), kPayload, static_cast<std::uint8_t>(i)));
+        ++written;
+    }
+    const std::uint64_t headAfterThree = ring.Producer().LocalHead();
+
+    std::uint64_t popped = 0;
+    RingRecordView view{};
+    while (ring.Consumer().Pop(view)) {
+        // Pop skips fillers by contract, so a pad must never reach a caller that is
+        // about to number it. If one ever does, that is the drift itself.
+        EXPECT_EQ(view.flags & kRecPad, 0u) << "a wrap filler reached the record counter";
+        EXPECT_NE(view.kind, kRingPadRecordKind);
+        ++popped;
+    }
+    EXPECT_EQ(popped, written) << "the consumer numbered something the producer did not send";
+    ring.Consumer().PublishApplied();
+    ring.Consumer().PublishRetired();
+
+    // Now drive the producer across the wrap and prove a filler really was emitted:
+    // the head advances by MORE than the records' own bytes, and that surplus is the
+    // pad. The record count still has to match.
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 10), kPayload, static_cast<std::uint8_t>(i + 10)));
+        ++written;
+    }
+    const std::uint64_t headAfterSix = ring.Producer().LocalHead();
+    EXPECT_GE(headAfterSix - headAfterThree, 3u * (kPayload + sizeof(RingRecordHeader)));
+
+    while (ring.Consumer().Pop(view)) {
+        EXPECT_EQ(view.flags & kRecPad, 0u) << "a wrap filler reached the record counter";
+        ++popped;
+    }
+    EXPECT_EQ(popped, written) << "the two sides' sequence spaces have drifted by the fillers between them";
+    EXPECT_TRUE(ring.Invariants());
+}
+
+// ---------------------------------------------------------------------------
+// The two flag spaces (P5, after w1's finding). MGPWireRecHeader::Flags IS
+// RingRecordHeader::flags - the two structs are the same eight bytes - and the
+// two enums that name those bits OVERLAP AND DISAGREE. Stamping
+// MGPipeCallFlagsFor(op) into the header is therefore a silent, data-dependent
+// corruption, and the first two bits agreeing is what makes it look right in a
+// debugger.
+//
+// The table below is exhaustive over both enums, and deliberately spells the
+// agreements as well as the collisions: "these two mean the same thing" is a
+// fact the encoder's translation relies on, so it has to be checked too.
+// ---------------------------------------------------------------------------
+
+namespace {
+    constexpr std::uint32_t Call(MobileGL::MG_Pipe::MGPipeCallFlags f) {
+        return static_cast<std::uint32_t>(f);
+    }
+    constexpr std::uint32_t Rec(RingRecordFlags f) {
+        return static_cast<std::uint32_t>(f);
+    }
+} // namespace
+
+TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
+    using namespace MobileGL::MG_Pipe;
+
+    // The two bits that agree. An encoder may pass these through, and w1's does.
+    static_assert(Call(kNeedsAck) == Rec(kRecNeedsAck), "bit 0 stopped agreeing");
+    static_assert(Call(kHasBlob) == Rec(kRecHasBlob), "bit 1 stopped agreeing");
+
+    // The three that collide. Each of these is a live defect if it is ever passed through,
+    // and the middle one was the worst: kRecPad is the flag RingConsumer::Pop reads as "wrap
+    // filler", so on the flag alone a stamped kVarTail would delete every variable-tail call
+    // from the stream with no error raised anywhere. Pop does not read it on the flag alone -
+    // it requires kind == kRingPadRecordKind beside it - and the runtime half below is the
+    // control on exactly that.
+    static_assert(Call(kVarTail) == Rec(kRecPad), "the kVarTail/kRecPad collision moved");
+    static_assert(Call(kHostSpan) == Rec(kRecBorrowSlot), "the kHostSpan/kRecBorrowSlot collision moved");
+    static_assert(Call(kReplySlot) == Rec(kRecVarTail), "the kReplySlot/kRecVarTail collision moved");
+
+    // kOptional HAD no ring counterpart and now has one, which is exactly what this block said
+    // would happen: "bit 5 is unused over there today; if a sixth ring flag is ever added it
+    // lands on this bit, so this is where that is noticed". P12 added it - kRecNoReply, "the
+    // server may skip this record's answer" - so ALL SIX call-flag bits now alias a ring bit and
+    // there is no spare bit left in either space.
+    static_assert(Call(kOptional) == (1u << 5), "kOptional moved");
+    static_assert(Call(kOptional) == Rec(kRecNoReply),
+                  "the kOptional/kRecNoReply collision moved - the sixth and last alias");
+
+    // Exhaustiveness, from both ends. The generator pins kMGPipeCallFlagsAllBits from
+    // MGPipe.h; this pins the ring's own set against it, so ADDING a flag to either enum is a
+    // build break here rather than a wrong decode in the field.
+    //
+    // THE RING SIDE OF THAT IS HAND-WRITTEN, so it is only as exhaustive as this list: a new
+    // enumerator that is not added below leaves the assert green. It has been extended for
+    // kRecNoReply; extend it again rather than reusing the count.
+    static_assert(kMGPipeCallFlagsAllBits == 0x3Fu, "MGPipeCallFlags grew or shrank");
+    constexpr std::uint32_t kAllRingFlags =
+        Rec(kRecNeedsAck) | Rec(kRecHasBlob) | Rec(kRecPad) | Rec(kRecBorrowSlot) | Rec(kRecVarTail) | Rec(kRecNoReply);
+    static_assert(kAllRingFlags == 0x3Fu, "RingRecordFlags grew or shrank");
+
+    // ---- the runtime half, and it is NOT the story the collision table alone suggests ----
+    //
+    // RingProducer::Reserve MASKS kRecPad OUT of whatever the caller passes
+    // (Ring.cpp: `flags & ~kRecPad`). So the worst of the three collisions - a real record
+    // framed as a wrap filler and skipped by Pop - is ALREADY DEFENDED for anyone who goes
+    // through Reserve. That defense is worth knowing about and worth pinning, because it is
+    // also exactly one bit wide: the other two collisions pass straight through.
+    RingFixture ring(1024);
+    const std::uint32_t drawVboCallFlags = MGPipeCallFlagsFor(MGPWireOp::DrawVbo);
+    ASSERT_NE(drawVboCallFlags & Call(kVarTail), 0u) << "draw_vbo stopped being a var-tail call";
+    ASSERT_NE(drawVboCallFlags & Call(kHostSpan), 0u) << "draw_vbo stopped being a host-span call";
+
+    void* payload =
+        ring.Producer().Reserve(static_cast<std::uint16_t>(MGPWireOp::DrawVbo),
+                                static_cast<std::uint16_t>(drawVboCallFlags), // the mistake, made on purpose
+                                16);
+    ASSERT_NE(payload, nullptr);
+    std::memset(payload, 0xAB, 16);
+    ring.Producer().Publish();
+
+    RingRecordView view{};
+    ASSERT_TRUE(ring.Consumer().Pop(view)) << "Reserve stopped masking kRecPad";
+    EXPECT_EQ(view.flags & static_cast<std::uint16_t>(kRecPad), 0u)
+        << "Reserve is what keeps a stamped kVarTail from deleting this record";
+    // ... and here is what IS wrong with it. kHostSpan landed on kRecBorrowSlot and kReplySlot
+    // on kRecVarTail, neither of which Reserve masks. The consumer now believes this record
+    // borrowed a slot into the GPU timeline - so it retires late, on completedFrameSerial
+    // instead of on apply - and that it carries a variable tail it does not have.
+    EXPECT_NE(view.flags & static_cast<std::uint16_t>(kRecBorrowSlot), 0u)
+        << "the kHostSpan/kRecBorrowSlot collision is what makes a stamped header lie about "
+           "this record's lifetime";
+    EXPECT_TRUE(ring.Invariants());
+
+    // The one that Reserve cannot defend: a producer that writes the header ITSELF rather than
+    // letting Reserve write it - which is precisely what a codec with its own header struct
+    // does, since MGPWireRecHeader and RingRecordHeader are the same eight bytes. Then the
+    // mask is not in the path and Pop sees kRecPad on a record that is not a filler.
+    //
+    // What saves it is the KIND. RingConsumer::Pop skips a record only when it carries kRecPad
+    // AND kind == kRingPadRecordKind (Ring.cpp: `(header.flags & kRecPad) != 0 && header.kind ==
+    // kRingPadRecordKind` - "BOTH, not just the flag"). Kind 0 is the wrap filler's and nothing
+    // else's, because the call catalog starts at 1. So the stamped record is DELIVERED, lies
+    // and all, and the decoder can reject it by name - which it can only do because it got it.
+    // THE ASSERT AND THE EXPECTS BELOW ARE THE CONTROL ON THAT KIND CHECK: delete the
+    // `&& header.kind == kRingPadRecordKind` half of Pop's condition and this record vanishes
+    // into the wrap-filler skip again, exactly as it did before the pair was required, and this
+    // case goes red on the ASSERT's own message. That perturbation was run.
+    void* second = ring.Producer().Reserve(static_cast<std::uint16_t>(MGPWireOp::DrawVbo), kRecNone, 16);
+    ASSERT_NE(second, nullptr);
+    std::memset(second, 0xAB, 16);
+    RingRecordHeader stamped{};
+    std::memcpy(&stamped, static_cast<std::uint8_t*>(second) - sizeof(RingRecordHeader), sizeof(stamped));
+    stamped.flags = static_cast<std::uint16_t>(drawVboCallFlags); // no mask in this path
+    std::memcpy(static_cast<std::uint8_t*>(second) - sizeof(RingRecordHeader), &stamped, sizeof(stamped));
+    ring.Producer().Publish();
+
+    ASSERT_TRUE(ring.Consumer().Pop(view))
+        << "the stamped record vanished into Pop's wrap-filler skip. Pop's kind check - a filler "
+           "must carry kind == kRingPadRecordKind as well as kRecPad - is the only thing standing "
+           "between a header stamped with the CALL flags and every var-tail call being deleted "
+           "from the stream with nothing logged on either side";
+    EXPECT_EQ(view.kind, static_cast<std::uint16_t>(MGPWireOp::DrawVbo))
+        << "kind is what Pop tells a real record from a filler by, and a filler's is "
+           "kRingPadRecordKind";
+
+    // Delivered is not the same as correct. The stamped bits arrive verbatim, and they are
+    // exactly the collisions the table above names: bit 2 (kVarTail -> kRecPad) is why this
+    // record looked like a filler at all, and bit 3 (kHostSpan -> kRecBorrowSlot) still makes it
+    // claim a slot in the GPU timeline it never borrowed. draw_vbo is not a kReplySlot call, so
+    // bit 4 (kReplySlot -> kRecVarTail) is clear here; on a blocking call it would lie too.
+    EXPECT_EQ(view.flags, static_cast<std::uint16_t>(drawVboCallFlags))
+        << "the header did not arrive as it was stamped";
+    EXPECT_NE(view.flags & static_cast<std::uint16_t>(kRecPad), 0u)
+        << "the kVarTail/kRecPad collision arrives intact - the kind check narrows the SKIP, it "
+           "does not scrub the bit, and naming this record is the decoder's job";
+    EXPECT_NE(view.flags & static_cast<std::uint16_t>(kRecBorrowSlot), 0u)
+        << "the kHostSpan/kRecBorrowSlot collision is what makes a stamped header lie about "
+           "this record's lifetime";
+    EXPECT_EQ(view.flags & static_cast<std::uint16_t>(kRecVarTail), 0u)
+        << "draw_vbo started carrying kReplySlot; then the third collision lies here too";
+    EXPECT_EQ(view.payloadSize, 16u);
+    EXPECT_TRUE(ring.Invariants());
+
+    // The other side of the same control, so that "the record is popped" cannot be satisfied by
+    // simply not skipping anything: kRecPad on a header whose kind IS kRingPadRecordKind is a
+    // genuine wrap filler and still vanishes. Pop's check was narrowed to the pair, not removed.
+    void* filler = ring.Producer().Reserve(kRingPadRecordKind, kRecNone, 16);
+    ASSERT_NE(filler, nullptr);
+    std::memset(filler, 0xEF, 16);
+    RingRecordHeader asFiller{};
+    std::memcpy(&asFiller, static_cast<std::uint8_t*>(filler) - sizeof(RingRecordHeader), sizeof(asFiller));
+    asFiller.flags = static_cast<std::uint16_t>(kRecPad);
+    std::memcpy(static_cast<std::uint8_t*>(filler) - sizeof(RingRecordHeader), &asFiller, sizeof(asFiller));
+    ring.Producer().Publish();
+
+    EXPECT_FALSE(ring.Consumer().Pop(view))
+        << "a header carrying BOTH kRecPad and kind kRingPadRecordKind is a wrap filler and has "
+           "to be skipped; if it reaches a caller the skip is gone, not narrowed";
+    EXPECT_TRUE(ring.Invariants());
+
+    // And the same record framed the way the encoder actually frames it - translated, with the
+    // ring's own var-tail bit - round-trips intact.
+    void* honest = ring.Producer().Reserve(static_cast<std::uint16_t>(MGPWireOp::DrawVbo), kRecVarTail, 16);
+    ASSERT_NE(honest, nullptr);
+    std::memset(honest, 0xCD, 16);
+    ring.Producer().Publish();
+    ASSERT_TRUE(ring.Consumer().Pop(view));
+    EXPECT_EQ(view.kind, static_cast<std::uint16_t>(MGPWireOp::DrawVbo));
+    EXPECT_EQ(view.flags, static_cast<std::uint16_t>(kRecVarTail));
+    EXPECT_EQ(view.payloadSize, 16u);
+    EXPECT_TRUE(ring.Invariants());
+}

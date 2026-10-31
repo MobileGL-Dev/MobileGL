@@ -46,8 +46,7 @@ namespace MobileGL {
                 bool Is1DSampledImageType(const Instruction* imageType) {
                     return imageType != nullptr && imageType->opcode() == spv::Op::OpTypeImage &&
                            imageType->NumInOperands() > kSampledOperand &&
-                           static_cast<spv::Dim>(imageType->GetSingleWordInOperand(kDimOperand)) ==
-                               spv::Dim::Dim1D &&
+                           static_cast<spv::Dim>(imageType->GetSingleWordInOperand(kDimOperand)) == spv::Dim::Dim1D &&
                            imageType->GetSingleWordInOperand(kSampledOperand) == 1u;
                 }
 
@@ -84,11 +83,10 @@ namespace MobileGL {
                             // Each names its element type in its last in-operand, except arrays,
                             // whose element type is the FIRST. Both are reached here because a
                             // sampler uniform may be declared as an array of samplers.
-                            type = defUseMgr->GetDef(
-                                type->opcode() == spv::Op::OpTypeArray ||
-                                        type->opcode() == spv::Op::OpTypeRuntimeArray
-                                    ? type->GetSingleWordInOperand(0)
-                                    : type->GetSingleWordInOperand(type->NumInOperands() - 1));
+                            type = defUseMgr->GetDef(type->opcode() == spv::Op::OpTypeArray ||
+                                                             type->opcode() == spv::Op::OpTypeRuntimeArray
+                                                         ? type->GetSingleWordInOperand(0)
+                                                         : type->GetSingleWordInOperand(type->NumInOperands() - 1));
                             continue;
                         default:
                             return nullptr;
@@ -108,7 +106,7 @@ namespace MobileGL {
                     Texel,
                     // Reads a property whose result does not depend on Dim. Safe to leave.
                     DimIndependentQuery,
-                    // Recognised, and refused: rewriting the type would change the shape of what
+                    // Recognized, and refused: rewriting the type would change the shape of what
                     // the shader consumes, or the operation is one this pass has no translation
                     // for.
                     Decline,
@@ -225,11 +223,9 @@ namespace MobileGL {
                     bool Any() const { return gradX != 0 || constOffset != 0 || offset != 0; }
                 };
 
-                OperandPositions LocateOperands(const Instruction& instruction,
-                                                uint32_t imageOperandsIndex) {
+                OperandPositions LocateOperands(const Instruction& instruction, uint32_t imageOperandsIndex) {
                     OperandPositions positions;
-                    if (imageOperandsIndex == 0xFFFFFFFFu ||
-                        instruction.NumInOperands() <= imageOperandsIndex) {
+                    if (imageOperandsIndex == 0xFFFFFFFFu || instruction.NumInOperands() <= imageOperandsIndex) {
                         return positions;
                     }
                     const uint32_t mask = instruction.GetSingleWordInOperand(imageOperandsIndex);
@@ -297,8 +293,7 @@ namespace MobileGL {
                     const analysis::Type* type = context->get_type_mgr()->GetType(def->type_id());
                     if (type == nullptr) return shape;
                     const analysis::Vector* asVector = type->AsVector();
-                    const analysis::Type* component =
-                        asVector != nullptr ? asVector->element_type() : type;
+                    const analysis::Type* component = asVector != nullptr ? asVector->element_type() : type;
                     if (component == nullptr) return shape;
                     if (component->AsInteger() == nullptr && component->AsFloat() == nullptr) {
                         return shape;
@@ -341,8 +336,7 @@ namespace MobileGL {
                     for (auto& function : *context->module()) {
                         for (auto& block : function) {
                             for (auto& instruction : block) {
-                                const OpClassification classification =
-                                    ClassifyOpcode(instruction.opcode());
+                                const OpClassification classification = ClassifyOpcode(instruction.opcode());
                                 if (classification.kind != OpKind::Texel ||
                                     instruction.NumInOperands() <= classification.coordinateOperand) {
                                     continue;
@@ -380,15 +374,12 @@ namespace MobileGL {
 
                 RewritePlan PlanRewrite(IRContext* context, const LoweringScope& scope) {
                     RewritePlan plan;
-                    const auto covered = [&scope](const Instruction* type) {
-                        return scope.Covers(type);
-                    };
+                    const auto covered = [&scope](const Instruction* type) { return scope.Covers(type); };
 
                     for (auto& function : *context->module()) {
                         for (auto& block : function) {
                             for (auto& instruction : block) {
-                                const OpClassification classification =
-                                    ClassifyOpcode(instruction.opcode());
+                                const OpClassification classification = ClassifyOpcode(instruction.opcode());
 
                                 if (classification.kind == OpKind::NotImageOp ||
                                     classification.kind == OpKind::DimIndependentQuery) {
@@ -443,19 +434,16 @@ namespace MobileGL {
                                 // (GetPlaneCoordSize(1D) == 1). Checking it up front is what
                                 // keeps the apply phase total.
                                 const ValueShape coordinate = DescribeValue(
-                                    context, instruction.GetSingleWordInOperand(
-                                                 classification.coordinateOperand));
+                                    context, instruction.GetSingleWordInOperand(classification.coordinateOperand));
                                 if (coordinate.componentCount == 0u || coordinate.componentCount > 3u) {
                                     plan.declined = true;
                                     return plan;
                                 }
-                                const uint32_t scalarOperands[] = {positions.gradX, positions.gradY,
-                                                                   positions.offset,
+                                const uint32_t scalarOperands[] = {positions.gradX, positions.gradY, positions.offset,
                                                                    positions.constOffset};
                                 for (const uint32_t position : scalarOperands) {
                                     if (position == 0u) continue;
-                                    if (!DescribeValue(context,
-                                                       instruction.GetSingleWordInOperand(position))
+                                    if (!DescribeValue(context, instruction.GetSingleWordInOperand(position))
                                              .IsScalar()) {
                                         plan.declined = true;
                                         return plan;
@@ -466,14 +454,12 @@ namespace MobileGL {
                                 // possible if the operand really is one.
                                 if (positions.constOffset != 0u &&
                                     context->get_constant_mgr()->FindDeclaredConstant(
-                                        instruction.GetSingleWordInOperand(positions.constOffset)) ==
-                                        nullptr) {
+                                        instruction.GetSingleWordInOperand(positions.constOffset)) == nullptr) {
                                     plan.declined = true;
                                     return plan;
                                 }
 
-                                plan.sites.push_back(
-                                    {&instruction, classification.coordinateOperand, positions});
+                                plan.sites.push_back({&instruction, classification.coordinateOperand, positions});
                             }
                         }
                     }
@@ -481,14 +467,12 @@ namespace MobileGL {
                 }
             } // namespace
 
-            bool Lower1DSampledImagesPass::BinaryHasOffsetOrGrad1DSampledImage(
-                const Vector<Uint32>& binary) {
+            bool Lower1DSampledImagesPass::BinaryHasOffsetOrGrad1DSampledImage(const Vector<Uint32>& binary) {
                 if (binary.empty()) {
                     return false;
                 }
                 std::unique_ptr<IRContext> context = spvtools::BuildModule(
-                    SPV_ENV_VULKAN_1_1,
-                    [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
+                    SPV_ENV_VULKAN_1_1, [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
                     binary.data(), binary.size());
                 if (!context) {
                     return false;
@@ -515,21 +499,17 @@ namespace MobileGL {
                 // pattern, which for a float zero is 0 as well - so one helper serves the integer
                 // coordinate of a fetch, the float coordinate of a sample and the float gradients
                 // alike, without a second spelling to keep in step.
-                const auto zeroOf = [&](const analysis::Type* componentType,
-                                        uint32_t componentTypeId) -> uint32_t {
-                    const analysis::Constant* constant =
-                        constantMgr->GetConstant(componentType, {0u});
+                const auto zeroOf = [&](const analysis::Type* componentType, uint32_t componentTypeId) -> uint32_t {
+                    const analysis::Constant* constant = constantMgr->GetConstant(componentType, {0u});
                     if (constant == nullptr) return 0u;
-                    const Instruction* defining =
-                        constantMgr->GetDefiningInstruction(constant, componentTypeId);
+                    const Instruction* defining = constantMgr->GetDefiningInstruction(constant, componentTypeId);
                     return defining != nullptr ? defining->result_id() : 0u;
                 };
 
                 // The whole of the arity repair, in one place: insert a zero at component 1.
                 // Scalar u becomes (u, 0); (u, layer) becomes (u, 0, layer); (u, q) becomes
                 // (u, 0, q). See the header for why one rule covers every shape.
-                const auto widen = [&](uint32_t valueId, Instruction* before,
-                                       bool mustBeConstant) -> uint32_t {
+                const auto widen = [&](uint32_t valueId, Instruction* before, bool mustBeConstant) -> uint32_t {
                     const ValueShape shape = DescribeValue(irContext, valueId);
                     if (shape.componentCount == 0u) return 0u;
 
@@ -550,18 +530,15 @@ namespace MobileGL {
                         if (!shape.IsScalar()) return 0u;
                         const analysis::Type* widenedType = typeMgr->GetType(widenedTypeId);
                         const analysis::Constant* widenedConstant =
-                            widenedType != nullptr
-                                ? constantMgr->GetConstant(widenedType, {valueId, zeroId})
-                                : nullptr;
+                            widenedType != nullptr ? constantMgr->GetConstant(widenedType, {valueId, zeroId}) : nullptr;
                         if (widenedConstant == nullptr) return 0u;
                         const Instruction* defining =
                             constantMgr->GetDefiningInstruction(widenedConstant, widenedTypeId);
                         return defining != nullptr ? defining->result_id() : 0u;
                     }
 
-                    InstructionBuilder builder(
-                        irContext, before,
-                        IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
+                    InstructionBuilder builder(irContext, before,
+                                               IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
                     std::vector<uint32_t> componentIds;
                     componentIds.reserve(shape.componentCount + 1u);
                     if (shape.IsScalar()) {
@@ -569,15 +546,13 @@ namespace MobileGL {
                         componentIds.push_back(zeroId);
                     } else {
                         for (uint32_t i = 0; i < shape.componentCount; ++i) {
-                            Instruction* extracted =
-                                builder.AddCompositeExtract(componentTypeId, valueId, {i});
+                            Instruction* extracted = builder.AddCompositeExtract(componentTypeId, valueId, {i});
                             if (extracted == nullptr) return 0u;
                             componentIds.push_back(extracted->result_id());
                             if (i == 0u) componentIds.push_back(zeroId);
                         }
                     }
-                    Instruction* widened =
-                        builder.AddCompositeConstruct(widenedTypeId, componentIds);
+                    Instruction* widened = builder.AddCompositeConstruct(widenedTypeId, componentIds);
                     return widened != nullptr ? widened->result_id() : 0u;
                 };
 
@@ -589,19 +564,16 @@ namespace MobileGL {
                         bool mustBeConstant;
                     };
                     const Target targets[] = {
-                        {site.coordinateOperand, false},
-                        {site.operands.gradX, false},
-                        {site.operands.gradY, false},
-                        {site.operands.offset, false},
+                        {site.coordinateOperand, false},   {site.operands.gradX, false},
+                        {site.operands.gradY, false},      {site.operands.offset, false},
                         {site.operands.constOffset, true},
                     };
                     for (const Target& target : targets) {
                         // Position 0 is the image operand, so it is this plan's "absent" marker
                         // for everything except the coordinate, which is never 0.
                         if (target.position == 0u) continue;
-                        const uint32_t widenedId =
-                            widen(instruction->GetSingleWordInOperand(target.position), instruction,
-                                  target.mustBeConstant);
+                        const uint32_t widenedId = widen(instruction->GetSingleWordInOperand(target.position),
+                                                         instruction, target.mustBeConstant);
                         if (widenedId == 0u) {
                             // Reachable only if the module's shapes disagree with what the plan
                             // recorded. Failing here makes the caller keep the input binary,
@@ -631,8 +603,7 @@ namespace MobileGL {
                 // instruction valid and RemoveDuplicates collapses the pair.
                 if (!AnyDim1DSampledTypeLeft(irContext)) {
                     for (Instruction& capability : irContext->capabilities()) {
-                        const auto value =
-                            static_cast<spv::Capability>(capability.GetSingleWordInOperand(0));
+                        const auto value = static_cast<spv::Capability>(capability.GetSingleWordInOperand(0));
                         if (value == spv::Capability::Sampled1D) {
                             capability.SetInOperand(0, {static_cast<uint32_t>(spv::Capability::Shader)});
                         }
@@ -644,8 +615,7 @@ namespace MobileGL {
             }
 
             spvtools::Optimizer::PassToken Lower1DSampledImagesPass::CreateLower1DSampledImagesPass() {
-                return spvtools::Optimizer::PassToken(
-                    spvtools::MakeUnique<Lower1DSampledImagesPass>());
+                return spvtools::Optimizer::PassToken(spvtools::MakeUnique<Lower1DSampledImagesPass>());
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

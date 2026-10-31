@@ -120,8 +120,8 @@ void main() { o_color = vec4(floor(gl_FragCoord.y) / 255.0, 0.0, 0.0, 1.0); }
 
         // Full height first: this one passed even before the fix (a flip alone maps the row set
         // onto itself), so it is the control that the shader and the readback agree at all.
-        EXPECT_TRUE(RowsAreTheirOwnIndex(RowsPaintedWithTheirOwnWindowY(program, width, fullHeight),
-                                         "full-height viewport"));
+        EXPECT_TRUE(
+            RowsAreTheirOwnIndex(RowsPaintedWithTheirOwnWindowY(program, width, fullHeight), "full-height viewport"));
 
         // Half height at GL y=0: the case the CTS failures were made of. A backend that reports
         // the stored row here answers `height - y` for every row - off the bottom of the range,

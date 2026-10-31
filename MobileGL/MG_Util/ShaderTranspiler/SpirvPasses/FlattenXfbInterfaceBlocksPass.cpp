@@ -25,8 +25,8 @@ namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
             namespace {
-                using spvtools::opt::IRContext;
                 using spvtools::opt::Instruction;
+                using spvtools::opt::IRContext;
                 using spvtools::opt::Operand;
                 namespace analysis = spvtools::opt::analysis;
 
@@ -83,8 +83,7 @@ namespace MobileGL {
                 // place it", which declines the whole block rather than guessing.
                 Uint32 LocationSpan(const analysis::Type* type) {
                     if (type == nullptr) return 0;
-                    if (type->AsFloat() != nullptr || type->AsInteger() != nullptr ||
-                        type->AsBool() != nullptr) {
+                    if (type->AsFloat() != nullptr || type->AsInteger() != nullptr || type->AsBool() != nullptr) {
                         return 1u;
                     }
                     if (const auto* vector = type->AsVector()) {
@@ -205,8 +204,7 @@ namespace MobileGL {
                 // publish once, at the end, which is silently the wrong data rather than a
                 // failure - so those stages keep their blocks and the capture keeps its
                 // spelling.
-                const auto executionModel =
-                    static_cast<spv::ExecutionModel>(entryPoint->GetSingleWordInOperand(0));
+                const auto executionModel = static_cast<spv::ExecutionModel>(entryPoint->GetSingleWordInOperand(0));
                 if (executionModel == spv::ExecutionModel::Geometry ||
                     executionModel == spv::ExecutionModel::TessellationControl) {
                     MGLOG_D("FlattenXfbInterfaceBlocksPass: execution model %u publishes outputs outside "
@@ -240,10 +238,8 @@ namespace MobileGL {
 
                 for (Instruction& inst : irContext->types_values()) {
                     if (inst.opcode() != spv::Op::OpVariable) continue;
-                    const auto storageClass =
-                        static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0));
-                    if (storageClass != spv::StorageClass::Input &&
-                        storageClass != spv::StorageClass::Output) {
+                    const auto storageClass = static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0));
+                    if (storageClass != spv::StorageClass::Input && storageClass != spv::StorageClass::Output) {
                         continue;
                     }
                     Instruction* pointerType = defUseMgr->GetDef(inst.type_id());
@@ -254,8 +250,7 @@ namespace MobileGL {
                     if (structType == nullptr) continue;
 
                     const String blockName = FindName(*irContext, pointeeTypeId);
-                    if (blockName.empty() ||
-                        m_blockNames.find(blockName) == m_blockNames.end()) {
+                    if (blockName.empty() || m_blockNames.find(blockName) == m_blockNames.end()) {
                         continue;
                     }
 
@@ -266,8 +261,7 @@ namespace MobileGL {
                     target.blockName = blockName;
 
                     Uint32 blockLocation = 0;
-                    const Bool hasBlockLocation =
-                        FindLocationDecoration(*irContext, inst.result_id(), blockLocation);
+                    const Bool hasBlockLocation = FindLocationDecoration(*irContext, inst.result_id(), blockLocation);
 
                     Bool usable = true;
                     for (auto& annotation : irContext->annotations()) {
@@ -296,8 +290,7 @@ namespace MobileGL {
                             break;
                         }
                         Uint32 memberLocation = 0;
-                        if (FindMemberLocationDecoration(*irContext, pointeeTypeId, memberIndex,
-                                                         memberLocation)) {
+                        if (FindMemberLocationDecoration(*irContext, pointeeTypeId, memberIndex, memberLocation)) {
                             member.location = memberLocation;
                             member.hasLocation = true;
                         } else if (hasBlockLocation) {
@@ -321,7 +314,7 @@ namespace MobileGL {
                 // The entry point's first block, past the leading OpVariable run SPIR-V
                 // requires to stay at the top of a function. Resolved BEFORE anything is
                 // mutated: a decline after the rewrite has started would leave a half-converted
-                // module behind, and the optimizer serialises whatever the module holds
+                // module behind, and the optimizer serializes whatever the module holds
                 // regardless of the status this returns.
                 const Uint32 entryFunctionId = entryPoint->GetSingleWordInOperand(1);
                 spvtools::opt::Function* entryFunction = nullptr;
@@ -337,7 +330,8 @@ namespace MobileGL {
                 {
                     auto& probeBlock = *entryFunction->begin();
                     auto probe = probeBlock.begin();
-                    while (probe != probeBlock.end() && probe->opcode() == spv::Op::OpVariable) ++probe;
+                    while (probe != probeBlock.end() && probe->opcode() == spv::Op::OpVariable)
+                        ++probe;
                     if (probe == probeBlock.end()) return Status::SuccessWithoutChange;
                 }
 
@@ -391,8 +385,7 @@ namespace MobileGL {
                     target.privatePointerTypeId =
                         typeMgr->FindPointerToType(target.structTypeId, spv::StorageClass::Private);
                     for (auto& member : target.members) {
-                        member.interfacePointerTypeId =
-                            typeMgr->FindPointerToType(member.typeId, target.storageClass);
+                        member.interfacePointerTypeId = typeMgr->FindPointerToType(member.typeId, target.storageClass);
                         member.privatePointerTypeId =
                             typeMgr->FindPointerToType(member.typeId, spv::StorageClass::Private);
                     }
@@ -415,8 +408,7 @@ namespace MobileGL {
                         irContext->AddGlobalValue(spvtools::MakeUnique<Instruction>(
                             irContext, spv::Op::OpVariable, member.interfacePointerTypeId, member.variableId,
                             std::initializer_list<Operand>{
-                                {SPV_OPERAND_TYPE_STORAGE_CLASS,
-                                 {static_cast<Uint32>(target.storageClass)}}}));
+                                {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<Uint32>(target.storageClass)}}}));
 
                         // The name IS the contract: it is what the rewritten capture request
                         // asks the driver for, and what makes the producer and consumer of a
@@ -425,18 +417,16 @@ namespace MobileGL {
                         std::vector<Operand> nameOperands;
                         nameOperands.push_back({SPV_OPERAND_TYPE_ID, {member.variableId}});
                         nameOperands.push_back(
-                            {SPV_OPERAND_TYPE_LITERAL_STRING,
-                             spvtools::utils::MakeVector(flatName)});
-                        newNames.push_back(spvtools::MakeUnique<Instruction>(irContext, spv::Op::OpName, 0, 0,
-                                                                             nameOperands));
+                            {SPV_OPERAND_TYPE_LITERAL_STRING, spvtools::utils::MakeVector(flatName)});
+                        newNames.push_back(
+                            spvtools::MakeUnique<Instruction>(irContext, spv::Op::OpName, 0, 0, nameOperands));
 
                         if (member.hasLocation) {
                             newDecorations.push_back(spvtools::MakeUnique<Instruction>(
                                 irContext, spv::Op::OpDecorate, 0, 0,
                                 std::initializer_list<Operand>{
                                     {SPV_OPERAND_TYPE_ID, {member.variableId}},
-                                    {SPV_OPERAND_TYPE_DECORATION,
-                                     {static_cast<Uint32>(spv::Decoration::Location)}},
+                                    {SPV_OPERAND_TYPE_DECORATION, {static_cast<Uint32>(spv::Decoration::Location)}},
                                     {SPV_OPERAND_TYPE_LITERAL_INTEGER, {member.location}}}));
                         }
                     }
@@ -448,8 +438,7 @@ namespace MobileGL {
                         if (annotation.GetSingleWordInOperand(0) != target.structTypeId) continue;
                         const Uint32 memberIndex = annotation.GetSingleWordInOperand(1);
                         if (memberIndex >= target.members.size()) continue;
-                        const auto decoration =
-                            static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(2));
+                        const auto decoration = static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(2));
                         if (!IsMemberDecorationToCarry(decoration)) continue;
                         std::vector<Operand> operands;
                         operands.push_back({SPV_OPERAND_TYPE_ID, {target.members[memberIndex].variableId}});
@@ -467,8 +456,7 @@ namespace MobileGL {
                     // A struct type shared by two flattened variables would otherwise have its
                     // Block decoration killed twice - and the second kill is a use-after-free,
                     // not a no-op.
-                    const Bool structTypeAlreadyStripped =
-                        strippedBlockStructTypes.count(target.structTypeId) != 0;
+                    const Bool structTypeAlreadyStripped = strippedBlockStructTypes.count(target.structTypeId) != 0;
                     strippedBlockStructTypes.insert(target.structTypeId);
                     for (auto& annotation : irContext->annotations()) {
                         if (annotation.opcode() != spv::Op::OpDecorate) continue;
@@ -593,8 +581,7 @@ namespace MobileGL {
                             const Uint32 memberPointerId = irContext->TakeNextId();
                             const Uint32 loadedId = irContext->TakeNextId();
                             returnInst->InsertBefore(spvtools::MakeUnique<Instruction>(
-                                irContext, spv::Op::OpAccessChain, member.privatePointerTypeId,
-                                memberPointerId,
+                                irContext, spv::Op::OpAccessChain, member.privatePointerTypeId, memberPointerId,
                                 std::initializer_list<Operand>{
                                     {SPV_OPERAND_TYPE_ID, {target.variable->result_id()}},
                                     {SPV_OPERAND_TYPE_ID, {memberIndexConstants[memberIndex]}}}));
@@ -618,8 +605,8 @@ namespace MobileGL {
                         spv::StorageClass::Private) {
                         continue;
                     }
-                    pointer->SetResultType(typeMgr->FindPointerToType(resultType->GetSingleWordInOperand(1),
-                                                                      spv::StorageClass::Private));
+                    pointer->SetResultType(
+                        typeMgr->FindPointerToType(resultType->GetSingleWordInOperand(1), spv::StorageClass::Private));
                 }
 
                 if (m_flattenedBlockNames != nullptr) {

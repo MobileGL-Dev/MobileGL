@@ -1,0 +1,96 @@
+// MobileGL - MobileGL/MG_Remote/Server/SurfaceControlFrame.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+#include "SurfaceControlFrame.h"
+
+namespace MobileGL::MG_Remote::Server {
+
+    const char* SurfaceControlOpName(SurfaceControlOp op) {
+        switch (op) {
+        case SurfaceControlOp::None:
+            return "None";
+        case SurfaceControlOp::InitializeDisplay:
+            return "InitializeDisplay";
+        case SurfaceControlOp::CreateWindowSurface:
+            return "CreateWindowSurface";
+        case SurfaceControlOp::CreatePbufferSurface:
+            return "CreatePbufferSurface";
+        case SurfaceControlOp::ResizeWindowSurface:
+            return "ResizeWindowSurface";
+        case SurfaceControlOp::ReleaseSurface:
+            return "ReleaseSurface";
+        case SurfaceControlOp::MakeCurrent:
+            return "MakeCurrent";
+        case SurfaceControlOp::ReleaseCurrent:
+            return "ReleaseCurrent";
+        case SurfaceControlOp::SetSwapInterval:
+            return "SetSwapInterval";
+        case SurfaceControlOp::ReleaseResources:
+            return "ReleaseResources";
+        case SurfaceControlOp::SetWindowHandle:
+            return "SetWindowHandle";
+        case SurfaceControlOp::InitCapabilities:
+            return "InitCapabilities";
+        case SurfaceControlOp::CreateContext:
+            return "CreateContext";
+        case SurfaceControlOp::DestroyContext:
+            return "DestroyContext";
+        case SurfaceControlOp::SwapBuffersInprocOnly:
+            return "SwapBuffersInprocOnly";
+        case SurfaceControlOp::InitWindowSurfaceInprocOnly:
+            return "InitWindowSurfaceInprocOnly";
+        case SurfaceControlOp::ProbeForTesting:
+            return "ProbeForTesting";
+        }
+        return "<unknown SurfaceControlOp>";
+    }
+
+    bool SurfaceControlOpHasWireKind(SurfaceControlOp op) {
+        switch (op) {
+        case SurfaceControlOp::InitializeDisplay:
+        case SurfaceControlOp::CreateWindowSurface:
+        case SurfaceControlOp::CreatePbufferSurface:
+        case SurfaceControlOp::ResizeWindowSurface:
+        case SurfaceControlOp::ReleaseSurface:
+        case SurfaceControlOp::MakeCurrent:
+        case SurfaceControlOp::ReleaseCurrent:
+        case SurfaceControlOp::SetSwapInterval:
+        case SurfaceControlOp::ReleaseResources:
+        case SurfaceControlOp::SetWindowHandle:
+        // cp: the request half of InitCapabilities. Its ANSWER is a CapsSnapshot
+        // frame, which is why this row was missing; the request still has to
+        // cross, because under spawn the apply thread is in another process.
+        case SurfaceControlOp::InitCapabilities:
+        // P14 S1: the context lifecycle. The client's eglCreateContext/eglDestroyContext have a
+        // live caller under spawn (EGLImpl), so unlike the inproc-only trio beside them these two
+        // MUST cross - the server it is asking is in another process.
+        case SurfaceControlOp::CreateContext:
+        case SurfaceControlOp::DestroyContext:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    const char* SurfaceRefusalCodeName(SurfaceRefusalCode code) {
+        switch (code) {
+        case SurfaceRefusalCode::None:
+            return "None";
+        case SurfaceRefusalCode::NoServerDisplay:
+            return "NoServerDisplay";
+        case SurfaceRefusalCode::NoServerWindow:
+            return "NoServerWindow";
+        case SurfaceRefusalCode::SurfaceModeMismatch:
+            return "SurfaceModeMismatch";
+        case SurfaceRefusalCode::ServerOwnedOnSetWindowHandle:
+            return "ServerOwnedOnSetWindowHandle";
+        }
+        return "<unknown SurfaceRefusalCode>";
+    }
+
+} // namespace MobileGL::MG_Remote::Server

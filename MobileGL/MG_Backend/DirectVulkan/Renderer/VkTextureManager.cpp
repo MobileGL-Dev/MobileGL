@@ -6,15 +6,33 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#include "RenderPassGuard.h"
 #include "VkTextureManager.h"
 
 #include "ProgramFactory.h"
 
 #include "MG_State/GLState/Core.h"
+#include <MG_Backend/MGPipe/PipeInputs.h>
 #include "MG_Util/Converters/MGToStr/TextureEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
+#include "MG_Util/Metrics/PipeStats.h"
 
 #include <Config.h>
+// P5f (fm): the handle-keyed texture arm's two sources - the applier's resource records
+// (shape) and the server's staged-texture store (texels).
+#include <MG_Pipe/PipeApply.h>
+#include <MG_Backend/Record/StagedTextureStore.h>
+#include "../DirectVulkan.h"
+// P7 wave 2 package B3: rule I's tally for the silent exits on this file's wire arm.
+#include "WireDeclineTally.h"
+#if MOBILEGL_BUILD_DISAGGREGATED
+// Shared images: a texture whose level 0 is a server-allocated AHardwareBuffer.
+#include <MG_Remote/Server/SharedImageRegistry.h>
+#if defined(__ANDROID__)
+#include <android/hardware_buffer.h>
+#endif
+#endif
+#include <string>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -31,13 +49,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // their feature is off (VUID-vkCmdPipelineBarrier-srcStageMask-04090/-04091), and ALL_GRAPHICS
     // would also serialize against non-shader stages. The default only matters before a device
     // exists, when nothing records barriers.
-    static VkPipelineStageFlags s_sampledReadStages =
-        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    // Per Magma session: each session's renderer is its own device.
+    struct SampledReadStages {
+        VkPipelineStageFlags value = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    };
+    static SessionLocal<SampledReadStages> s_sampledReadStagesSlot;
+
+    static VkImageUsageFlags ResolveTextureUsage(VkImageAspectFlags aspect, VkFormatFeatureFlags formatFeatures,
+                                                 Bool supportsStorageImage) {
+        VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+        if (supportsStorageImage) usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+        // A color aspect does not imply renderability (for example, RGB9_E5).
+        if ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) && (formatFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) {
+            usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        }
+        if (aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
+            usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        }
+        return usage;
+    }
 
     static Uint32 ComputeFullMipLevelCount(const IntVec3& baseTexelSize) {
-        Int maxDimension = std::max<Int>(baseTexelSize.x(),
-                                         std::max<Int>(baseTexelSize.y(), std::max<Int>(baseTexelSize.z(), 1)));
+        Int maxDimension =
+            std::max<Int>(baseTexelSize.x(), std::max<Int>(baseTexelSize.y(), std::max<Int>(baseTexelSize.z(), 1)));
         Uint32 mipLevelCount = 1;
         while (maxDimension > 1) {
             maxDimension = std::max<Int>(maxDimension / 2, 1);
@@ -56,13 +91,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     static Bool IsR11G11B10FFallbackEnabled() {
         return MG_Config::Features.MagmaR11G11B10FFallback;
-    }
-
-    static Bool IsMultisampleTextureUploadTarget(TextureUploadTarget target) {
-        return target == TextureUploadTarget::Texture2DMultisample ||
-               target == TextureUploadTarget::ProxyTexture2DMultisample ||
-               target == TextureUploadTarget::Texture2DMultisampleArray ||
-               target == TextureUploadTarget::ProxyTexture2DMultisampleArray;
     }
 
     static Bool IsMutableStorageImageFormat(VkFormat format) {
@@ -91,8 +119,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VKU_FORMAT_INFO lhsInfo = vkuGetFormatInfo(lhs);
         const VKU_FORMAT_INFO rhsInfo = vkuGetFormatInfo(rhs);
         if (lhsInfo.component_count == 0 || lhsInfo.component_count != rhsInfo.component_count ||
-            lhsInfo.texel_block_size != rhsInfo.texel_block_size ||
-            lhsInfo.texels_per_block != 1 || rhsInfo.texels_per_block != 1) {
+            lhsInfo.texel_block_size != rhsInfo.texel_block_size || lhsInfo.texels_per_block != 1 ||
+            rhsInfo.texels_per_block != 1) {
             return false;
         }
         for (Uint32 component = 0; component < lhsInfo.component_count; ++component) {
@@ -137,8 +165,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static Bool IsCubeMapFaceUploadTarget(TextureUploadTarget target) {
-        return target >= TextureUploadTarget::CubeMapPositiveX &&
-               target <= TextureUploadTarget::CubeMapNegativeZ;
+        return target >= TextureUploadTarget::CubeMapPositiveX && target <= TextureUploadTarget::CubeMapNegativeZ;
     }
 
     static Uint32 ResolveUploadArrayLayer(TextureUploadTarget target) {
@@ -148,27 +175,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return static_cast<Uint32>(target) - static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
     }
 
-    static Bool IsValidSampledImageLayout(VkImageLayout layout) {
-        switch (layout) {
-        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-        case VK_IMAGE_LAYOUT_GENERAL:
-        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
-        case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
-        case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
-            return true;
-        default:
-            return false;
-        }
-    }
-
     static VkImageLayout ResolveSampledReadOnlyLayout(VkImageAspectFlags aspectMask) {
         return (aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0
-            ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-            : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                   ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                   : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
 
-    static void GetImageTransitionSourceState(VkImageLayout oldLayout,
-                                              VkPipelineStageFlags& outSrcStageMask,
+    static void GetImageTransitionSourceState(VkImageLayout oldLayout, VkPipelineStageFlags& outSrcStageMask,
                                               VkAccessFlags& outSrcAccessMask) {
         switch (oldLayout) {
         case VK_IMAGE_LAYOUT_UNDEFINED:
@@ -185,14 +198,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return;
         case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
             outSrcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-            outSrcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            outSrcAccessMask =
+                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
             return;
         case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
         case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
         case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            outSrcStageMask = s_sampledReadStages;
+            outSrcStageMask = s_sampledReadStagesSlot->value;
             outSrcAccessMask = VK_ACCESS_SHADER_READ_BIT;
             return;
         case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
@@ -211,32 +224,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    VkTextureManager::TextureIdentity VkTextureManager::MakeTextureIdentity(
-        MG_State::GLState::ITextureObject* texture) {
-        // A GL texture view (ARB_texture_view) is identified by the texture whose STORAGE it
-        // views, not by itself. Everything this identity keys - the TextureResource, the tracked
-        // image layout, the alive-object weak reference, the storage-usage marks, the per-draw
-        // sync memos - is a property of the IMAGE, and a view shares that image exactly. Doing
-        // the resolution here rather than at each call site is what makes it impossible to miss
-        // one: a layout update posted against a view's own identity would have found no resource
-        // at all, which is precisely how an attached view came back blank.
-        //
-        // One hop suffices and cannot recurse: glTextureView composes a view-of-a-view onto the
-        // root at creation, so a storage owner is never itself a view.
-        if (texture != nullptr) {
-            const auto& storageOwner = texture->GetViewStorageOwner();
-            if (storageOwner) {
-                texture = storageOwner.get();
-            }
-        }
-        return TextureIdentity{
-            .texture = texture,
-            .lifetimeId = texture ? texture->GetLifetimeId() : 0,
-        };
-    }
-
-    static void GetImageTransitionDestinationState(VkImageLayout newLayout,
-                                                   VkPipelineStageFlags& outDstStageMask,
+    static void GetImageTransitionDestinationState(VkImageLayout newLayout, VkPipelineStageFlags& outDstStageMask,
                                                    VkAccessFlags& outDstAccessMask) {
         switch (newLayout) {
         case VK_IMAGE_LAYOUT_GENERAL:
@@ -249,14 +237,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return;
         case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
             outDstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-            outDstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            outDstAccessMask =
+                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
             return;
         case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
         case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
         case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            outDstStageMask = s_sampledReadStages;
+            outDstStageMask = s_sampledReadStagesSlot->value;
             outDstAccessMask = VK_ACCESS_SHADER_READ_BIT;
             return;
         case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
@@ -268,18 +256,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             outDstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
             return;
         default:
-            MOBILEGL_ASSERT(false, "GetImageTransitionDestinationState: unsupported layout=%d", static_cast<Int>(newLayout));
+            MOBILEGL_ASSERT(false, "GetImageTransitionDestinationState: unsupported layout=%d",
+                            static_cast<Int>(newLayout));
             outDstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
             outDstAccessMask = 0;
             return;
         }
     }
 
-    static Bool PreserveTextureContentsOnRecreate(VkDevice device,
-                                                  VkCommandPool commandPool,
-                                                  VkQueue graphicsQueue,
+    static Bool PreserveTextureContentsOnRecreate(VkDevice device, VkCommandPool commandPool, VkQueue graphicsQueue,
                                                   const VkTextureManager::TextureResource& oldResource,
-                                                  VkTextureManager::TextureResource& newResource) {
+                                                  VkTextureManager::TextureResource& newResource,
+                                                  Bool splitAspects = false, VkTextureManager* rawE5Manager = nullptr) {
         MOBILEGL_ASSERT(device != VK_NULL_HANDLE, "PreserveTextureContentsOnRecreate: device is null");
         MOBILEGL_ASSERT(commandPool != VK_NULL_HANDLE, "PreserveTextureContentsOnRecreate: commandPool is null");
         MOBILEGL_ASSERT(graphicsQueue != VK_NULL_HANDLE, "PreserveTextureContentsOnRecreate: graphicsQueue is null");
@@ -308,23 +296,79 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         Bool ok = VkTextureManager::TransitionImageLayout(
             commandBuffer, newResource.image, newResource.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0, VK_ACCESS_TRANSFER_WRITE_BIT, newResource.aspect, 0, newResource.mipLevels);
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+            newResource.aspect, 0, newResource.mipLevels);
         MOBILEGL_ASSERT(ok, "PreserveTextureContentsOnRecreate: failed to prepare destination image");
 
+        // E5B9G9R9 on a device whose transfer reads canonicalize it: each level leaves through the
+        // raw route (WireE5RawCopy.h) into a twin, and the twins are copied instead. The old image
+        // and the new one must agree on the shape for the twin's single-level copy to stand in.
+        const Bool rawE5 = rawE5Manager != nullptr && rawE5Manager->WireE5RawReadApplies(oldResource) &&
+                           newResource.format == oldResource.format && newResource.viewType == oldResource.viewType;
         VkImageLayout srcTrackedLayout = oldResource.layout;
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcAccessMask = 0;
         GetImageTransitionSourceState(srcTrackedLayout, srcStageMask, srcAccessMask);
         ok = VkTextureManager::TransitionImageLayout(
-            commandBuffer, oldResource.image, srcTrackedLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, oldResource.aspect, 0, preservedMipLevels);
+            commandBuffer, oldResource.image, srcTrackedLayout,
+            rawE5 ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, srcStageMask,
+            rawE5 ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask,
+            rawE5 ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_TRANSFER_READ_BIT, oldResource.aspect, 0, preservedMipLevels);
         MOBILEGL_ASSERT(ok, "PreserveTextureContentsOnRecreate: failed to prepare source image");
+
+        // Destroyed after the fence wait below, which is the twins' last use.
+        Vector<VkTextureManager::TextureResource> rawTwins;
+        Vector<WireE5RawCopyObjects> rawObjects;
+        if (rawE5) {
+            rawTwins.reserve(preservedMipLevels);
+            const Bool volume = oldResource.viewType == VK_IMAGE_VIEW_TYPE_3D;
+            for (Uint32 level = 0; level < preservedMipLevels; ++level) {
+                WireE5RawCopyRegion region;
+                region.source = oldResource.image;
+                region.volume = volume;
+                region.level = level;
+                region.layerCount = volume ? 1u : std::min(oldResource.arrayLayers, newResource.arrayLayers);
+                region.extent = {std::max(std::min(oldResource.extent.width, newResource.extent.width) >> level, 1u),
+                                 std::max(std::min(oldResource.extent.height, newResource.extent.height) >> level, 1u),
+                                 volume ? std::max(std::min(oldResource.depth, newResource.depth) >> level, 1u) : 1u};
+                VkTextureManager::TextureResource twin;
+                WireE5RawCopyObjects objects;
+                if (!rawE5Manager->RecordWireE5RawTwin(commandBuffer, region, VK_IMAGE_LAYOUT_GENERAL, twin, objects))
+                    break;
+                VkImageCopy copy{};
+                copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, region.layerCount};
+                copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, region.layerCount};
+                copy.extent = region.extent;
+                vkCmdCopyImage(commandBuffer, twin.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, newResource.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                rawTwins.push_back(Move(twin));
+                rawObjects.push_back(objects);
+            }
+            if (rawTwins.size() != preservedMipLevels) {
+                // A twin could not be made: the remaining levels go by transfer (canonicalized,
+                // as every level was before the route) rather than not at all.
+                MGLOG_W_ONCE("PreserveTextureContentsOnRecreate: the raw E5B9G9R9 route failed; levels %zu.. "
+                             "are copied by transfer",
+                             rawTwins.size());
+            }
+        }
+        const Uint32 firstTransferLevel = static_cast<Uint32>(rawTwins.size());
+        if (rawE5 && firstTransferLevel < preservedMipLevels) {
+            VkImageMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            toTransfer.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            toTransfer.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            toTransfer.srcQueueFamilyIndex = toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toTransfer.image = oldResource.image;
+            toTransfer.subresourceRange = {oldResource.aspect, 0, preservedMipLevels, 0, VK_REMAINING_ARRAY_LAYERS};
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                 0, nullptr, 0, nullptr, 1, &toTransfer);
+        }
 
         Vector<VkImageCopy> copyRegions;
         copyRegions.reserve(preservedMipLevels);
-        for (Uint32 level = 0; level < preservedMipLevels; ++level) {
+        for (Uint32 level = firstTransferLevel; level < preservedMipLevels; ++level) {
             VkImageCopy copy{};
             copy.srcSubresource.aspectMask = oldResource.aspect;
             copy.srcSubresource.mipLevel = level;
@@ -337,21 +381,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             copy.extent.width = std::max(oldResource.extent.width >> level, 1u);
             copy.extent.height = std::max(oldResource.extent.height >> level, 1u);
             copy.extent.depth = std::max(oldResource.depth >> level, 1u);
-            copyRegions.push_back(copy);
+            if (splitAspects) {
+                for (const VkImageAspectFlags aspect :
+                     {VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_ASPECT_STENCIL_BIT}) {
+                    if ((oldResource.aspect & aspect) == 0) continue;
+                    copy.srcSubresource.aspectMask = aspect;
+                    copy.dstSubresource.aspectMask = aspect;
+                    copyRegions.push_back(copy);
+                }
+            } else
+                copyRegions.push_back(copy);
         }
 
-        vkCmdCopyImage(commandBuffer,
-                       oldResource.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       newResource.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                       static_cast<Uint32>(copyRegions.size()), copyRegions.data());
+        EndActiveRenderPassOn(commandBuffer);
+        if (!copyRegions.empty())
+            vkCmdCopyImage(commandBuffer, oldResource.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, newResource.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<Uint32>(copyRegions.size()),
+                           copyRegions.data());
 
         VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags dstAccessMask = 0;
         GetImageTransitionDestinationState(oldResource.layout, dstStageMask, dstAccessMask);
         ok = VkTextureManager::TransitionImageLayout(
-            commandBuffer, newResource.image, newResource.layout, oldResource.layout,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, dstStageMask,
-            VK_ACCESS_TRANSFER_WRITE_BIT, dstAccessMask, newResource.aspect, 0, newResource.mipLevels);
+            commandBuffer, newResource.image, newResource.layout, oldResource.layout, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            dstStageMask, VK_ACCESS_TRANSFER_WRITE_BIT, dstAccessMask, newResource.aspect, 0, newResource.mipLevels);
         MOBILEGL_ASSERT(ok, "PreserveTextureContentsOnRecreate: failed to restore destination layout");
 
         VK_VERIFY(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer(texture preserve)");
@@ -367,6 +420,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VK_VERIFY(vkCreateFence(device, &fenceInfo, nullptr, &fence), "vkCreateFence(texture preserve)");
         VK_VERIFY(vkQueueSubmit(graphicsQueue, 1, &submitInfo, fence), "vkQueueSubmit(texture preserve)");
         VK_VERIFY(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX), "vkWaitForFences(texture preserve)");
+        for (WireE5RawCopyObjects& objects : rawObjects)
+            DestroyWireE5RawCopyObjects(device, objects);
 
         vkDestroyFence(device, fence, nullptr);
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
@@ -435,10 +490,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(formatInfo.componentByteCount > 0,
                         "ExpandRgbSourceToRgba: invalid component size for expanded RGB format");
 
+        if (!source || texelSize.x() <= 0 || texelSize.y() <= 0 || !formatInfo.componentByteCount ||
+            formatInfo.componentByteCount > formatInfo.alphaBytes.size())
+            return false;
         const SizeT depth = static_cast<SizeT>(std::max(texelSize.z(), 1));
-        const SizeT pixelCount = static_cast<SizeT>(texelSize.x()) * static_cast<SizeT>(texelSize.y()) * depth;
-        MOBILEGL_ASSERT(pixelCount > 0, "ExpandRgbSourceToRgba: invalid texel size (%d, %d, %d)",
-                        texelSize.x(), texelSize.y(), texelSize.z());
+        const SizeT width = static_cast<SizeT>(texelSize.x());
+        const SizeT height = static_cast<SizeT>(texelSize.y());
+        if (height > std::numeric_limits<SizeT>::max() / width ||
+            depth > std::numeric_limits<SizeT>::max() / width / height)
+            return false;
+        const SizeT pixelCount = width * height * depth;
+        if (pixelCount > std::numeric_limits<SizeT>::max() / (formatInfo.componentByteCount * 4) ||
+            sourceByteSize != pixelCount * formatInfo.componentByteCount * 3)
+            return false;
+        MOBILEGL_ASSERT(pixelCount > 0, "ExpandRgbSourceToRgba: invalid texel size (%d, %d, %d)", texelSize.x(),
+                        texelSize.y(), texelSize.z());
         MOBILEGL_ASSERT(sourceByteSize == pixelCount * formatInfo.componentByteCount * 3,
                         "ExpandRgbSourceToRgba: unexpected source byte size=%zu for pixelCount=%zu componentBytes=%u",
                         sourceByteSize, pixelCount, formatInfo.componentByteCount);
@@ -457,151 +523,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-    static VkComponentSwizzle ToVkComponentSwizzle(TextureSwizzleParam swizzle) {
-        switch (swizzle) {
-        case TextureSwizzleParam::Red:
-            return VK_COMPONENT_SWIZZLE_R;
-        case TextureSwizzleParam::Green:
-            return VK_COMPONENT_SWIZZLE_G;
-        case TextureSwizzleParam::Blue:
-            return VK_COMPONENT_SWIZZLE_B;
-        case TextureSwizzleParam::Alpha:
-            return VK_COMPONENT_SWIZZLE_A;
-        case TextureSwizzleParam::Zero:
-            return VK_COMPONENT_SWIZZLE_ZERO;
-        case TextureSwizzleParam::One:
-            return VK_COMPONENT_SWIZZLE_ONE;
-        default:
-            MOBILEGL_ASSERT(false, "ToVkComponentSwizzle: unsupported swizzle=%d", static_cast<Int>(swizzle));
-            return VK_COMPONENT_SWIZZLE_IDENTITY;
-        }
-    }
-
-    static VkComponentSwizzle ToVkSampledComponentSwizzle(TextureSwizzleParam swizzle, Bool alphaIsImplicitOne) {
-        if (alphaIsImplicitOne && swizzle == TextureSwizzleParam::Alpha) {
-            return VK_COMPONENT_SWIZZLE_ONE;
-        }
-        return ToVkComponentSwizzle(swizzle);
-    }
-
-    static VkComponentMapping ResolveSampledViewComponents(const MG_State::GLState::ITextureObject& texture,
-                                                           const TextureFormatInfo& formatInfo) {
-        const auto& swizzles = texture.GetAllSwizzleParams();
-        const Bool alphaIsImplicitOne = formatInfo.expandRgbToRgba;
-        VkComponentMapping components{
-            ToVkSampledComponentSwizzle(swizzles.x(), alphaIsImplicitOne),
-            ToVkSampledComponentSwizzle(swizzles.y(), alphaIsImplicitOne),
-            ToVkSampledComponentSwizzle(swizzles.z(), alphaIsImplicitOne),
-            ToVkSampledComponentSwizzle(swizzles.w(), alphaIsImplicitOne),
-        };
-        return components;
-    }
-
-    static Bool TryResolveTextureShapeInfo(const MG_State::GLState::ITextureObject& texture,
-                                           TextureUploadTarget uploadTarget, const IntVec3& texelSize,
-                                           TextureShapeInfo& outShape) {
-        switch (uploadTarget) {
-        case TextureUploadTarget::Texture1D:
-        case TextureUploadTarget::ProxyTexture1D:
-            outShape = {};
-            outShape.imageType = VK_IMAGE_TYPE_1D;
-            outShape.viewType = VK_IMAGE_VIEW_TYPE_1D;
-            return true;
-        case TextureUploadTarget::Texture1DArray:
-        case TextureUploadTarget::ProxyTexture1DArray:
-            MOBILEGL_ASSERT(texelSize.z() > 0,
-                            "TryResolveTextureShapeInfo: invalid 1D array depth=%d for textureId=%d",
-                            texelSize.z(), texture.GetExternalIndex());
-            outShape.imageType = VK_IMAGE_TYPE_1D;
-            outShape.viewType = VK_IMAGE_VIEW_TYPE_1D_ARRAY;
-            outShape.depth = 1;
-            outShape.arrayLayers = static_cast<Uint32>(texelSize.z());
-            return true;
-        case TextureUploadTarget::Texture2D:
-        case TextureUploadTarget::ProxyTexture2D:
-        case TextureUploadTarget::TextureRectangle:
-        case TextureUploadTarget::ProxyTextureRectangle:
-            outShape = {};
-            return true;
-        case TextureUploadTarget::Texture2DMultisample:
-        case TextureUploadTarget::ProxyTexture2DMultisample:
-            outShape = {};
-            return true;
-        case TextureUploadTarget::Texture2DArray:
-        case TextureUploadTarget::ProxyTexture2DArray:
-            MOBILEGL_ASSERT(texelSize.z() > 0,
-                            "TryResolveTextureShapeInfo: invalid 2D array depth=%d for textureId=%d",
-                            texelSize.z(), texture.GetExternalIndex());
-            outShape.imageType = VK_IMAGE_TYPE_2D;
-            outShape.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-            outShape.depth = 1;
-            outShape.arrayLayers = static_cast<Uint32>(texelSize.z());
-            return true;
-        case TextureUploadTarget::Texture2DMultisampleArray:
-        case TextureUploadTarget::ProxyTexture2DMultisampleArray:
-            MOBILEGL_ASSERT(texelSize.z() > 0,
-                            "TryResolveTextureShapeInfo: invalid 2D multisample array depth=%d for textureId=%d",
-                            texelSize.z(), texture.GetExternalIndex());
-            outShape.imageType = VK_IMAGE_TYPE_2D;
-            outShape.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-            outShape.depth = 1;
-            outShape.arrayLayers = static_cast<Uint32>(texelSize.z());
-            return true;
-        case TextureUploadTarget::Texture3D:
-        case TextureUploadTarget::ProxyTexture3D:
-            MOBILEGL_ASSERT(texelSize.z() > 0,
-                            "TryResolveTextureShapeInfo: invalid 3D texture depth=%d for textureId=%d",
-                            texelSize.z(), texture.GetExternalIndex());
-            outShape.imageType = VK_IMAGE_TYPE_3D;
-            outShape.viewType = VK_IMAGE_VIEW_TYPE_3D;
-            outShape.depth = static_cast<Uint32>(texelSize.z());
-            return true;
-        case TextureUploadTarget::CubeMapPositiveX:
-        case TextureUploadTarget::CubeMapNegativeX:
-        case TextureUploadTarget::CubeMapPositiveY:
-        case TextureUploadTarget::CubeMapNegativeY:
-        case TextureUploadTarget::CubeMapPositiveZ:
-        case TextureUploadTarget::CubeMapNegativeZ:
-        case TextureUploadTarget::ProxyCubeMap:
-            MOBILEGL_ASSERT(texture.GetTarget() == TextureTarget::TextureCubeMap,
-                            "TryResolveTextureShapeInfo: cube upload target on non-cube textureId=%d target=%s",
-                            texture.GetExternalIndex(),
-                            MG_Util::ConvertTextureTargetToString(texture.GetTarget()).c_str());
-            MOBILEGL_ASSERT(texelSize.x() == texelSize.y(),
-                            "TryResolveTextureShapeInfo: cube map textureId=%d is not square (%d x %d)",
-                            texture.GetExternalIndex(), texelSize.x(), texelSize.y());
-            outShape.imageType = VK_IMAGE_TYPE_2D;
-            outShape.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
-            outShape.imageFlags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-            outShape.depth = 1;
-            outShape.arrayLayers = 6;
-            return true;
-        case TextureUploadTarget::CubeMapArray:
-        case TextureUploadTarget::ProxyCubeMapArray:
-            // GL_TEXTURE_CUBE_MAP_ARRAY is an array texture whose layers happen to be cube faces:
-            // one 2D image with arrayLayers = 6 * cubeCount, CUBE_COMPATIBLE so the whole thing can
-            // be sampled as a samplerCubeArray. glTexStorage3D hands the 6*n through as the GL depth
-            // and the upload path's depthSelectsArrayLayer already lists VK_IMAGE_VIEW_TYPE_CUBE_ARRAY,
-            // so the copies address layers correctly.
-            //
-            // A depth that is not a whole number of cubes, or a non-square level, has no Vulkan shape
-            // - declined the way every other unrepresentable target is. This function's Bool return
-            // exists for exactly that; asserting here would abort the process on ordinary application
-            // input, GL_PROXY_TEXTURE_CUBE_MAP_ARRAY above all.
-            if (texelSize.z() <= 0 || (texelSize.z() % 6) != 0 || texelSize.x() != texelSize.y()) {
-                return false;
-            }
-            outShape.imageType = VK_IMAGE_TYPE_2D;
-            outShape.viewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
-            outShape.imageFlags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-            outShape.depth = 1;
-            outShape.arrayLayers = static_cast<Uint32>(texelSize.z());
-            return true;
-        default:
-            return false;
-        }
-    }
-
     Bool VkTextureManager::Initialize(const InitInfo& initInfo) {
         Shutdown();
 
@@ -611,21 +532,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_commandPool = initInfo.commandPool;
         m_graphicsQueue = initInfo.graphicsQueue;
         m_imageFormatListSupported = initInfo.imageFormatListSupported;
-        s_sampledReadStages = initInfo.sampledReadStageMask;
+        s_sampledReadStagesSlot->value = initInfo.sampledReadStageMask;
         m_currentFrameIndex = 0;
         m_deferredReleases.clear();
         m_deferredReleases.resize(initInfo.frameCount);
         m_deferredViewReleases.clear();
         m_deferredViewReleases.resize(initInfo.frameCount);
+        m_deferredE5Releases.clear();
+        m_deferredE5Releases.resize(initInfo.frameCount);
 
         MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE && m_physicalDevice != VK_NULL_HANDLE && m_allocator != nullptr &&
                             m_commandPool != VK_NULL_HANDLE && m_graphicsQueue != VK_NULL_HANDLE,
                         "VkTextureManager::Initialize failed: invalid initialization info");
-        MOBILEGL_ASSERT(initInfo.frameCount > 0,
-                        "VkTextureManager::Initialize failed: frameCount must be > 0");
+        MOBILEGL_ASSERT(initInfo.frameCount > 0, "VkTextureManager::Initialize failed: frameCount must be > 0");
 
-        TextureResource::s_device = m_device;
-        TextureResource::s_allocator = m_allocator;
+        TextureResource::s_device.Get() = m_device;
+        TextureResource::s_allocator.Get() = m_allocator;
 
         // Own pool for the recycled upload-batch command buffers. Parking a
         // dozen reset-but-alive command buffers in the renderer's shared pool
@@ -633,8 +555,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // allocated/freed there every frame; isolating them keeps both pools'
         // internal allocators dense.
         VkCommandPoolCreateInfo uploadPoolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-        uploadPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT |
-                               VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        uploadPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
         uploadPoolInfo.queueFamilyIndex = initInfo.graphicsQueueFamilyIndex;
         VK_VERIFY(vkCreateCommandPool(m_device, &uploadPoolInfo, nullptr, &m_uploadCommandPool),
                   "vkCreateCommandPool(texture upload batch)");
@@ -657,10 +578,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         DestroyDeferredReleases();
-        ++m_resourceEraseEpoch;  // every memoized resource pointer dies with the map
-        m_textureResources.clear();
-        m_aliveObjects.clear();
-        m_storageImageTextures.clear();
+        ++m_resourceEraseEpoch; // every memoized resource pointer dies with the map
+        // Destroy images while the device/allocator still exist, including after context death.
+        m_wireTextureResources.clear();
+        m_wireRenderbufferResources.clear();
+        m_sharedImageUses.clear();
 
         m_device = VK_NULL_HANDLE;
         m_physicalDevice = VK_NULL_HANDLE;
@@ -672,11 +594,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VkTextureManager::BeginFrame(Uint32 frameIndex) {
         MOBILEGL_ASSERT(frameIndex < m_deferredReleases.size(),
-                        "VkTextureManager::BeginFrame invalid frame index %u (size=%zu)",
-                        frameIndex, m_deferredReleases.size());
+                        "VkTextureManager::BeginFrame invalid frame index %u (size=%zu)", frameIndex,
+                        m_deferredReleases.size());
         MOBILEGL_ASSERT(frameIndex < m_deferredViewReleases.size(),
-                        "VkTextureManager::BeginFrame invalid deferred-view frame index %u (size=%zu)",
-                        frameIndex, m_deferredViewReleases.size());
+                        "VkTextureManager::BeginFrame invalid deferred-view frame index %u (size=%zu)", frameIndex,
+                        m_deferredViewReleases.size());
         m_currentFrameIndex = frameIndex;
         CollectDeferredReleases(frameIndex);
         ReclaimCompletedUploads();
@@ -702,989 +624,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    void VkTextureManager::EraseTrackedTexture(const TextureIdentity& identity) {
-        m_viewRequestedImageFlags.erase(identity);
-        m_viewRequestedFormats.erase(identity);
-        auto resourceIt = m_textureResources.find(identity);
-        if (resourceIt != m_textureResources.end()) {
-            DeferResourceRelease(Move(resourceIt->second));
-            m_textureResources.erase(resourceIt);
-        }
-        m_aliveObjects.erase(identity);
-        m_storageImageTextures.erase(identity);
-        // Invalidate every cross-draw sampled-texture memo: the erased
-        // resource's address may be reused by a future emplace.
-        ++m_resourceEraseEpoch;
-    }
-
-    void VkTextureManager::PruneStaleTextureAliases(MG_State::GLState::ITextureObject* texture) {
-        if (texture == nullptr) {
-            return;
-        }
-
-        Vector<TextureIdentity> staleAliases;
-        for (auto it = m_aliveObjects.begin(); it != m_aliveObjects.end(); ++it) {
-            if (it->first.texture != texture) {
-                continue;
-            }
-            const auto liveTexture = it->second.lock();
-            if (!liveTexture || liveTexture.get() != texture ||
-                liveTexture->GetLifetimeId() != it->first.lifetimeId) {
-                staleAliases.emplace_back(it->first);
-            }
-        }
-        for (const auto& identity : staleAliases) {
-            EraseTrackedTexture(identity);
-        }
-    }
-
-    void VkTextureManager::BeginDrawSyncScope() {
-        m_drawSyncedThisDraw.clear();
-        m_drawSyncScopeActive = true;
-    }
-
-    void VkTextureManager::EndDrawSyncScope() {
-        m_drawSyncScopeActive = false;
-        m_drawSyncedThisDraw.clear();
-    }
-
-    VkTextureManager::TextureResource* VkTextureManager::SyncTextureAndGetDescriptor(MG_State::GLState::ITextureObject& textureOrView) {
-        MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE, "SyncTextureAndGetDescriptor: m_device == VK_NULL_HANDLE");
-
-        // A GL texture view has no image of its own; it resolves to - and shares - the resource
-        // of the texture whose storage it views, so that there is exactly one VkImage, one
-        // tracked layout and one upload path per storage. Everything that makes the view a
-        // different texture (format, level/layer window, sampled aspect) is applied where the
-        // VkImageViews are built, keyed in alternateSampledViews / attachmentViews.
-        MG_State::GLState::ITextureObject& texture = StorageTextureOf(textureOrView);
-        if (&texture != &textureOrView) {
-            NoteTextureViewImageRequirements(textureOrView, texture);
-        }
-
-        const TextureIdentity identity = MakeTextureIdentity(&texture);
-
-        // Per-draw memo fast path (see BeginDrawSyncScope): a texture already fully
-        // synced earlier in this draw cannot have changed since (no GL mutation runs
-        // mid-SetupDraw), so skip the heavy SyncTexture work and hand back the
-        // already-synced resource. Layout lives on the resource and is updated by the
-        // transition path, so the short-circuited resource still reflects the truth.
-        const Bool memoActive = m_drawSyncScopeActive;
-        if (memoActive) {
-            for (const DrawSyncedTexture& synced : m_drawSyncedThisDraw) {
-                if (synced.identity == identity) {
-                    if (synced.resource != nullptr && synced.resource->image != VK_NULL_HANDLE) {
-                        return synced.resource;
-                    }
-                    break;  // resource unexpectedly gone -> fall through to a full sync
-                }
-            }
-        }
-
-        // Cross-draw memo probe (see SyncedTextureMemoEntry): skips both map
-        // lookups and the (re)registration path for repeat-bound textures.
-        TextureResource* resourcePtr = nullptr;
-        for (Uint32 i = 0; i < kSyncedTextureMemoSize; ++i) {
-            const SyncedTextureMemoEntry& memo = m_syncedTextureMemo[i];
-            if (memo.texture == &texture && memo.lifetimeId == identity.lifetimeId &&
-                memo.eraseEpoch == m_resourceEraseEpoch) {
-                resourcePtr = memo.resource;
-                break;
-            }
-        }
-
-        if (resourcePtr == nullptr) {
-            auto aliveIt = m_aliveObjects.find(identity);
-            if (aliveIt != m_aliveObjects.end() && aliveIt->second.expired()) {
-                EraseTrackedTexture(aliveIt->first);
-                aliveIt = m_aliveObjects.end();
-            }
-
-            // Only (re)register and prune when this (texture, lifetime) pair is new: stale
-            // aliases can only come into existence through an address reuse, which by
-            // construction introduces a new identity. Doing this unconditionally made every
-            // sampled-texture sync scan the entire alive-texture map per draw.
-            if (aliveIt == m_aliveObjects.end()) {
-                WeakPtr<MG_State::GLState::ITextureObject> aliveTexture;
-                const auto& liveTexture = MG_State::pGLContext->GetTextureObject(texture.GetExternalIndex());
-                if (liveTexture && liveTexture.get() == &texture) {
-                    aliveTexture = liveTexture;
-                } else {
-                    // The name lookup legally fails while the object is alive: the name was
-                    // deleted with the texture still attached to an FBO (the attachment's
-                    // SharedPtr keeps it alive), or the name was reused by a new texture, or
-                    // this is a default texture object (name 0 lives outside the name map).
-                    // Register through the object's own control block so the resource created
-                    // below still participates in weak-expiry GC instead of becoming an
-                    // orphan no reclamation path can reach until Shutdown.
-                    aliveTexture = texture.weak_from_this();
-                }
-                if (!aliveTexture.expired()) {
-                    m_aliveObjects[identity] = Move(aliveTexture);
-                    PruneStaleTextureAliases(&texture);
-                }
-            }
-
-            auto it = m_textureResources.find(identity);
-            if (it == m_textureResources.end()) {
-                TextureResource initial{};
-                auto [insertIt, _] = m_textureResources.emplace(identity, Move(initial));
-                it = insertIt;
-            }
-            resourcePtr = &(it->second);
-            m_syncedTextureMemo[m_syncedTextureMemoNext] =
-                SyncedTextureMemoEntry{&texture, identity.lifetimeId, m_resourceEraseEpoch, resourcePtr};
-            m_syncedTextureMemoNext = (m_syncedTextureMemoNext + 1) % kSyncedTextureMemoSize;
-        }
-
-        if (!SyncTexture(texture, *resourcePtr)) {
-            MGLOG_D("%s: Syncing texture %d failed", __func__, texture.GetExternalIndex());
-            return nullptr;
-        }
-
-        if (memoActive) {
-            Bool recorded = false;
-            for (const DrawSyncedTexture& synced : m_drawSyncedThisDraw) {
-                if (synced.identity == identity) {
-                    recorded = true;
-                    break;
-                }
-            }
-            if (!recorded) {
-                m_drawSyncedThisDraw.push_back({identity, resourcePtr});
-            }
-        }
-
-        return resourcePtr;
-    }
-
-    VkImageView VkTextureManager::GetOrCreateViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel) {
-        TextureResource* resource = SyncTextureAndGetDescriptor(texture);
-        if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
-            return VK_NULL_HANDLE;
-        }
-        // A GL texture view shares this resource with the texture it views, so it must not touch
-        // perMipViews: that vector is indexed by mip level alone and holds views built with the
-        // STORAGE texture's format and full layer range. Route it through the keyed attachment
-        // cache instead, where its own window is part of the key.
-        if (texture.IsTextureView()) {
-            const TextureViewWindow window = ResolveTextureViewWindow(texture, *resource);
-            return GetOrCreateAttachmentViewAtMipLevel(texture, mipLevel, window.baseArrayLayer, window.layerCount,
-                                                       window.viewType);
-        }
-        if (mipLevel >= resource->mipLevels) {
-            return VK_NULL_HANDLE;
-        }
-
-        if (resource->perMipViews.size() != resource->mipLevels) {
-            resource->perMipViews.resize(resource->mipLevels, VK_NULL_HANDLE);
-        }
-
-        VkImageView& perMipView = resource->perMipViews[mipLevel];
-        if (perMipView != VK_NULL_HANDLE) {
-            return perMipView;
-        }
-
-        perMipView = CreateImageView(resource->image, resource->format, resource->aspect, resource->viewType,
-                                     mipLevel, 1, 0, resource->arrayLayers);
-        if (perMipView == VK_NULL_HANDLE) {
-            MGLOG_D("%s: CreateImageView failed for textureId=%d mipLevel=%u", __func__, texture.GetExternalIndex(), mipLevel);
-            return VK_NULL_HANDLE;
-        }
-
-        return perMipView;
-    }
-
-    VkImageView VkTextureManager::GetOrCreateAttachmentViewAtMipLevel(MG_State::GLState::ITextureObject& texture,
-                                                                      Uint32 mipLevel, Uint32 baseArrayLayer,
-                                                                      Uint32 layerCount,
-                                                                      VkImageViewType viewType) {
-        TextureResource* resource = SyncTextureAndGetDescriptor(texture);
-        if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
-            return VK_NULL_HANDLE;
-        }
-        // mipLevel and baseArrayLayer arrive in STORAGE space - every caller runs them through
-        // ToStorageMipLevel / ToStorageArrayLayer at the GL attachment boundary. What a GL texture
-        // view still contributes here is its own internal format, which may reinterpret the
-        // storage's (GL 4.6 core table 8.21) and is what the attachment must actually be written
-        // through.
-        VkFormat viewFormatOverride = VK_FORMAT_UNDEFINED;
-        if (texture.IsTextureView()) {
-            viewFormatOverride = ResolveTextureViewWindow(texture, *resource).format;
-        }
-        if (mipLevel >= resource->mipLevels) {
-            return VK_NULL_HANDLE;
-        }
-        // A 3D image has arrayLayers == 1 and keeps its GL layers on the z axis, so an attachment
-        // view over it addresses SLICES through baseArrayLayer/layerCount: one slice for a
-        // non-layered attachment (a 2D view) and the whole span for a layered one (a 2D_ARRAY view,
-        // which is what a layered GL_TEXTURE_3D attachment plus a gl_Layer-writing geometry shader
-        // means). BOTH spellings are legal only on a 2D-array-compatible image
-        // (VUID-VkImageViewCreateInfo-image-04970 / -06723), which SyncTextureResource asks for and
-        // may have had refused per format.
-        //
-        // The span is validated against the MIP's slice count, never against arrayLayers: a 3D
-        // image's arrayLayers is 1 by construction, so measuring a layered span against it rejected
-        // every layered 3D attachment - the null view that used to reach vkCreateFramebuffer.
-        if (resource->viewType == VK_IMAGE_VIEW_TYPE_3D &&
-            (viewType == VK_IMAGE_VIEW_TYPE_2D || viewType == VK_IMAGE_VIEW_TYPE_2D_ARRAY)) {
-            const Uint32 sliceCount = std::max(resource->depth >> mipLevel, 1u);
-            if ((resource->imageCreateFlags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) == 0 ||
-                layerCount == 0 || baseArrayLayer >= sliceCount || baseArrayLayer + layerCount > sliceCount) {
-                // Not an error line: the render-pass builder turns the null view into one
-                // MGLOG_E_ONCE and a skipped draw, which is the level this belongs at.
-                MGLOG_D("%s: cannot name slice span [%u, %u) of 3D textureId=%d as viewType=%d (mip %u has %u "
-                        "slices, 2D-array-compatible=%d)",
-                        __func__, baseArrayLayer, baseArrayLayer + layerCount, texture.GetExternalIndex(),
-                        static_cast<Int>(viewType), mipLevel, sliceCount,
-                        (int)((resource->imageCreateFlags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) != 0));
-                return VK_NULL_HANDLE;
-            }
-        } else if (layerCount == 0 || baseArrayLayer >= resource->arrayLayers ||
-                   baseArrayLayer + layerCount > resource->arrayLayers) {
-            MGLOG_D("%s: invalid layer span [%u, %u) for textureId=%d arrayLayers=%u",
-                    __func__, baseArrayLayer, baseArrayLayer + layerCount, texture.GetExternalIndex(),
-                    resource->arrayLayers);
-            return VK_NULL_HANDLE;
-        }
-
-        const Bool framebufferSrgbEnabled =
-            MG_State::pGLContext->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb);
-        const VkFormat baseAttachmentFormat =
-            viewFormatOverride != VK_FORMAT_UNDEFINED ? viewFormatOverride : resource->format;
-        const VkFormat attachmentFormat =
-            ResolveSrgbAttachmentWriteFormat(baseAttachmentFormat, framebufferSrgbEnabled);
-
-        // The shortcut back to the per-mip vector is only sound for the storage texture itself;
-        // for a view every field below is part of what distinguishes it from its parent.
-        if (viewFormatOverride == VK_FORMAT_UNDEFINED && attachmentFormat == resource->format &&
-            baseArrayLayer == 0 && layerCount == resource->arrayLayers && viewType == resource->viewType) {
-            return GetOrCreateViewAtMipLevel(texture, mipLevel);
-        }
-
-        const TextureResource::AttachmentViewKey key{
-            .mipLevel = mipLevel,
-            .baseArrayLayer = baseArrayLayer,
-            .layerCount = layerCount,
-            .viewType = viewType,
-            .viewFormat = attachmentFormat,
-        };
-        auto it = resource->attachmentViews.find(key);
-        if (it == resource->attachmentViews.end()) {
-            it = resource->attachmentViews.emplace(key, VK_NULL_HANDLE).first;
-        }
-        VkImageView& attachmentView = it->second;
-        if (attachmentView != VK_NULL_HANDLE) {
-            return attachmentView;
-        }
-
-        attachmentView = CreateImageView(resource->image, attachmentFormat, resource->aspect, viewType,
-                                         mipLevel, 1, baseArrayLayer, layerCount);
-        if (attachmentView == VK_NULL_HANDLE) {
-            MGLOG_D("%s: CreateImageView failed for textureId=%d mipLevel=%u baseArrayLayer=%u layerCount=%u viewType=%d",
-                    __func__, texture.GetExternalIndex(), mipLevel, baseArrayLayer, layerCount, static_cast<Int>(viewType));
-            resource->attachmentViews.erase(it);
-            return VK_NULL_HANDLE;
-        }
-
-        return attachmentView;
-    }
-
-    VkImageView VkTextureManager::GetOrCreateSampledViewAtMipLevel(MG_State::GLState::ITextureObject& texture,
-                                                                   Uint32 mipLevel) {
-        TextureResource* resource = SyncTextureAndGetDescriptor(texture);
-        if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
-            return VK_NULL_HANDLE;
-        }
-        // As in GetOrCreateViewAtMipLevel: perMipSampledViews belongs to the storage texture's
-        // own format and aspect, so a GL view has to go to the keyed cache.
-        if (texture.IsTextureView()) {
-            if (mipLevel >= resource->mipLevels) {
-                return VK_NULL_HANDLE;
-            }
-            TextureViewWindow window = ResolveTextureViewWindow(texture, *resource);
-            // Storage space already (see ToStorageMipLevel); only the level COUNT narrows.
-            window.baseMipLevel = mipLevel;
-            window.levelCount = 1;
-            return GetOrCreateWindowedSampledView(texture, *resource, window);
-        }
-        if (mipLevel >= resource->mipLevels) {
-            return VK_NULL_HANDLE;
-        }
-
-        if (resource->perMipSampledViews.size() != resource->mipLevels) {
-            resource->perMipSampledViews.resize(resource->mipLevels, VK_NULL_HANDLE);
-        }
-
-        VkImageView& perMipSampledView = resource->perMipSampledViews[mipLevel];
-        if (perMipSampledView != VK_NULL_HANDLE) {
-            return perMipSampledView;
-        }
-
-        const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(texture.GetFormat());
-        const VkComponentMapping sampledComponents = ResolveSampledViewComponents(texture, formatInfo);
-        const VkImageAspectFlags sampledAspect =
-            ResolveSampledImageViewAspectMask(resource->aspect, texture.GetDepthStencilTextureMode());
-        perMipSampledView = CreateImageView(resource->image, resource->format, sampledAspect, resource->viewType,
-                                            mipLevel, 1, 0, resource->arrayLayers, &sampledComponents);
-        if (perMipSampledView == VK_NULL_HANDLE) {
-            MGLOG_D("%s: CreateImageView failed for textureId=%d mipLevel=%u", __func__, texture.GetExternalIndex(),
-                    mipLevel);
-            return VK_NULL_HANDLE;
-        }
-
-        return perMipSampledView;
-    }
-
-    // Builds (and caches) one sampled VkImageView over `resource`'s image for an arbitrary
-    // window - the shared back end of every GL-texture-view sampled path. Keyed by the whole
-    // window, which is what keeps a D24S8's depth-aspect view and its stencil-aspect view apart
-    // in the same cache while both name the same image, the same levels and the same layers.
-    VkImageView VkTextureManager::GetOrCreateWindowedSampledView(MG_State::GLState::ITextureObject& texture,
-                                                                 TextureResource& resource,
-                                                                 const TextureViewWindow& window) {
-        const TextureResource::SampledImageViewKey key{
-            .baseMipLevel = window.baseMipLevel,
-            .levelCount = window.levelCount,
-            .baseArrayLayer = window.baseArrayLayer,
-            .layerCount = window.layerCount,
-            .viewType = window.viewType,
-            .format = window.format,
-            .aspect = window.sampledAspect,
-            .componentSwizzle = PackComponentSwizzle(window.components),
-        };
-        const auto existing = resource.alternateSampledViews.find(key);
-        if (existing != resource.alternateSampledViews.end()) {
-            return existing->second;
-        }
-
-        if (window.format != resource.format &&
-            (resource.imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0) {
-            MGLOG_E_ONCE("%s: textureId=%d needs a mutable-format image to be viewed as format=%d "
-                         "(image format=%d)",
-                         __func__, texture.GetExternalIndex(), static_cast<Int>(window.format),
-                         static_cast<Int>(resource.format));
-            return VK_NULL_HANDLE;
-        }
-
-        const VkImageView view =
-            CreateImageView(resource.image, window.format, window.sampledAspect, window.viewType,
-                            window.baseMipLevel, window.levelCount, window.baseArrayLayer, window.layerCount,
-                            &window.components);
-        if (view == VK_NULL_HANDLE) {
-            MGLOG_E_ONCE("%s: failed to create sampled view for textureId=%d format=%d aspect=0x%x "
-                         "mips=[%u,%u) layers=[%u,%u)",
-                         __func__, texture.GetExternalIndex(), static_cast<Int>(window.format),
-                         static_cast<Uint32>(window.sampledAspect), window.baseMipLevel,
-                         window.baseMipLevel + window.levelCount, window.baseArrayLayer,
-                         window.baseArrayLayer + window.layerCount);
-            return VK_NULL_HANDLE;
-        }
-        resource.alternateSampledViews.emplace(key, view);
-        return view;
-    }
-
-    VkImageView VkTextureManager::GetOrCreateSampledImageView(MG_State::GLState::ITextureObject& texture,
-                                                               VkFormat format) {
-        TextureResource* resource = SyncTextureAndGetDescriptor(texture);
-        if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
-            return VK_NULL_HANDLE;
-        }
-
-        // A GL texture view never has a sampledView of its own on this resource - that one
-        // belongs to the storage texture, with the storage texture's format, level range and
-        // depth/stencil aspect. The window is the view's whole identity, so it always goes to the
-        // keyed cache, even when the requested format happens to match the image's.
-        if (texture.IsTextureView()) {
-            TextureViewWindow window = ResolveTextureViewWindow(texture, *resource);
-            if (format != VK_FORMAT_UNDEFINED) {
-                window.format = format;
-            }
-            return GetOrCreateWindowedSampledView(texture, *resource, window);
-        }
-
-        if (resource->sampledView == VK_NULL_HANDLE) {
-            return VK_NULL_HANDLE;
-        }
-        if (format == VK_FORMAT_UNDEFINED || format == resource->format) {
-            return resource->sampledView;
-        }
-        if (!AreSampledImageViewFormatsCompatible(resource->format, format)) {
-            MGLOG_E_ONCE("%s: incompatible sampled image view format=%d for textureId=%d imageFormat=%d",
-                    __func__, static_cast<Int>(format), texture.GetExternalIndex(),
-                    static_cast<Int>(resource->format));
-            return VK_NULL_HANDLE;
-        }
-        if ((resource->imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0) {
-            MGLOG_E_ONCE("%s: textureId=%d needs mutable image format=%d for sampled view format=%d",
-                    __func__, texture.GetExternalIndex(), static_cast<Int>(resource->format),
-                    static_cast<Int>(format));
-            return VK_NULL_HANDLE;
-        }
-
-        const TextureResource::SampledImageViewKey key{
-            .baseMipLevel = resource->sampledBaseMipLevel,
-            .levelCount = resource->sampledLevelCount,
-            .baseArrayLayer = 0,
-            .layerCount = resource->arrayLayers,
-            .viewType = resource->viewType,
-            .format = format,
-            .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
-            .componentSwizzle = PackComponentSwizzle(
-                ResolveSampledViewComponents(texture, ResolveTextureFormatInfo(texture.GetFormat()))),
-        };
-        const auto existing = resource->alternateSampledViews.find(key);
-        if (existing != resource->alternateSampledViews.end()) {
-            return existing->second;
-        }
-
-        VkFormatProperties formatProperties{};
-        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
-        if ((formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == 0) {
-            MGLOG_E_ONCE("%s: sampled image view format=%d lacks VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT "
-                    "for textureId=%d (available=0x%x)",
-                    __func__, static_cast<Int>(format), texture.GetExternalIndex(),
-                    static_cast<Uint32>(formatProperties.optimalTilingFeatures));
-            return VK_NULL_HANDLE;
-        }
-
-        const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(texture.GetFormat());
-        const VkComponentMapping sampledComponents = ResolveSampledViewComponents(texture, formatInfo);
-        const VkImageView view = CreateImageView(
-            resource->image, format, VK_IMAGE_ASPECT_COLOR_BIT, resource->viewType,
-            resource->sampledBaseMipLevel, resource->sampledLevelCount, 0, resource->arrayLayers,
-            &sampledComponents, VK_IMAGE_USAGE_SAMPLED_BIT);
-        if (view == VK_NULL_HANDLE) {
-            MGLOG_E_ONCE("%s: failed to create sampled image view textureId=%d imageFormat=%d viewFormat=%d",
-                    __func__, texture.GetExternalIndex(), static_cast<Int>(resource->format),
-                    static_cast<Int>(format));
-            return VK_NULL_HANDLE;
-        }
-
-        resource->alternateSampledViews.emplace(key, view);
-        MGLOG_D("%s: created sampled image view textureId=%d imageFormat=%d viewFormat=%d mip=[%u,%u)",
-                __func__, texture.GetExternalIndex(), static_cast<Int>(resource->format),
-                static_cast<Int>(format), resource->sampledBaseMipLevel,
-                resource->sampledBaseMipLevel + resource->sampledLevelCount);
-        return view;
-    }
-
-    VkImageView VkTextureManager::GetOrCreateStorageImageView(MG_State::GLState::ITextureObject& texture,
-                                                               Uint32 mipLevel, VkFormat format,
-                                                               Bool layered, Int32 layer) {
-        // mipLevel and layer arrive in STORAGE space; ResolveStorageImageDescriptor converts
-        // the glBindImageTexture values with ToStorageMipLevel / ToStorageArrayLayer.
-        TextureResource* resource = SyncTextureAndGetDescriptor(texture);
-        if (resource == nullptr || resource->image == VK_NULL_HANDLE || mipLevel >= resource->mipLevels ||
-            resource->sampleCount != VK_SAMPLE_COUNT_1_BIT ||
-            (resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) == 0) {
-            return VK_NULL_HANDLE;
-        }
-
-        if (format == VK_FORMAT_UNDEFINED) {
-            format = resource->format;
-        }
-        if (!AreStorageImageViewFormatsCompatible(resource->format, format)) {
-            MGLOG_E_ONCE("%s: incompatible storage image view format=%d for textureId=%d imageFormat=%d",
-                    __func__, static_cast<Int>(format), texture.GetExternalIndex(),
-                    static_cast<Int>(resource->format));
-            return VK_NULL_HANDLE;
-        }
-        if (format != resource->format &&
-            (resource->imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0) {
-            MGLOG_E_ONCE("%s: textureId=%d needs mutable image format=%d for storage view format=%d",
-                    __func__, texture.GetExternalIndex(), static_cast<Int>(resource->format),
-                    static_cast<Int>(format));
-            return VK_NULL_HANDLE;
-        }
-
-        // A GL texture view opens onto a WINDOW of the storage's layers; a layered image
-        // binding of it must not reach past that window into the parent's other layers.
-        Uint32 baseArrayLayer = ToStorageArrayLayer(&texture, 0);
-        Uint32 layerCount = texture.IsTextureView()
-                                ? std::min(static_cast<Uint32>(texture.GetViewNumLayers()),
-                                           resource->arrayLayers - baseArrayLayer)
-                                : resource->arrayLayers;
-        VkImageViewType viewType = resource->viewType;
-        if (!layered) {
-            switch (resource->viewType) {
-            case VK_IMAGE_VIEW_TYPE_1D_ARRAY:
-                viewType = VK_IMAGE_VIEW_TYPE_1D;
-                break;
-            case VK_IMAGE_VIEW_TYPE_2D_ARRAY:
-            case VK_IMAGE_VIEW_TYPE_CUBE:
-            case VK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
-                viewType = VK_IMAGE_VIEW_TYPE_2D;
-                break;
-            case VK_IMAGE_VIEW_TYPE_3D:
-                MGLOG_E_ONCE("%s: non-layered 3D storage views are unsupported for textureId=%d",
-                        __func__, texture.GetExternalIndex());
-                return VK_NULL_HANDLE;
-            default:
-                break;
-            }
-
-            if (viewType != resource->viewType) {
-                if (layer < 0 || static_cast<Uint32>(layer) >= resource->arrayLayers) {
-                    MGLOG_E_ONCE("%s: storage image layer=%d is out of range for textureId=%d arrayLayers=%u",
-                            __func__, layer, texture.GetExternalIndex(), resource->arrayLayers);
-                    return VK_NULL_HANDLE;
-                }
-                baseArrayLayer = static_cast<Uint32>(layer);
-                layerCount = 1;
-            }
-        }
-
-        const Bool isFullResourceView = baseArrayLayer == 0 && layerCount == resource->arrayLayers &&
-                                        viewType == resource->viewType;
-        if (format == resource->format && isFullResourceView && !texture.IsTextureView()) {
-            return GetOrCreateViewAtMipLevel(texture, mipLevel);
-        }
-
-        const TextureResource::StorageImageViewKey key{
-            .mipLevel = mipLevel,
-            .baseArrayLayer = baseArrayLayer,
-            .layerCount = layerCount,
-            .viewType = viewType,
-            .format = format,
-        };
-        auto it = resource->storageImageViews.find(key);
-        if (it != resource->storageImageViews.end()) {
-            return it->second;
-        }
-
-        VkFormatFeatureFlags requiredFormatFeatures = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
-        if (format != resource->format &&
-            (format == VK_FORMAT_R32_UINT || format == VK_FORMAT_R32_SINT)) {
-            requiredFormatFeatures |= VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT;
-        }
-        VkFormatProperties formatProperties{};
-        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
-        if ((formatProperties.optimalTilingFeatures & requiredFormatFeatures) != requiredFormatFeatures) {
-            MGLOG_E_ONCE("%s: storage image view format=%d lacks required features=0x%x for textureId=%d "
-                    "(available=0x%x)",
-                    __func__, static_cast<Int>(format), static_cast<Uint32>(requiredFormatFeatures),
-                    texture.GetExternalIndex(), static_cast<Uint32>(formatProperties.optimalTilingFeatures));
-            return VK_NULL_HANDLE;
-        }
-
-        const VkImageView view = CreateImageView(resource->image, format, VK_IMAGE_ASPECT_COLOR_BIT, viewType,
-                                                 mipLevel, 1, baseArrayLayer, layerCount, nullptr,
-                                                 VK_IMAGE_USAGE_STORAGE_BIT);
-        if (view == VK_NULL_HANDLE) {
-            MGLOG_E_ONCE("%s: failed to create storage image view for textureId=%d mip=%u imageFormat=%d viewFormat=%d",
-                    __func__, texture.GetExternalIndex(), mipLevel, static_cast<Int>(resource->format),
-                    static_cast<Int>(format));
-            return VK_NULL_HANDLE;
-        }
-        resource->storageImageViews.emplace(key, view);
-        MGLOG_D("%s: created storage image view textureId=%d mip=%u imageFormat=%d viewFormat=%d",
-                __func__, texture.GetExternalIndex(), mipLevel, static_cast<Int>(resource->format),
-                static_cast<Int>(format));
-        return view;
-    }
-
-    void VkTextureManager::StampTextureRecordingUse(MG_State::GLState::ITextureObject* texture) {
-        if (texture == nullptr) {
-            return;
-        }
-        auto it = m_textureResources.find(MakeTextureIdentity(texture));
-        if (it != m_textureResources.end()) {
-            it->second.lastRecordingGeneration = m_recordingGeneration;
-        }
-    }
-
-    VkTextureManager::TextureResource* VkTextureManager::FindTextureResource(
-        MG_State::GLState::ITextureObject& textureOrView) {
-        auto it = m_textureResources.find(MakeTextureIdentity(&StorageTextureOf(textureOrView)));
-        return it != m_textureResources.end() ? &it->second : nullptr;
-    }
-
-    Bool VkTextureManager::HasLiveImage(MG_State::GLState::ITextureObject& textureOrView) const {
-        auto it = m_textureResources.find(MakeTextureIdentity(&StorageTextureOf(textureOrView)));
-        return it != m_textureResources.end() && it->second.image != VK_NULL_HANDLE;
-    }
-
-    Bool VkTextureManager::HasPendingTexelUpload(MG_State::GLState::ITextureObject& textureOrView) const {
-        auto& storage = StorageTextureOf(textureOrView);
-        auto it = m_textureResources.find(MakeTextureIdentity(&storage));
-        if (it == m_textureResources.end() || it->second.image == VK_NULL_HANDLE) {
-            return false;
-        }
-        return it->second.syncedShapeVersion == storage.GetShapeVersion() &&
-               it->second.syncedContentVersion != storage.GetContentVersion();
-    }
-
-    Bool VkTextureManager::WasTextureWrittenThisRecording(MG_State::GLState::ITextureObject& textureOrView) const {
-        auto it = m_textureResources.find(MakeTextureIdentity(&StorageTextureOf(textureOrView)));
-        return it != m_textureResources.end() && it->second.lastRecordingWriteGeneration == m_recordingGeneration;
-    }
-
-    void VkTextureManager::StampTextureRecordingWrite(MG_State::GLState::ITextureObject* texture) {
-        if (texture == nullptr) {
-            return;
-        }
-        auto it = m_textureResources.find(MakeTextureIdentity(&StorageTextureOf(*texture)));
-        if (it != m_textureResources.end()) {
-            StampResourceRecordingWrite(it->second);
-        }
-    }
-
-    void VkTextureManager::UpdateTrackedImageLayout(MG_State::GLState::ITextureObject* texture, VkImageLayout newLayout) {
-        MOBILEGL_ASSERT(texture != nullptr, "UpdateTrackedImageLayout: texture is null");
-        auto it = m_textureResources.find(MakeTextureIdentity(texture));
-        MOBILEGL_ASSERT(it != m_textureResources.end(),
-                        "UpdateTrackedImageLayout: textureId=%d has no tracked resource", texture->GetExternalIndex());
-        MOBILEGL_ASSERT(it->second.image != VK_NULL_HANDLE,
-                        "UpdateTrackedImageLayout: textureId=%d has null image", texture->GetExternalIndex());
-        it->second.layout = newLayout;
-    }
-
-    void VkTextureManager::UpdateTrackedImageLayoutAfterAttachmentWrite(VkCommandBuffer commandBuffer,
-                                                                        MG_State::GLState::ITextureObject* texture,
-                                                                        Uint32 writtenMipLevel,
-                                                                        VkImageLayout newLayout) {
-        MOBILEGL_ASSERT(texture != nullptr, "UpdateTrackedImageLayoutAfterAttachmentWrite: texture is null");
-        auto it = m_textureResources.find(MakeTextureIdentity(texture));
-        MOBILEGL_ASSERT(it != m_textureResources.end(),
-                        "UpdateTrackedImageLayoutAfterAttachmentWrite: textureId=%d has no tracked resource",
-                        texture->GetExternalIndex());
-
-        auto& resource = it->second;
-        MOBILEGL_ASSERT(resource.image != VK_NULL_HANDLE,
-                        "UpdateTrackedImageLayoutAfterAttachmentWrite: textureId=%d has null image",
-                        texture->GetExternalIndex());
-        MOBILEGL_ASSERT(writtenMipLevel < resource.mipLevels,
-                        "UpdateTrackedImageLayoutAfterAttachmentWrite: textureId=%d mipLevel=%u out of range %u",
-                        texture->GetExternalIndex(), writtenMipLevel, resource.mipLevels);
-        // Pre-pass stream bookkeeping: the render pass that just ended wrote this image.
-        StampResourceRecordingWrite(resource);
-
-        if (resource.layout != newLayout && resource.mipLevels > 1) {
-            VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            VkAccessFlags srcAccessMask = 0;
-            GetImageTransitionSourceState(resource.layout, srcStageMask, srcAccessMask);
-
-            VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            VkAccessFlags dstAccessMask = 0;
-            GetImageTransitionDestinationState(newLayout, dstStageMask, dstAccessMask);
-
-            if (writtenMipLevel > 0) {
-                VkImageLayout lowerMipLayout = resource.layout;
-                const Bool lowerTransitioned = TransitionImageLayout(
-                    commandBuffer, resource.image, lowerMipLayout, newLayout,
-                    srcStageMask, dstStageMask, srcAccessMask, dstAccessMask,
-                    resource.aspect, 0, writtenMipLevel);
-                MOBILEGL_ASSERT(lowerTransitioned,
-                                "UpdateTrackedImageLayoutAfterAttachmentWrite: failed to transition lower mip levels for textureId=%d",
-                                texture->GetExternalIndex());
-            }
-
-            const Uint32 upperBaseMipLevel = writtenMipLevel + 1;
-            if (upperBaseMipLevel < resource.mipLevels) {
-                VkImageLayout upperMipLayout = resource.layout;
-                const Bool upperTransitioned = TransitionImageLayout(
-                    commandBuffer, resource.image, upperMipLayout, newLayout,
-                    srcStageMask, dstStageMask, srcAccessMask, dstAccessMask,
-                    resource.aspect, upperBaseMipLevel, resource.mipLevels - upperBaseMipLevel);
-                MOBILEGL_ASSERT(upperTransitioned,
-                                "UpdateTrackedImageLayoutAfterAttachmentWrite: failed to transition upper mip levels for textureId=%d",
-                                texture->GetExternalIndex());
-            }
-        }
-
-        resource.layout = newLayout;
-    }
-
-    Bool VkTextureManager::TransitionTextureForSampling(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture) {
-        TextureResource* resource = SyncTextureAndGetDescriptor(texture);
-        if (resource == nullptr) {
-            return false;
-        }
-        if (IsValidSampledImageLayout(resource->layout)) {
-            return true;
-        }
-        if (resource->layout == VK_IMAGE_LAYOUT_UNDEFINED) {
-            MGLOG_W_ONCE("TransitionTextureForSampling: textureId=%d is still in VK_IMAGE_LAYOUT_UNDEFINED before sampling",
-                    texture.GetExternalIndex());
-        }
-
-        VkImageLayout targetLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        VkAccessFlags srcAccessMask = 0;
-        if ((resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0) {
-            MOBILEGL_ASSERT(resource->layout == VK_IMAGE_LAYOUT_UNDEFINED ||
-                            resource->layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                            "TransitionTextureForSampling: unsupported color layout=%d for textureId=%d",
-                            static_cast<Int>(resource->layout), texture.GetExternalIndex());
-            if (resource->layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-                srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-                srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            }
-            targetLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        } else if ((resource->aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0) {
-            MOBILEGL_ASSERT(resource->layout == VK_IMAGE_LAYOUT_UNDEFINED ||
-                            resource->layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                            "TransitionTextureForSampling: unsupported depth/stencil layout=%d for textureId=%d",
-                            static_cast<Int>(resource->layout), texture.GetExternalIndex());
-            if (resource->layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
-                srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-                srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            }
-            targetLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        } else {
-            MOBILEGL_ASSERT(false, "TransitionTextureForSampling: unsupported aspect mask=0x%x for textureId=%d",
-                            static_cast<Uint32>(resource->aspect), texture.GetExternalIndex());
-        }
-
-        const Bool ok = TransitionImageLayout(commandBuffer, resource->image, resource->layout, targetLayout, srcStageMask,
-                                              s_sampledReadStages, srcAccessMask,
-                                              VK_ACCESS_SHADER_READ_BIT, resource->aspect, 0, resource->mipLevels);
-        MOBILEGL_ASSERT(ok, "TransitionTextureForSampling: transition failed for textureId=%d", texture.GetExternalIndex());
-        // Pre-pass stream bookkeeping: a command referencing the image was recorded.
-        StampResourceRecordingUse(*resource);
-        return ok;
-    }
-
-    Bool VkTextureManager::TransitionTextureForStorageImage(VkCommandBuffer commandBuffer,
-                                                            MG_State::GLState::ITextureObject& texture) {
-        TextureResource* resource = SyncTextureAndGetDescriptor(texture);
-        if (resource == nullptr) {
-            return false;
-        }
-        if (resource->sampleCount != VK_SAMPLE_COUNT_1_BIT) {
-            MGLOG_D("TransitionTextureForStorageImage: multisample textureId=%d is not exposed as a storage image",
-                    texture.GetExternalIndex());
-            return false;
-        }
-        if (resource->layout == VK_IMAGE_LAYOUT_GENERAL) {
-            return true;
-        }
-
-        VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-        VkAccessFlags srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT;
-        GetImageTransitionSourceState(resource->layout, srcStageMask, srcAccessMask);
-
-        const Bool ok = TransitionImageLayout(commandBuffer, resource->image, resource->layout,
-                                              VK_IMAGE_LAYOUT_GENERAL, srcStageMask,
-                                              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, srcAccessMask,
-                                              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                                              resource->aspect, 0, resource->mipLevels);
-        MOBILEGL_ASSERT(ok, "TransitionTextureForStorageImage: transition failed for textureId=%d",
-                        texture.GetExternalIndex());
-        // Pre-pass stream bookkeeping: a command referencing the image was recorded, and an
-        // image unit may store to it.
-        StampResourceRecordingWrite(*resource);
-        return ok;
-    }
-
-    Bool VkTextureManager::SnapshotTextureForSampling(VkCommandBuffer commandBuffer,
-                                                      MG_State::GLState::ITextureObject& texture,
-                                                      SamplerNumericDomain numericDomain,
-                                                      VkPipelineStageFlags consumerShaderStageMask,
-                                                      SampledTextureSnapshot& outSnapshot) {
-        outSnapshot = {};
-        TextureResource* source = SyncTextureAndGetDescriptor(texture);
-        if (source == nullptr || source->image == VK_NULL_HANDLE || source->sampleCount != VK_SAMPLE_COUNT_1_BIT ||
-            source->sampledLevelCount == 0) {
-            return false;
-        }
-
-        const VkFormat sampledFormat = ResolveSampledImageViewFormat(source->format, numericDomain);
-        if (sampledFormat == VK_FORMAT_UNDEFINED ||
-            !AreSampledImageViewFormatsCompatible(source->format, sampledFormat)) {
-            MGLOG_E_ONCE("SnapshotTextureForSampling: textureId=%d cannot create sampled view format=%d from image format=%d",
-                         texture.GetExternalIndex(), static_cast<Int>(sampledFormat), static_cast<Int>(source->format));
-            return false;
-        }
-        if (sampledFormat != source->format &&
-            (source->imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0) {
-            MGLOG_E_ONCE("SnapshotTextureForSampling: textureId=%d needs unavailable mutable image format=%d for sampled view=%d",
-                         texture.GetExternalIndex(), static_cast<Int>(source->format), static_cast<Int>(sampledFormat));
-            return false;
-        }
-
-        VkImageType imageType = VK_IMAGE_TYPE_2D;
-        switch (source->viewType) {
-        case VK_IMAGE_VIEW_TYPE_1D:
-        case VK_IMAGE_VIEW_TYPE_1D_ARRAY:
-            imageType = VK_IMAGE_TYPE_1D;
-            break;
-        case VK_IMAGE_VIEW_TYPE_3D:
-            imageType = VK_IMAGE_TYPE_3D;
-            break;
-        default:
-            break;
-        }
-
-        TextureResource snapshot{};
-        VkImageCreateInfo imageInfo{};
-        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imageInfo.flags = source->imageCreateFlags;
-        imageInfo.imageType = imageType;
-        imageInfo.extent = {source->extent.width, source->extent.height, source->depth};
-        imageInfo.mipLevels = source->mipLevels;
-        imageInfo.arrayLayers = source->arrayLayers;
-        imageInfo.format = source->format;
-        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-        // Keep the temporary's view-format list just as narrow as the source's sampler use. This
-        // has no storage-image usage, so unlike an app image binding the exact list is knowable.
-        Vector<VkFormat> viewFormats;
-        VkImageFormatListCreateInfo formatListInfo{};
-        if (m_imageFormatListSupported && (imageInfo.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0) {
-            viewFormats.push_back(source->format);
-            if (sampledFormat != source->format) {
-                viewFormats.push_back(sampledFormat);
-            }
-            formatListInfo.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
-            formatListInfo.viewFormatCount = static_cast<Uint32>(viewFormats.size());
-            formatListInfo.pViewFormats = viewFormats.data();
-            imageInfo.pNext = &formatListInfo;
-        }
-
-        VmaAllocationCreateInfo allocationInfo{};
-        allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        allocationInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-        const VkResult createResult =
-            vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &snapshot.image, &snapshot.allocation, nullptr);
-        if (createResult != VK_SUCCESS) {
-            MGLOG_E_ONCE("SnapshotTextureForSampling: vmaCreateImage failed result=%d textureId=%d", createResult,
-                         texture.GetExternalIndex());
-            return false;
-        }
-
-        snapshot.extent = source->extent;
-        snapshot.depth = source->depth;
-        snapshot.arrayLayers = source->arrayLayers;
-        snapshot.mipLevels = source->mipLevels;
-        snapshot.sampledBaseMipLevel = source->sampledBaseMipLevel;
-        snapshot.sampledLevelCount = source->sampledLevelCount;
-        snapshot.format = source->format;
-        snapshot.aspect = source->aspect;
-        snapshot.viewType = source->viewType;
-        snapshot.sampleCount = VK_SAMPLE_COUNT_1_BIT;
-        snapshot.imageCreateFlags = imageInfo.flags;
-        snapshot.usageFlags = imageInfo.usage;
-
-        const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(texture.GetFormat());
-        const VkComponentMapping sampledComponents = ResolveSampledViewComponents(texture, formatInfo);
-        const VkImageAspectFlags sampledAspect =
-            ResolveSampledImageViewAspectMask(snapshot.aspect, texture.GetDepthStencilTextureMode());
-        snapshot.sampledView = CreateImageView(snapshot.image, sampledFormat, sampledAspect, snapshot.viewType,
-                                               snapshot.sampledBaseMipLevel, snapshot.sampledLevelCount, 0,
-                                               snapshot.arrayLayers, &sampledComponents);
-        if (snapshot.sampledView == VK_NULL_HANDLE) {
-            MGLOG_E_ONCE("SnapshotTextureForSampling: failed to create sampled view textureId=%d", texture.GetExternalIndex());
-            return false;
-        }
-
-        VkPipelineStageFlags sourceStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        VkAccessFlags sourceAccessMask = 0;
-        const VkImageLayout sourceLayout = source->layout;
-        GetImageTransitionSourceState(sourceLayout, sourceStageMask, sourceAccessMask);
-        if (!TransitionImageLayout(commandBuffer, source->image, source->layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   sourceStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT, sourceAccessMask,
-                                   VK_ACCESS_TRANSFER_READ_BIT, source->aspect, 0, source->mipLevels) ||
-            !TransitionImageLayout(commandBuffer, snapshot.image, snapshot.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                                   VK_ACCESS_TRANSFER_WRITE_BIT, snapshot.aspect, snapshot.sampledBaseMipLevel,
-                                   snapshot.sampledLevelCount)) {
-            return false;
-        }
-
-        Vector<VkImageCopy> copyRegions;
-        copyRegions.reserve(snapshot.sampledLevelCount);
-        for (Uint32 level = snapshot.sampledBaseMipLevel;
-             level < snapshot.sampledBaseMipLevel + snapshot.sampledLevelCount; ++level) {
-            VkImageCopy copy{};
-            copy.srcSubresource = {source->aspect, level, 0, source->arrayLayers};
-            copy.dstSubresource = {snapshot.aspect, level, 0, snapshot.arrayLayers};
-            copy.extent = {std::max(source->extent.width >> level, 1u),
-                           std::max(source->extent.height >> level, 1u),
-                           std::max(source->depth >> level, 1u)};
-            copyRegions.push_back(copy);
-        }
-        vkCmdCopyImage(commandBuffer, source->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, snapshot.image,
-                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<Uint32>(copyRegions.size()), copyRegions.data());
-
-        if (!TransitionImageLayout(commandBuffer, snapshot.image, snapshot.layout,
-                                   ResolveSampledReadOnlyLayout(snapshot.aspect), VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                   consumerShaderStageMask, VK_ACCESS_TRANSFER_WRITE_BIT,
-                                   VK_ACCESS_SHADER_READ_BIT, snapshot.aspect, snapshot.sampledBaseMipLevel,
-                                   snapshot.sampledLevelCount) ||
-            !TransitionImageLayout(commandBuffer, source->image, source->layout, sourceLayout,
-                                   VK_PIPELINE_STAGE_TRANSFER_BIT, consumerShaderStageMask,
-                                   VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                                   source->aspect, 0, source->mipLevels)) {
-            return false;
-        }
-
-        StampResourceRecordingUse(*source);
-        outSnapshot = {.imageView = snapshot.sampledView, .layout = snapshot.layout};
-        DeferResourceRelease(Move(snapshot));
-        return true;
-    }
-
-    void VkTextureManager::MarkStorageImageTexture(MG_State::GLState::ITextureObject& texture) {
-        m_storageImageTextures.insert(MakeTextureIdentity(&texture));
-    }
-
-    Bool VkTextureManager::NeedsStorageUsageUpgrade(MG_State::GLState::ITextureObject& texture) const {
-        const TextureIdentity identity = MakeTextureIdentity(&texture);
-        if (m_storageImageTextures.find(identity) == m_storageImageTextures.end()) {
-            return false;
-        }
-        const auto it = m_textureResources.find(identity);
-        // No image yet: the first sync creates it with STORAGE straight away, so there is nothing
-        // to preserve and nothing to order against.
-        return it != m_textureResources.end() && it->second.image != VK_NULL_HANDLE &&
-               !it->second.storageUsageResolved;
-    }
-
-    Bool VkTextureManager::NeedsMipChainGrowth(MG_State::GLState::ITextureObject& texture) const {
-        const TextureIdentity identity = MakeTextureIdentity(&texture);
-        const auto it = m_textureResources.find(identity);
-        // No image yet: the first sync sizes the chain from the levels the texture already
-        // defines, so nothing is recreated and there is nothing to order against.
-        if (it == m_textureResources.end() || it->second.image == VK_NULL_HANDLE) {
-            return false;
-        }
-        const TextureResource& resource = it->second;
-        const IntVec3 extent = {static_cast<Int>(resource.extent.width), static_cast<Int>(resource.extent.height),
-                                static_cast<Int>(resource.depth)};
-        return resource.mipLevels < ComputeFullMipLevelCount(extent);
-    }
-
-    Bool VkTextureManager::NeedsStorageImagePreparation(MG_State::GLState::ITextureObject& texture) const {
-        const TextureIdentity identity = MakeTextureIdentity(&texture);
-        const auto it = m_textureResources.find(identity);
-        if (it == m_textureResources.end()) {
-            return true;
-        }
-        const TextureResource& resource = it->second;
-        if (resource.image == VK_NULL_HANDLE || resource.layout != VK_IMAGE_LAYOUT_GENERAL) {
-            return true;
-        }
-        // The image predates this texture's first image-unit binding, so it was created without
-        // STORAGE usage and has to be recreated - which is illegal inside a render pass.
-        if (!resource.storageUsageResolved &&
-            m_storageImageTextures.find(identity) != m_storageImageTextures.end()) {
-            return true;
-        }
-        // Mirror SyncTexture's cross-draw skip condition: any version drift means the sync
-        // path may upload or rebuild, both of which need the render pass ended first.
-        const auto* mipTexture = MG_State::GLState::AsMipmapTexture(&texture);
-        const Uint32 mipLevelCount = mipTexture != nullptr ? mipTexture->GetMipmapLevelCount() : 0u;
-        return resource.syncedContentVersion != texture.GetContentVersion() ||
-               resource.syncedShapeVersion != texture.GetShapeVersion() ||
-               resource.syncedTextureParamsVersion != texture.GetTextureParamsVersion() ||
-               resource.syncedMipLevelCount != mipLevelCount;
-    }
-
     Bool VkTextureManager::TransitionImageLayout(VkCommandBuffer commandBuffer, VkImage image,
                                                  VkImageLayout& trackedLayout, VkImageLayout newLayout,
                                                  VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask,
@@ -1694,9 +633,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(image != VK_NULL_HANDLE, "TransitionImageLayout: m_image == VK_NULL_HANDLE");
         MOBILEGL_ASSERT(!((dstAccessMask & VK_ACCESS_TRANSFER_READ_BIT) != 0 &&
                           (dstStageMask & VK_PIPELINE_STAGE_TRANSFER_BIT) == 0),
-                        "TransitionImageLayout: invalid dstAccess/dstStage pair (dstAccess=0x%x, dstStage=0x%x, oldLayout=%d, newLayout=%d)",
-                        static_cast<Uint32>(dstAccessMask), static_cast<Uint32>(dstStageMask), static_cast<Int>(trackedLayout),
-                        static_cast<Int>(newLayout));
+                        "TransitionImageLayout: invalid dstAccess/dstStage pair (dstAccess=0x%x, dstStage=0x%x, "
+                        "oldLayout=%d, newLayout=%d)",
+                        static_cast<Uint32>(dstAccessMask), static_cast<Uint32>(dstStageMask),
+                        static_cast<Int>(trackedLayout), static_cast<Int>(newLayout));
 
         if (trackedLayout == newLayout) {
             return true;
@@ -1722,6 +662,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // slices" but will read as "depth slice 0" once VK_KHR_maintenance9 is enabled. The
         // validation layer warns about that literal 1 by name.
         barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+        EndActiveRenderPassOn(commandBuffer);
         vkCmdPipelineBarrier(commandBuffer, srcStageMask, dstStageMask, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
         trackedLayout = newLayout;
@@ -1740,165 +681,389 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     SizeT VkTextureManager::PruneDeadTextures() {
-        // Erasing entries would dangle the raw TextureResource pointers memoized for the
-        // current draw; every call path (BeginFrame, and CollectGarbage at the top of a
-        // freshly opened draw-sync scope) runs before any memo entry is recorded.
-        MOBILEGL_ASSERT(m_drawSyncedThisDraw.empty(),
-                        "PruneDeadTextures: draw-sync memo holds raw resource pointers an erase would dangle");
-
-        Vector<MG_State::GLState::ITextureObject*> expiredTextures;
-        expiredTextures.reserve(m_aliveObjects.size());
-        for (auto it = m_aliveObjects.begin(); it != m_aliveObjects.end(); ++it) {
-            if (it->second.expired()) {
-                expiredTextures.emplace_back(it->first.texture);
+        // P13: only the handle-keyed tables are left; a resource whose record is no longer live
+        // at its generation is released through the per-frame deferred queues.
+        SizeT prunedCount = 0;
+        const auto pruneWire = [&](auto& resources, const auto& records) {
+            for (auto it = resources.begin(); it != resources.end();) {
+                const Uint32 slot = static_cast<Uint32>(it->first >> 32) & 0x7fffffffu;
+                const Uint32 generation = static_cast<Uint32>(it->first);
+                if (slot < records.size() && records[slot].Live && records[slot].Gen == generation) {
+                    ++it;
+                    continue;
+                }
+                DeferResourceRelease(Move(it->second));
+                it = resources.erase(it);
+                ++m_resourceEraseEpoch;
+                ++prunedCount;
             }
-        }
-        for (auto* texture : expiredTextures) {
-            PruneStaleTextureAliases(texture);
-        }
-        SizeT prunedCount = expiredTextures.size();
-
-        // Orphan sweep: after the pass above, m_aliveObjects holds only live entries.
-        // Registration in SyncTextureAndGetDescriptor cannot fail for a SharedPtr-owned
-        // texture (weak_from_this fallback), so a resource whose identity has no alive
-        // entry has no trackable owner: its GL-side object is gone, or was never
-        // shared-owned, in which case recreation on a later sync is the safe fallback.
-        // Destruction goes through the per-frame deferred queues, never immediate.
-        Vector<TextureIdentity> orphanIdentities;
-        for (auto it = m_textureResources.begin(); it != m_textureResources.end(); ++it) {
-            if (m_aliveObjects.find(it->first) == m_aliveObjects.end()) {
-                orphanIdentities.emplace_back(it->first);
-            }
-        }
-        for (const auto& identity : orphanIdentities) {
-            EraseTrackedTexture(identity);
-        }
-        prunedCount += orphanIdentities.size();
+        };
+        const auto& applier = MG_Pipe::MGPipeApplier();
+        pruneWire(m_wireTextureResources, applier.TextureResources);
+        pruneWire(m_wireRenderbufferResources, applier.RenderbufferResources);
         return prunedCount;
     }
 
-    Bool VkTextureManager::SyncTexture(MG_State::GLState::ITextureObject &texture,
-                                       TextureResource &outResource) {
-        // Cross-draw fast path: if the resource is already built and neither the texture's
-        // pixel content (bumped in MarkStorageDirty), its SHAPE (bumped in BumpShapeVersion)
-        // nor its params changed since the last sync, there is nothing to re-check or
-        // re-upload - skip CheckMipmapCompleteness, SyncTextureResource, SyncTextureViews and
-        // the per-level dirty scan. Layout is maintained separately by the transition path, so
-        // the resource still reflects truth. The shape version is NOT redundant with the
-        // content one: glTexImage2D(..., nullptr) re-specifies a level's size or format
-        // without dirtying a texel, which is exactly how a re-specified image-unit texture used
-        // to keep reporting its old imageSize().
-        const Uint64 syncingContentVersion = texture.GetContentVersion();
-        const Uint64 syncingShapeVersion = texture.GetShapeVersion();
-        const auto* syncingMipTexture = MG_State::GLState::AsMipmapTexture(&texture);
-        const Uint32 syncingMipLevelCount =
-            syncingMipTexture != nullptr ? syncingMipTexture->GetMipmapLevelCount() : 0u;
-        // A pending storage-usage upgrade also has to bust the skip: nothing about the texture's
-        // content or params changed, but the image itself must be recreated with STORAGE usage
-        // before it can back an image-unit descriptor.
-        const Bool storageUpgradePending =
-            !outResource.storageUsageResolved &&
-            m_storageImageTextures.find(MakeTextureIdentity(&texture)) != m_storageImageTextures.end();
-        // Same shape for a GL texture view's demands on the image (MUTABLE_FORMAT for a
-        // format-reinterpreting view, CUBE_COMPATIBLE for a cube view of an array texture):
-        // nothing about the texture itself changed, but the live image cannot carry the view.
-        // Masked by what this format can actually be given: MUTABLE_FORMAT is deliberately
-        // withheld from formats the driver already refused it for (see SyncTextureResource), and
-        // without this mask the "upgrade still pending" test below could never come true again -
-        // costing every later sync of that texture the whole slow path, forever.
-        VkImageCreateFlags requestedViewFlags = GetViewRequestedImageFlags(texture);
-        if (m_mutableFormatUnsupported.find(outResource.format) != m_mutableFormatUnsupported.end()) {
-            requestedViewFlags &= ~VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+    // ---------------------------------------------------------------------------------
+    // P5f (fm): THE HANDLE-KEYED TEXTURE ARM
+    // ---------------------------------------------------------------------------------
+    //
+    // SyncTexture reads the frontend ITextureObject: the target, the format, the level
+    // chain, the dirty scan and - through UploadDirtyMipLevels - the CLIENT's mip shadow
+    // texels. Under an active transport none of that memory is the server's to read
+    // (rule E), which is exactly what Magma's texture-legacy-arm scope waived from P5c until
+    // P7 retired it (SyncTexture). This arm is the same sync re-sourced: the SHAPE comes from the applier's
+    // resource record (MGPipeApplier().TextureResources - the resource_create /
+    // resource_respecify descriptors), the TEXELS from the server's staged-texture store
+    // (P5c tx, adopted at apply time), and the WHICH-LEVELS from the record's
+    // pending-upload set, consumed entry by entry exactly where the upload lands
+    // (D-D5's rule: the set survives a bail, so a consumption is only ever written after
+    // the bytes were actually staged).
+    //
+    // What this arm deliberately does NOT have, and the loud answer each gets:
+    //   * buffer textures (StorageKind == Buffer): the buffer twin is P7's - declined;
+    //   * sampled/storage VIEW construction: clear/blit/readback/mipmap name images and
+    //     subresources, never descriptors, so no VkImageView is built here at all;
+    //   * the sampled-parameter sync (MGPTextureParams): nobody on those verbs samples.
+    //
+    // The map is keyed by StagedTextureStore::KeyForHandle - slot AND generation - so a
+    // recycled slot's new owner can never inherit its predecessor's image, and the sweep in
+    // PruneDeadTextures drops an entry whose record died.
+
+    // TryResolveTextureShapeInfo's answers derived from the wire descriptor instead of the
+    // frontend object. The descriptor's Width/Height/Depth are the BASE level's GL extent and
+    // ArrayLayers the layer count the emitter already normalized (MGPipeTextureExtentOf: a 1D
+    // array's layers are already out of its height, a cube map reports 6).
+    static Bool ResolveWireTextureShapeInfo(const MG_Pipe::MGPResourceDesc& desc, TextureShapeInfo& outShape) {
+        using MG_Pipe::MGPipeResourceTarget;
+        outShape = {};
+        switch (static_cast<MGPipeResourceTarget>(desc.Target)) {
+        case MGPipeResourceTarget::Tex1D:
+            outShape.imageType = VK_IMAGE_TYPE_1D;
+            outShape.viewType = VK_IMAGE_VIEW_TYPE_1D;
+            return desc.Width > 0;
+        case MGPipeResourceTarget::Tex2D:
+        case MGPipeResourceTarget::TexRect:
+        case MGPipeResourceTarget::Tex2DMS:
+        case MGPipeResourceTarget::Renderbuffer:
+            return desc.Width > 0 && desc.Height > 0;
+        case MGPipeResourceTarget::Tex3D:
+            outShape.imageType = VK_IMAGE_TYPE_3D;
+            outShape.viewType = VK_IMAGE_VIEW_TYPE_3D;
+            outShape.depth = desc.Depth;
+            return desc.Width > 0 && desc.Height > 0 && desc.Depth > 0;
+        case MGPipeResourceTarget::Tex1DArray:
+            outShape.imageType = VK_IMAGE_TYPE_1D;
+            outShape.viewType = VK_IMAGE_VIEW_TYPE_1D_ARRAY;
+            outShape.arrayLayers = desc.ArrayLayers;
+            return desc.Width > 0 && desc.ArrayLayers > 0;
+        case MGPipeResourceTarget::Tex2DArray:
+        case MGPipeResourceTarget::Tex2DMSArray:
+            outShape.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            outShape.arrayLayers = desc.ArrayLayers;
+            return desc.Width > 0 && desc.Height > 0 && desc.ArrayLayers > 0;
+        case MGPipeResourceTarget::TexCube:
+            outShape.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+            outShape.imageFlags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+            outShape.arrayLayers = 6;
+            return desc.Width > 0 && desc.Width == desc.Height;
+        case MGPipeResourceTarget::TexCubeArray:
+            // glTexStorage3D hands 6n through as the depth; the emitter normalized it into
+            // ArrayLayers. A non-whole cube count has no Vulkan shape - declined like every
+            // other unrepresentable target.
+            outShape.viewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+            outShape.imageFlags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+            outShape.arrayLayers = desc.ArrayLayers;
+            return desc.Width > 0 && desc.Width == desc.Height && desc.ArrayLayers > 0 && (desc.ArrayLayers % 6) == 0;
+        default:
+            // Buffer (a record routing fault on a texture path) and TexBuffer (P7's buffer
+            // twin) have no mipmapped image here.
+            return false;
         }
-        const Bool viewFlagUpgradePending =
-            (outResource.imageCreateFlags & requestedViewFlags) != requestedViewFlags;
-        if (outResource.image != VK_NULL_HANDLE && !storageUpgradePending && !viewFlagUpgradePending &&
-            outResource.syncedContentVersion == syncingContentVersion &&
-            outResource.syncedShapeVersion == syncingShapeVersion &&
-            outResource.syncedTextureParamsVersion == texture.GetTextureParamsVersion() &&
-            outResource.syncedMipLevelCount == syncingMipLevelCount) {
+    }
+
+    // WireTextureTargetOf: Espryt's BufferImpl::StagedTextureTargetForPipeTarget answered
+    // Magma-locally (the DirectGLES header is not this backend's to include).
+    static TextureTarget WireTextureTargetOfPipeTarget(Uint8 pipeTarget) {
+        using MG_Pipe::MGPipeResourceTarget;
+        switch (static_cast<MGPipeResourceTarget>(pipeTarget)) {
+        case MGPipeResourceTarget::Tex1D:
+            return TextureTarget::Texture1D;
+        case MGPipeResourceTarget::Tex2D:
+            return TextureTarget::Texture2D;
+        case MGPipeResourceTarget::Tex3D:
+            return TextureTarget::Texture3D;
+        case MGPipeResourceTarget::Tex1DArray:
+            return TextureTarget::Texture1DArray;
+        case MGPipeResourceTarget::Tex2DArray:
+            return TextureTarget::Texture2DArray;
+        case MGPipeResourceTarget::TexCube:
+            return TextureTarget::TextureCubeMap;
+        case MGPipeResourceTarget::TexCubeArray:
+            return TextureTarget::TextureCubeMapArray;
+        case MGPipeResourceTarget::Tex2DMS:
+            return TextureTarget::Texture2DMultisample;
+        case MGPipeResourceTarget::Tex2DMSArray:
+            return TextureTarget::Texture2DMultisampleArray;
+        case MGPipeResourceTarget::TexRect:
+            return TextureTarget::TextureRectangle;
+        case MGPipeResourceTarget::TexBuffer:
+            return TextureTarget::TextureBuffer;
+        default:
+            return TextureTarget::Unknown;
+        }
+    }
+
+    // The per-level byte transform UploadDirtyMipLevels runs between the shadow and the
+    // staging buffer, factored onto values so the wire arm can run it without the frontend
+    // object: RGB -> RGBA expansion, pure-depth word conversion (the image may be the
+    // D32_SFLOAT fallback for X8_D24), and the combined depth-stencil de-interleave. Returns
+    // false - the upload's decline - when the (format, layout) pair has no conversion here.
+    static Bool ConvertWireLevelBytes(const void* source, SizeT byteSize, const IntVec3& texelSize,
+                                      VkFormat imageFormat, VkImageAspectFlags aspect,
+                                      TextureInternalFormat internalFormat, const TextureFormatInfo& formatInfo,
+                                      Vector<Uint8>& outOwned, const void*& outSource, SizeT& outByteSize) {
+        outSource = static_cast<const Uint8*>(source);
+        outByteSize = byteSize;
+        if (formatInfo.expandRgbToRgba) {
+            if (!ExpandRgbSourceToRgba(source, byteSize, texelSize, formatInfo, outOwned)) {
+                return false;
+            }
+            outSource = outOwned.data();
+            outByteSize = outOwned.size();
             return true;
         }
-
-        TextureUploadTarget uploadTarget = TextureUploadTarget::Unknown;
-        IntVec3 texelSize{0, 0, 0};
-        SizeT byteSize = 0;
-        Uint32 mipLevelCount = 0;
-        if (!CheckMipmapCompleteness(texture, uploadTarget, texelSize, byteSize, mipLevelCount)) {
-            MGLOG_D("%s: mipmap not complete", __func__);
-            return false;
-        }
-
-        auto* mipTexture = MG_State::GLState::AsMipmapTexture(&texture);
-        if (!mipTexture) {
-            MGLOG_D("%s: not TextureObjectMipmap", __func__);
-            return false;
-        }
-
-        // From here down the size is VULKAN geometry, not GL's: a 1D array's layer count moves
-        // out of the height it occupies GL-side and into z, which is the slot
-        // TryResolveTextureShapeInfo reads arrayLayers from and the only one that leaves
-        // extent.height at the 1 a VK_IMAGE_TYPE_1D image is required to have.
-        texelSize = ToVulkanLevelExtent(texture.GetTarget(), texelSize);
-
-        if (!SyncTextureResource(texture, uploadTarget, texelSize, byteSize, mipLevelCount, outResource)) {
-            MGLOG_D("%s: SyncTextureResource failed", __func__);
-            return false;
-        }
-        if (!SyncTextureViews(texture, outResource)) {
-            MGLOG_D("%s: SyncTextureViews failed", __func__);
-            return false;
-        }
-
-        Vector<TextureUploadTarget> dirtyTargets;
-        if (outResource.viewType == VK_IMAGE_VIEW_TYPE_CUBE) {
-            dirtyTargets = mipTexture->GetUploadTargets();
-        } else {
-            dirtyTargets.push_back(uploadTarget);
-        }
-        Bool hasDirtyMipLevel = false;
-        for (const TextureUploadTarget target : dirtyTargets) {
-            const Uint32 targetMipLevelCount = std::min(mipLevelCount, GetUploadMipLevelCount(*mipTexture, target));
-            for (Uint32 level = 0; level < targetMipLevelCount; ++level) {
-                if (mipTexture->IsStorageDirty(target, level)) {
-                    hasDirtyMipLevel = true;
-                    break;
+        const Bool isCombinedDepthStencil =
+            (aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0 && (aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;
+        const SizeT texelCount = static_cast<SizeT>(texelSize.x()) * static_cast<SizeT>(texelSize.y()) *
+                                 static_cast<SizeT>(std::max(texelSize.z(), 1));
+        if (texelCount == 0) return false;
+        if (isCombinedDepthStencil) {
+            const Bool srcIsD24S8 = imageFormat == VK_FORMAT_D24_UNORM_S8_UINT;
+            const Bool srcIsD32FS8 = imageFormat == VK_FORMAT_D32_SFLOAT_S8_UINT;
+            if (!srcIsD24S8 && !srcIsD32FS8) return false;
+            const SizeT shadowTexelSize = byteSize / texelCount;
+            if (shadowTexelSize != 4 && shadowTexelSize != 8) return false;
+            outOwned.resize(texelCount * 4 + texelCount);
+            Uint8* depthPlane = outOwned.data();
+            Uint8* stencilPlane = outOwned.data() + texelCount * 4;
+            const Uint8* shadow = static_cast<const Uint8*>(source);
+            for (SizeT t = 0; t < texelCount; ++t) {
+                if (shadowTexelSize == 8) {
+                    // GL_FLOAT_32_UNSIGNED_INT_24_8_REV: float depth, then a word with the
+                    // stencil in its low 8 bits.
+                    float depthValue;
+                    Uint32 stencilWord;
+                    std::memcpy(&depthValue, shadow + t * 8, sizeof(depthValue));
+                    std::memcpy(&stencilWord, shadow + t * 8 + 4, sizeof(stencilWord));
+                    if (srcIsD32FS8) {
+                        std::memcpy(depthPlane + t * 4, &depthValue, sizeof(depthValue));
+                    } else {
+                        const float clamped = std::min(std::max(depthValue, 0.0f), 1.0f);
+                        const Uint32 depthWord = static_cast<Uint32>(clamped * 16777215.0f + 0.5f);
+                        std::memcpy(depthPlane + t * 4, &depthWord, sizeof(depthWord));
+                    }
+                    stencilPlane[t] = static_cast<Uint8>(stencilWord & 0xFFu);
+                } else {
+                    // GL_UNSIGNED_INT_24_8: depth in the high 24 bits, stencil low 8.
+                    Uint32 packed;
+                    std::memcpy(&packed, shadow + t * 4, sizeof(packed));
+                    if (srcIsD24S8) {
+                        const Uint32 depthWord = packed >> 8;
+                        std::memcpy(depthPlane + t * 4, &depthWord, sizeof(depthWord));
+                    } else {
+                        const float depthValue = static_cast<float>(packed >> 8) / 16777215.0f;
+                        std::memcpy(depthPlane + t * 4, &depthValue, sizeof(depthValue));
+                    }
+                    stencilPlane[t] = static_cast<Uint8>(packed & 0xFFu);
                 }
             }
-            if (hasDirtyMipLevel) {
-                break;
-            }
-        }
-        if (!hasDirtyMipLevel) {
-            outResource.syncedContentVersion = syncingContentVersion;
-            outResource.syncedMipLevelCount = syncingMipLevelCount;
-            outResource.syncedShapeVersion = syncingShapeVersion;
+            outSource = outOwned.data();
+            outByteSize = outOwned.size();
             return true;
         }
-
-        if (!UploadDirtyMipLevels(*mipTexture, uploadTarget, outResource)) {
-            MGLOG_D("%s: UploadDirtyMipLevels failed", __func__);
-            return false;
+        if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
+            const Bool shadowIsFloat = internalFormat == TextureInternalFormat::DepthComponent32F;
+            const Bool dstIsFloat = imageFormat == VK_FORMAT_D32_SFLOAT;
+            const Bool dstIsD24Word = imageFormat == VK_FORMAT_X8_D24_UNORM_PACK32;
+            const SizeT shadowTexelSize = byteSize / texelCount;
+            const Bool needsConversion =
+                (dstIsFloat && !shadowIsFloat) || (dstIsD24Word && shadowTexelSize == 4 && !shadowIsFloat);
+            if (needsConversion) {
+                outOwned.resize(texelCount * 4);
+                const Uint8* shadow = static_cast<const Uint8*>(source);
+                for (SizeT t = 0; t < texelCount; ++t) {
+                    Uint32 wide = 0;
+                    if (shadowTexelSize == 2) {
+                        Uint16 raw = 0;
+                        std::memcpy(&raw, shadow + t * 2, sizeof(raw));
+                        wide = (static_cast<Uint32>(raw) << 16) | raw;
+                    } else {
+                        std::memcpy(&wide, shadow + t * 4, sizeof(wide));
+                    }
+                    if (dstIsFloat) {
+                        const float value = static_cast<float>(static_cast<double>(wide) / 4294967295.0);
+                        std::memcpy(outOwned.data() + t * 4, &value, sizeof(value));
+                    } else { // X8_D24: depth in the low 24 bits of a 32-bit word
+                        const Uint32 word = wide >> 8;
+                        std::memcpy(outOwned.data() + t * 4, &word, sizeof(word));
+                    }
+                }
+                outSource = outOwned.data();
+                outByteSize = outOwned.size();
+            }
         }
-        outResource.syncedContentVersion = syncingContentVersion;
-        outResource.syncedMipLevelCount = syncingMipLevelCount;
-        outResource.syncedShapeVersion = syncingShapeVersion;
         return true;
     }
 
-    Bool VkTextureManager::SyncTextureResource(const MG_State::GLState::ITextureObject &texture,
-                                               TextureUploadTarget uploadTarget,
-                                               const IntVec3 &texelSize, SizeT byteSize, Uint32 mipLevels,
-                                               TextureResource &resource) {
-        const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(texture.GetFormat());
-        VkFormat format = formatInfo.format;
-        if (format == VK_FORMAT_UNDEFINED) {
-            MGLOG_D("%s: format == VK_FORMAT_UNDEFINED", __func__);
+    Bool VkTextureManager::ReadUnbackedWireLevel(MG_Pipe::MGPipeHandle handle, TextureUploadTarget target, Uint32 level,
+                                                 const IntVec3& extent, VkFormat& format, Vector<Uint8>& bytes) {
+        const auto& records = MG_Pipe::MGPipeApplier().TextureResources;
+        if (!handle.Slot || handle.Slot >= records.size()) return false;
+        const auto& record = records[handle.Slot];
+        if (!record.Live || record.Gen != handle.Gen || !MG_Pipe::MGPipeHandleIsNull(record.Desc.ViewOf)) return false;
+        auto& store = MG_Record::ServerStagedTexture();
+        const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(handle);
+        const auto upload = static_cast<Uint16>(target);
+        const auto native = m_wireTextureResources.find(key);
+        if (native != m_wireTextureResources.end() && native->second.image && level < native->second.mipLevels) {
+            const auto& image = native->second;
+            const IntVec3 nativeExtent = ToVulkanLevelExtent(WireTextureTargetOfPipeTarget(record.Desc.Target), extent);
+            const Bool volume = image.viewType == VK_IMAGE_VIEW_TYPE_3D;
+            const Uint64 firstLayer = ResolveUploadArrayLayer(target);
+            if (nativeExtent.x() == static_cast<Int>(std::max(image.extent.width >> level, 1u)) &&
+                nativeExtent.y() == static_cast<Int>(std::max(image.extent.height >> level, 1u)) &&
+                (volume ? nativeExtent.z() == static_cast<Int>(std::max(image.depth >> level, 1u))
+                        : firstLayer + static_cast<Uint64>(nativeExtent.z()) <= image.arrayLayers))
+                return false; // a failed sync cannot substitute CPU bytes for this native image
+        }
+        if (!store.IsCovered(key, upload, level) || store.IsLevelGpuDirty(key, upload, level) ||
+            store.LevelExtentOrUndefined(key, upload, level) != extent) {
+            const auto actual = store.LevelExtentOrUndefined(key, upload, level);
+            MGLOG_E("Magma unbacked read: {%u,%u} target=%u level=%u covered=%d gpuDirty=%d extent=%dx%dx%d "
+                    "requested=%dx%dx%d bytes=%zu",
+                    handle.Slot, handle.Gen, upload, level, store.IsCovered(key, upload, level),
+                    store.IsLevelGpuDirty(key, upload, level), actual.x(), actual.y(), actual.z(), extent.x(),
+                    extent.y(), extent.z(), store.LevelByteSize(key, upload, level));
             return false;
         }
-        // X8_D24 lacks optimal-tiling support on several drivers (lavapipe included);
-        // D32_SFLOAT holds every 24-bit depth value exactly, and the upload path
-        // converts the shadow words to float (see the pure-depth branch below).
+        const auto logical = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
+        const auto formatInfo = ResolveTextureFormatInfo(logical);
+        format = formatInfo.format;
+        if (format == VK_FORMAT_UNDEFINED) return false;
+        const void* source = store.RequireLevelBytes(key, upload, level, "unbacked texture level readback");
+        const void* converted = nullptr;
+        SizeT convertedSize = 0;
+        Vector<Uint8> owned;
+        if (!ConvertWireLevelBytes(source, store.LevelByteSize(key, upload, level),
+                                   ToVulkanLevelExtent(WireTextureTargetOfPipeTarget(record.Desc.Target), extent),
+                                   format, GetAspectMaskForFormat(format), logical, formatInfo, owned, converted,
+                                   convertedSize))
+            return false;
+        const auto* begin = static_cast<const Uint8*>(converted);
+        bytes.assign(begin, begin + convertedSize);
+        return true;
+    }
+
+    // D-D5's consume, Magma-local: the level's entry leaves the applier's pending set ONLY
+    // here, where its bytes were actually staged. (Espryt's twin is Managers.cpp's
+    // ConsumePipeTextureUpload; the decode rule is the shared one.)
+    static void ConsumeWireTextureUpload(MG_Pipe::MGPipeResourceRecord& record, Uint16 uploadTarget, Uint16 level) {
+        for (SizeT index = 0; index < record.PendingUploads.size(); ++index) {
+            const auto& pending = record.PendingUploads[index];
+            if (MG_Pipe::MGPipeSubDataUploadTargetOf(pending.UploadTarget) != static_cast<Uint8>(uploadTarget) ||
+                pending.Level != level) {
+                continue;
+            }
+            record.PendingUploads[index] = std::move(record.PendingUploads.back());
+            record.PendingUploads.pop_back();
+            return;
+        }
+    }
+
+    Bool VkTextureManager::SyncWireTextureShape(const MG_Pipe::MGPipeResourceRecord& record, TextureResource& resource,
+                                                Bool requireStorage) {
+        const MG_Pipe::MGPResourceDesc& desc = record.Desc;
+        // A YUV shared image is converted INTO the texture's own RGBA8 storage, which the rest of
+        // this function defines as for any texture; the image is only named here, and the
+        // renderer converts it at its first use in each frame (WireYuvImage.cpp).
+        if (record.SharedImageId != resource.yuvImageId && !m_syncingYuvTextureStorage) {
+            // Respecified away from (or to another) YUV image: its source goes with it, once the
+            // GPU is done with it (a released resource's Reset is deferred).
+            if (resource.yuvSource != nullptr) {
+                TextureResource retired;
+                retired.yuvSource = std::move(resource.yuvSource);
+                DeferResourceRelease(Move(retired));
+            }
+            resource.yuvImageId = 0;
+            resource.yuvOwner.reset();
+            resource.yuvSource.reset();
+            resource.yuvConvertedFrame = 0;
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (record.SharedImageId != 0 && !m_syncingYuvTextureStorage) {
+            const auto yuv = MG_Remote::Server::SharedImages::Find(record.SharedImageId);
+            if (yuv != nullptr && MG_Remote::Server::SharedImages::FourccIsYuv(yuv->Fourcc)) {
+                m_syncingYuvTextureStorage = true;
+                const Bool defined = SyncWireTextureShape(record, resource, requireStorage);
+                m_syncingYuvTextureStorage = false;
+                if (!defined) return false;
+                if (resource.yuvImageId != record.SharedImageId) {
+                    resource.yuvImageId = record.SharedImageId;
+                    resource.yuvOwner = yuv;
+                    resource.yuvSource.reset();
+                    resource.yuvConvertedFrame = 0;
+                }
+                return true;
+            }
+        }
+#endif
+        // Level 0 is a shared image: bind its buffer. An image that cannot be bound here leaves
+        // the texture the storage its NULL-data definition asked for, below.
+        if (record.SharedImageId != 0 && !m_syncingYuvTextureStorage) {
+            const SharedImageBind bound = SyncWireSharedImage(record, resource, requireStorage);
+            if (bound != SharedImageBind::Unresolved) return bound == SharedImageBind::Bound;
+        }
+        if (desc.StorageKind != static_cast<Uint8>(TextureStorageType::Mipmap)) {
+            MGLOG_W_ONCE("Magma wire texture {slot=%u, gen=%u}: buffer-backed textures are not migrated; declined",
+                         desc.Resource.Slot, desc.Resource.Gen);
+            WireDeclineTally::Count(WireDeclineSite::ShapeBufferBacked);
+            return false;
+        }
+        // ResolveWireTextureStorage has already followed ViewOf. Views share the storage
+        // owner's image and layout; allocating a second image would break aliasing.
+        if (!MG_Pipe::MGPipeHandleIsNull(desc.ViewOf)) {
+            MGL_WIRE_DECLINE_AT(ShapeViewOfStorage,
+                                "texture {slot=%u, gen=%u} is a view whose storage owner did not resolve",
+                                desc.Resource.Slot, desc.Resource.Gen);
+            return false;
+        }
+        if (desc.Levels == 0) {
+            // A create before the first respecify: no storage, nothing to back.
+            MGL_WIRE_DECLINE_AT(ShapeNoLevels, "texture {slot=%u, gen=%u} has no defined level yet", desc.Resource.Slot,
+                                desc.Resource.Gen);
+            return false;
+        }
+        TextureShapeInfo shapeInfo{};
+        if (!ResolveWireTextureShapeInfo(desc, shapeInfo)) {
+            MGLOG_W_ONCE("Magma wire texture {slot=%u, gen=%u}: no Vulkan shape for pipe target %u "
+                         "(%ux%ux%u, %u layers); declined",
+                         desc.Resource.Slot, desc.Resource.Gen, static_cast<Uint32>(desc.Target), desc.Width,
+                         desc.Height, desc.Depth, static_cast<Uint32>(desc.ArrayLayers));
+            WireDeclineTally::Count(WireDeclineSite::ShapeNoVulkanShape);
+            return false;
+        }
+        const TextureInternalFormat internalFormat = static_cast<TextureInternalFormat>(desc.InternalFormat);
+        const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(internalFormat);
+        VkFormat format = formatInfo.format;
+        if (format == VK_FORMAT_UNDEFINED) {
+            MGLOG_W_ONCE("Magma wire texture {slot=%u, gen=%u}: no backing VkFormat for internal format 0x%x",
+                         desc.Resource.Slot, desc.Resource.Gen, desc.InternalFormat);
+            WireDeclineTally::Count(WireDeclineSite::ShapeNoVkFormat);
+            return false;
+        }
+        // X8_D24 lacks optimal-tiling support on several drivers (lavapipe included); the same
+        // fallback SyncTextureResource applies, and the upload arm converts the shadow words.
         if (format == VK_FORMAT_X8_D24_UNORM_PACK32) {
             VkFormatProperties formatProperties{};
             vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
@@ -1908,137 +1073,62 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 format = VK_FORMAT_D32_SFLOAT;
             }
         }
-        if (texelSize.x() <= 0 || texelSize.y() <= 0 /*|| byteSize == 0*/) {
-            MGLOG_D("%s: texelSize or byteSize is zero", __func__);
-            return false;
-        }
-        if (mipLevels == 0) {
-            MGLOG_D("%s: no mip levels", __func__);
-            return false;
-        }
-        const Bool isMultisampleTexture = IsMultisampleTextureUploadTarget(uploadTarget);
-        // A texture that has only ever defined level 0 gets a single-level backing
-        // (ANGLE's model). Preallocating the full chain put every render target
-        // onto Adreno's multi-mip image layout and grew each texture by a third
-        // for levels most textures never define. Once a second level is defined
-        // the backing is recreated ONE time with the full chain (the
-        // preserve-copy path below carries the pixels over), so sequentially-
-        // defined atlas mips do not recreate per level, and glGenerateMipmap -
-        // which defines every level before syncing - works unchanged.
-        TextureShapeInfo shapeInfo{};
-        const Bool supportedShape = TryResolveTextureShapeInfo(texture, uploadTarget, texelSize, shapeInfo);
-        // ComputeFullMipLevelCount takes max(x, y, z), and for every ARRAY shape z is the layer
-        // count, not a mip-able axis: a 4x4 array with 192 layers asked for 6 levels on an image
-        // whose legal maximum is 3 (VUID-VkImageCreateInfo-mipLevels-00958). Only the image's own
-        // extent - width, height and shapeInfo.depth, which is 1 for every array - can bound it.
-        // lavapipe has been letting this through unvalidated; a strict driver would not.
-        const IntVec3 mipExtent{texelSize.x(), texelSize.y(), static_cast<Int>(shapeInfo.depth)};
-        const Uint32 fullMipLevels = ComputeFullMipLevelCount(mipExtent);
-        const Uint32 backingMipLevels =
-            isMultisampleTexture ? 1u : (mipLevels > 1 ? std::min(std::max(mipLevels, fullMipLevels), fullMipLevels) : 1u);
-        if (!supportedShape) {
-            // A gap in this backend's coverage, not a broken invariant: the GL front end accepts
-            // targets this manager has no Vulkan image shape for yet (cube map arrays above all).
-            // Declining the sync leaves the texture unbacked - wrong, but recoverable - where an
-            // assertion would take the whole process down instead.
-            MGLOG_W_ONCE("SyncTextureResource: unsupported uploadTarget=%s textureTarget=%s textureId=%d size=(%d,%d,%d) "
-                    "mipLevels=%u vkViewType=%d",
-                    MG_Util::ConvertTextureUploadTargetToString(uploadTarget).c_str(),
-                    MG_Util::ConvertTextureTargetToString(texture.GetTarget()).c_str(), texture.GetExternalIndex(),
-                    texelSize.x(), texelSize.y(), texelSize.z(), mipLevels,
-                    static_cast<Int>(MG_Util::ConvertTextureUploadTargetToVkEnum(uploadTarget)));
-            return false;
-        }
+        const Bool isMultisample =
+            desc.Target == static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2DMS) ||
+            desc.Target == static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2DMSArray) ||
+            (desc.Target == static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Renderbuffer) && desc.Samples > 1);
         VkSampleCountFlagBits resolvedSampleCount = VK_SAMPLE_COUNT_1_BIT;
-        if (isMultisampleTexture &&
-            !TryResolveSampleCountFlagBits(texture.GetSamples(), resolvedSampleCount)) {
-            MGLOG_D("%s: unsupported multisample count=%d for textureId=%d target=%s", __func__,
-                    texture.GetSamples(), texture.GetExternalIndex(),
-                    MG_Util::ConvertTextureUploadTargetToString(uploadTarget).c_str());
-            return false;
-        }
-        // glTexStorage*Multisample(samples = 1) is legal GL, but a one-sample image cannot back a
-        // sampler2DMS: VUID-RuntimeSpirv-samples-08726 forbids an OpTypeImage with MS = 1 from
-        // reading an image created with VK_SAMPLE_COUNT_1_BIT, and the fetch returns undefined data
-        // rather than an error. GL only promises "at least the requested number of samples", so
-        // giving a multisample texture two is both legal and the only way to keep the shader's view
-        // of it honest. GL_TEXTURE_SAMPLES still reports what the application asked for - that is
-        // read off the texture object, not off the image.
-        if (isMultisampleTexture && resolvedSampleCount == VK_SAMPLE_COUNT_1_BIT) {
-            resolvedSampleCount = VK_SAMPLE_COUNT_2_BIT;
+        if (isMultisample) {
+            if (!TryResolveSampleCountFlagBits(static_cast<Int>(desc.Samples), resolvedSampleCount)) {
+                MGLOG_W_ONCE("Magma wire texture {slot=%u, gen=%u}: unsupported sample count %u", desc.Resource.Slot,
+                             desc.Resource.Gen, static_cast<Uint32>(desc.Samples));
+                WireDeclineTally::Count(WireDeclineSite::ShapeSampleCount);
+                return false;
+            }
+            // glTexStorage*Multisample(samples = 1) is legal GL, but a one-sample image cannot
+            // back a sampler2DMS (VUID-RuntimeSpirv-samples-08726).
+            if (resolvedSampleCount == VK_SAMPLE_COUNT_1_BIT) {
+                resolvedSampleCount = VK_SAMPLE_COUNT_2_BIT;
+            }
         }
 
         const VkImageAspectFlags aspect = GetAspectMaskForFormat(format);
         VkFormatProperties formatProperties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
-        // Only textures that have actually been bound to a GL image unit get STORAGE usage (and
-        // the MUTABLE_FORMAT it drags in for format-reinterpreting image views). Requesting it
-        // for every storage-capable colour texture costs real bandwidth: Adreno cannot keep UBWC
-        // compression on an image that may be written through a storage descriptor, so the whole
-        // render target - MC's included - runs uncompressed. MarkStorageImageTexture upgrades a
-        // texture before its first image-unit draw, and the usage below feeds the compatibility
-        // check so the upgrade recreates the image.
+        // The descriptor's sticky bind mask carries the image-unit hint, so the image is born
+        // with STORAGE usage and no re-mint ever pulls texels back (TextureEmit.h D-A3).
         const Bool markedAsStorageImage =
-            m_storageImageTextures.find(MakeTextureIdentity(
-                const_cast<MG_State::GLState::ITextureObject*>(&texture))) != m_storageImageTextures.end();
-        // Storage-image CAPABILITY (does the format allow it at all) is deliberately separate from
-        // whether this texture actually needs the usage. MUTABLE_FORMAT keys off capability, as
-        // before: format-reinterpreting views are not a storage-only concern - the SAMPLED path
-        // needs them too (GetOrCreateSampledImageView bails out without it, see ~line 892), so
-        // tying MUTABLE_FORMAT to the image-unit mark would break sampled format reinterpretation
-        // for every texture that never becomes a storage image.
+            requireStorage || resource.storageUsageResolved || (desc.BindMask & MG_Pipe::kMGPipeBindShaderImage) != 0;
         const Bool storageImageCapable =
-            !isMultisampleTexture &&
-            (aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0 &&
+            !isMultisample && (aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0 &&
             (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
         const Bool supportsStorageImage = storageImageCapable && markedAsStorageImage;
         VkImageCreateFlags imageCreateFlags = shapeInfo.imageFlags;
-        // One z slice of a 3D texture can only be attached to a framebuffer through a 2D view over
-        // it, which needs the image to be 2D-array-compatible (Vulkan 1.1 core, promoted from
-        // VK_KHR_maintenance1). Asked for optimistically and withdrawn per format below if the
-        // driver refuses - losing it only costs per-slice attachment, while failing creation would
-        // lose the texture entirely.
-        if (shapeInfo.imageType == VK_IMAGE_TYPE_3D && !isMultisampleTexture &&
+        if (shapeInfo.imageType == VK_IMAGE_TYPE_3D && !isMultisample &&
             m_2dArrayCompatibleUnsupported.find(format) == m_2dArrayCompatibleUnsupported.end()) {
             imageCreateFlags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
         }
-        if (storageImageCapable && IsMutableStorageImageFormat(format) &&
+        // A view can be created after its storage was first used. Give wire color storage
+        // its legal format-compatibility class from birth, so that view creation needs no
+        // frontend identity lookup and cannot silently use an immutable-format VkImage.
+        if (IsMutableStorageImageFormat(format) &&
             m_mutableFormatUnsupported.find(format) == m_mutableFormatUnsupported.end()) {
             imageCreateFlags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
         }
-        // Flags a GL texture view over this storage asked for (see NoteTextureViewImageRequirements).
-        // MUTABLE_FORMAT is still withheld from formats the driver has already refused it for, so a
-        // reinterpreting view degrades to no view rather than to no texture.
-        const VkImageCreateFlags requestedViewFlags = GetViewRequestedImageFlags(texture);
-        if (requestedViewFlags != 0) {
-            imageCreateFlags |= requestedViewFlags;
-            if (m_mutableFormatUnsupported.find(format) != m_mutableFormatUnsupported.end()) {
-                imageCreateFlags &= ~VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
-            }
-        }
-        // sRGB color images attach through their UNORM twin while GL_FRAMEBUFFER_SRGB is
-        // disabled (see ResolveSrgbAttachmentWriteFormat), which needs format-reinterpreting
-        // views - multisample sRGB render targets included.
-        if (ResolveSrgbAttachmentWriteFormat(format, false) != format &&
-            (aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0 &&
+        // sRGB color images attach through their UNORM twin while GL_FRAMEBUFFER_SRGB is off.
+        if (ResolveSrgbAttachmentWriteFormat(format, false) != format && (aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0 &&
             m_mutableFormatUnsupported.find(format) == m_mutableFormatUnsupported.end()) {
             imageCreateFlags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
         }
 
         VkImageUsageFlags desiredUsage =
-            VK_IMAGE_USAGE_SAMPLED_BIT |
-            (supportsStorageImage ? VK_IMAGE_USAGE_STORAGE_BIT : 0) |
-            ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) |
-            (((aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || (aspect & VK_IMAGE_ASPECT_STENCIL_BIT)) ?
-                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT :
-                 0);
-        if (!isMultisampleTexture) {
-            desiredUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        }
+            ResolveTextureUsage(aspect, formatProperties.optimalTilingFeatures, supportsStorageImage);
+        // Multisample attachments are also transfer sources for vkCmdResolveImage.
+        desiredUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
-        // Round a multisample request up to a count the device supports for this
-        // format (GL only promises "at least"), mirroring the renderbuffer path.
-        if (isMultisampleTexture && resolvedSampleCount != VK_SAMPLE_COUNT_1_BIT) {
+        // Round a multisample request up to a count the device supports for this format (GL
+        // only promises "at least"), the renderbuffer path's rule.
+        if (isMultisample && resolvedSampleCount != VK_SAMPLE_COUNT_1_BIT) {
             auto supportedIt = m_multisampleCountsByFormat.find(format);
             if (supportedIt == m_multisampleCountsByFormat.end()) {
                 VkImageFormatProperties imageFormatProperties{};
@@ -2061,9 +1151,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                 }
                 if (rounded == 0) {
-                    // Never land on one sample: that is the VUID-RuntimeSpirv-samples-08726
-                    // violation the floor above exists to avoid, and it would come back silently
-                    // for any format whose only supported count is 1.
                     for (Uint32 bit = static_cast<Uint32>(resolvedSampleCount) >> 1;
                          bit > static_cast<Uint32>(VK_SAMPLE_COUNT_1_BIT); bit >>= 1) {
                         if ((supported & bit) != 0) {
@@ -2073,15 +1160,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                 }
                 if (rounded == 0 && (supported & VK_SAMPLE_COUNT_1_BIT) != 0) {
-                    // Nothing at two samples or above. Reachable because the frontend validates
-                    // multisample allocations against the count MobileGL ADVERTISES (GL requires
-                    // GL_MAX_SAMPLES >= 4) rather than against the device's per-format support, so
-                    // a format this device cannot multisample at all now gets here instead of
-                    // being refused up front. Keeping the unsupported count would hand
-                    // vkCreateImage an invalid VkImageCreateInfo; one sample is at least a legal
-                    // image, and the samples-08726 hazard above is the lesser of the two.
-                    MGLOG_W_ONCE("Multisample texture format %d supports no count above one on this device; "
-                                 "backing it with a single sample",
+                    MGLOG_W_ONCE("Magma wire texture: multisample format %d supports no count above one on this "
+                                 "device; backing it with a single sample",
                                  static_cast<Int>(format));
                     rounded = static_cast<Uint32>(VK_SAMPLE_COUNT_1_BIT);
                 }
@@ -2091,60 +1171,62 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
-        const Bool compatible = resource.image != VK_NULL_HANDLE && resource.format == format &&
-                                resource.extent.width == static_cast<Uint32>(texelSize.x()) &&
-                                resource.extent.height == static_cast<Uint32>(texelSize.y()) &&
-                                resource.depth == shapeInfo.depth &&
-                                resource.arrayLayers == shapeInfo.arrayLayers &&
-                                resource.viewType == shapeInfo.viewType &&
-                                resource.sampleCount == resolvedSampleCount &&
-                                resource.imageCreateFlags == imageCreateFlags &&
-                                resource.usageFlags == desiredUsage &&
-                                resource.mipLevels == backingMipLevels;
+        // The ANGLE-shaped backing rule SyncTextureResource runs: a texture that has only ever
+        // defined level 0 gets a single-level backing; a second defined level recreates it ONCE
+        // with the full chain. The full-chain count bounds by the image's own extent (array
+        // layers are not a mip-able axis).
+        // The wire retains the GL base extent: a 1D-array's Height is its layer count.
+        const Uint32 imageHeight = shapeInfo.imageType == VK_IMAGE_TYPE_1D ? 1u : desc.Height;
+        const IntVec3 mipExtent{static_cast<Int>(desc.Width), static_cast<Int>(imageHeight),
+                                static_cast<Int>(shapeInfo.depth)};
+        const Uint32 fullMipLevels = ComputeFullMipLevelCount(mipExtent);
+        const Uint32 backingMipLevels =
+            isMultisample
+                ? 1u
+                : (desc.Levels > 1 ? std::min(std::max<Uint32>(desc.Levels, fullMipLevels), fullMipLevels) : 1u);
+
+        // A shared image never stands in for allocated storage: the attach is over (or never
+        // resolved), so the texture gets storage of its own, and none of the image's texels.
+        const Bool compatible =
+            resource.image != VK_NULL_HANDLE && resource.sharedImageId == 0 && resource.format == format &&
+            resource.extent.width == desc.Width && resource.extent.height == imageHeight &&
+            resource.depth == shapeInfo.depth && resource.arrayLayers == shapeInfo.arrayLayers &&
+            resource.viewType == shapeInfo.viewType && resource.sampleCount == resolvedSampleCount &&
+            resource.imageCreateFlags == imageCreateFlags && resource.usageFlags == desiredUsage &&
+            resource.mipLevels >= backingMipLevels;
         if (compatible) {
-            if (resource.perMipViews.size() != backingMipLevels) {
-                resource.perMipViews.resize(backingMipLevels, VK_NULL_HANDLE);
-            }
-            if (resource.perMipSampledViews.size() != backingMipLevels) {
-                resource.perMipSampledViews.resize(backingMipLevels, VK_NULL_HANDLE);
-            }
-            // Keeping the image is itself the answer to the mark: either it already carries
-            // STORAGE, or this format can never carry it. Either way there is nothing left to
-            // recreate, so stop reporting the texture as needing preparation.
             resource.storageUsageResolved = markedAsStorageImage;
             return true;
         }
 
-        const Bool preserveExistingContent =
-            resource.image != VK_NULL_HANDLE &&
-            resource.format == format &&
-            resource.extent.width == static_cast<Uint32>(texelSize.x()) &&
-            resource.extent.height == static_cast<Uint32>(texelSize.y()) &&
-            resource.depth == shapeInfo.depth &&
-            resource.arrayLayers == shapeInfo.arrayLayers &&
-            resource.viewType == shapeInfo.viewType &&
-            resource.sampleCount == resolvedSampleCount &&
-            resource.imageCreateFlags == imageCreateFlags &&
-            resolvedSampleCount == VK_SAMPLE_COUNT_1_BIT &&
-            // '<=' rather than '<': a storage-usage upgrade recreates the image with an
-            // unchanged mip count, and its contents (a render target's pixels live only on the
-            // GPU) still have to survive. The vkCmdCopyImage below copies min(mipLevels).
-            resource.mipLevels <= backingMipLevels &&
-            resource.layout != VK_IMAGE_LAYOUT_UNDEFINED;
-
-        std::unique_ptr<TextureResource> preservedResource;
-        if (preserveExistingContent) {
-            preservedResource = std::make_unique<TextureResource>(Move(resource));
-        } else {
-            DeferResourceRelease(Move(resource));
+        // A named-level respecify changes ONLY that level; a BindMask update changes no
+        // storage at all. Preserve every compatible old level when growing/upgrading the
+        // allocation. A whole-store redefinition permits (but does not require) old texels.
+        const Bool preserve =
+            resource.image != VK_NULL_HANDLE && resource.sharedImageId == 0 && resource.format == format &&
+            resource.extent.width == desc.Width && resource.extent.height == imageHeight &&
+            resource.depth == shapeInfo.depth && resource.arrayLayers == shapeInfo.arrayLayers &&
+            resource.viewType == shapeInfo.viewType && resource.sampleCount == VK_SAMPLE_COUNT_1_BIT &&
+            resolvedSampleCount == VK_SAMPLE_COUNT_1_BIT && resource.layout != VK_IMAGE_LAYOUT_UNDEFINED;
+        // Preservation submits its copy separately. Earlier draws/clears of the
+        // old image must reach the queue first; waiting only for the preservation
+        // fence cannot order work that is still in the renderer's open recording.
+        // The descriptor caller preflights this before capturing its command buffer.
+        if (preserve && pVulkanRenderer && !pVulkanRenderer->FlushWirePendingCommandsForTextureUpdate()) {
+            MGL_WIRE_DECLINE_AT(ShapePreserveFlushFailed,
+                                "texture {slot=%u, gen=%u}: earlier work could not be submitted before "
+                                "preserving its texels across a reallocation",
+                                desc.Resource.Slot, desc.Resource.Gen);
+            return false;
         }
+        TextureResource replacement;
 
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.flags = imageCreateFlags;
         imageInfo.imageType = shapeInfo.imageType;
-        imageInfo.extent.width = static_cast<Uint32>(texelSize.x());
-        imageInfo.extent.height = static_cast<Uint32>(texelSize.y());
+        imageInfo.extent.width = desc.Width;
+        imageInfo.extent.height = imageHeight;
         imageInfo.extent.depth = shapeInfo.depth;
         imageInfo.mipLevels = backingMipLevels;
         imageInfo.arrayLayers = shapeInfo.arrayLayers;
@@ -2153,161 +1235,991 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         imageInfo.usage = desiredUsage;
         imageInfo.samples = resolvedSampleCount;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-        // Bound the mutability. A blindly-mutable image has to be laid out so that ANY format in
-        // its compatibility class can be viewed, which costs bandwidth compression on tilers;
-        // naming the exact set instead lets the driver keep it. Only safe when that set really is
-        // exhaustive, so it is restricted to textures that are not image-unit bound: sampled views
-        // can only ever ask for ResolveSampledImageViewFormat's output, whereas glBindImageTexture
-        // may name any compatible format, which nothing here can enumerate ahead of time.
-        Vector<VkFormat> viewFormats;
-        VkImageFormatListCreateInfo formatListInfo{};
-        if (m_imageFormatListSupported && !supportsStorageImage &&
-            (imageInfo.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0) {
-            viewFormats.push_back(format);
-            for (const SamplerNumericDomain domain : {SamplerNumericDomain::Float,
-                                                      SamplerNumericDomain::SignedInteger,
-                                                      SamplerNumericDomain::UnsignedInteger}) {
-                const VkFormat viewFormat = ResolveSampledImageViewFormat(format, domain);
-                if (viewFormat == VK_FORMAT_UNDEFINED) {
-                    continue;
-                }
-                if (std::find(viewFormats.begin(), viewFormats.end(), viewFormat) == viewFormats.end()) {
-                    viewFormats.push_back(viewFormat);
-                }
-            }
-            // ...plus every format a glTextureView over this storage reinterprets it as. Those
-            // are NOT enumerable from ResolveSampledImageViewFormat - an application may name any
-            // member of the format's view class (GL 4.6 core table 8.21) - so without this the
-            // list would forbid the very view the MUTABLE_FORMAT bit was requested for.
-            AppendViewRequestedFormats(texture, viewFormats);
-            formatListInfo.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
-            formatListInfo.viewFormatCount = static_cast<Uint32>(viewFormats.size());
-            formatListInfo.pViewFormats = viewFormats.data();
-            imageInfo.pNext = &formatListInfo;
-        }
-
-        if (isMultisampleTexture || (imageInfo.flags & (VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT |
-                                                        VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT)) != 0) {
+        if (isMultisample ||
+            (imageInfo.flags & (VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT)) != 0) {
             VkImageFormatProperties imageFormatProperties{};
             VkResult imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
-                m_physicalDevice, format, imageInfo.imageType, imageInfo.tiling, imageInfo.usage,
-                imageInfo.flags, &imageFormatProperties);
-            if (imageFormatResult != VK_SUCCESS && !isMultisampleTexture &&
+                m_physicalDevice, format, imageInfo.imageType, imageInfo.tiling, imageInfo.usage, imageInfo.flags,
+                &imageFormatProperties);
+            if (imageFormatResult != VK_SUCCESS && !isMultisample &&
                 (imageInfo.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0) {
-                // Losing reinterpreted views only degrades the formatless-image feature for
-                // this texture; failing creation would lose the texture entirely, so retry
-                // as a plain immutable-format image.
-                MGLOG_W_ONCE("%s: mutable image format=%d is unsupported for textureId=%d; creating "
-                        "without VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT (format reinterpretation "
-                        "will be unavailable for it)",
-                        __func__, static_cast<Int>(format), texture.GetExternalIndex());
-                // Remember the verdict so later syncs of same-format textures neither retry
-                // the probe nor flag-mismatch against this image and recreate it.
+                // Losing reinterpreted views only degrades the formatless-image feature;
+                // failing creation would lose the texture entirely.
                 m_mutableFormatUnsupported.insert(format);
                 imageInfo.flags &= ~VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
                 imageCreateFlags = imageInfo.flags;
                 imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
-                    m_physicalDevice, format, imageInfo.imageType, imageInfo.tiling, imageInfo.usage,
-                    imageInfo.flags, &imageFormatProperties);
+                    m_physicalDevice, format, imageInfo.imageType, imageInfo.tiling, imageInfo.usage, imageInfo.flags,
+                    &imageFormatProperties);
             }
-            if (imageFormatResult != VK_SUCCESS && !isMultisampleTexture &&
+            if (imageFormatResult != VK_SUCCESS && !isMultisample &&
                 (imageInfo.flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) != 0) {
-                // Losing 2D-array compatibility only costs framebuffer attachment of this format's
-                // 3D images - per-slice AND layered, since both are spelled as a 2D-family view over
-                // the z axis; failing creation would lose the texture entirely. Recorded here (the
-                // per-format set below) so later syncs neither reprobe nor flag-mismatch against this
-                // image and recreate it, and so GetOrCreateAttachmentViewAtMipLevel declines rather
-                // than handing back a view that cannot exist - the render-pass builder then turns
-                // that decline into a skipped draw instead of a null VkImageView in pAttachments.
-                MGLOG_W_ONCE("%s: VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT is unsupported for format=%d "
-                        "textureId=%d; creating without it (per-slice and layered framebuffer "
-                        "attachment of 3D textures in this format will be unavailable)",
-                        __func__, static_cast<Int>(format), texture.GetExternalIndex());
                 m_2dArrayCompatibleUnsupported.insert(format);
                 imageInfo.flags &= ~VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
                 imageCreateFlags = imageInfo.flags;
                 imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
-                    m_physicalDevice, format, imageInfo.imageType, imageInfo.tiling, imageInfo.usage,
-                    imageInfo.flags, &imageFormatProperties);
+                    m_physicalDevice, format, imageInfo.imageType, imageInfo.tiling, imageInfo.usage, imageInfo.flags,
+                    &imageFormatProperties);
             }
             if (imageFormatResult != VK_SUCCESS ||
-                (isMultisampleTexture && (imageFormatProperties.sampleCounts & resolvedSampleCount) == 0)) {
-                MGLOG_D("%s: image flags=0x%x sampleCount=%d are unsupported for textureId=%d target=%s "
-                        "format=%d usage=0x%x",
-                        __func__, static_cast<Uint32>(imageInfo.flags), texture.GetSamples(),
-                        texture.GetExternalIndex(),
-                        MG_Util::ConvertTextureUploadTargetToString(uploadTarget).c_str(),
-                        static_cast<Int>(format), static_cast<Uint32>(imageInfo.usage));
-                // The preserved image was written by GPU work that may still be in flight
-                // (preserve requires layout != UNDEFINED); park it on the deferred ring
-                // like every other destruction path instead of letting the unique_ptr
-                // destroy it synchronously under the GPU.
-                if (preservedResource) {
-                    DeferResourceRelease(Move(*preservedResource));
-                }
+                (isMultisample && (imageFormatProperties.sampleCounts & resolvedSampleCount) == 0)) {
+                // Was an MGLOG_D, which a Release build compiles away, so on the builds that ship
+                // this exit left no line - one of five Shape* exits that did (with ViewOf,
+                // NoLevels, preserve-flush and preserve-copy) before B3's review round.
+                MGL_WIRE_DECLINE_AT(ShapeImageFlagsUnsupported,
+                                    "texture {slot=%u, gen=%u}: image flags=0x%x sampleCount=%d are unsupported "
+                                    "by the device",
+                                    desc.Resource.Slot, desc.Resource.Gen, static_cast<Uint32>(imageInfo.flags),
+                                    static_cast<Int>(imageInfo.samples));
                 return false;
             }
         }
-        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
         VmaAllocationCreateInfo allocationInfo{};
         allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         allocationInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-        // Soft failure like the unsupported-sample-count path above: a driver can pass the
-        // vkGetPhysicalDeviceImageFormatProperties pre-check yet still refuse the creation
-        // (e.g. multisampled depth on lavapipe); the texture simply stays unbacked.
-        const VkResult createImageResult =
-            vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &resource.image, &resource.allocation, nullptr);
+        // Soft failure, SyncTextureResource's rule: a driver can pass the pre-check yet refuse
+        // the creation; the texture stays unbacked and the caller declines.
+        const VkResult createImageResult = vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &replacement.image,
+                                                          &replacement.allocation, nullptr);
         if (createImageResult != VK_SUCCESS) {
-            // E_ONCE, not F: the comment above says it - this is a soft failure the caller
-            // recovers from, and it re-fires on every sync of every texture the driver refuses.
-            MGLOG_E_ONCE("SyncTextureResource: vmaCreateImage failed (%d) textureId=%d extent=%ux%u depth=%u layers=%u "
-                    "mips=%u samples=%d format=%d",
-                    createImageResult, texture.GetExternalIndex(), imageInfo.extent.width, imageInfo.extent.height,
-                    imageInfo.extent.depth, imageInfo.arrayLayers, imageInfo.mipLevels,
-                    static_cast<Int>(imageInfo.samples), static_cast<Int>(imageInfo.format));
-            resource.image = VK_NULL_HANDLE;
-            resource.allocation = nullptr;
-            // Same as the probe failure above: the preserved live image must go through
-            // the deferred ring, never a synchronous destructor while frames that
-            // reference it are still in flight.
-            if (preservedResource) {
-                DeferResourceRelease(Move(*preservedResource));
-            }
+            MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: vmaCreateImage failed (%d) extent=%ux%u depth=%u "
+                         "layers=%u mips=%u samples=%d format=%d",
+                         desc.Resource.Slot, desc.Resource.Gen, createImageResult, imageInfo.extent.width,
+                         imageInfo.extent.height, imageInfo.extent.depth, imageInfo.arrayLayers, imageInfo.mipLevels,
+                         static_cast<Int>(imageInfo.samples), static_cast<Int>(imageInfo.format));
+            WireDeclineTally::Count(WireDeclineSite::ShapeCreateImageFailed);
             return false;
         }
         ++m_textureImageEpoch; // a new attachment image invalidates cached render passes
 
-        resource.layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        resource.extent = {static_cast<Uint32>(texelSize.x()), static_cast<Uint32>(texelSize.y())};
-        resource.depth = shapeInfo.depth;
-        resource.arrayLayers = shapeInfo.arrayLayers;
-        resource.mipLevels = backingMipLevels;
-        resource.perMipViews.assign(backingMipLevels, VK_NULL_HANDLE);
-        resource.perMipSampledViews.assign(backingMipLevels, VK_NULL_HANDLE);
-        resource.sampledBaseMipLevel = 0;
-        resource.sampledLevelCount = mipLevels;
-        resource.format = format;
-        resource.aspect = aspect;
-        resource.viewType = shapeInfo.viewType;
-        resource.sampleCount = resolvedSampleCount;
-        resource.imageCreateFlags = imageCreateFlags;
-        resource.usageFlags = imageInfo.usage;
-        resource.storageUsageResolved = markedAsStorageImage;
-        resource.syncedTextureParamsVersion = 0;
-
-        if (preservedResource) {
-            // The preserve copy reads the OLD image on its own immediately-
-            // submitted-and-waited command buffer; a batched upload into that
-            // image still sitting in the open batch must reach the queue first
-            // or the copy carries pre-upload texels forward.
+        replacement.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        replacement.extent = {imageInfo.extent.width, imageInfo.extent.height};
+        replacement.depth = imageInfo.extent.depth;
+        replacement.arrayLayers = imageInfo.arrayLayers;
+        replacement.mipLevels = backingMipLevels;
+        replacement.sampledBaseMipLevel = 0;
+        replacement.sampledLevelCount = backingMipLevels;
+        replacement.format = format;
+        replacement.aspect = aspect;
+        replacement.viewType = shapeInfo.viewType;
+        replacement.sampleCount = resolvedSampleCount;
+        replacement.imageCreateFlags = imageInfo.flags;
+        replacement.usageFlags = desiredUsage;
+        replacement.storageUsageResolved = markedAsStorageImage;
+        if (preserve) {
             FlushPendingUploads();
-            const Bool preserved = PreserveTextureContentsOnRecreate(
-                m_device, m_commandPool, m_graphicsQueue, *preservedResource, resource);
-            MOBILEGL_ASSERT(preserved,
-                            "SyncTextureResource: failed to preserve texture contents while growing mip chain");
-            DeferResourceRelease(Move(*preservedResource));
+            if (!PreserveTextureContentsOnRecreate(m_device, m_commandPool, m_graphicsQueue, resource, replacement,
+                                                   true, this)) {
+                MGL_WIRE_DECLINE_AT(ShapePreserveCopyFailed,
+                                    "texture {slot=%u, gen=%u}: its texels could not be copied into the "
+                                    "reallocated image",
+                                    desc.Resource.Slot, desc.Resource.Gen);
+                return false;
+            }
         }
+        DeferResourceRelease(Move(resource));
+        std::destroy_at(&resource);
+        std::construct_at(&resource, Move(replacement));
+        return true;
+    }
+
+    Bool VkTextureManager::UploadPendingWireLevels(MG_Pipe::MGPipeHandle handle, MG_Pipe::MGPipeResourceRecord& record,
+                                                   TextureResource& resource) {
+        if (record.PendingUploads.empty()) {
+            return true;
+        }
+        auto& store = MG_Record::ServerStagedTexture();
+        // This arm runs under a transport (the store copies) or on monolith's record arm (it
+        // aliases the frontend's level shadows); a store that holds neither has nothing to upload.
+        MOBILEGL_ASSERT(store.Holds(),
+                        "UploadPendingWireLevels under a staged store that holds no levels: the wire arm needs one");
+        const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(handle);
+        const TextureInternalFormat internalFormat = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
+        const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(internalFormat);
+        const TextureTarget target = WireTextureTargetOfPipeTarget(record.Desc.Target);
+
+        struct WireUploadItem {
+            Uint16 uploadTarget = 0;
+            Uint16 level = 0;
+            Uint32 baseArrayLayer = 0;
+            IntVec3 texelSize = {0, 0, 0};
+            VkOffset3D imageOffset{};
+            const void* source = nullptr;
+            SizeT byteSize = 0;
+            Vector<Uint8> owned;
+            VkDeviceSize offset = 0;
+        };
+        Vector<WireUploadItem> items;
+        VkDeviceSize stagingSize = 0;
+        Bool incomplete = false;
+        for (const auto& pending : record.PendingUploads) {
+            const Uint16 uploadTarget = MG_Pipe::MGPipeSubDataUploadTargetOf(pending.UploadTarget);
+            const Uint16 level = pending.Level;
+            if (level >= resource.mipLevels) {
+                // A pending entry the current image cannot hold: the level was defined past the
+                // accepted descriptor's chain. Loud, and left in the set - the next respecify
+                // or generation grows into it or drops it.
+                MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: pending upload for level %u exceeds the "
+                             "image's %u levels; left pending",
+                             handle.Slot, handle.Gen, static_cast<Uint32>(level), resource.mipLevels);
+                WireDeclineTally::Count(WireDeclineSite::UploadLevelBeyondChain);
+                continue;
+            }
+            const IntVec3 glExtent = store.LevelExtentOrUndefined(key, uploadTarget, level);
+            const SizeT byteSize = store.LevelByteSize(key, uploadTarget, level);
+            // The staged run IS the whole level shadow (StagedTextureStore.h's coverage rule):
+            // it exists because the applier accepted this entry, so a miss is the store's own
+            // Fatal{StageSnapshotTooNarrow}, not a silent zero.
+            const Uint8* bytes =
+                store.RequireLevelBytes(key, uploadTarget, level, "VkTextureManager::UploadPendingWireLevels");
+            // Vulkan geometry, like the image this stages into: a 1D array's layers move out of
+            // the shadow's height into z.
+            const IntVec3 texelSize = ToVulkanLevelExtent(target, glExtent);
+            // GL permits independently defined mutable mip images. A Vulkan
+            // image can only hold the canonical halving chain. Keep an unusual
+            // level in owned staging instead of copying outside a VkImage mip.
+            const Bool volume = resource.viewType == VK_IMAGE_VIEW_TYPE_3D;
+            if (texelSize.x() != static_cast<Int>(std::max(resource.extent.width >> level, 1u)) ||
+                texelSize.y() != static_cast<Int>(std::max(resource.extent.height >> level, 1u)) ||
+                (volume && texelSize.z() != static_cast<Int>(std::max(resource.depth >> level, 1u))) ||
+                (!volume && Uint64(ResolveUploadArrayLayer(static_cast<TextureUploadTarget>(uploadTarget))) +
+                                    static_cast<Uint64>(texelSize.z()) >
+                                resource.arrayLayers)) {
+                // NOT `incomplete`: this arm reports SUCCESS while leaving the entry pending,
+                // so the draw proceeds against texels that were never uploaded. Counted
+                // separately for exactly that reason (B3).
+                MGL_WIRE_DECLINE_AT(UploadLevelExtentMismatch,
+                                    "texture {slot=%u, gen=%u} level %u: the staged extent does not match the "
+                                    "image's extent for that level; left pending and NOT uploaded",
+                                    handle.Slot, handle.Gen, static_cast<Uint32>(level));
+                continue;
+            }
+            if (texelSize.x() <= 0 || texelSize.y() <= 0 || byteSize == 0) {
+                MGL_WIRE_DECLINE_AT(UploadEmptyLevel, "texture {slot=%u, gen=%u} level %u is empty", handle.Slot,
+                                    handle.Gen, static_cast<Uint32>(level));
+                incomplete = true;
+                continue;
+            }
+            WireUploadItem item{};
+            item.uploadTarget = uploadTarget;
+            item.level = level;
+            item.baseArrayLayer = ResolveUploadArrayLayer(static_cast<TextureUploadTarget>(uploadTarget));
+            item.texelSize = texelSize;
+            if (!ConvertWireLevelBytes(bytes, byteSize, texelSize, resource.format, resource.aspect, internalFormat,
+                                       formatInfo, item.owned, item.source, item.byteSize)) {
+                MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: no shadow-to-image conversion for format %d; "
+                             "level %u left pending",
+                             handle.Slot, handle.Gen, static_cast<Int>(resource.format), static_cast<Uint32>(level));
+                WireDeclineTally::Count(WireDeclineSite::UploadConversion);
+                incomplete = true;
+                continue;
+            }
+            // Adoption covers the complete CPU shadow, but only the emitted regions are
+            // authoritative after a GPU write. Uploading the whole run here overwrites
+            // untouched texels of a prior clear/blit/mipmap with stale client bytes.
+            const SizeT levelTexels = static_cast<SizeT>(texelSize.x()) * texelSize.y() * std::max(texelSize.z(), 1);
+            const Bool combined =
+                (resource.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) && (resource.aspect & VK_IMAGE_ASPECT_STENCIL_BIT);
+            if (vkuFormatIsCompressed(resource.format) || !levelTexels || item.byteSize % levelTexels != 0 ||
+                item.byteSize / levelTexels == 0) {
+                MGL_WIRE_DECLINE_AT(UploadTexelArithmetic,
+                                    "texture {slot=%u, gen=%u} level %u: compressed, or its byte size is not a "
+                                    "whole number of texels",
+                                    handle.Slot, handle.Gen, static_cast<Uint32>(level));
+                incomplete = true;
+                continue;
+            }
+            const SizeT texelBytes = combined ? 4u : item.byteSize / levelTexels;
+            const Bool arrayLayers = resource.viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY ||
+                                     resource.viewType == VK_IMAGE_VIEW_TYPE_2D_ARRAY ||
+                                     resource.viewType == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+            const auto addRegion = [&](const MG_Pipe::MGPBox& glBox) {
+                IntVec3 offset{glBox.X, glBox.Y, glBox.Z};
+                IntVec3 extent{static_cast<Int>(glBox.W), static_cast<Int>(glBox.H), static_cast<Int>(glBox.D)};
+                if (target == TextureTarget::Texture1DArray) {
+                    offset = {glBox.X, 0, glBox.Y};
+                    extent = {static_cast<Int>(glBox.W), 1, static_cast<Int>(glBox.H)};
+                }
+                for (Int axis = 0; axis < 3; ++axis) {
+                    if (offset[axis] < 0 || extent[axis] <= 0 ||
+                        static_cast<Uint64>(offset[axis]) + static_cast<Uint64>(extent[axis]) >
+                            static_cast<Uint64>(texelSize[axis])) {
+                        MGL_WIRE_DECLINE_AT(UploadRegionOutOfBounds,
+                                            "texture {slot=%u, gen=%u} level %u: a staged region lies outside "
+                                            "the level",
+                                            handle.Slot, handle.Gen, static_cast<Uint32>(level));
+                        incomplete = true;
+                        return;
+                    }
+                }
+                WireUploadItem region{};
+                region.uploadTarget = uploadTarget;
+                region.level = level;
+                region.baseArrayLayer = item.baseArrayLayer + (arrayLayers ? offset.z() : 0);
+                region.texelSize = extent;
+                region.imageOffset = {offset.x(), offset.y(), arrayLayers ? 0 : offset.z()};
+                const SizeT regionTexels = static_cast<SizeT>(extent.x()) * extent.y() * extent.z();
+                region.owned.resize(regionTexels * (combined ? 5u : texelBytes));
+                const auto* source = static_cast<const Uint8*>(item.source);
+                for (Int z = 0; z < extent.z(); ++z) {
+                    for (Int y = 0; y < extent.y(); ++y) {
+                        const SizeT sourceTexel =
+                            (static_cast<SizeT>(offset.z() + z) * texelSize.y() + offset.y() + y) * texelSize.x() +
+                            offset.x();
+                        const SizeT destinationTexel = (static_cast<SizeT>(z) * extent.y() + y) * extent.x();
+                        std::memcpy(region.owned.data() + destinationTexel * texelBytes,
+                                    source + sourceTexel * texelBytes, extent.x() * texelBytes);
+                        if (combined) {
+                            std::memcpy(region.owned.data() + regionTexels * 4 + destinationTexel,
+                                        source + levelTexels * 4 + sourceTexel, extent.x());
+                        }
+                    }
+                }
+                region.source = region.owned.data();
+                region.byteSize = region.owned.size();
+                stagingSize = (stagingSize + 15u) & ~VkDeviceSize{15u};
+                region.offset = stagingSize;
+                stagingSize += static_cast<VkDeviceSize>(region.byteSize);
+                items.push_back(Move(region));
+            };
+            if (pending.Regions.empty()) {
+                addRegion(pending.UnionBox);
+            } else {
+                for (const auto& region : pending.Regions)
+                    addRegion({region.X, region.Y, region.Z, region.W, region.H, region.D});
+            }
+        }
+        // B3: the pending gauge is sampled here, on every pass through the funnel, because a
+        // refusal below does NOT consume the entries - they and their level shadows stay
+        // alive for the next draw to trip over (and, on a heavy-texture trace, to accumulate).
+        {
+            Uint64 pendingBytes = 0;
+            for (const auto& pending : record.PendingUploads) {
+                pendingBytes += static_cast<Uint64>(store.LevelByteSize(
+                    MG_Record::StagedTextureStore::KeyForHandle(handle), pending.UploadTarget, pending.Level));
+            }
+            WireDeclineTally::SetPendingGauge(static_cast<Uint64>(record.PendingUploads.size()), pendingBytes);
+        }
+        if (incomplete) {
+            MGL_WIRE_DECLINE_AT(UploadIncomplete,
+                                "texture {slot=%u, gen=%u}: at least one pending level could not be staged; "
+                                "every draw that samples it is declined until it can",
+                                handle.Slot, handle.Gen);
+            return false;
+        }
+        if (items.empty()) {
+            return true;
+        }
+
+        // This upload will be independently submitted by FlushPendingUploads.
+        // Submit older renderer work before adding the new bytes to the batch,
+        // otherwise Draw(old T), TexSubImage(T), Draw(new T) can upload before
+        // the first draw. A clean texture never reaches this submission boundary.
+        if (pVulkanRenderer && !pVulkanRenderer->FlushWirePendingCommandsForTextureUpload()) {
+            MGL_WIRE_DECLINE_AT(UploadFlushFailed,
+                                "texture {slot=%u, gen=%u}: earlier renderer work could not be submitted before "
+                                "its upload batch",
+                                handle.Slot, handle.Gen);
+            return false;
+        }
+
+        // UploadDirtyMipLevels' batching rules, verbatim: flush an open batch that already
+        // writes this image and was touched by the open recording, and bound the staging bytes
+        // a batch pins.
+        if (m_uploadBatchOpen && WasTouchedThisRecording(resource) &&
+            std::find(m_uploadBatchImages.begin(), m_uploadBatchImages.end(), resource.image) !=
+                m_uploadBatchImages.end()) {
+            FlushPendingUploads();
+        }
+        constexpr VkDeviceSize kMaxBatchStagingBytes = 64u * 1024u * 1024u;
+        if (m_uploadBatchOpen && m_uploadBatchStagingBytes + stagingSize > kMaxBatchStagingBytes) {
+            FlushPendingUploads();
+        }
+
+        VkCommandBuffer commandBuffer = EnsureUploadBatchOpen();
+        VkBuffer stagingBuffer = VK_NULL_HANDLE;
+        VkDeviceSize stagingBase = 0;
+        Uint8* mapped = AcquireUploadStagingSpace(stagingSize, stagingBuffer, stagingBase);
+        for (const auto& item : items) {
+            std::memcpy(mapped + item.offset, item.source, item.byteSize);
+        }
+
+        const VkImageAspectFlags aspectMask = resource.aspect;
+        VkPipelineStageFlags uploadSrcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags uploadSrcAccessMask = 0;
+        GetImageTransitionSourceState(resource.layout, uploadSrcStageMask, uploadSrcAccessMask);
+        Bool ok =
+            TransitionImageLayout(commandBuffer, resource.image, resource.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  uploadSrcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT, uploadSrcAccessMask,
+                                  VK_ACCESS_TRANSFER_WRITE_BIT, aspectMask, 0, resource.mipLevels);
+        MOBILEGL_ASSERT(ok, "UploadPendingWireLevels: transition to TRANSFER_DST failed");
+
+        const Bool isCombinedDepthStencil =
+            (aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0 && (aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) != 0;
+        const Bool depthSelectsArrayLayer = resource.viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY ||
+                                            resource.viewType == VK_IMAGE_VIEW_TYPE_2D_ARRAY ||
+                                            resource.viewType == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+        for (const auto& item : items) {
+            const Uint32 depthOrLayers = item.texelSize.z() > 0 ? static_cast<Uint32>(item.texelSize.z()) : 1u;
+            VkBufferImageCopy copy{};
+            copy.bufferOffset = stagingBase + item.offset;
+            copy.bufferRowLength = 0;
+            copy.bufferImageHeight = 0;
+            copy.imageSubresource.aspectMask = aspectMask;
+            copy.imageSubresource.mipLevel = item.level;
+            copy.imageSubresource.baseArrayLayer = item.baseArrayLayer;
+            copy.imageSubresource.layerCount = depthSelectsArrayLayer ? depthOrLayers : 1;
+            copy.imageOffset = item.imageOffset;
+            copy.imageExtent = {static_cast<Uint32>(item.texelSize.x()), static_cast<Uint32>(item.texelSize.y()),
+                                depthSelectsArrayLayer ? 1u : depthOrLayers};
+            if (isCombinedDepthStencil) {
+                // Per-aspect copies: VkBufferImageCopy's aspectMask must name exactly one
+                // aspect; the de-interleaved run is the depth plane followed by stencil bytes.
+                const SizeT texelCount = static_cast<SizeT>(item.texelSize.x()) *
+                                         static_cast<SizeT>(item.texelSize.y()) *
+                                         static_cast<SizeT>(std::max(item.texelSize.z(), 1));
+                VkBufferImageCopy depthCopy = copy;
+                depthCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                VkBufferImageCopy stencilCopy = copy;
+                stencilCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+                stencilCopy.bufferOffset = stagingBase + item.offset + static_cast<VkDeviceSize>(texelCount) * 4;
+                const VkBufferImageCopy copies[2] = {depthCopy, stencilCopy};
+                EndActiveRenderPassOn(commandBuffer);
+                vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, resource.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, copies);
+            } else {
+                EndActiveRenderPassOn(commandBuffer);
+                vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, resource.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            }
+        }
+
+        const VkImageLayout finalLayout = ResolveSampledReadOnlyLayout(aspectMask);
+        VkImageLayout uploadLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        ok = TransitionImageLayout(commandBuffer, resource.image, uploadLayout, finalLayout,
+                                   VK_PIPELINE_STAGE_TRANSFER_BIT, s_sampledReadStagesSlot->value,
+                                   VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, aspectMask, 0,
+                                   resource.mipLevels);
+        MOBILEGL_ASSERT(ok, "UploadPendingWireLevels: transition to the sampled layout failed");
+        resource.layout = finalLayout;
+
+        if (std::find(m_uploadBatchImages.begin(), m_uploadBatchImages.end(), resource.image) ==
+            m_uploadBatchImages.end()) {
+            m_uploadBatchImages.push_back(resource.image);
+        }
+        m_uploadBatchStagingBytes += stagingSize;
+
+        // The bytes are staged; NOW the entries leave the pending set (D-D5).
+        for (const auto& item : items) {
+            ConsumeWireTextureUpload(record, item.uploadTarget, item.level);
+        }
+        return true;
+    }
+
+    MG_Pipe::MGPipeHandle VkTextureManager::ResolveWireTextureStorage(MG_Pipe::MGPipeHandle handle, Uint32& level,
+                                                                      Uint32& layer, VkFormat* viewFormat,
+                                                                      Uint32* layerCount, Bool* outsideWindow) {
+        const auto& state = MG_Pipe::MGPipeApplier();
+        if (viewFormat) *viewFormat = VK_FORMAT_UNDEFINED;
+        if (outsideWindow) *outsideWindow = false;
+        const auto outside = [outsideWindow] {
+            if (outsideWindow) *outsideWindow = true;
+            return MG_Pipe::kMGPipeNullHandle;
+        };
+        Uint32 mappedLevel = level, mappedLayer = layer;
+        Uint32 remainingLayers = ~Uint32{0};
+        VkFormat outerFormat = VK_FORMAT_UNDEFINED;
+        // Production views point directly to their root. The bound also makes a corrupt
+        // or future multi-hop record graph terminate without ever following client data.
+        for (SizeT hop = 0; hop <= state.TextureResources.size(); ++hop) {
+            if (MG_Pipe::MGPipeHandleIsNull(handle) || handle.Slot >= state.TextureResources.size())
+                return MG_Pipe::kMGPipeNullHandle;
+            const auto& record = state.TextureResources[handle.Slot];
+            if (!record.Live || record.Gen != handle.Gen) return MG_Pipe::kMGPipeNullHandle;
+            if (MG_Pipe::MGPipeHandleIsNull(record.Desc.ViewOf)) {
+                // Levels == 0 is a texture with no storage at all: every level is outside it.
+                if (mappedLevel >= record.Desc.Levels) return outside();
+                const Uint32 layers = record.Desc.Target == static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex3D)
+                                          ? std::max(record.Desc.Depth >> mappedLevel, 1u)
+                                          : std::max<Uint32>(record.Desc.ArrayLayers, 1u);
+                if (mappedLayer >= layers) return outside();
+                level = mappedLevel;
+                layer = mappedLayer;
+                if (viewFormat) *viewFormat = outerFormat;
+                if (layerCount) *layerCount = std::min(remainingLayers, layers - mappedLayer);
+                return handle;
+            }
+            const auto viewHandle = record.ViewCso;
+            if (MG_Pipe::MGPipeHandleIsNull(viewHandle) || viewHandle.Slot >= state.SamplerViewCsos.size())
+                return MG_Pipe::kMGPipeNullHandle;
+            const auto& viewRecord = state.SamplerViewCsos[viewHandle.Slot];
+            const auto& view = viewRecord.View;
+            if (!viewRecord.Live || viewRecord.Gen != viewHandle.Gen || view.Texture != handle)
+                return MG_Pipe::kMGPipeNullHandle;
+            if (mappedLevel >= view.NumLevels || mappedLayer >= view.NumLayers) return outside();
+            if (outerFormat == VK_FORMAT_UNDEFINED) {
+                outerFormat = ResolveTextureFormatInfo(static_cast<TextureInternalFormat>(view.InternalFormat)).format;
+                if (outerFormat == VK_FORMAT_UNDEFINED) return MG_Pipe::kMGPipeNullHandle;
+            }
+            remainingLayers = std::min(remainingLayers, static_cast<Uint32>(view.NumLayers) - mappedLayer);
+            mappedLevel += view.MinLevel;
+            mappedLayer += view.MinLayer;
+            handle = record.Desc.ViewOf;
+        }
+        return MG_Pipe::kMGPipeNullHandle;
+    }
+
+    Bool VkTextureManager::ImportSharedImage(void* nativeBuffer, Uint32 width, Uint32 height, ImportedSharedImage& out,
+                                             String& why) {
+        out = ImportedSharedImage{};
+#if defined(__ANDROID__)
+        auto* ahb = static_cast<AHardwareBuffer*>(nativeBuffer);
+        if (ahb == nullptr) {
+            why = "the image has no AHardwareBuffer";
+            return false;
+        }
+        VulkanRenderer::WireAhbImport ctx;
+        if (pVulkanRenderer == nullptr || !pVulkanRenderer->GetWireAhbImport(ctx)) {
+            why = "the device did not take VK_ANDROID_external_memory_android_hardware_buffer";
+            return false;
+        }
+        AHardwareBuffer_Desc desc{};
+        AHardwareBuffer_describe(ahb, &desc);
+        if (desc.width != width || desc.height != height || desc.layers != 1) {
+            why = "the buffer is " + std::to_string(desc.width) + "x" + std::to_string(desc.height) + "x" +
+                  std::to_string(desc.layers) + ", not " + std::to_string(width) + "x" + std::to_string(height);
+            return false;
+        }
+        const auto getProperties =
+            reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(ctx.getAhbProperties);
+        VkAndroidHardwareBufferFormatPropertiesANDROID formatProperties{
+            VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID};
+        VkAndroidHardwareBufferPropertiesANDROID properties{
+            VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID};
+        properties.pNext = &formatProperties;
+        VkResult result = getProperties(ctx.device, ahb, &properties);
+        if (result != VK_SUCCESS) {
+            why = "vkGetAndroidHardwareBufferPropertiesANDROID -> " + std::to_string(static_cast<int>(result));
+            return false;
+        }
+        // The RGBA8/RGBX8 buffers the registry allocates have a Vulkan format; an external-only
+        // format would need a YCbCr conversion and is not a color buffer this path can write.
+        if (formatProperties.format == VK_FORMAT_UNDEFINED) {
+            why = "the buffer has no Vulkan format (external format only)";
+            return false;
+        }
+        // Usage is bounded by the buffer's own usage (the AHardwareBuffer usage equivalence);
+        // transfers need no buffer usage bit.
+        VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        if ((desc.usage & AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE) != 0 &&
+            (formatProperties.formatFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0)
+            usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+        if ((desc.usage & AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT) != 0 &&
+            (formatProperties.formatFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0)
+            usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        VkExternalMemoryImageCreateInfo external{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
+        external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+        VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        imageInfo.pNext = &external;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = formatProperties.format;
+        imageInfo.extent = {width, height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = usage;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        result = vkCreateImage(ctx.device, &imageInfo, nullptr, &out.image);
+        if (result != VK_SUCCESS) {
+            out.image = VK_NULL_HANDLE;
+            why = "vkCreateImage(external AHB) -> " + std::to_string(static_cast<int>(result));
+            return false;
+        }
+        Int32 type = -1;
+        for (Uint32 i = 0; i < ctx.memory.memoryTypeCount && type < 0; ++i) {
+            if ((properties.memoryTypeBits & (1u << i)) != 0 &&
+                (ctx.memory.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0)
+                type = static_cast<Int32>(i);
+        }
+        for (Uint32 i = 0; i < ctx.memory.memoryTypeCount && type < 0; ++i) {
+            if ((properties.memoryTypeBits & (1u << i)) != 0) type = static_cast<Int32>(i);
+        }
+        if (type < 0) {
+            why = "no memory type can import it";
+            DestroyImportedSharedImage(ctx.device, out);
+            return false;
+        }
+        VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+        dedicated.image = out.image;
+        VkImportAndroidHardwareBufferInfoANDROID import{VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID};
+        import.pNext = &dedicated;
+        import.buffer = ahb;
+        VkMemoryAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocateInfo.pNext = &import;
+        allocateInfo.allocationSize = properties.allocationSize;
+        allocateInfo.memoryTypeIndex = static_cast<Uint32>(type);
+        result = vkAllocateMemory(ctx.device, &allocateInfo, nullptr, &out.memory);
+        if (result != VK_SUCCESS) {
+            out.memory = VK_NULL_HANDLE;
+            why = "vkAllocateMemory(import AHB) -> " + std::to_string(static_cast<int>(result));
+            DestroyImportedSharedImage(ctx.device, out);
+            return false;
+        }
+        result = vkBindImageMemory(ctx.device, out.image, out.memory, 0);
+        if (result != VK_SUCCESS) {
+            why = "vkBindImageMemory -> " + std::to_string(static_cast<int>(result));
+            DestroyImportedSharedImage(ctx.device, out);
+            return false;
+        }
+        out.format = formatProperties.format;
+        out.usage = usage;
+        out.features = formatProperties.formatFeatures;
+        out.queueFamily = ctx.queueFamily;
+        return true;
+#else
+        (void)nativeBuffer, (void)width, (void)height;
+        why = "shared images are imported on Android only";
+        return false;
+#endif
+    }
+
+    void VkTextureManager::DestroyImportedSharedImage(VkDevice device, ImportedSharedImage& image) {
+        if (image.image != VK_NULL_HANDLE) vkDestroyImage(device, image.image, nullptr);
+        if (image.memory != VK_NULL_HANDLE) vkFreeMemory(device, image.memory, nullptr);
+        image = ImportedSharedImage{};
+    }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    VkTextureManager::SharedImageBind VkTextureManager::SyncWireSharedImage(const MG_Pipe::MGPipeResourceRecord& record,
+                                                                            TextureResource& resource,
+                                                                            Bool requireStorage) {
+        const MG_Pipe::MGPResourceDesc& desc = record.Desc;
+        const Uint64 id = record.SharedImageId;
+        if (requireStorage) {
+            // The buffer's usage has no storage equivalent; a reallocation would drop the image.
+            MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: shared image %llu is bound as a shader image, "
+                         "which it cannot back; declined",
+                         desc.Resource.Slot, desc.Resource.Gen, static_cast<unsigned long long>(id));
+            return SharedImageBind::Failed;
+        }
+        // Already this image: the serial moved for something else (params, the bind mask).
+        if (resource.sharedImageId == id && resource.image != VK_NULL_HANDLE) return SharedImageBind::Bound;
+
+        const auto image = MG_Remote::Server::SharedImages::Find(id);
+        if (image == nullptr) {
+            MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: shared image %llu is no longer live; the texture "
+                         "keeps its own (undefined) level 0",
+                         desc.Resource.Slot, desc.Resource.Gen, static_cast<unsigned long long>(id));
+            return SharedImageBind::Unresolved;
+        }
+        const Bool flat2D = desc.Target == static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D) ||
+                            desc.Target == static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::TexRect);
+        if (!flat2D || desc.Width != image->Width || desc.Height != image->Height ||
+            !MG_Pipe::MGPipeHandleIsNull(desc.ViewOf)) {
+            MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: pipe target %u at %ux%u cannot take shared image "
+                         "%llu (%ux%u); the texture keeps its own level 0",
+                         desc.Resource.Slot, desc.Resource.Gen, static_cast<Uint32>(desc.Target), desc.Width,
+                         desc.Height, static_cast<unsigned long long>(id), image->Width, image->Height);
+            return SharedImageBind::Unresolved;
+        }
+        ImportedSharedImage imported;
+        String why;
+        if (!ImportSharedImage(image->Native, image->Width, image->Height, imported, why)) {
+            MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: shared image %llu not imported - %s; the texture "
+                         "keeps its own level 0",
+                         desc.Resource.Slot, desc.Resource.Gen, static_cast<unsigned long long>(id), why.c_str());
+            return SharedImageBind::Unresolved;
+        }
+
+        // NOT ACQUIRED HERE. The writer (a client session's present, on its own device) releases
+        // the image to VK_QUEUE_FAMILY_FOREIGN_EXT in GENERAL - also the layout every wire
+        // descriptor samples in - once per frame it writes. Each use acquires it again when the
+        // write generation moved, waiting for that write's fence on the GPU, and the frame boundary
+        // releases it back (VulkanRenderer::AcquireSharedImage, WireSharedImage.cpp).
+
+        TextureResource replacement;
+        replacement.image = imported.image;
+        replacement.importedMemory = imported.memory;
+        replacement.layout = VK_IMAGE_LAYOUT_GENERAL;
+        replacement.extent = {image->Width, image->Height};
+        replacement.depth = 1;
+        replacement.arrayLayers = 1;
+        replacement.mipLevels = 1;
+        replacement.sampledBaseMipLevel = 0;
+        replacement.sampledLevelCount = 1;
+        replacement.format = imported.format;
+        replacement.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        replacement.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        replacement.sampleCount = VK_SAMPLE_COUNT_1_BIT;
+        replacement.imageCreateFlags = 0;
+        replacement.usageFlags = imported.usage;
+        replacement.sharedImageId = id;
+        replacement.sharedImageOwner = image;
+        replacement.sharedImageAlphaOne = MG_Remote::Server::SharedImages::FourccIgnoresAlpha(image->Fourcc);
+        ++m_textureImageEpoch; // a new attachment image invalidates cached render passes
+        DeferResourceRelease(Move(resource));
+        std::destroy_at(&resource);
+        std::construct_at(&resource, Move(replacement));
+        MGLOG_D("Magma wire texture {slot=%u, gen=%u}: level 0 is shared image %llu (%ux%u)", desc.Resource.Slot,
+                desc.Resource.Gen, static_cast<unsigned long long>(id), image->Width, image->Height);
+        return SharedImageBind::Bound;
+    }
+#else
+    // P13 W5: a library without a transport allocates no shared image, so no record names one.
+    VkTextureManager::SharedImageBind VkTextureManager::SyncWireSharedImage(const MG_Pipe::MGPipeResourceRecord&,
+                                                                            TextureResource&, Bool) {
+        return SharedImageBind::Unresolved;
+    }
+#endif
+
+    VkTextureManager::TextureResource* VkTextureManager::SyncTextureResourceByHandle(MG_Pipe::MGPipeHandle handle,
+                                                                                     Bool renderbuffer,
+                                                                                     Bool requireStorage) {
+        MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE, "SyncTextureResourceByHandle: m_device == VK_NULL_HANDLE");
+        if (MG_Pipe::MGPipeHandleIsNull(handle)) {
+            return nullptr;
+        }
+        auto& applier = MG_Pipe::MGPipeApplier();
+        if (!renderbuffer) {
+            Uint32 level = 0, layer = 0;
+            VkFormat viewFormat = VK_FORMAT_UNDEFINED;
+            const auto storage = ResolveWireTextureStorage(handle, level, layer, &viewFormat);
+            if (MG_Pipe::MGPipeHandleIsNull(storage)) {
+                MGL_WIRE_DECLINE_AT(TexResolveStorage, "texture {slot=%u, gen=%u}: no storage owner resolved",
+                                    handle.Slot, handle.Gen);
+                return nullptr;
+            }
+            if (storage != handle) {
+                auto* resource = SyncTextureResourceByHandle(storage, false, requireStorage);
+                if (!resource) return nullptr;
+                if (viewFormat != resource->format &&
+                    ((resource->imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0 ||
+                     vkuFormatCompatibilityClass(viewFormat) != vkuFormatCompatibilityClass(resource->format))) {
+                    MGLOG_E_ONCE("Magma wire view: format %d cannot reinterpret storage format %d",
+                                 static_cast<Int>(viewFormat), static_cast<Int>(resource->format));
+                    WireDeclineTally::Count(WireDeclineSite::TexViewFormat);
+                    return nullptr;
+                }
+                return resource;
+            }
+        }
+        auto& records = renderbuffer ? applier.RenderbufferResources : applier.TextureResources;
+        auto& resources = renderbuffer ? m_wireRenderbufferResources : m_wireTextureResources;
+        if (handle.Slot >= records.size()) {
+            MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: no applier record at that slot; declined", handle.Slot,
+                         handle.Gen);
+            WireDeclineTally::Count(WireDeclineSite::TexNoApplierRecord);
+            return nullptr;
+        }
+        auto& record = records[handle.Slot];
+        if (!record.Live || record.Gen != handle.Gen) {
+            // FramebufferRecordFor's rule: a dead or recycled slot is a loud refusal, never a
+            // quiet answer from whatever the slot holds today.
+            MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: the applier's record is %s; declined", handle.Slot,
+                         handle.Gen, !record.Live ? "dead" : "of another generation");
+            WireDeclineTally::Count(WireDeclineSite::TexRecordDeadOrStale);
+            return nullptr;
+        }
+        const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(handle);
+        auto& lookup =
+            (renderbuffer ? m_wireRenderbufferLookup : m_wireTextureLookup)[key % kWireResourceLookupEntries];
+        if (lookup.resource == nullptr || lookup.key != key || lookup.eraseEpoch != m_resourceEraseEpoch) {
+            auto [it, inserted] = resources.try_emplace(key);
+            (void)inserted;
+            lookup = {key, m_resourceEraseEpoch, &it->second};
+        }
+        TextureResource& resource = *lookup.resource;
+        // P15: an image with deferred clears runs them before any use that is not an attachment
+        // resolve (PendingClearHold), and before a shape or texel change of its own even then:
+        // a mip-chain growth copies the content, and an upload lands after the clear it followed.
+        if (!resource.pendingClears.empty() && pVulkanRenderer != nullptr) {
+            const Bool current = resource.image != VK_NULL_HANDLE && resource.syncedWireSerial == record.Serial &&
+                                 record.PendingUploads.empty() &&
+                                 (!requireStorage || (resource.usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) != 0);
+            if (m_pendingClearHold == 0 || !current) pVulkanRenderer->MaterializeWirePendingClears(resource);
+        }
+        if (resource.image != VK_NULL_HANDLE && resource.syncedWireSerial == record.Serial &&
+            record.PendingUploads.empty() &&
+            (!requireStorage || (resource.usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) != 0)) {
+            return &resource;
+        }
+        if (!SyncWireTextureShape(record, resource, requireStorage)) {
+            MGL_WIRE_DECLINE_AT(TexShapeSync, "texture {slot=%u, gen=%u}: no backing image; see the Shape* tally",
+                                handle.Slot, handle.Gen);
+            return nullptr;
+        }
+        if (!renderbuffer && !UploadPendingWireLevels(handle, record, resource)) {
+            MGL_WIRE_DECLINE_AT(TexUploadPendingLevels,
+                                "texture {slot=%u, gen=%u}: pending levels could not be uploaded; see the "
+                                "Upload* tally",
+                                handle.Slot, handle.Gen);
+            return nullptr;
+        }
+        if (requireStorage && (resource.usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) == 0) {
+            MGL_WIRE_DECLINE_AT(TexStorageUsage,
+                                "texture {slot=%u, gen=%u} is bound as a shader image but its allocation has no "
+                                "STORAGE usage",
+                                handle.Slot, handle.Gen);
+            return nullptr;
+        }
+        resource.sharedImageKey = resource.sharedImageId != 0 || resource.yuvImageId != 0 ? key : 0;
+        resource.syncedWireSerial = record.Serial;
+        return &resource;
+    }
+
+    void VkTextureManager::MarkWireTextureGpuWritten(MG_Pipe::MGPipeHandle handle, Uint32 mipLevel,
+                                                     Uint32 baseArrayLayer, Uint32 layerCount) {
+        Uint32 availableLayers = 0;
+        handle = ResolveWireTextureStorage(handle, mipLevel, baseArrayLayer, nullptr, &availableLayers);
+        layerCount = std::min(layerCount, availableLayers);
+        const auto& records = MG_Pipe::MGPipeApplier().TextureResources;
+        if (MG_Pipe::MGPipeHandleIsNull(handle) || handle.Slot >= records.size()) return;
+        const auto& record = records[handle.Slot];
+        if (!record.Live || record.Gen != handle.Gen) return;
+        using MG_Pipe::MGPipeResourceTarget;
+        TextureUploadTarget target;
+        switch (static_cast<MGPipeResourceTarget>(record.Desc.Target)) {
+        case MGPipeResourceTarget::Tex1D:
+            target = TextureUploadTarget::Texture1D;
+            break;
+        case MGPipeResourceTarget::Tex1DArray:
+            target = TextureUploadTarget::Texture1DArray;
+            break;
+        case MGPipeResourceTarget::Tex3D:
+            target = TextureUploadTarget::Texture3D;
+            break;
+        case MGPipeResourceTarget::TexRect:
+            target = TextureUploadTarget::TextureRectangle;
+            break;
+        case MGPipeResourceTarget::Tex2DMS:
+            target = TextureUploadTarget::Texture2DMultisample;
+            break;
+        case MGPipeResourceTarget::Tex2DMSArray:
+            target = TextureUploadTarget::Texture2DMultisampleArray;
+            break;
+        case MGPipeResourceTarget::Tex2DArray:
+            target = TextureUploadTarget::Texture2DArray;
+            break;
+        case MGPipeResourceTarget::TexCubeArray:
+            target = TextureUploadTarget::CubeMapArray;
+            break;
+        case MGPipeResourceTarget::TexCube: {
+            const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(handle);
+            for (Uint32 face = baseArrayLayer; face < 6 && face - baseArrayLayer < layerCount; ++face)
+                MG_Record::ServerStagedTexture().MarkLevelGpuDirty(
+                    key, static_cast<Uint16>(TextureUploadTarget::CubeMapPositiveX) + face,
+                    static_cast<Uint16>(mipLevel), true);
+            return;
+        }
+        default:
+            target = TextureUploadTarget::Texture2D;
+            break;
+        }
+        MG_Record::ServerStagedTexture().MarkLevelGpuDirty(MG_Record::StagedTextureStore::KeyForHandle(handle),
+                                                           static_cast<Uint16>(target), static_cast<Uint16>(mipLevel),
+                                                           true);
+    }
+
+    Bool VkTextureManager::WireE5RawReadApplies(const TextureResource& resource) const {
+        return m_wireE5RawCopyKit != nullptr && resource.format == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 &&
+               resource.sampleCount == VK_SAMPLE_COUNT_1_BIT &&
+               (resource.imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0 &&
+               resource.viewType != VK_IMAGE_VIEW_TYPE_1D && resource.viewType != VK_IMAGE_VIEW_TYPE_1D_ARRAY;
+    }
+
+    Bool VkTextureManager::RecordWireE5RawTwin(VkCommandBuffer commandBuffer, const WireE5RawCopyRegion& region,
+                                               VkImageLayout sourceLayout, TextureResource& twin,
+                                               WireE5RawCopyObjects& objects) {
+        if (m_wireE5RawCopyKit == nullptr) return false;
+        const VkImageCreateInfo info = WireE5RawCopyTwinInfo(region);
+        VmaAllocationCreateInfo allocation{};
+        allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        allocation.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        if (vmaCreateImage(m_allocator, &info, &allocation, &twin.image, &twin.allocation, nullptr) != VK_SUCCESS) {
+            MGLOG_E_ONCE("RecordWireE5RawTwin: vmaCreateImage failed");
+            return false;
+        }
+        twin.format = info.format;
+        twin.extent = {info.extent.width, info.extent.height};
+        twin.depth = info.extent.depth;
+        twin.arrayLayers = info.arrayLayers;
+        twin.mipLevels = 1;
+        twin.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        twin.viewType = region.volume ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        EndActiveRenderPassOn(commandBuffer);
+        const VkResult result = RecordWireE5RawCopy(m_device, commandBuffer, *m_wireE5RawCopyKit, region, sourceLayout,
+                                                    twin.image, objects);
+        if (result != VK_SUCCESS) {
+            MGLOG_E_ONCE("RecordWireE5RawTwin: recording the raw copy failed (%d)", static_cast<Int>(result));
+            DestroyWireE5RawCopyObjects(m_device, objects);
+            twin.Reset();
+            return false;
+        }
+        twin.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        return true;
+    }
+
+    Bool VkTextureManager::GrowWireTextureMipChain(MG_Pipe::MGPipeHandle handle, Uint32 requiredMipLevels,
+                                                   VkCommandBuffer commandBuffer) {
+        if (MG_Pipe::MGPipeHandleIsNull(handle)) {
+            return false;
+        }
+        const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(handle);
+        auto it = m_wireTextureResources.find(key);
+        if (it == m_wireTextureResources.end() || it->second.image == VK_NULL_HANDLE) {
+            return false;
+        }
+        TextureResource& resource = it->second;
+        if (resource.mipLevels >= requiredMipLevels) {
+            return true;
+        }
+        if (resource.sampleCount != VK_SAMPLE_COUNT_1_BIT) {
+            return false; // a multisample image has no mip chain to grow
+        }
+
+        // The caller (GenerateMipmap's record arm) flushed every pending submission, so the old
+        // image is GPU-idle; the carry-over copy is recorded straight into the frame's command
+        // buffer and the old image is parked on the deferred-release ring behind it.
+        // Keep the live allocation intact until allocation of its replacement succeeds.
+        TextureResource& old = resource;
+        TextureResource grown;
+
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.flags = old.imageCreateFlags;
+        imageInfo.imageType = old.viewType == VK_IMAGE_VIEW_TYPE_1D || old.viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY
+                                  ? VK_IMAGE_TYPE_1D
+                                  : (old.viewType == VK_IMAGE_VIEW_TYPE_3D ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D);
+        imageInfo.extent = {old.extent.width, old.extent.height, old.depth};
+        imageInfo.mipLevels = requiredMipLevels;
+        imageInfo.arrayLayers = old.arrayLayers;
+        imageInfo.format = old.format;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = old.usageFlags;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo allocationInfo{};
+        allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        allocationInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        const VkResult createImageResult =
+            vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &grown.image, &grown.allocation, nullptr);
+        if (createImageResult != VK_SUCCESS) {
+            MGLOG_E_ONCE("GrowWireTextureMipChain: vmaCreateImage failed (%d)", createImageResult);
+            return false;
+        }
+        ++m_textureImageEpoch;
+
+        const VkImageAspectFlags aspect = old.aspect;
+        const VkImageLayout oldLayout = old.layout;
+        // E5B9G9R9 on a device whose transfer reads canonicalize it: every level leaves through the
+        // raw route (WireE5RawCopy.h), so the old image is read by a shader, from GENERAL.
+        const Bool rawE5 = WireE5RawReadApplies(old);
+        VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags srcAccessMask = 0;
+        GetImageTransitionSourceState(oldLayout, srcStageMask, srcAccessMask);
+        Bool ok = TransitionImageLayout(
+            commandBuffer, old.image, old.layout,
+            rawE5 ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, srcStageMask,
+            rawE5 ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask,
+            rawE5 ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_TRANSFER_READ_BIT, aspect, 0, old.mipLevels);
+        MOBILEGL_ASSERT(ok, "GrowWireTextureMipChain: source transition failed");
+        VkImageLayout grownLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        ok = TransitionImageLayout(commandBuffer, grown.image, grownLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                   VK_ACCESS_TRANSFER_WRITE_BIT, aspect, 0, requiredMipLevels);
+        MOBILEGL_ASSERT(ok, "GrowWireTextureMipChain: destination transition failed");
+
+        for (Uint32 level = 0; level < old.mipLevels; ++level) {
+            VkImageCopy copy{};
+            copy.srcSubresource = {aspect, level, 0, old.arrayLayers};
+            copy.dstSubresource = {aspect, level, 0, old.arrayLayers};
+            copy.srcOffset = {0, 0, 0};
+            copy.dstOffset = {0, 0, 0};
+            copy.extent = {std::max(old.extent.width >> level, 1u), std::max(old.extent.height >> level, 1u),
+                           std::max(old.depth >> level, 1u)};
+            if (rawE5) {
+                const Bool volume = old.viewType == VK_IMAGE_VIEW_TYPE_3D;
+                WireE5RawCopyRegion region;
+                region.source = old.image;
+                region.volume = volume;
+                region.level = level;
+                region.layerCount = volume ? 1u : old.arrayLayers;
+                region.extent = copy.extent;
+                TextureResource twin;
+                WireE5RawCopyObjects objects;
+                if (!RecordWireE5RawTwin(commandBuffer, region, VK_IMAGE_LAYOUT_GENERAL, twin, objects)) {
+                    // Nothing was recorded for this level; the plain copy below reads the
+                    // canonicalized words, which is what every level got before the route.
+                    MGLOG_W_ONCE("GrowWireTextureMipChain: the raw E5B9G9R9 route failed; level %u is copied "
+                                 "by transfer",
+                                 level);
+                    VkImageMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                    toTransfer.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                    toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                    toTransfer.oldLayout = toTransfer.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    toTransfer.srcQueueFamilyIndex = toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toTransfer.image = old.image;
+                    toTransfer.subresourceRange = {aspect, level, 1, 0, VK_REMAINING_ARRAY_LAYERS};
+                    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toTransfer);
+                    EndActiveRenderPassOn(commandBuffer);
+                    vkCmdCopyImage(commandBuffer, old.image, VK_IMAGE_LAYOUT_GENERAL, grown.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                    continue;
+                }
+                VkImageCopy twinCopy = copy;
+                twinCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, region.layerCount};
+                vkCmdCopyImage(commandBuffer, twin.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, grown.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &twinCopy);
+                // Both name the frame's command buffer, so they ride the old image's ring slot.
+                m_deferredE5Releases[m_currentFrameIndex].push_back(objects);
+                DeferResourceRelease(Move(twin));
+                continue;
+            }
+            for (const VkImageAspectFlags copyAspect :
+                 {VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_ASPECT_STENCIL_BIT}) {
+                if ((aspect & copyAspect) == 0) continue;
+                copy.srcSubresource.aspectMask = copyAspect;
+                copy.dstSubresource.aspectMask = copyAspect;
+                EndActiveRenderPassOn(commandBuffer);
+                vkCmdCopyImage(commandBuffer, old.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, grown.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            }
+        }
+
+        VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags dstAccessMask = 0;
+        GetImageTransitionDestinationState(oldLayout, dstStageMask, dstAccessMask);
+        ok = TransitionImageLayout(commandBuffer, grown.image, grownLayout, oldLayout, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   dstStageMask, VK_ACCESS_TRANSFER_WRITE_BIT, dstAccessMask, aspect, 0,
+                                   requiredMipLevels);
+        MOBILEGL_ASSERT(ok, "GrowWireTextureMipChain: restore transition failed");
+
+        grown.layout = oldLayout;
+        grown.extent = old.extent;
+        grown.depth = old.depth;
+        grown.arrayLayers = old.arrayLayers;
+        grown.mipLevels = requiredMipLevels;
+        grown.sampledBaseMipLevel = old.sampledBaseMipLevel;
+        grown.sampledLevelCount = requiredMipLevels;
+        grown.format = old.format;
+        grown.aspect = old.aspect;
+        grown.viewType = old.viewType;
+        grown.sampleCount = old.sampleCount;
+        grown.imageCreateFlags = old.imageCreateFlags;
+        grown.usageFlags = old.usageFlags;
+        grown.storageUsageResolved = old.storageUsageResolved;
+        grown.syncedWireSerial = old.syncedWireSerial;
+
+        DeferResourceRelease(Move(resource));
+        std::destroy_at(&resource);
+        std::construct_at(&resource, Move(grown));
         return true;
     }
 
@@ -2323,10 +2235,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             FlushPendingUploads();
         }
         if (resource.image == VK_NULL_HANDLE && resource.fullView == VK_NULL_HANDLE &&
-            resource.sampledView == VK_NULL_HANDLE &&
-            resource.perMipViews.empty() && resource.perMipSampledViews.empty() &&
-            resource.attachmentViews.empty() && resource.alternateSampledViews.empty() &&
-            resource.storageImageViews.empty()) {
+            resource.sampledView == VK_NULL_HANDLE && resource.perMipViews.empty() &&
+            resource.perMipSampledViews.empty() && resource.attachmentViews.empty() &&
+            resource.alternateSampledViews.empty() && resource.storageImageViews.empty() &&
+            resource.yuvSource == nullptr) {
             return;
         }
 
@@ -2343,8 +2255,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VkTextureManager::CollectDeferredReleases(Uint32 frameIndex) {
         MOBILEGL_ASSERT(frameIndex < m_deferredReleases.size(),
-                        "VkTextureManager::CollectDeferredReleases invalid frame index %u (size=%zu)",
-                        frameIndex, m_deferredReleases.size());
+                        "VkTextureManager::CollectDeferredReleases invalid frame index %u (size=%zu)", frameIndex,
+                        m_deferredReleases.size());
+        if (frameIndex < m_deferredE5Releases.size()) {
+            for (WireE5RawCopyObjects& objects : m_deferredE5Releases[frameIndex])
+                DestroyWireE5RawCopyObjects(m_device, objects);
+            m_deferredE5Releases[frameIndex].clear();
+        }
         m_deferredReleases[frameIndex].clear();
 
         MOBILEGL_ASSERT(frameIndex < m_deferredViewReleases.size(),
@@ -2460,8 +2377,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (m_freeUploadStagingBlocks[i].capacity >= size) {
                     block = Move(m_freeUploadStagingBlocks[i]);
                     m_freeUploadStagingBytes -= block.capacity;
-                    m_freeUploadStagingBlocks.erase(m_freeUploadStagingBlocks.begin() +
-                                                    static_cast<std::ptrdiff_t>(i));
+                    m_freeUploadStagingBlocks.erase(m_freeUploadStagingBlocks.begin() + static_cast<std::ptrdiff_t>(i));
                     break;
                 }
             }
@@ -2473,8 +2389,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
                 VmaAllocationCreateInfo stagingAllocationInfo{};
                 stagingAllocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-                stagingAllocationInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                                              VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                stagingAllocationInfo.flags =
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
                 stagingAllocationInfo.requiredFlags =
                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
                 VmaAllocationInfo allocationResult{};
@@ -2495,6 +2411,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         outBaseOffset = alignedCursor;
         current->cursor = alignedCursor + size;
         return current->mapped + alignedCursor;
+    }
+
+    Bool VkTextureManager::WireUploadsAreIdle() {
+        // An open batch still owns references even before it has a fence. Poll
+        // submitted batches without waiting; reclamation is deferred if any lives.
+        if (m_uploadBatchOpen) return false;
+        ReclaimCompletedUploads();
+        return m_pendingUploadReclaims.empty();
     }
 
     void VkTextureManager::FlushPendingUploads() {
@@ -2578,6 +2502,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkTextureManager::DestroyDeferredReleases() {
+        for (auto& deferredE5 : m_deferredE5Releases) {
+            for (WireE5RawCopyObjects& objects : deferredE5)
+                DestroyWireE5RawCopyObjects(m_device, objects);
+        }
+        m_deferredE5Releases.clear();
         for (auto& deferredReleases : m_deferredReleases) {
             deferredReleases.clear();
         }
@@ -2592,858 +2521,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             deferredViews.clear();
         }
         m_deferredViewReleases.clear();
-    }
-
-    void VkTextureManager::DeferViewRelease(VkImageView view) {
-        if (view == VK_NULL_HANDLE) {
-            return;
-        }
-
-        if (m_deferredViewReleases.empty()) {
-            vkDestroyImageView(m_device, view, nullptr);
-            return;
-        }
-
-        MOBILEGL_ASSERT(m_currentFrameIndex < m_deferredViewReleases.size(),
-                        "VkTextureManager::DeferViewRelease invalid current frame index %u (size=%zu)",
-                        m_currentFrameIndex, m_deferredViewReleases.size());
-        m_deferredViewReleases[m_currentFrameIndex].push_back(view);
-    }
-
-    MG_State::GLState::ITextureObject& VkTextureManager::StorageTextureOf(
-        MG_State::GLState::ITextureObject& texture) {
-        const auto& storageOwner = texture.GetViewStorageOwner();
-        return storageOwner ? *storageOwner : texture;
-    }
-
-    // The VkImageViewType a GL texture view's own target asks for. Deliberately derived from the
-    // GL target rather than inherited from the storage image: a 2D view of a 2D-array texture is
-    // a VK_IMAGE_VIEW_TYPE_2D over one layer, and a cube view of the same image is a
-    // VK_IMAGE_VIEW_TYPE_CUBE over six - which is the whole reason table 8.20 lists those pairs.
-    static VkImageViewType ResolveTextureViewImageViewType(TextureTarget target,
-                                                           VkImageViewType storageViewType) {
-        switch (target) {
-        case TextureTarget::Texture1D:
-            return VK_IMAGE_VIEW_TYPE_1D;
-        case TextureTarget::Texture1DArray:
-            return VK_IMAGE_VIEW_TYPE_1D_ARRAY;
-        case TextureTarget::Texture2D:
-        case TextureTarget::TextureRectangle:
-        case TextureTarget::Texture2DMultisample:
-            return VK_IMAGE_VIEW_TYPE_2D;
-        case TextureTarget::Texture2DArray:
-        case TextureTarget::Texture2DMultisampleArray:
-            return VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-        case TextureTarget::TextureCubeMap:
-            return VK_IMAGE_VIEW_TYPE_CUBE;
-        case TextureTarget::TextureCubeMapArray:
-            return VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
-        default:
-            return storageViewType;
-        }
-    }
-
-    VkTextureManager::TextureViewWindow VkTextureManager::ResolveTextureViewWindow(
-        MG_State::GLState::ITextureObject& texture, const TextureResource& resource) const {
-        TextureViewWindow window{};
-        window.format = resource.format;
-        window.viewType = resource.viewType;
-        window.baseArrayLayer = 0;
-        window.layerCount = resource.arrayLayers;
-        window.sampledAspect =
-            ResolveSampledImageViewAspectMask(resource.aspect, texture.GetDepthStencilTextureMode());
-        window.components = ResolveSampledViewComponents(texture, ResolveTextureFormatInfo(texture.GetFormat()));
-        ResolveViewMipRange(texture, resource.mipLevels, window.baseMipLevel, window.levelCount);
-        if (!texture.IsTextureView()) {
-            return window;
-        }
-
-        window.isTextureView = true;
-        // GL 4.6 core 8.18: the view's TEXTURE_BASE_LEVEL / TEXTURE_MAX_LEVEL are relative to the
-        // view, so ResolveViewMipRange above already clamped them against the view's own level
-        // count (TextureObjectView reports it); shifting by TEXTURE_VIEW_MIN_LEVEL puts them back
-        // into the storage image's numbering.
-        window.baseMipLevel += static_cast<Uint32>(texture.GetViewMinLevel());
-        window.baseArrayLayer = static_cast<Uint32>(texture.GetViewMinLayer());
-        window.layerCount = static_cast<Uint32>(texture.GetViewNumLayers());
-        window.viewType = ResolveTextureViewImageViewType(texture.GetTarget(), resource.viewType);
-        // The view's OWN internalformat, which may reinterpret the storage's (table 8.21).
-        const VkFormat viewFormat = ResolveTextureFormatInfo(texture.GetFormat()).format;
-        if (viewFormat != VK_FORMAT_UNDEFINED) {
-            window.format = viewFormat;
-        }
-        // Recomputed against the view's own format: a depth/stencil storage viewed as
-        // depth/stencil still has to honour the VIEW's DEPTH_STENCIL_TEXTURE_MODE, which is the
-        // one parameter Better Clouds deliberately sets differently on the two names.
-        window.sampledAspect =
-            ResolveSampledImageViewAspectMask(GetAspectMaskForFormat(window.format) != VK_IMAGE_ASPECT_NONE
-                                                  ? GetAspectMaskForFormat(window.format)
-                                                  : resource.aspect,
-                                              texture.GetDepthStencilTextureMode());
-
-        // Clamp to what the image actually has; a malformed view must degrade to an empty range
-        // rather than reach vkCreateImageView with an out-of-bounds subresource.
-        if (window.baseMipLevel >= resource.mipLevels) {
-            window.baseMipLevel = resource.mipLevels - 1;
-            window.levelCount = 1;
-        } else {
-            window.levelCount = std::min(window.levelCount, resource.mipLevels - window.baseMipLevel);
-        }
-        if (window.levelCount == 0) window.levelCount = 1;
-        if (window.baseArrayLayer >= resource.arrayLayers) {
-            window.baseArrayLayer = resource.arrayLayers - 1;
-            window.layerCount = 1;
-        } else {
-            window.layerCount = std::min(window.layerCount, resource.arrayLayers - window.baseArrayLayer);
-        }
-        if (window.layerCount == 0) window.layerCount = 1;
-        return window;
-    }
-
-    // The extra VkImageCreateFlags a GL texture view needs on the image it views. Recorded
-    // BEFORE the storage texture is synced (see SyncTextureAndGetDescriptor) so the very first
-    // resolve of a view already creates - or recreates and copies forward - an image the view can
-    // legally be built over, instead of handing back VK_NULL_HANDLE for a frame.
-    void VkTextureManager::NoteTextureViewImageRequirements(MG_State::GLState::ITextureObject& viewTexture,
-                                                            MG_State::GLState::ITextureObject& storageTexture) {
-        const TextureIdentity storageIdentity = MakeTextureIdentity(&storageTexture);
-        VkImageCreateFlags required = 0;
-        const VkFormat viewFormat = ResolveTextureFormatInfo(viewTexture.GetFormat()).format;
-        const VkFormat storageFormat = ResolveTextureFormatInfo(storageTexture.GetFormat()).format;
-        if (viewFormat != VK_FORMAT_UNDEFINED && storageFormat != VK_FORMAT_UNDEFINED &&
-            viewFormat != storageFormat) {
-            required |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
-            // The image may be created with a NARROWED format list (see SyncTextureResource), and
-            // that list is a promise about every format the image will ever be viewed as. Record
-            // this one so the promise stays true.
-            m_viewRequestedFormats[storageIdentity].insert(viewFormat);
-        }
-        const TextureTarget viewTarget = viewTexture.GetTarget();
-        if (viewTarget == TextureTarget::TextureCubeMap || viewTarget == TextureTarget::TextureCubeMapArray) {
-            // Only when the storage could legally carry the bit. VK_IMAGE_CREATE_CUBE_COMPATIBLE
-            // demands a 2D image with square levels and at least six array layers
-            // (VUID-VkImageCreateInfo-flags-00954), and asking for it on a storage that has fewer
-            // would fail vkCreateImage - which, because SyncTextureResource has already released
-            // the old resource by then, would leave the PARENT texture with no image at all. A
-            // degenerate view must not be able to destroy the texture it views; let its own view
-            // creation fail instead.
-            const IntVec3 storageSize = storageTexture.GetBaseSize();
-            const Bool storageCanBeCube = storageSize.x() == storageSize.y() &&
-                                          storageTexture.GetViewNumLayers() >= 6 &&
-                                          storageTexture.GetTarget() != TextureTarget::Texture3D;
-            if (storageCanBeCube) {
-                required |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-            } else {
-                MGLOG_W_ONCE("Texture view %d wants a cube view of texture %d, whose storage is %dx%d with %u "
-                             "layers and cannot be cube-compatible; the view will have no image view.",
-                             viewTexture.GetExternalIndex(), storageTexture.GetExternalIndex(), storageSize.x(),
-                             storageSize.y(), storageTexture.GetViewNumLayers());
-            }
-        }
-        if (required == 0) {
-            return;
-        }
-        VkImageCreateFlags& stored = m_viewRequestedImageFlags[storageIdentity];
-        stored |= required;
-    }
-
-    VkImageCreateFlags VkTextureManager::GetViewRequestedImageFlags(
-        const MG_State::GLState::ITextureObject& storageTexture) const {
-        const auto it = m_viewRequestedImageFlags.find(
-            MakeTextureIdentity(const_cast<MG_State::GLState::ITextureObject*>(&storageTexture)));
-        return it == m_viewRequestedImageFlags.end() ? 0 : it->second;
-    }
-
-    void VkTextureManager::AppendViewRequestedFormats(const MG_State::GLState::ITextureObject& storageTexture,
-                                                      Vector<VkFormat>& outFormats) const {
-        const auto it = m_viewRequestedFormats.find(
-            MakeTextureIdentity(const_cast<MG_State::GLState::ITextureObject*>(&storageTexture)));
-        if (it == m_viewRequestedFormats.end()) {
-            return;
-        }
-        for (const VkFormat viewFormat : it->second) {
-            if (std::find(outFormats.begin(), outFormats.end(), viewFormat) == outFormats.end()) {
-                outFormats.push_back(viewFormat);
-            }
-        }
-    }
-
-    Bool VkTextureManager::SyncTextureViews(const MG_State::GLState::ITextureObject& texture, TextureResource& resource) {
-        MOBILEGL_ASSERT(resource.image != VK_NULL_HANDLE, "SyncTextureViews: image == VK_NULL_HANDLE");
-
-        Uint32 baseMipLevel = 0;
-        Uint32 levelCount = 1;
-        ResolveViewMipRange(texture, resource.mipLevels, baseMipLevel, levelCount);
-
-        const Bool needsRecreate =
-            resource.fullView == VK_NULL_HANDLE ||
-            resource.sampledView == VK_NULL_HANDLE ||
-            resource.sampledBaseMipLevel != baseMipLevel ||
-            resource.sampledLevelCount != levelCount ||
-            resource.syncedTextureParamsVersion != texture.GetTextureParamsVersion();
-        if (!needsRecreate) {
-            return true;
-        }
-
-        if (resource.fullView != VK_NULL_HANDLE) {
-            DeferViewRelease(resource.fullView);
-            resource.fullView = VK_NULL_HANDLE;
-        }
-        if (resource.sampledView != VK_NULL_HANDLE) {
-            DeferViewRelease(resource.sampledView);
-            resource.sampledView = VK_NULL_HANDLE;
-        }
-        for (auto& sampledView : resource.perMipSampledViews) {
-            if (sampledView != VK_NULL_HANDLE) {
-                DeferViewRelease(sampledView);
-                sampledView = VK_NULL_HANDLE;
-            }
-        }
-        for (const auto& [_, sampledView] : resource.alternateSampledViews) {
-            DeferViewRelease(sampledView);
-        }
-        resource.alternateSampledViews.clear();
-
-        const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(texture.GetFormat());
-        const VkComponentMapping sampledComponents = ResolveSampledViewComponents(texture, formatInfo);
-        resource.fullView = CreateImageView(resource.image, resource.format, resource.aspect, resource.viewType,
-                                            baseMipLevel, levelCount, 0, resource.arrayLayers, &sampledComponents);
-        if (resource.fullView == VK_NULL_HANDLE) {
-            return false;
-        }
-        const VkImageAspectFlags sampledAspect =
-            ResolveSampledImageViewAspectMask(resource.aspect, texture.GetDepthStencilTextureMode());
-        resource.sampledView = CreateImageView(resource.image, resource.format, sampledAspect, resource.viewType,
-                                               baseMipLevel, levelCount, 0, resource.arrayLayers, &sampledComponents);
-        if (resource.sampledView == VK_NULL_HANDLE) {
-            return false;
-        }
-
-        resource.sampledBaseMipLevel = baseMipLevel;
-        resource.sampledLevelCount = levelCount;
-        resource.syncedTextureParamsVersion = texture.GetTextureParamsVersion();
-        return true;
-    }
-
-    VkImageView VkTextureManager::CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspect,
-                                                  VkImageViewType viewType, Uint32 baseMipLevel, Uint32 levelCount,
-                                                  Uint32 baseArrayLayer,
-                                                  Uint32 layerCount,
-                                                  const VkComponentMapping* components,
-                                                  VkImageUsageFlags viewUsage) const {
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = image;
-        viewInfo.viewType = viewType;
-        viewInfo.format = format;
-        viewInfo.components = components != nullptr ?
-            *components :
-            VkComponentMapping{VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G,
-                               VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A};
-        viewInfo.subresourceRange.aspectMask = aspect;
-        viewInfo.subresourceRange.baseMipLevel = baseMipLevel;
-        viewInfo.subresourceRange.levelCount = levelCount;
-        viewInfo.subresourceRange.baseArrayLayer = baseArrayLayer;
-        viewInfo.subresourceRange.layerCount = layerCount;
-
-        VkImageViewUsageCreateInfo usageInfo{};
-        if (viewUsage != 0) {
-            usageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
-            usageInfo.usage = viewUsage;
-            viewInfo.pNext = &usageInfo;
-        }
-
-        VkImageView view = VK_NULL_HANDLE;
-        VK_VERIFY(vkCreateImageView(m_device, &viewInfo, nullptr, &view), "vkCreateImageView(texture)");
-        return view;
-    }
-
-    Bool VkTextureManager::UploadDirtyMipLevels(MG_State::GLState::TextureObjectMipmap &mipmapTexture,
-                                        TextureUploadTarget uploadTarget,
-                                        TextureResource &outResource) {
-        struct UploadItem {
-            TextureUploadTarget target = TextureUploadTarget::Unknown;
-            Uint32 level = 0;
-            Uint32 baseArrayLayer = 0;
-            SizeT uploadByteSize = 0;
-            IntVec3 texelSize = {0, 0, 0};
-            const void* source = nullptr;
-            Vector<Uint8> expandedData;
-            VkDeviceSize offset = 0;
-            // Sub-region upload (a small sprite in a big atlas): only the dirty box
-            // is staged and copied. texelSize keeps the LEVEL extent - the staging
-            // row copy needs it for the stride. Color formats only (an RGB-expanded
-            // level is cut from its expanded bytes); the depth(+stencil) conversion
-            // passes rewrite whole levels and stay full-size.
-            Bool subRegion = false;
-            IntVec3 regionLo = {0, 0, 0};
-            IntVec3 regionSize = {0, 0, 0};
-            SizeT texelBytes = 0;
-            // The writes' exact footprint when it is more than one box (~100 sprites
-            // whose union box spans the whole atlas): each rect is staged tightly and
-            // copied with its own VkBufferImageCopy in ONE vkCmdCopyBufferToImage.
-            // Empty means "stage the one box above". Only set while subRegion.
-            Vector<MG_State::GLState::MipmapDirtyRegion> rects;
-        };
-
-        Vector<UploadItem> uploadItems;
-        Vector<TextureUploadTarget> targets;
-        if (outResource.viewType == VK_IMAGE_VIEW_TYPE_CUBE) {
-            targets = mipmapTexture.GetUploadTargets();
-        } else {
-            targets.push_back(uploadTarget);
-        }
-        const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(mipmapTexture.GetFormat());
-        Vector<MG_State::GLState::MipmapDirtyRegion> dirtyFootprint;
-
-        VkDeviceSize stagingSize = 0;
-        for (const TextureUploadTarget target : targets) {
-            const Uint32 definedMipLevels = GetUploadMipLevelCount(mipmapTexture, target);
-            MOBILEGL_ASSERT(definedMipLevels <= outResource.mipLevels,
-                            "UploadDirtyMipLevels: defined mip level count %u exceeds backing mip level count %u for textureId=%d target=%s",
-                            definedMipLevels, outResource.mipLevels, mipmapTexture.GetExternalIndex(),
-                            MG_Util::ConvertTextureUploadTargetToString(target).c_str());
-
-            for (Uint32 level = 0; level < definedMipLevels; ++level) {
-                if (!mipmapTexture.IsStorageDirty(target, level)) {
-                    continue;
-                }
-
-                const auto texelSize = mipmapTexture.GetMipmapTexelSize(target, level);
-                const auto byteSize = mipmapTexture.GetMipmapByteSize(target, level);
-                if (texelSize.x() <= 0 || texelSize.y() <= 0 || byteSize == 0) {
-                    mipmapTexture.MarkStorageDirty(target, level, false);
-                    continue;
-                }
-
-                const void* source = mipmapTexture.MapMipmapData(target, level);
-                if (source == nullptr) {
-                    MGLOG_D("%s: MapmipmapData failed at target %s level %d", __func__,
-                            MG_Util::ConvertTextureUploadTargetToString(target).c_str(), level);
-                    return false;
-                }
-
-                UploadItem uploadItem{};
-                uploadItem.target = target;
-                uploadItem.level = level;
-                uploadItem.baseArrayLayer = ResolveUploadArrayLayer(target);
-                // Vulkan geometry, like the image this stages into (see SyncTexture): a 1D
-                // array's layers move from y to z, where the copy loop's depthSelectsArrayLayer
-                // branch turns them into layerCount. The shadow needs no repacking to follow -
-                // one layer of a 1D array IS one row of `width` texels, so the tight-packed
-                // per-layer copy the swapped size describes reads the same bytes in the same
-                // order as the row-major level it replaces.
-                uploadItem.texelSize = ToVulkanLevelExtent(mipmapTexture.GetTarget(), texelSize);
-                uploadItem.source = source;
-                uploadItem.offset = stagingSize;
-                uploadItem.uploadByteSize = byteSize;
-                // The RGB -> RGBA expansion rewrites the level texel for texel into a tight buffer
-                // of its own, so it runs first and the dirty region below is taken from whichever
-                // bytes are staged. Uploading an expanded level WHOLE put the shadow's stale texels
-                // over whatever the GPU had drawn into the rest of it.
-                if (formatInfo.expandRgbToRgba) {
-                    const Bool expanded = ExpandRgbSourceToRgba(source, byteSize, texelSize, formatInfo,
-                                                                uploadItem.expandedData);
-                    MOBILEGL_ASSERT(expanded,
-                                    "UploadDirtyMipLevels: failed to expand RGB textureId=%d target=%s level=%u to RGBA staging data",
-                                    mipmapTexture.GetExternalIndex(),
-                                    MG_Util::ConvertTextureUploadTargetToString(target).c_str(), level);
-                    uploadItem.uploadByteSize = uploadItem.expandedData.size();
-                }
-                const SizeT levelBytes = uploadItem.uploadByteSize;
-                if (GetAspectMaskForFormat(outResource.format) == VK_IMAGE_ASPECT_COLOR_BIT) {
-                    const auto region = mipmapTexture.GetStorageDirtyRegion(target, level);
-                    const SizeT texelCount = static_cast<SizeT>(texelSize.x()) *
-                                             static_cast<SizeT>(texelSize.y()) *
-                                             static_cast<SizeT>(std::max(texelSize.z(), 1));
-                    // Exactly the texels the client wrote, never their union box or the storage's
-                    // rect list (which merges touching writes into their bounding box, folds when
-                    // full and is withheld past 3/4 of the box): the image may hold what the GPU
-                    // drew or cleared anywhere else, and the shadow is stale there. Each box is one
-                    // more VkBufferImageCopy in the same vkCmdCopyBufferToImage, which costs next
-                    // to nothing, so there is no cheaper shape worth being wrong for. A union box
-                    // that spans the level with gaps in it is not a whole-level write either.
-                    mipmapTexture.GetStorageDirtyFootprint(target, level, dirtyFootprint);
-                    if (!region.Empty() && (dirtyFootprint.size() >= 2 || !region.CoversWholeLevel(texelSize)) &&
-                        texelCount > 0 && levelBytes % texelCount == 0) {
-                        uploadItem.subRegion = true;
-                        uploadItem.regionLo = region.lo;
-                        uploadItem.regionSize = {region.hi.x() - region.lo.x(), region.hi.y() - region.lo.y(),
-                                                 region.hi.z() - region.lo.z()};
-                        uploadItem.texelBytes = levelBytes / texelCount;
-                        uploadItem.uploadByteSize = static_cast<SizeT>(uploadItem.regionSize.x()) *
-                                                    static_cast<SizeT>(uploadItem.regionSize.y()) *
-                                                    static_cast<SizeT>(uploadItem.regionSize.z()) *
-                                                    uploadItem.texelBytes;
-                        // Several boxes: each is staged tightly and copied on its own. One box is
-                        // the union box above.
-                        if (dirtyFootprint.size() >= 2) {
-                            uploadItem.rects.assign(dirtyFootprint.begin(), dirtyFootprint.end());
-                            SizeT rectTexels = 0;
-                            for (const auto& rect : uploadItem.rects) {
-                                rectTexels += rect.TexelCount();
-                            }
-                            uploadItem.uploadByteSize = rectTexels * uploadItem.texelBytes;
-                        }
-                        // The boxes came out of the shadow in GL coordinates, where a 1D
-                        // array's layer is the y. They have to follow texelSize across to z or
-                        // they would address rows of an image that now has exactly one, and
-                        // the staging walk would read the wrong bytes for them. Every byte
-                        // count computed above is a product of the three extents, so moving
-                        // the axes leaves all of them alone - and an OFFSET lands on a zero y,
-                        // not on the extent's one, which is why this is spelled out rather than
-                        // handed to ToVulkanLevelExtent.
-                        if (mipmapTexture.GetTarget() == TextureTarget::Texture1DArray) {
-                            uploadItem.regionLo = {uploadItem.regionLo.x(), 0, uploadItem.regionLo.y()};
-                            uploadItem.regionSize = {uploadItem.regionSize.x(), 1,
-                                                     uploadItem.regionSize.y()};
-                            for (auto& rect : uploadItem.rects) {
-                                rect.lo = {rect.lo.x(), 0, rect.lo.y()};
-                                rect.hi = {rect.hi.x(), 1, rect.hi.y()};
-                            }
-                        }
-                    }
-                }
-                uploadItems.push_back(Move(uploadItem));
-                if (!uploadItems.back().expandedData.empty()) {
-                    uploadItems.back().source = uploadItems.back().expandedData.data();
-                }
-                stagingSize += static_cast<VkDeviceSize>(uploadItems.back().uploadByteSize);
-            }
-        }
-
-        if (uploadItems.empty()) {
-            return true;
-        }
-
-        // Combined depth-stencil images need per-aspect copies (VkBufferImageCopy aspectMask
-        // must have exactly one bit set), so de-interleave the shadow's GL wire format into
-        // a depth plane followed by a stencil plane per upload item.
-        const VkImageAspectFlags uploadAspectMask = GetAspectMaskForFormat(outResource.format);
-        const Bool isCombinedDepthStencil =
-            (uploadAspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) && (uploadAspectMask & VK_IMAGE_ASPECT_STENCIL_BIT);
-        if (isCombinedDepthStencil) {
-            const Bool srcIsD24S8 = outResource.format == VK_FORMAT_D24_UNORM_S8_UINT;
-            const Bool srcIsD32FS8 = outResource.format == VK_FORMAT_D32_SFLOAT_S8_UINT;
-            if (!srcIsD24S8 && !srcIsD32FS8) {
-                MGLOG_E_ONCE("UploadDirtyMipLevels: unsupported combined depth-stencil format %d for textureId=%d",
-                        static_cast<Int>(outResource.format), mipmapTexture.GetExternalIndex());
-                for (const auto& item : uploadItems) {
-                    mipmapTexture.MarkStorageDirty(item.target, item.level, false);
-                }
-                return true;
-            }
-            stagingSize = 0;
-            for (auto& item : uploadItems) {
-                const SizeT texelCount = static_cast<SizeT>(item.texelSize.x()) *
-                                         static_cast<SizeT>(item.texelSize.y()) *
-                                         static_cast<SizeT>(std::max(item.texelSize.z(), 1));
-                const SizeT shadowTexelSize = item.uploadByteSize / std::max<SizeT>(texelCount, 1);
-                MOBILEGL_ASSERT(shadowTexelSize == 4 || shadowTexelSize == 8,
-                                "UploadDirtyMipLevels: unexpected depth-stencil shadow texel size %zu for textureId=%d",
-                                shadowTexelSize, mipmapTexture.GetExternalIndex());
-                // Depth plane as the aspect's buffer-copy format (32-bit word for
-                // D24: low 24 bits; float for D32F), then one stencil byte per texel.
-                Vector<Uint8> deinterleaved(texelCount * 4 + texelCount);
-                Uint8* depthPlane = deinterleaved.data();
-                Uint8* stencilPlane = deinterleaved.data() + texelCount * 4;
-                const Uint8* shadow = static_cast<const Uint8*>(item.source);
-                for (SizeT t = 0; t < texelCount; ++t) {
-                    if (shadowTexelSize == 8) {
-                        // GL_FLOAT_32_UNSIGNED_INT_24_8_REV: float depth, then a word
-                        // with stencil in its low 8 bits.
-                        float depthValue;
-                        Uint32 stencilWord;
-                        std::memcpy(&depthValue, shadow + t * 8, sizeof(depthValue));
-                        std::memcpy(&stencilWord, shadow + t * 8 + 4, sizeof(stencilWord));
-                        if (srcIsD32FS8) {
-                            std::memcpy(depthPlane + t * 4, &depthValue, sizeof(depthValue));
-                        } else {
-                            const float clamped = std::min(std::max(depthValue, 0.0f), 1.0f);
-                            const Uint32 depthWord = static_cast<Uint32>(clamped * 16777215.0f + 0.5f);
-                            std::memcpy(depthPlane + t * 4, &depthWord, sizeof(depthWord));
-                        }
-                        stencilPlane[t] = static_cast<Uint8>(stencilWord & 0xFFu);
-                    } else {
-                        // GL_UNSIGNED_INT_24_8: depth in the high 24 bits, stencil low 8.
-                        Uint32 packed;
-                        std::memcpy(&packed, shadow + t * 4, sizeof(packed));
-                        if (srcIsD24S8) {
-                            const Uint32 depthWord = packed >> 8;
-                            std::memcpy(depthPlane + t * 4, &depthWord, sizeof(depthWord));
-                        } else {
-                            const float depthValue = static_cast<float>(packed >> 8) / 16777215.0f;
-                            std::memcpy(depthPlane + t * 4, &depthValue, sizeof(depthValue));
-                        }
-                        stencilPlane[t] = static_cast<Uint8>(packed & 0xFFu);
-                    }
-                }
-                item.expandedData = Move(deinterleaved);
-                item.source = item.expandedData.data();
-                item.uploadByteSize = item.expandedData.size();
-                item.offset = stagingSize;
-                stagingSize += static_cast<VkDeviceSize>(item.uploadByteSize);
-            }
-        }
-
-        // Pure-depth images whose canonical shadow layout differs from the image texel
-        // layout (the shadow keeps a full-scale 16/32-bit unorm word or a float; the
-        // image may be X8_D24 or a D32_SFLOAT fallback) convert per texel here.
-        if (uploadAspectMask == VK_IMAGE_ASPECT_DEPTH_BIT) {
-            const TextureInternalFormat depthInternal = mipmapTexture.GetFormat();
-            const Bool shadowIsFloat = depthInternal == TextureInternalFormat::DepthComponent32F;
-            const Bool dstIsFloat = outResource.format == VK_FORMAT_D32_SFLOAT;
-            const Bool dstIsD24Word = outResource.format == VK_FORMAT_X8_D24_UNORM_PACK32;
-            stagingSize = 0;
-            for (auto& item : uploadItems) {
-                const SizeT texelCount = static_cast<SizeT>(item.texelSize.x()) *
-                                         static_cast<SizeT>(item.texelSize.y()) *
-                                         static_cast<SizeT>(std::max(item.texelSize.z(), 1));
-                const SizeT shadowTexelSize = item.uploadByteSize / std::max<SizeT>(texelCount, 1);
-                const Bool needsConversion =
-                    (dstIsFloat && !shadowIsFloat) || (dstIsD24Word && shadowTexelSize == 4 && !shadowIsFloat);
-                if (needsConversion) {
-                    Vector<Uint8> converted(texelCount * 4);
-                    const Uint8* shadow = static_cast<const Uint8*>(item.source);
-                    for (SizeT t = 0; t < texelCount; ++t) {
-                        Uint32 wide = 0;
-                        if (shadowTexelSize == 2) {
-                            Uint16 raw = 0;
-                            std::memcpy(&raw, shadow + t * 2, sizeof(raw));
-                            wide = (static_cast<Uint32>(raw) << 16) | raw;
-                        } else {
-                            std::memcpy(&wide, shadow + t * 4, sizeof(wide));
-                        }
-                        if (dstIsFloat) {
-                            const float value = static_cast<float>(static_cast<double>(wide) / 4294967295.0);
-                            std::memcpy(converted.data() + t * 4, &value, sizeof(value));
-                        } else { // X8_D24: depth in the low 24 bits of a 32-bit word
-                            const Uint32 word = wide >> 8;
-                            std::memcpy(converted.data() + t * 4, &word, sizeof(word));
-                        }
-                    }
-                    item.expandedData = Move(converted);
-                    item.source = item.expandedData.data();
-                    item.uploadByteSize = item.expandedData.size();
-                }
-                item.offset = stagingSize;
-                stagingSize += static_cast<VkDeviceSize>(item.uploadByteSize);
-            }
-        }
-
-        // Rare mid-frame hazard, kept at parity with the old per-upload
-        // submits: this image already has an upload recorded in the OPEN batch
-        // and has since been referenced by the frame's open recording (drawn).
-        // Appending here would merge both uploads into the same pre-frame
-        // submission the old code split into two; flush first so the second
-        // upload lands in its own later submission, exactly like before.
-        if (m_uploadBatchOpen && WasTouchedThisRecording(outResource) &&
-            std::find(m_uploadBatchImages.begin(), m_uploadBatchImages.end(), outResource.image) !=
-                m_uploadBatchImages.end()) {
-            FlushPendingUploads();
-        }
-        // Bound the staging bytes a single batch can pin before its fence can
-        // reclaim them.
-        constexpr VkDeviceSize kMaxBatchStagingBytes = 64u * 1024u * 1024u;
-        if (m_uploadBatchOpen && m_uploadBatchStagingBytes + stagingSize > kMaxBatchStagingBytes) {
-            FlushPendingUploads();
-        }
-
-        VkCommandBuffer commandBuffer = EnsureUploadBatchOpen();
-        VkBuffer stagingBuffer = VK_NULL_HANDLE;
-        VkDeviceSize stagingBase = 0;
-        Uint8* mapped = AcquireUploadStagingSpace(stagingSize, stagingBuffer, stagingBase);
-        for (const auto& item : uploadItems) {
-            Uint8* dst = mapped + item.offset;
-            if (!item.subRegion) {
-                std::memcpy(dst, item.source, item.uploadByteSize);
-                continue;
-            }
-            // Tight-pack the dirty box(es): the shadow keeps whole-level rows, the
-            // staging slice holds only the region (bufferRowLength stays 0). Multi-
-            // rect items pack their rects back to back in list order; the copy loop
-            // below recomputes the same running offsets.
-            const SizeT levelRowBytes = static_cast<SizeT>(item.texelSize.x()) * item.texelBytes;
-            const SizeT levelSliceBytes = static_cast<SizeT>(item.texelSize.y()) * levelRowBytes;
-            const Uint8* src = static_cast<const Uint8*>(item.source);
-            const auto packBox = [&](Uint8* out, const IntVec3& lo, const IntVec3& boxSize) {
-                const SizeT boxRowBytes = static_cast<SizeT>(boxSize.x()) * item.texelBytes;
-                for (Int z = 0; z < boxSize.z(); ++z) {
-                    for (Int y = 0; y < boxSize.y(); ++y) {
-                        const Uint8* srcRow = src + static_cast<SizeT>(lo.z() + z) * levelSliceBytes +
-                                              static_cast<SizeT>(lo.y() + y) * levelRowBytes +
-                                              static_cast<SizeT>(lo.x()) * item.texelBytes;
-                        std::memcpy(out + (static_cast<SizeT>(z) * static_cast<SizeT>(boxSize.y()) + y) *
-                                              boxRowBytes,
-                                    srcRow, boxRowBytes);
-                    }
-                }
-                return static_cast<SizeT>(boxSize.x()) * static_cast<SizeT>(boxSize.y()) *
-                       static_cast<SizeT>(boxSize.z()) * item.texelBytes;
-            };
-            if (!item.rects.empty()) {
-                for (const auto& rect : item.rects) {
-                    dst += packBox(dst, rect.lo,
-                                   IntVec3{rect.hi.x() - rect.lo.x(), rect.hi.y() - rect.lo.y(),
-                                           rect.hi.z() - rect.lo.z()});
-                }
-                continue;
-            }
-            packBox(dst, item.regionLo, item.regionSize);
-        }
-
-        const VkImageAspectFlags aspectMask = GetAspectMaskForFormat(outResource.format);
-        VkPipelineStageFlags uploadSrcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        VkAccessFlags uploadSrcAccessMask = 0;
-        GetImageTransitionSourceState(outResource.layout, uploadSrcStageMask, uploadSrcAccessMask);
-        Bool ok = TransitionImageLayout(commandBuffer, outResource.image,
-                                        outResource.layout,
-                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                        uploadSrcStageMask,
-                                        VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                        uploadSrcAccessMask,
-                                        VK_ACCESS_TRANSFER_WRITE_BIT,
-                                        aspectMask, 0, outResource.mipLevels);
-        MOBILEGL_ASSERT(ok, "TransitionImageLayout to VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL failed");
-
-        // Array textures keep their GL "depth" in VkImage array layers, so the
-        // copy must address layerCount, not imageExtent.depth (which is invalid
-        // for 2D images and silently dropped every layer past the first).
-        const Bool depthSelectsArrayLayer = outResource.viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY ||
-                                            outResource.viewType == VK_IMAGE_VIEW_TYPE_2D_ARRAY ||
-                                            outResource.viewType == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
-        Vector<VkBufferImageCopy> rectCopies;
-        for (const auto& item : uploadItems) {
-            if (!item.rects.empty()) {
-                // Multi-rect item: one VkBufferImageCopy per rect, all submitted in a
-                // single vkCmdCopyBufferToImage. The rect list is pairwise disjoint by
-                // construction, so no two copies write the same texels. Multi-rect
-                // implies subRegion, which implies a plain color aspect - the combined
-                // depth-stencil split below can never see one of these.
-                rectCopies.resize(item.rects.size());
-                Uint32 rectCopyCount = 0;
-                VkDeviceSize runningOffset = item.offset;
-                for (const auto& rect : item.rects) {
-                    const IntVec3 rectSize = {rect.hi.x() - rect.lo.x(), rect.hi.y() - rect.lo.y(),
-                                              rect.hi.z() - rect.lo.z()};
-                    const Uint32 rectDepth = static_cast<Uint32>(std::max(rectSize.z(), 1));
-                    VkBufferImageCopy rectCopy{};
-                    rectCopy.bufferOffset = stagingBase + runningOffset;
-                    rectCopy.bufferRowLength = 0;
-                    rectCopy.bufferImageHeight = 0;
-                    rectCopy.imageSubresource.aspectMask = aspectMask;
-                    rectCopy.imageSubresource.mipLevel = item.level;
-                    rectCopy.imageSubresource.baseArrayLayer = item.baseArrayLayer;
-                    rectCopy.imageSubresource.layerCount = 1;
-                    rectCopy.imageOffset = {rect.lo.x(), rect.lo.y(),
-                                            depthSelectsArrayLayer ? 0 : rect.lo.z()};
-                    rectCopy.imageExtent = {static_cast<Uint32>(rectSize.x()),
-                                            static_cast<Uint32>(rectSize.y()),
-                                            depthSelectsArrayLayer ? 1u : rectDepth};
-                    if (depthSelectsArrayLayer) {
-                        // The GL "depth" axis addresses array layers here, so a partial
-                        // z-range narrows the layer span rather than the extent.
-                        rectCopy.imageSubresource.baseArrayLayer =
-                            item.baseArrayLayer + static_cast<Uint32>(rect.lo.z());
-                        rectCopy.imageSubresource.layerCount = rectDepth;
-                    }
-                    rectCopies[rectCopyCount++] = rectCopy;
-                    runningOffset += static_cast<VkDeviceSize>(rect.TexelCount() * item.texelBytes);
-                }
-                vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, outResource.image,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rectCopyCount, rectCopies.data());
-                continue;
-            }
-            const Uint32 depthOrLayers = item.texelSize.z() > 0 ? static_cast<Uint32>(item.texelSize.z()) : 1u;
-            VkBufferImageCopy copy{};
-            copy.bufferOffset = stagingBase + item.offset;
-            copy.bufferRowLength = 0;
-            copy.bufferImageHeight = 0;
-            copy.imageSubresource.aspectMask = aspectMask;
-            copy.imageSubresource.mipLevel = item.level;
-            copy.imageSubresource.baseArrayLayer = item.baseArrayLayer;
-            copy.imageSubresource.layerCount = depthSelectsArrayLayer ? depthOrLayers : 1;
-            copy.imageOffset = {0, 0, 0};
-            copy.imageExtent = {static_cast<Uint32>(item.texelSize.x()), static_cast<Uint32>(item.texelSize.y()),
-                                depthSelectsArrayLayer ? 1u : depthOrLayers};
-            if (item.subRegion) {
-                const Uint32 regionDepth = static_cast<Uint32>(std::max(item.regionSize.z(), 1));
-                copy.imageOffset = {item.regionLo.x(), item.regionLo.y(),
-                                    depthSelectsArrayLayer ? 0 : item.regionLo.z()};
-                copy.imageExtent = {static_cast<Uint32>(item.regionSize.x()),
-                                    static_cast<Uint32>(item.regionSize.y()),
-                                    depthSelectsArrayLayer ? 1u : regionDepth};
-                if (depthSelectsArrayLayer) {
-                    // The GL "depth" axis addresses array layers here, so a partial
-                    // z-range narrows the layer span rather than the extent.
-                    copy.imageSubresource.baseArrayLayer =
-                        item.baseArrayLayer + static_cast<Uint32>(item.regionLo.z());
-                    copy.imageSubresource.layerCount = regionDepth;
-                }
-            }
-            if (isCombinedDepthStencil) {
-                const SizeT texelCount = static_cast<SizeT>(item.texelSize.x()) *
-                                         static_cast<SizeT>(item.texelSize.y()) *
-                                         static_cast<SizeT>(std::max(item.texelSize.z(), 1));
-                VkBufferImageCopy depthCopy = copy;
-                depthCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-                VkBufferImageCopy stencilCopy = copy;
-                stencilCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
-                stencilCopy.bufferOffset = stagingBase + item.offset + static_cast<VkDeviceSize>(texelCount) * 4;
-                const VkBufferImageCopy copies[2] = {depthCopy, stencilCopy};
-                vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, outResource.image,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, copies);
-                continue;
-            }
-            vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, outResource.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   1, &copy);
-        }
-
-        const VkImageLayout finalLayout = ResolveSampledReadOnlyLayout(aspectMask);
-        VkImageLayout uploadLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        ok = TransitionImageLayout(commandBuffer, outResource.image,
-                                   uploadLayout,
-                                   finalLayout,
-                                   VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                   s_sampledReadStages,
-                                   VK_ACCESS_TRANSFER_WRITE_BIT,
-                                   VK_ACCESS_SHADER_READ_BIT,
-                                   aspectMask, 0, outResource.mipLevels);
-        MOBILEGL_ASSERT(ok, "TransitionImageLayout to sampled read-only layout failed");
-        outResource.layout = finalLayout;
-
-        // Ordering argument (replaces the old immediate per-texture submit):
-        // this upload is RECORDED into the shared batch command buffer, which
-        // FlushPendingUploads submits - with one vkQueueSubmit and one pooled
-        // fence for the whole batch - strictly BEFORE any other submission on
-        // the same queue whose commands could consume the image: the renderer
-        // flushes at every frame-command-buffer submit (mid-frame flush,
-        // readback, Present), and the texture manager flushes before the
-        // preserve-on-recreate copy and before deferring an image the batch
-        // references. The frame command buffer therefore still lands behind
-        // the uploads on the queue, so a texture uploaded and then immediately
-        // sampled in the same frame sees its data exactly as it did when each
-        // upload was its own submit. No fence is waited here, for the same
-        // reason as before: the batch queues behind the previous frame's
-        // rendering, and a synchronous wait would drain the GPU; the staging
-        // blocks/command buffer are parked on the reclaim list at flush time
-        // and recycled once the batch fence signals.
-        if (std::find(m_uploadBatchImages.begin(), m_uploadBatchImages.end(), outResource.image) ==
-            m_uploadBatchImages.end()) {
-            m_uploadBatchImages.push_back(outResource.image);
-        }
-        m_uploadBatchStagingBytes += stagingSize;
-
-        if (!ok) {
-            MGLOG_D("%s: texture upload cmd failed", __func__);
-            return false;
-        }
-        for (const auto& item : uploadItems) {
-            mipmapTexture.MarkStorageDirty(item.target, item.level, false);
-        }
-        outResource.layout = finalLayout;
-        // Large batches flush right away instead of riding until the frame
-        // submit: a big copy amortizes its own vkQueueSubmit, submitting it
-        // early lets the GPU overlap the copy with the rest of the frame's
-        // CPU recording (measurably faster than a frame-tail burst), and the
-        // frame-tail burst pattern was observed to leave the GPU in a
-        // latency state that taxes whatever runs next. Small uploads keep
-        // accumulating, so a lightmap+sprite frame still costs one submit.
-        constexpr VkDeviceSize kEagerUploadFlushBytes = 128u * 1024u;
-        if (m_uploadBatchStagingBytes >= kEagerUploadFlushBytes) {
-            FlushPendingUploads();
-        }
-        return true;
-    }
-
-    Bool VkTextureManager::CheckMipmapCompleteness(const MG_State::GLState::ITextureObject& texture,
-                                                   TextureUploadTarget& outTarget,
-                                                   IntVec3& outTexelSize,
-                                                   SizeT& outByteSize,
-                                                   Uint32& outMipLevelCount) {
-        const auto* mipTexture = MG_State::GLState::AsMipmapTexture(&texture);
-        if (!mipTexture) {
-            MGLOG_D("%s: not TextureObjectMipmap", __func__);
-            return false;
-        }
-        const auto& targets = texture.GetUploadTargets();
-        if (targets.empty()) {
-            MGLOG_D("%s: upload target empty", __func__);
-            return false;
-        }
-
-        for (const auto target : targets) {
-            const Uint32 mipLevelCount = GetUploadMipLevelCount(*mipTexture, target);
-            if (mipLevelCount == 0) {
-                MGLOG_D("%s: mipLevelCount == 0", __func__);
-                continue;
-            }
-
-            // Backing VkImage allocation still uses storage mip 0 as the physical image extent.
-            // GL_TEXTURE_BASE_LEVEL / MAX_LEVEL are applied later when building the sampled view.
-            const auto storageBaseTexelSize = mipTexture->GetMipmapTexelSize(target, 0);
-            const auto storageBaseByteSize = mipTexture->GetMipmapByteSize(target, 0);
-            if (storageBaseTexelSize.x() <= 0 || storageBaseTexelSize.y() <= 0 /*|| storageBaseByteSize == 0*/) {
-                continue;
-            }
-
-            outTarget = target;
-            outTexelSize = storageBaseTexelSize;
-            outByteSize = storageBaseByteSize;
-            outMipLevelCount = mipLevelCount;
-            return true;
-        }
-        MGLOG_D("%s: no valid target or mipmap", __func__);
-        return false;
-    }
-
-    Uint32 VkTextureManager::GetUploadMipLevelCount(const MG_State::GLState::TextureObjectMipmap& texture,
-                                                    TextureUploadTarget target) {
-        const Uint totalLevelCount = texture.GetMipmapLevelCount();
-        if (totalLevelCount == 0) {
-            return 0;
-        }
-
-        Uint32 validLevelCount = 0;
-        for (Uint level = 0; level < totalLevelCount; ++level) {
-            const auto size = texture.GetMipmapTexelSize(target, level);
-            const auto byteSize = texture.GetMipmapByteSize(target, level);
-            if (size.x() <= 0 || size.y() <= 0 /*|| byteSize == 0*/) {
-                break;
-            }
-            ++validLevelCount;
-        }
-        return validLevelCount;
-    }
-
-    void VkTextureManager::ResolveViewMipRange(const MG_State::GLState::ITextureObject& texture, Uint32 mipLevels,
-                                               Uint32& outBaseMipLevel, Uint32& outLevelCount) {
-        MOBILEGL_ASSERT(mipLevels > 0, "ResolveViewMipRange: mipLevels must be > 0");
-
-        Uint32 definedMipLevels = mipLevels;
-        if (const auto* mipTexture = MG_State::GLState::AsMipmapTexture(&texture)) {
-            const auto& targets = texture.GetUploadTargets();
-            for (const auto target : targets) {
-                const Uint32 uploadMipLevels = GetUploadMipLevelCount(*mipTexture, target);
-                if (uploadMipLevels == 0) {
-                    continue;
-                }
-                definedMipLevels = std::min(mipLevels, uploadMipLevels);
-                break;
-            }
-        }
-        MOBILEGL_ASSERT(definedMipLevels > 0, "ResolveViewMipRange: texture has no defined mip levels");
-
-        const auto& levelRange = texture.GetLevelRange();
-        const Uint32 maxAvailableMipLevel = definedMipLevels - 1;
-        const Uint32 requestedBaseMipLevel = std::min(static_cast<Uint32>(levelRange.x()), maxAvailableMipLevel);
-        Uint32 requestedMaxMipLevel = std::min(static_cast<Uint32>(levelRange.y()), maxAvailableMipLevel);
-        if (requestedMaxMipLevel < requestedBaseMipLevel) {
-            requestedMaxMipLevel = requestedBaseMipLevel;
-        }
-
-        outBaseMipLevel = requestedBaseMipLevel;
-        outLevelCount = requestedMaxMipLevel - requestedBaseMipLevel + 1;
     }
 
     VkImageAspectFlags VkTextureManager::GetAspectMaskForFormat(VkFormat format) {
@@ -3485,8 +2562,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return imageAspect;
     }
 
-    VkFormat VkTextureManager::ResolveSampledImageViewFormat(VkFormat imageFormat,
-                                                              SamplerNumericDomain numericDomain) {
+    VkFormat VkTextureManager::ResolveSampledImageViewFormat(VkFormat imageFormat, SamplerNumericDomain numericDomain) {
         // Depth/stencil images always sample through the existing depth-aspect sampledView.
         // Combined formats (D24S8, D32FS8) are multi-numeric, so vkuFormatIsSampledFloat is
         // false for them by design, yet their depth aspect reads as float in every GL depth
@@ -3508,8 +2584,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // texture sampled by a usampler rather than an arbitrary member (such as
         // R8G8B8A8_UINT) of Vulkan's broad 32-bit compatibility class.
         for (Int candidateValue = static_cast<Int>(VK_FORMAT_R4G4_UNORM_PACK8);
-             candidateValue <= static_cast<Int>(VK_FORMAT_ASTC_12x12_SRGB_BLOCK);
-             ++candidateValue) {
+             candidateValue <= static_cast<Int>(VK_FORMAT_ASTC_12x12_SRGB_BLOCK); ++candidateValue) {
             const VkFormat candidate = static_cast<VkFormat>(candidateValue);
             if (!IsMutableStorageImageFormat(candidate) ||
                 !FormatMatchesSamplerNumericDomain(candidate, numericDomain) ||
@@ -3537,11 +2612,4 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                vkuFormatCompatibilityClass(imageFormat) == vkuFormatCompatibilityClass(viewFormat);
     }
 
-    Bool VkTextureManager::AreStorageImageViewFormatsCompatible(VkFormat imageFormat, VkFormat viewFormat) {
-        if (imageFormat == viewFormat) {
-            return true;
-        }
-        return IsMutableStorageImageFormat(imageFormat) && IsMutableStorageImageFormat(viewFormat) &&
-               vkuFormatCompatibilityClass(imageFormat) == vkuFormatCompatibilityClass(viewFormat);
-    }
 } // namespace MobileGL::MG_Backend::DirectVulkan

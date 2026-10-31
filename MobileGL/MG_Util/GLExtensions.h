@@ -769,6 +769,9 @@ namespace MobileGL {
         E_GL_EXT_texture_storage,
         E_GL_EXT_framebuffer_blit_layers,
         E_GL_NV_uniform_buffer_std430_layout,
-        E_GL_MESA_texture_const_bandwidth
+        E_GL_MESA_texture_const_bandwidth,
+        E_GL_EXT_fragment_shading_rate,
+        E_GL_EXT_fragment_shading_rate_primitive,
+        E_GL_EXT_fragment_shading_rate_attachment
     };
 } // namespace MobileGL

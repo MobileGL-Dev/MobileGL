@@ -1,3 +1,11 @@
+# MobileGL - MobileGL/MG_Test/CMakeLists.txt
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 cmake_minimum_required(VERSION 3.24)
 project(MobileGLTest)
 
@@ -21,6 +29,12 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
+# The main() of every test binary: gtest's, then the shader compile workers stop before main
+# returns (see TestMain.cpp).
+add_library(MobileGLTestMain STATIC TestMain.cpp)
+target_link_libraries(MobileGLTestMain PUBLIC GTest::gtest MobileGL_s)
+target_include_directories(MobileGLTestMain PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
+
 enable_testing()
 
 # # Find the required libraries using our custom Find modules
@@ -34,7 +48,7 @@ add_executable(
 )
 target_link_libraries(
   SanityTest
-  GTest::gtest_main
+  MobileGLTestMain
   MobileGL_s
 )
 
@@ -85,6 +99,12 @@ add_subdirectory(VertexArray)
 add_subdirectory(Program)
 add_subdirectory(Query)
 add_subdirectory(Pipeline)
+# The MGPipe catalog arithmetic: no GL context and no driver, just the .def, the seven
+# generated files and the payload layouts.
+add_subdirectory(Pipe)
+# The P0.5 interface-purity gate: a python walk of #include lines, so it registers with no
+# MobileGL build, no GL context and no submodules (scripts/check_include_closure.py).
+add_subdirectory(Purity)
 add_subdirectory(Swapchain)
 add_subdirectory(ShaderTranspiler)
 add_subdirectory(Util)
@@ -92,6 +112,24 @@ add_subdirectory(SelfTest)
 # The DirectGLES post-transpile ESSL passes are pure String -> String, so unlike the
 # DirectVulkan suite below this one needs no device and always builds.
 add_subdirectory(Backend/DirectGLES)
+# Which session's submission stops the GPU (MG_Backend/GpuHangWatch.h): no device, no driver.
+add_executable(GpuHangWatchTest Backend/GpuHangWatchTest.cpp)
+target_include_directories(GpuHangWatchTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
+target_link_libraries(GpuHangWatchTest PRIVATE MobileGLTestMain ${LINK_LIBRARIES})
+gtest_discover_tests(GpuHangWatchTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+# The base class's EGL surface and current-context bookkeeping driven through a test double: no
+# device, no EGL driver, no window.
+add_executable(BackendObjectEglStateTest Backend/BackendObjectEglStateTest.cpp)
+target_include_directories(BackendObjectEglStateTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
+target_link_libraries(BackendObjectEglStateTest PRIVATE MobileGLTestMain ${LINK_LIBRARIES})
+gtest_discover_tests(BackendObjectEglStateTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 if (ENABLE_INTEGRATION_TESTS)
     add_subdirectory(Backend/DirectVulkan)
+endif()
+# The wire layer only exists in the disaggregated configuration, so its suite
+# is only registered there. Nothing under MG_Remote is compiled otherwise.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    add_subdirectory(Wire)
+    # The GBM backend glamor uses (Xwayland on MobileGL), through the system's loader.
+    add_subdirectory(Gbm)
 endif()

@@ -18,9 +18,9 @@ namespace MobileGL {
         NoDepthComponent32 = 1 << 4,
         NoRGBA8Snorm = 1 << 5,
         NoRGB16Snorm = 1 << 6,
-        // The target must be colour-renderable and ES has no renderable three-channel
+        // The target must be color-renderable and ES has no renderable three-channel
         // form of the requested format, so it has to be widened to the four-channel one.
-        // Set for any colour-attachable target whose native three-channel form the driver
+        // Set for any color-attachable target whose native three-channel form the driver
         // refused to render to (multisample storage always, since ES has no three-channel
         // multisample format at all; every other target only after its native probe failed).
         // The widening is visible to every transfer path, so it also retargets the (format,
@@ -29,7 +29,7 @@ namespace MobileGL {
         // three-channel client data with an alpha of 1.0, and sampling/readback has to hide
         // the added alpha again (BackendTextureFormatAddsAlpha).
         NoThreeChannelRenderTarget = 1 << 7,
-        // A 16-bit signed-normalized image has to back a colour attachment, and the driver cannot
+        // A 16-bit signed-normalized image has to back a color attachment, and the driver cannot
         // render to the signed-normalized encoding itself: that needs both EXT_texture_norm16 and
         // EXT_render_snorm, and without either one an R16_SNORM / RG16_SNORM / RGB16_SNORM /
         // RGBA16_SNORM attachment is texture-only, so the framebuffer is never complete and the
@@ -40,7 +40,7 @@ namespace MobileGL {
         // 65535 channel values bit for bit.
         NoSnorm16RenderTarget = 1 << 8,
         // The 8-bit twin of the bit above: without EXT_render_snorm an R8_SNORM / RG8_SNORM /
-        // RGB8_SNORM / RGBA8_SNORM colour attachment is not renderable either. Here a half float
+        // RGB8_SNORM / RGBA8_SNORM color attachment is not renderable either. Here a half float
         // IS exact - every value in [-127, 127] divided by 127 round-trips through a half - so the
         // substitute matches what the always-on GL_RGBA8_SNORM fallback already picks.
         NoSnorm8RenderTarget = 1 << 9,
@@ -60,9 +60,8 @@ namespace MobileGL {
         None = 0,
     };
     namespace MG_Util::TextureFormatProcessor {
-        Flags<PixelFormatNormalizeOptionBit>
-        GetApplicablePixelFormatNormalizeOptions(GLenum internalFormat,
-                                                 Flags<PixelFormatNormalizeOptionBit> options);
+        Flags<PixelFormatNormalizeOptionBit> GetApplicablePixelFormatNormalizeOptions(
+            GLenum internalFormat, Flags<PixelFormatNormalizeOptionBit> options);
         void NormalizePixelFormat(GLenum internalFormat, Flags<PixelFormatNormalizeOptionBit> options,
                                   GLenum* outInternalFormat, GLenum* outFormat, GLenum* outType);
     } // namespace MG_Util::TextureFormatProcessor

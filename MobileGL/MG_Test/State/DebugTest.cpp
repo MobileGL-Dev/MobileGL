@@ -34,8 +34,7 @@ namespace {
     class DebugTest : public ::testing::Test {
     protected:
         static void DrainPendingGlErrors() {
-            for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {
-            }
+            for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {}
         }
 
         static void ExpectSingleGlError(GLenum expected) {
@@ -197,7 +196,7 @@ namespace {
         EXPECT_STREQ(bufferLabel, "the buffer");
     }
 
-    TEST_F(DebugTest, AnUnlabelledObjectAnswersWithAnEmptyString) {
+    TEST_F(DebugTest, AnUnlabeledObjectAnswersWithAnEmptyString) {
         const GLuint texture = GenTexture();
         MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
         DrainPendingGlErrors();
@@ -224,12 +223,12 @@ namespace {
         EXPECT_STREQ(buffer, "abc");
     }
 
-    TEST_F(DebugTest, LabellingSomethingThatDoesNotExistIsInvalidValue) {
+    TEST_F(DebugTest, LabelingSomethingThatDoesNotExistIsInvalidValue) {
         MG_Impl::GLImpl::ObjectLabel(GL_TEXTURE, 0xFFFFFFFFu, -1, "nothing");
         ExpectSingleGlError(GL_INVALID_VALUE);
     }
 
-    TEST_F(DebugTest, LabellingANonObjectTypeIsInvalidEnum) {
+    TEST_F(DebugTest, LabelingANonObjectTypeIsInvalidEnum) {
         const GLuint texture = GenTexture();
         MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
         DrainPendingGlErrors();

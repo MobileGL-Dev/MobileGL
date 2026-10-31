@@ -17,6 +17,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetFloatv(GLenum pname, GLfloat* params);
     void GetDoublev(GLenum pname, GLdouble* params);
     void GetIntegerv(GLenum pname, GLint* params);
+    // GL_EXT_fragment_shading_rate
+    void GetFragmentShadingRatesEXT(GLsizei samples, GLsizei maxCount, GLsizei* count, GLenum* shadingRates);
     void GetInteger64v(GLenum pname, GLint64* params);
     void GetIntegeri_v(GLenum target, GLuint index, GLint* data);
     void GetFloati_v(GLenum target, GLuint index, GLfloat* data);
@@ -45,4 +47,13 @@ namespace MobileGL::MG_Impl::GLImpl {
     // gl_NumSamples stand-in - a shader comparing gl_NumSamples against glGetIntegerv(GL_SAMPLES)
     // is exactly what the sample_variables CTS does.
     GLint ResolveDrawFramebufferSampleCount();
+    // The extensions the frontend appends to the backend's list - one list behind
+    // glGetString(GL_EXTENSIONS), glGetStringi and GL_NUM_EXTENSIONS - for the given conditions:
+    // shared images, YUV images that may be advertised (ClientSideExternalImageExtensionsAllowed),
+    // the ES identity, and a context created for the OpenGL ES API.
+    const Vector<const char*>& ClientSideExtensionList(Bool images, Bool external, Bool es, Bool esApi);
+    // Whether the current context may list GL_OES_EGL_image_external(_essl3): a context created
+    // for the OpenGL ES API, or any context outside the strict core-profile rules
+    // (MG_State::IsRelaxedSemanticsActive).
+    Bool ClientSideExternalImageExtensionsAllowed();
 } // namespace MobileGL::MG_Impl::GLImpl

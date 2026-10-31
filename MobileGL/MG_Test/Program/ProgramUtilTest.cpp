@@ -123,11 +123,17 @@ TEST_F(ProgramUtilTest, UnformattedFloatStorageImagesKeepIntegerAtomicImagesType
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 layout(rgba16, binding = 0) uniform image2D floatImage;
 layout(r32ui, binding = 1) uniform uimage2D atomicImage;
+layout(rgba32f, binding = 2) uniform image2D otherFloatImages[2];
+layout(std430, binding = 3) buffer Output0 { uint value0; };
+layout(std430, binding = 4) buffer Output1 { uint value1; };
 
 void main() {
     ivec2 coordinate = ivec2(gl_GlobalInvocationID.xy);
     imageStore(floatImage, coordinate, imageLoad(floatImage, coordinate));
+    imageStore(otherFloatImages[1], coordinate, imageLoad(otherFloatImages[0], coordinate));
     imageAtomicAdd(atomicImage, coordinate, 1u);
+    value0 = 11u;
+    value1 = 22u;
 }
 )";
 
@@ -164,21 +170,85 @@ void main() {
 
     const auto countOccurrences = [](const String& text, const String& needle) {
         SizeT count = 0;
-        for (SizeT offset = 0; (offset = text.find(needle, offset)) != String::npos;
-             offset += needle.size()) {
+        for (SizeT offset = 0; (offset = text.find(needle, offset)) != String::npos; offset += needle.size()) {
             ++count;
         }
         return count;
     };
-    EXPECT_EQ(countOccurrences(outputText, "OpCapability StorageImageReadWithoutFormat"), 1u)
-        << outputText;
-    EXPECT_EQ(countOccurrences(outputText, "OpCapability StorageImageWriteWithoutFormat"), 1u)
-        << outputText;
+    EXPECT_EQ(countOccurrences(outputText, "OpCapability StorageImageReadWithoutFormat"), 1u) << outputText;
+    EXPECT_EQ(countOccurrences(outputText, "OpCapability StorageImageWriteWithoutFormat"), 1u) << outputText;
+    EXPECT_EQ(countOccurrences(outputText, "2D 0 0 0 2 Unknown"), 1u) << outputText;
+    EXPECT_NE(outputText.find("Binding 0"), String::npos) << outputText;
+    EXPECT_NE(outputText.find("Binding 1"), String::npos) << outputText;
+    EXPECT_NE(outputText.find("Binding 2"), String::npos) << outputText;
+    EXPECT_NE(outputText.find("\"Output0\""), String::npos) << outputText;
+    EXPECT_NE(outputText.find("\"Output1\""), String::npos) << outputText;
     EXPECT_TRUE(tools.Validate(outputBinary));
 
     Vector<Uint32> secondOutputBinary;
     ASSERT_TRUE(ShaderCompiler::UseUnformattedFloatStorageImagesForVulkan(outputBinary, secondOutputBinary));
     EXPECT_EQ(secondOutputBinary, outputBinary);
+}
+
+TEST_F(ProgramUtilTest, LowerRectImagesMergesWithExisting2DImageTypes) {
+    using namespace MG_Util::ShaderTranspiler;
+    const String spirvText = R"(
+               OpCapability Shader
+               OpCapability ImageRect
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+               OpName %Output0 "Output0"
+               OpName %Output1 "Output1"
+               OpDecorate %Output0 Block
+               OpDecorate %Output1 Block
+               OpMemberDecorate %Output0 0 Offset 0
+               OpMemberDecorate %Output1 0 Offset 0
+               OpDecorate %buffer0 DescriptorSet 0
+               OpDecorate %buffer0 Binding 2
+               OpDecorate %buffer1 DescriptorSet 0
+               OpDecorate %buffer1 Binding 3
+               OpDecorate %rect DescriptorSet 0
+               OpDecorate %rect Binding 0
+               OpDecorate %flat DescriptorSet 0
+               OpDecorate %flat Binding 1
+       %void = OpTypeVoid
+       %uint = OpTypeInt 32 0
+    %Output0 = OpTypeStruct %uint
+    %Output1 = OpTypeStruct %uint
+ %outputPtr0 = OpTypePointer StorageBuffer %Output0
+ %outputPtr1 = OpTypePointer StorageBuffer %Output1
+    %buffer0 = OpVariable %outputPtr0 StorageBuffer
+    %buffer1 = OpVariable %outputPtr1 StorageBuffer
+   %rectType = OpTypeImage %uint Rect 0 0 0 2 R32ui
+   %flatType = OpTypeImage %uint 2D 0 0 0 2 R32ui
+    %rectPtr = OpTypePointer UniformConstant %rectType
+    %flatPtr = OpTypePointer UniformConstant %flatType
+       %rect = OpVariable %rectPtr UniformConstant
+       %flat = OpVariable %flatPtr UniformConstant
+   %mainType = OpTypeFunction %void
+       %main = OpFunction %void None %mainType
+      %entry = OpLabel
+          %r = OpLoad %rectType %rect
+          %f = OpLoad %flatType %flat
+               OpReturn
+               OpFunctionEnd
+)";
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    Vector<Uint32> inputBinary;
+    ASSERT_TRUE(tools.Assemble(spirvText, &inputBinary));
+    Vector<Uint32> outputBinary;
+    ASSERT_TRUE(ShaderCompiler::LowerRectImages(inputBinary, outputBinary));
+    EXPECT_TRUE(tools.Validate(outputBinary));
+    String outputText;
+    ASSERT_TRUE(tools.Disassemble(outputBinary, &outputText));
+    EXPECT_NE(outputText.find("Binding 0"), String::npos);
+    EXPECT_NE(outputText.find("Binding 1"), String::npos);
+    const auto firstImage = outputText.find("OpTypeImage");
+    ASSERT_NE(firstImage, String::npos);
+    EXPECT_EQ(outputText.find("OpTypeImage", firstImage + 1), String::npos);
+    EXPECT_NE(outputText.find("\"Output0\""), String::npos) << outputText;
+    EXPECT_NE(outputText.find("\"Output1\""), String::npos) << outputText;
 }
 
 TEST_F(ProgramUtilTest, UnformattedFloatStorageImagesKeepFloatAtomicImageTypesTyped) {
@@ -223,10 +293,8 @@ TEST_F(ProgramUtilTest, UnformattedFloatStorageImagesKeepFloatAtomicImageTypesTy
     EXPECT_EQ(outputText.find("StorageImageReadWithoutFormat"), String::npos) << outputText;
     EXPECT_EQ(outputText.find("StorageImageWriteWithoutFormat"), String::npos) << outputText;
     String validationDiagnostics;
-    tools.SetMessageConsumer([&validationDiagnostics](spv_message_level_t, const char*,
-                                                       const spv_position_t&, const char* message) {
-        validationDiagnostics += message;
-    });
+    tools.SetMessageConsumer([&validationDiagnostics](spv_message_level_t, const char*, const spv_position_t&,
+                                                      const char* message) { validationDiagnostics += message; });
     EXPECT_TRUE(tools.Validate(outputBinary)) << validationDiagnostics;
 }
 
@@ -433,8 +501,8 @@ void main() {
     ShaderAttrib vertexAttrib{.shaderType = GL_VERTEX_SHADER, .sourceStr = vertexSource};
     auto vertexResult = ShaderCompiler::CompileShader(vertexAttrib);
     if (!vertexResult) {
-        FAIL() << "errc: " << vertexResult.error().errc << "\nlog: " << vertexResult.error().log
-               << "\nsource:\n" << vertexSource;
+        FAIL() << "errc: " << vertexResult.error().errc << "\nlog: " << vertexResult.error().log << "\nsource:\n"
+               << vertexSource;
     }
 
     String fragmentSource = R"(#version 150
@@ -454,8 +522,8 @@ void main() {
     ShaderAttrib fragmentAttrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = fragmentSource};
     auto fragmentResult = ShaderCompiler::CompileShader(fragmentAttrib);
     if (!fragmentResult) {
-        FAIL() << "errc: " << fragmentResult.error().errc << "\nlog: " << fragmentResult.error().log
-               << "\nsource:\n" << fragmentSource;
+        FAIL() << "errc: " << fragmentResult.error().errc << "\nlog: " << fragmentResult.error().log << "\nsource:\n"
+               << fragmentSource;
     }
 }
 
@@ -485,8 +553,9 @@ void main() {
     };
 
     // Preserve the pre-existing desktop-core route: the current resource table cannot parse ESSL built-ins.
-    verifyVersion("#version 300 es", "#version 460 core\n");
-    verifyVersion("#version 310 es", "#version 460 core\n");
+    // The directive carries the declared ESSL version, which FindEsOrigin reads back.
+    verifyVersion("#version 300 es", "#version 460 core /*mobilegl-es-origin:300*/\n");
+    verifyVersion("#version 310 es", "#version 460 core /*mobilegl-es-origin:310*/\n");
 }
 
 TEST_F(ProgramUtilTest, PreprocessModernDesktopVersionsRecognizesUtf8Bom) {
@@ -535,25 +604,24 @@ TEST_F(ProgramUtilTest, PreprocessRejectsMalformedVersionDirectives) {
         PreprocessShaderSource(ShaderStage::Fragment, src);
         ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = src};
         auto res = ShaderCompiler::CompileShader(attrib);
-        return res ? false : true;  // "rejects" == compile failed
+        return res ? false : true; // "rejects" == compile failed
     };
 
     // Silently legalized today - the five this fix must flip to rejection:
-    EXPECT_TRUE(rejects(String("#version 329") + body))        << "329 is not a real version";
-    EXPECT_TRUE(rejects(String("#version 331") + body))        << "331 is not a real version";
-    EXPECT_TRUE(rejects(String("#version 330 foo") + body))    << "unknown profile keyword";
-    EXPECT_TRUE(rejects(String("#version 330.0") + body))      << "float literal, not an int token";
+    EXPECT_TRUE(rejects(String("#version 329") + body)) << "329 is not a real version";
+    EXPECT_TRUE(rejects(String("#version 331") + body)) << "331 is not a real version";
+    EXPECT_TRUE(rejects(String("#version 330 foo") + body)) << "unknown profile keyword";
+    EXPECT_TRUE(rejects(String("#version 330.0") + body)) << "float literal, not an int token";
     EXPECT_TRUE(rejects(String("#version 330 foobar") + body)) << "trailing tokens after a valid decl";
 
     // Already rejected (no leading integer, or #version is not the first token) - pinned so a future
     // change to the normalizer cannot start legalizing them either:
-    EXPECT_TRUE(rejects(String("#version") + body))            << "missing version number";
-    EXPECT_TRUE(rejects(String("#version foobar") + body))     << "identifier where the int belongs";
-    EXPECT_TRUE(rejects(String("#version AAA") + body))        << "identifier where the int belongs";
+    EXPECT_TRUE(rejects(String("#version") + body)) << "missing version number";
+    EXPECT_TRUE(rejects(String("#version foobar") + body)) << "identifier where the int belongs";
+    EXPECT_TRUE(rejects(String("#version AAA") + body)) << "identifier where the int belongs";
     EXPECT_TRUE(rejects(String("precision mediump float;\n#version 330") + body))
         << "#version must be the first statement";
-    EXPECT_TRUE(rejects(String("#define FOO BAR\n#version 330") + body))
-        << "#version must precede a #define";
+    EXPECT_TRUE(rejects(String("#define FOO BAR\n#version 330") + body)) << "#version must precede a #define";
 }
 
 // The PASS half of the same CTS group: a valid decl, and #version preceded only by whitespace or a
@@ -571,10 +639,8 @@ TEST_F(ProgramUtilTest, PreprocessKeepsValidVersionDirectivesCompiling) {
     };
 
     EXPECT_TRUE(compiles(String("#version 330 core") + body));
-    EXPECT_TRUE(compiles(String("\n#version 330 core") + body))
-        << "leading whitespace is legal before #version";
-    EXPECT_TRUE(compiles(String("// test\n#version 330 core") + body))
-        << "a leading comment is legal before #version";
+    EXPECT_TRUE(compiles(String("\n#version 330 core") + body)) << "leading whitespace is legal before #version";
+    EXPECT_TRUE(compiles(String("// test\n#version 330 core") + body)) << "a leading comment is legal before #version";
 }
 
 TEST_F(ProgramUtilTest, PreprocessUsesRealSpacedVersionDirectiveForInjectedOutput) {
@@ -599,7 +665,7 @@ void main() {
     // declaration, so measure the line rather than assuming its length.
     EXPECT_EQ(outputPos, source.find('\n', versionPos) + 1);
     EXPECT_NE(source.find("// #version 460 core"), String::npos);
-    // This #line sits ahead of the version directive, where GLSL would never have honoured it, so
+    // This #line sits ahead of the version directive, where GLSL would never have honored it, so
     // it is still dropped. Directives that follow the version line are kept - see
     // PreprocessKeepsPlainLineDirectivesAndSparesLookalikeIdentifiers.
     EXPECT_EQ(source.find("#line"), String::npos);
@@ -847,7 +913,6 @@ void main() {
     }
 }
 
-
 const char* vs = R"(#version 150
 
 in vec4 Position;
@@ -930,7 +995,7 @@ void main() {
 TEST_F(ProgramUtilTest, RetargetLegacyVersionDirectiveOnlyTouchesNormalizedDesktopCore) {
     using namespace MG_Util::ShaderTranspiler;
 
-    // Only MobileGL's own normalization is retargetable, and it is recognised by the marker the
+    // Only MobileGL's own normalization is retargetable, and it is recognized by the marker the
     // preprocessor leaves on the directive line - so normalize a legacy source rather than
     // hand-writing the directive the marker belongs to.
     String normalized = "#version 130\nvoid main() {}\n";
@@ -1179,10 +1244,11 @@ void main() { fragColor = vColor; }
     auto essl = ShaderCompiler::DecompileShader(session);
     if (!essl) FAIL() << "decompile errc: " << essl.error().errc << "\nlog: " << essl.error().log;
 
-    EXPECT_NE(essl.value().find("noperspective"), String::npos)
-        << "noperspective was lost before it reached SPIR-V:\n" << essl.value();
+    EXPECT_NE(essl.value().find("noperspective"), String::npos) << "noperspective was lost before it reached SPIR-V:\n"
+                                                                << essl.value();
     EXPECT_NE(essl.value().find("GL_NV_shader_noperspective_interpolation"), String::npos)
-        << "SPIRV-Cross must require the NV extension for ES noperspective:\n" << essl.value();
+        << "SPIRV-Cross must require the NV extension for ES noperspective:\n"
+        << essl.value();
 }
 
 // The old handling was a naked substring erase of "noperspective", so any identifier that merely
@@ -1197,8 +1263,8 @@ out vec4 fragColor;
 void main() { fragColor = vec4(noperspectiveBlend); }
 )";
     PreprocessShaderSource(ShaderStage::Fragment, source);
-    EXPECT_NE(source.find("noperspectiveBlend"), String::npos)
-        << "identifier was corrupted by substring stripping:\n" << source;
+    EXPECT_NE(source.find("noperspectiveBlend"), String::npos) << "identifier was corrupted by substring stripping:\n"
+                                                               << source;
 }
 
 // The DirectGLES fallback for devices without GL_NV_shader_noperspective_interpolation: stripping the
@@ -1241,10 +1307,10 @@ void main() { fragColor = vColor; }
     SpvcSession session(stripped, SessionUsageBit::Transpile);
     auto essl = ShaderCompiler::DecompileShader(session);
     if (!essl) FAIL() << "decompile errc: " << essl.error().errc << "\nlog: " << essl.error().log;
-    EXPECT_EQ(essl.value().find("noperspective"), String::npos)
-        << "the decoration should be gone:\n" << essl.value();
+    EXPECT_EQ(essl.value().find("noperspective"), String::npos) << "the decoration should be gone:\n" << essl.value();
     EXPECT_EQ(essl.value().find("GL_NV_shader_noperspective_interpolation"), String::npos)
-        << "no extension require without the decoration:\n" << essl.value();
+        << "no extension require without the decoration:\n"
+        << essl.value();
 }
 
 // Directly exercises BOTH decoration forms StripNoPerspectivePass handles: a plain-variable
@@ -1300,8 +1366,8 @@ TEST_F(ProgramUtilTest, StripNoPerspectivePassRemovesBothDecorateForms) {
 
     String inputText;
     ASSERT_TRUE(tools.Disassemble(inputBinary, &inputText));
-    ASSERT_EQ(countNoPerspective(inputText), 2u)
-        << "fixture must carry both a plain and a member NoPerspective:\n" << inputText;
+    ASSERT_EQ(countNoPerspective(inputText), 2u) << "fixture must carry both a plain and a member NoPerspective:\n"
+                                                 << inputText;
 
     Vector<uint32_t> outputBinary;
     ASSERT_TRUE(ShaderCompiler::StripNoPerspectiveForEssl(inputBinary, outputBinary));
@@ -1310,11 +1376,10 @@ TEST_F(ProgramUtilTest, StripNoPerspectivePassRemovesBothDecorateForms) {
     String outputText;
     ASSERT_TRUE(tools.Disassemble(outputBinary, &outputText));
     EXPECT_EQ(countNoPerspective(outputText), 0u)
-        << "both NoPerspective decorations (OpDecorate and OpMemberDecorate) must be stripped:\n" << outputText;
-    EXPECT_NE(outputText.find("Flat"), String::npos)
-        << "the unrelated Flat decoration must survive:\n" << outputText;
-    EXPECT_NE(outputText.find("Location"), String::npos)
-        << "Location decorations must survive:\n" << outputText;
+        << "both NoPerspective decorations (OpDecorate and OpMemberDecorate) must be stripped:\n"
+        << outputText;
+    EXPECT_NE(outputText.find("Flat"), String::npos) << "the unrelated Flat decoration must survive:\n" << outputText;
+    EXPECT_NE(outputText.find("Location"), String::npos) << "Location decorations must survive:\n" << outputText;
 }
 
 // Phase 2 emulation - fragment side. On a device without the NV extension the NoPerspective input is
@@ -1357,7 +1422,8 @@ void main() { f = vColor; }
     if (!essl) FAIL() << "decompile: " << essl.error().log;
     EXPECT_EQ(essl.value().find("noperspective"), String::npos) << essl.value();
     EXPECT_EQ(essl.value().find("GL_NV_shader_noperspective_interpolation"), String::npos) << essl.value();
-    EXPECT_NE(essl.value().find("gl_FragCoord"), String::npos) << "recovery must reference gl_FragCoord:\n" << essl.value();
+    EXPECT_NE(essl.value().find("gl_FragCoord"), String::npos) << "recovery must reference gl_FragCoord:\n"
+                                                               << essl.value();
 }
 
 // Phase 2 emulation - vertex side. The NoPerspective output is pre-multiplied by gl_Position.w before
@@ -1396,27 +1462,28 @@ void main() { gl_Position = pos; vColor = pos; }
     auto essl = ShaderCompiler::DecompileShader(session);
     if (!essl) FAIL() << "decompile: " << essl.error().log;
     EXPECT_EQ(essl.value().find("noperspective"), String::npos) << essl.value();
-    EXPECT_NE(essl.value().find("gl_Position"), String::npos) << "pre-multiply must reference gl_Position:\n" << essl.value();
+    EXPECT_NE(essl.value().find("gl_Position"), String::npos) << "pre-multiply must reference gl_Position:\n"
+                                                              << essl.value();
 }
 
 namespace {
-// Compiles one shader stage through the full pipeline and returns its SPIR-V, or fails the test.
-MobileGL::Vector<uint32_t> CompileStageSpirv(GLenum type, const char* src) {
-    using namespace MG_Util::ShaderTranspiler;
-    ShaderAttrib attrib{.shaderType = type, .sourceStr = src};
-    auto res = ShaderCompiler::CompileShader(attrib);
-    EXPECT_TRUE(static_cast<bool>(res)) << (res ? "" : res.error().log);
-    if (!res) return {};
-    ProgramAttrib pa{.shaders = {res.value()}};
-    auto pr = ShaderCompiler::LinkProgram(pa);
-    EXPECT_TRUE(static_cast<bool>(pr)) << (pr ? "" : pr.error().log);
-    if (!pr) return {};
-    ProgramBinaryAttrib ba{.shaderTypes = {type}, .program = *pr.value()};
-    auto br = ShaderCompiler::GetSpirvBinaryFromProgram(ba);
-    EXPECT_TRUE(static_cast<bool>(br)) << (br ? "" : br.error().log);
-    if (!br || br.value().empty()) return {};
-    return br.value()[0];
-}
+    // Compiles one shader stage through the full pipeline and returns its SPIR-V, or fails the test.
+    MobileGL::Vector<uint32_t> CompileStageSpirv(GLenum type, const char* src) {
+        using namespace MG_Util::ShaderTranspiler;
+        ShaderAttrib attrib{.shaderType = type, .sourceStr = src};
+        auto res = ShaderCompiler::CompileShader(attrib);
+        EXPECT_TRUE(static_cast<bool>(res)) << (res ? "" : res.error().log);
+        if (!res) return {};
+        ProgramAttrib pa{.shaders = {res.value()}};
+        auto pr = ShaderCompiler::LinkProgram(pa);
+        EXPECT_TRUE(static_cast<bool>(pr)) << (pr ? "" : pr.error().log);
+        if (!pr) return {};
+        ProgramBinaryAttrib ba{.shaderTypes = {type}, .program = *pr.value()};
+        auto br = ShaderCompiler::GetSpirvBinaryFromProgram(ba);
+        EXPECT_TRUE(static_cast<bool>(br)) << (br ? "" : br.error().log);
+        if (!br || br.value().empty()) return {};
+        return br.value()[0];
+    }
 } // namespace
 
 // Regression: the vertex pre-multiply must be applied exactly once (in main), not once per function.
@@ -1468,8 +1535,8 @@ void main() { f = vec4(vColor.x); }
     ASSERT_TRUE(tools.Disassemble(emulated, &dis));
     ASSERT_TRUE(tools.Validate(emulated)) << dis;
     EXPECT_EQ(dis.find("NoPerspective"), String::npos) << dis;
-    EXPECT_NE(dis.find("FragCoord"), String::npos)
-        << "the component read must still be recovered via gl_FragCoord.w:\n" << dis;
+    EXPECT_NE(dis.find("FragCoord"), String::npos) << "the component read must still be recovered via gl_FragCoord.w:\n"
+                                                   << dis;
 }
 
 // Coverage: a scalar float varying exercises the OpFMul path; a vector varying the OpVectorTimesScalar
@@ -1493,7 +1560,8 @@ void main() { f = vec4(a, b, 1.0); }
     EXPECT_EQ(dis.find("NoPerspective"), String::npos) << dis;
     EXPECT_NE(dis.find("OpFMul"), String::npos) << "the scalar varying must scale with OpFMul:\n" << dis;
     EXPECT_NE(dis.find("OpVectorTimesScalar"), String::npos)
-        << "the vector varying must scale with OpVectorTimesScalar:\n" << dis;
+        << "the vector varying must scale with OpVectorTimesScalar:\n"
+        << dis;
 }
 
 const char* vs_location = R"(#version 460
@@ -1958,8 +2026,7 @@ TEST_F(ProgramUtilTest, DecomposeWorkgroupVec3InSpirvPass) {
 
     SpvcSession session(optimized, SessionUsageBit::Transpile);
     auto sourceRes = ShaderCompiler::DecompileShader(session);
-    ASSERT_TRUE(sourceRes.has_value()) << "errc: " << sourceRes.error().errc
-                                       << "\nlog: " << sourceRes.error().log;
+    ASSERT_TRUE(sourceRes.has_value()) << "errc: " << sourceRes.error().errc << "\nlog: " << sourceRes.error().log;
 
     const String& source = sourceRes.value();
     // The decomposed output must not contain a `shared vec3` declaration.
@@ -1968,9 +2035,8 @@ TEST_F(ProgramUtilTest, DecomposeWorkgroupVec3InSpirvPass) {
         << source;
 
     // It should now use a scalar array form (shared float ...).
-    EXPECT_NE(source.find("shared float"), std::string::npos)
-        << "Expected `shared float` in decomposed output:\n"
-        << source;
+    EXPECT_NE(source.find("shared float"), std::string::npos) << "Expected `shared float` in decomposed output:\n"
+                                                              << source;
 
     EXPECT_EQ(source.find("= shared_memory[0]"), std::string::npos)
         << "Decomposed output kept an invalid whole-row shared-memory load:\n"
@@ -2020,7 +2086,6 @@ void main() {
     ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(binRes->at(0), optimized));
 }
 
-
 TEST_F(ProgramUtilTest, PreprocessCoercesBlockPackingQualifiersToStd140) {
     using namespace MG_Util::ShaderTranspiler;
 
@@ -2047,9 +2112,8 @@ void main() {
     EXPECT_NE(source.find("layout ( std140 ) uniform SpacedBlock"), String::npos);
     EXPECT_NE(source.find("layout(std140) uniform KeptBlock"), String::npos);
 
-    ShaderAttrib attrib{.shaderType = GL_VERTEX_SHADER,
-                        .sourceStr = source,
-                        .flags = ShaderCompileBits::CompileForOpenGL};
+    ShaderAttrib attrib{
+        .shaderType = GL_VERTEX_SHADER, .sourceStr = source, .flags = ShaderCompileBits::CompileForOpenGL};
     auto res = ShaderCompiler::CompileShader(attrib);
     if (!res) {
         FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
@@ -2304,7 +2368,6 @@ TEST_F(ProgramUtilTest, CompileEnvFingerprintTracksEveryInput) {
     CompileEnv otherExtensions = base;
     otherExtensions.advertisedExtensions.push_back(MobileGL::E_GL_ARB_gpu_shader_int64);
     EXPECT_NE(ComputeCompileEnvFingerprint(otherExtensions), baseline);
-
 }
 
 // The no-backend fallback must stay exactly what the pipeline used to do inline:
@@ -2323,7 +2386,7 @@ TEST_F(ProgramUtilTest, CompileEnvWithoutBackendAdvertisesEverything) {
     EXPECT_TRUE(env.IsExtensionAdvertised(MobileGL::E_GL_ARB_gpu_shader_int64));
 }
 
-// P0b layer 2: ShaderPreprocessCache, tested directly. The GL-level behaviour it
+// P0b layer 2: ShaderPreprocessCache, tested directly. The GL-level behavior it
 // enables is covered end to end in ProgramTest; these pin the container itself,
 // where the interesting cases (hash collisions, both eviction budgets) are hard
 // to provoke through glCompileShader.
@@ -2565,8 +2628,7 @@ void main() {
     explicitVertexIns["a_TexCoord"] = 2;
     explicitVertexIns["iris_Normal"] = 10;
     explicitVertexIns["mc_Entity"] = 11;
-    ProgramAttrib programAttrib{.shaders = {shaderResult.value()},
-                                .explicitVertexInLocations = explicitVertexIns};
+    ProgramAttrib programAttrib{.shaders = {shaderResult.value()}, .explicitVertexInLocations = explicitVertexIns};
     auto programResult = ShaderCompiler::LinkProgram(programAttrib);
     ASSERT_TRUE(programResult) << programResult.error().log;
 
@@ -2579,10 +2641,10 @@ void main() {
     // The authoritative check - this is the same validator whose VUID the driver enforces.
     spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
     String validatorMessages;
-    tools.SetMessageConsumer([&validatorMessages](spv_message_level_t, const char*, const spv_position_t&,
-                                                  const char* message) {
-        if (message != nullptr) validatorMessages += String(message) + "\n";
-    });
+    tools.SetMessageConsumer(
+        [&validatorMessages](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+            if (message != nullptr) validatorMessages += String(message) + "\n";
+        });
     EXPECT_TRUE(tools.Validate(vertexBinary))
         << "the raw vertex module is not valid SPIR-V; Adreno rejects the whole pipeline for this "
         << "while lavapipe tolerates it:\n"
@@ -2615,8 +2677,7 @@ void main() {
     for (const unsigned id : inputIds) {
         if (builtInIds.count(id) != 0) continue;
         const auto it = locationById.find(id);
-        ASSERT_NE(it, locationById.end())
-            << "vertex input id " << id << " reached SPIR-V with no Location decoration";
+        ASSERT_NE(it, locationById.end()) << "vertex input id " << id << " reached SPIR-V with no Location decoration";
         EXPECT_TRUE(usedLocations.insert(it->second).second)
             << "two vertex inputs were assigned location " << it->second;
         ++checked;
@@ -2644,10 +2705,17 @@ namespace {
             if (wordCount == 0 || i + wordCount > spirv.size()) break;
             if (opcode == kOpVariable && wordCount >= 4) {
                 switch (spirv[i + 3]) {
-                    case kStorageClassInput: ++census.inputCount; break;
-                    case kStorageClassOutput: ++census.outputCount; break;
-                    case kStorageClassPrivate: ++census.privateCount; break;
-                    default: break;
+                case kStorageClassInput:
+                    ++census.inputCount;
+                    break;
+                case kStorageClassOutput:
+                    ++census.outputCount;
+                    break;
+                case kStorageClassPrivate:
+                    ++census.privateCount;
+                    break;
+                default:
+                    break;
                 }
             } else if (opcode == kOpFunctionCall) {
                 ++census.functionCallCount;
@@ -2688,12 +2756,10 @@ vec4 helperTint() { return vec4(1.0); }
             ADD_FAILURE() << programResult.error().log;
             return {};
         }
-        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_VERTEX_SHADER},
-                                         .program = *programResult.value()};
+        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_VERTEX_SHADER}, .program = *programResult.value()};
         auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
         if (!binaryResult || binaryResult->size() != 1u) {
-            ADD_FAILURE() << (binaryResult ? "unexpected module count"
-                                           : binaryResult.error().log);
+            ADD_FAILURE() << (binaryResult ? "unexpected module count" : binaryResult.error().log);
             return {};
         }
         return binaryResult->front();
@@ -2728,10 +2794,10 @@ TEST_F(ProgramUtilTest, DeadPrivateChainVertexInputIsEliminatedFromOptimizedBina
 
     spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
     String validatorMessages;
-    tools.SetMessageConsumer([&validatorMessages](spv_message_level_t, const char*,
-                                                  const spv_position_t&, const char* message) {
-        if (message != nullptr) validatorMessages += String(message) + "\n";
-    });
+    tools.SetMessageConsumer(
+        [&validatorMessages](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+            if (message != nullptr) validatorMessages += String(message) + "\n";
+        });
     EXPECT_TRUE(tools.Validate(optimized)) << validatorMessages;
 }
 
@@ -2936,7 +3002,7 @@ void main() {
 // (GLSL ES 3.00 4.3.6). SPIRV-Cross carries the dynamic index straight into the ESSL, a strict
 // driver rejects the shader, the program links nothing, and every draw using it silently draws
 // nothing - which is what empties the translucent layer of improved-transparency-minecraft-26.3
-// on the Android DirectGLES (ANGLE) lane while Mesa, being lenient, renders it correctly.
+// on the Android DirectGLES (ANGLE) lane while llvmpipe, being lenient, renders it correctly.
 namespace {
     Vector<Uint32> CompileFragmentToRawSpirv(const String& source) {
         using namespace MG_Util::ShaderTranspiler;
@@ -2952,8 +3018,7 @@ namespace {
             ADD_FAILURE() << programResult.error().log;
             return {};
         }
-        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_FRAGMENT_SHADER},
-                                         .program = *programResult.value()};
+        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_FRAGMENT_SHADER}, .program = *programResult.value()};
         auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
         if (!binaryResult || binaryResult->size() != 1u) {
             ADD_FAILURE() << (binaryResult ? "unexpected module count" : binaryResult.error().log);
@@ -3029,16 +3094,19 @@ void main() {
 
     const String disassembly = DisassembleSpirv(legalized);
     EXPECT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(legalized))
-        << "no fragment output may be left indexed by anything but a constant:\n" << disassembly;
+        << "no fragment output may be left indexed by anything but a constant:\n"
+        << disassembly;
     EXPECT_EQ(disassembly.find("OpSwitch"), String::npos)
-        << "a loop-derived index must fold, not fall back to the switch lowering:\n" << disassembly;
+        << "a loop-derived index must fold, not fall back to the switch lowering:\n"
+        << disassembly;
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
         << "the legalized module must stay validator-clean";
 
     const String essl = DecompileToEssl(legalized);
     ASSERT_FALSE(essl.empty());
     EXPECT_TRUE(AllArrayIndicesAreLiterals(essl, "coeff"))
-        << "the generated ESSL still indexes a fragment output with a non-constant:\n" << essl;
+        << "the generated ESSL still indexes a fragment output with a non-constant:\n"
+        << essl;
 }
 
 // Marking a loop for unrolling means marking every loop enclosing it - SPIRV-Tools only unrolls
@@ -3099,8 +3167,7 @@ void main() {
 }
 )");
     ASSERT_FALSE(raw.empty());
-    ASSERT_TRUE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw))
-        << DisassembleSpirv(raw);
+    ASSERT_TRUE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw)) << DisassembleSpirv(raw);
 
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
@@ -3110,18 +3177,23 @@ void main() {
 
     const String disassembly = DisassembleSpirv(legalized);
     EXPECT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(legalized))
-        << "the uniform-driven index must be lowered away:\n" << disassembly;
+        << "the uniform-driven index must be lowered away:\n"
+        << disassembly;
     EXPECT_NE(disassembly.find("OpSwitch"), String::npos)
-        << "the dynamic write must become a switch over the array range:\n" << disassembly;
+        << "the dynamic write must become a switch over the array range:\n"
+        << disassembly;
     EXPECT_NE(disassembly.find("OpSelect"), String::npos)
-        << "the dynamic read must become constant-indexed loads and a select:\n" << disassembly;
+        << "the dynamic read must become constant-indexed loads and a select:\n"
+        << disassembly;
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
-        << "the lowered module must stay validator-clean:\n" << disassembly;
+        << "the lowered module must stay validator-clean:\n"
+        << disassembly;
 
     const String essl = DecompileToEssl(legalized);
     ASSERT_FALSE(essl.empty());
     EXPECT_TRUE(AllArrayIndicesAreLiterals(essl, "coeff"))
-        << "the generated ESSL still indexes a fragment output with a non-constant:\n" << essl;
+        << "the generated ESSL still indexes a fragment output with a non-constant:\n"
+        << essl;
 }
 
 // The bound on the folding half. The index here IS loop-derived, so unrolling would fold it -
@@ -3153,19 +3225,23 @@ void main() {
 
     const String disassembly = DisassembleSpirv(legalized);
     EXPECT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(legalized))
-        << "the index must be legalized even when the loop is left standing:\n" << disassembly;
+        << "the index must be legalized even when the loop is left standing:\n"
+        << disassembly;
     EXPECT_NE(disassembly.find("OpLoopMerge"), String::npos)
         << "a 512-trip loop must NOT be unrolled - that is the whole point of the cap:\n"
         << disassembly;
     EXPECT_NE(disassembly.find("OpSwitch"), String::npos)
-        << "with the loop standing, the write must go through the switch lowering:\n" << disassembly;
+        << "with the loop standing, the write must go through the switch lowering:\n"
+        << disassembly;
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
-        << "lowering inside a loop body must stay validator-clean:\n" << disassembly;
+        << "lowering inside a loop body must stay validator-clean:\n"
+        << disassembly;
 
     const String essl = DecompileToEssl(legalized);
     ASSERT_FALSE(essl.empty());
     EXPECT_TRUE(AllArrayIndicesAreLiterals(essl, "coeff"))
-        << "the generated ESSL still indexes a fragment output with a non-constant:\n" << essl;
+        << "the generated ESSL still indexes a fragment output with a non-constant:\n"
+        << essl;
 }
 
 // The gate: a fragment shader that never indexes an output array dynamically must come back byte
@@ -3210,7 +3286,8 @@ void main() {
 )");
     ASSERT_FALSE(raw.empty());
     EXPECT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw))
-        << "only fragment outputs carry the constant-index rule:\n" << DisassembleSpirv(raw);
+        << "only fragment outputs carry the constant-index rule:\n"
+        << DisassembleSpirv(raw);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -3273,7 +3350,7 @@ void main() {
     const Vector<Uint32> spirv = BuildSpirvForStage(vs, GL_VERTEX_SHADER);
     ASSERT_FALSE(spirv.empty());
     EXPECT_TRUE(ShaderCompiler::ModuleDeclaresBufferTextureSampler(spirv))
-        << "an isamplerBuffer must be recognised as a buffer texture";
+        << "an isamplerBuffer must be recognized as a buffer texture";
 }
 
 // The float and unsigned spellings lower to the same Dim=Buffer image with a different
@@ -3319,7 +3396,7 @@ void main() { fragColor = texture(Albedo, vUv) + vec4(texelFetch(Ids, ivec2(0), 
         << "only Dim=Buffer images are buffer textures";
 }
 
-// Pins the SPIRV-Cross behaviour the whole defect rests on: below ESSL 320 it synthesizes an
+// Pins the SPIRV-Cross behavior the whole defect rests on: below ESSL 320 it synthesizes an
 // EXT_texture_buffer requirement from the image type itself. There is nothing in the module
 // to strip - which is why the OES driver is served by retargeting the emitted directive
 // (RetargetTextureBufferExtension) rather than by rewriting the SPIR-V.
@@ -3352,8 +3429,7 @@ void main() { fragColor = vec4(texelFetch(Data, 3)); }
 
     const String essl310 = emitAt(310);
     ASSERT_FALSE(essl310.empty()) << "ESSL 310 emission failed outright";
-    EXPECT_NE(essl310.find("isamplerBuffer"), String::npos)
-        << "the buffer sampler must survive to ESSL:\n" << essl310;
+    EXPECT_NE(essl310.find("isamplerBuffer"), String::npos) << "the buffer sampler must survive to ESSL:\n" << essl310;
     EXPECT_NE(essl310.find("GL_EXT_texture_buffer"), String::npos)
         << "SPIRV-Cross requires EXT_texture_buffer below ESSL 320, and hardcodes that spelling - "
            "which is the whole reason an OES-only driver needs the emitted directive retargeted:\n"
@@ -3367,7 +3443,6 @@ void main() { fragColor = vec4(texelFetch(Data, 3)); }
     EXPECT_EQ(essl320.find("GL_EXT_texture_buffer"), String::npos)
         << "ES 3.2 has buffer textures in core; requiring the extension there would be wrong:\n"
         << essl320;
-
 }
 
 namespace {
@@ -3426,7 +3501,7 @@ void main() { ssb.sum = imageAtomicAdd(i0, 2, 7u); }
 
 // The negative control, and the whole reason the pass exists: SPIRV-Cross's ES emulation of 1D
 // images does not ask whether the type is arrayed, so it wraps an already-two-component
-// coordinate in a two-component constructor. Pinning the upstream behaviour here means that if a
+// coordinate in a two-component constructor. Pinning the upstream behavior here means that if a
 // future SPIRV-Cross bump fixes it, this test fails and says so, rather than the pass quietly
 // becoming dead weight.
 TEST_F(ProgramUtilTest, SpirvCrossEmitsAMalformedCoordinateFor1DArrayImages) {
@@ -3470,18 +3545,17 @@ TEST_F(ProgramUtilTest, Lower1DArrayImagesRewritesTheTypeAndWidensTheCoordinate)
     ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered, true));
     ASSERT_FALSE(lowered.empty());
 
-    EXPECT_EQ(Count1DArrayStorageImageTypes(lowered), 0u)
-        << "no 1D-array storage image type may survive the pass:\n"
-        << DisassembleSpirv(lowered);
+    EXPECT_EQ(Count1DArrayStorageImageTypes(lowered), 0u) << "no 1D-array storage image type may survive the pass:\n"
+                                                          << DisassembleSpirv(lowered);
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
         << "the lowered module must stay validator-clean";
 
     const String essl = DecompileToEssl(lowered);
     ASSERT_FALSE(essl.empty());
     EXPECT_NE(essl.find("uimage2DArray"), String::npos)
-        << "the image must be declared as the 2D array the texture is stored as:\n" << essl;
-    EXPECT_EQ(essl.find("ivec2(ivec2("), String::npos)
-        << "the malformed constructor must be gone:\n" << essl;
+        << "the image must be declared as the 2D array the texture is stored as:\n"
+        << essl;
+    EXPECT_EQ(essl.find("ivec2(ivec2("), String::npos) << "the malformed constructor must be gone:\n" << essl;
     // The ORDER is the whole point, and it is what a widening that merely appended the 0 would
     // get wrong while still producing a three-component constructor that compiles. The fixture
     // reads (u=2, layer=3), and the ES 2D array holds height 1 with the layers in depth
@@ -3546,7 +3620,7 @@ layout (location = 0, r32ui) readonly uniform uimage1D i0;
 layout (std430, binding = 0) buffer SSB { uint sum; } ssb;
 void main() { ssb.sum = imageLoad(i0, 2).r; }
 )",
-                                                   GL_COMPUTE_SHADER);
+                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
 
     Vector<Uint32> lowered;
@@ -3556,14 +3630,15 @@ void main() { ssb.sum = imageLoad(i0, 2).r; }
     const String essl = DecompileToEssl(lowered);
     ASSERT_FALSE(essl.empty());
     EXPECT_NE(essl.find("uimage2D "), String::npos)
-        << "SPIRV-Cross's own 1D-as-2D emulation must still be what handles this:\n" << essl;
+        << "SPIRV-Cross's own 1D-as-2D emulation must still be what handles this:\n"
+        << essl;
 }
 
 // The negative control for the ATOMIC half, and the reason the non-arrayed case is in scope at
 // all: SPIRV-Cross widens a 1D image coordinate in OpImageRead and OpImageWrite but not in
 // OpImageTexelPointer, so the atomic comes out addressing an `uimage2D` with a scalar. Every ES
 // driver answers "no matching overloaded function found" and the whole stage - with every other
-// image in it - is lost. Pinning the upstream behaviour here means a future SPIRV-Cross bump that
+// image in it - is lost. Pinning the upstream behavior here means a future SPIRV-Cross bump that
 // fixes it fails this test instead of leaving the lowering as silent dead weight.
 TEST_F(ProgramUtilTest, SpirvCrossEmitsAScalarCoordinateForA1DImageAtomic) {
     using namespace MG_Util::ShaderTranspiler;
@@ -3576,14 +3651,16 @@ TEST_F(ProgramUtilTest, SpirvCrossEmitsAScalarCoordinateForA1DImageAtomic) {
     const String essl = DecompileToEssl(spirv);
     ASSERT_FALSE(essl.empty());
     EXPECT_NE(essl.find("uimage2D"), String::npos)
-        << "SPIRV-Cross declares the 1D image as 2D on ES; that half it does do:\n" << essl;
+        << "SPIRV-Cross declares the 1D image as 2D on ES; that half it does do:\n"
+        << essl;
     EXPECT_NE(essl.find("imageAtomicAdd(i0, 2"), String::npos)
         << "SPIRV-Cross is expected to pass the SCALAR coordinate straight through to the atomic. "
            "If this no longer happens, the non-arrayed half of Lower1DArrayImagesForEssl may no "
            "longer be needed:\n"
         << essl;
     EXPECT_EQ(essl.find("ivec2("), String::npos)
-        << "nothing else in this fixture builds an ivec2, so its absence is the defect:\n" << essl;
+        << "nothing else in this fixture builds an ivec2, so its absence is the defect:\n"
+        << essl;
 }
 
 // The fix: the type becomes a plain 2D image - which is what MobileGL stores a GL_TEXTURE_1D in,
@@ -3614,8 +3691,8 @@ TEST_F(ProgramUtilTest, Lower1DArrayImagesWidensThe1DAtomicCoordinate) {
 
     const String essl = DecompileToEssl(lowered);
     ASSERT_FALSE(essl.empty());
-    EXPECT_NE(essl.find("uimage2D"), String::npos)
-        << "the declaration must still be the 2D one the ES texture is:\n" << essl;
+    EXPECT_NE(essl.find("uimage2D"), String::npos) << "the declaration must still be the 2D one the ES texture is:\n"
+                                                   << essl;
     EXPECT_NE(essl.find("imageAtomicAdd(i0, ivec2(2, 0)"), String::npos)
         << "the atomic must address the image with the same (u, 0) SPIRV-Cross writes for a read "
            "or a write:\n"
@@ -3634,7 +3711,7 @@ layout (r32ui) coherent uniform uimage1D i0;
 layout (std430, binding = 0) buffer SSB { uint sum; } ssb;
 void main() { ssb.sum = imageAtomicAdd(i0, 2, 7u) + uint(imageSize(i0)); }
 )",
-                                                   GL_COMPUTE_SHADER);
+                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
     const auto traits = Lower1DArrayImagesPass::InspectBinary(spirv);
     ASSERT_TRUE(traits.declaresImage && traits.queriesImageSize)
@@ -3658,7 +3735,7 @@ in vec2 vUv;
 out vec4 fragColor;
 void main() { fragColor = texture(uTex, vUv); }
 )",
-                                                   GL_FRAGMENT_SHADER);
+                                                    GL_FRAGMENT_SHADER);
     ASSERT_FALSE(spirv.empty());
 
     Vector<Uint32> lowered;
@@ -3679,7 +3756,7 @@ layout (location = 0, r32ui) readonly uniform uimage1DArray i0;
 layout (std430, binding = 0) buffer SSB { uint sum; } ssb;
 void main() { ssb.sum = uint(imageSize(i0).x) + imageLoad(i0, ivec2(0, 0)).r; }
 )",
-                                                   GL_COMPUTE_SHADER);
+                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
     const auto traits = Lower1DArrayImagesPass::InspectBinary(spirv);
     ASSERT_TRUE(traits.declaresImage && traits.queriesImageSize)
@@ -3708,8 +3785,7 @@ namespace {
             const unsigned wordCount = spirv[i] >> 16;
             const unsigned opcode = spirv[i] & 0xFFFFu;
             if (wordCount == 0 || i + wordCount > spirv.size()) break;
-            if (opcode == kOpTypeImage && wordCount >= 8 && spirv[i + 3] == kDim1D &&
-                spirv[i + 7] == 1u) {
+            if (opcode == kOpTypeImage && wordCount >= 8 && spirv[i + 3] == kDim1D && spirv[i + 7] == 1u) {
                 ++count;
             }
             i += wordCount;
@@ -3729,7 +3805,7 @@ void main() { ssb.data = textureLodOffset(g_sampler4, vec2(0.5, 1.0), 0.0, 0); }
 
 // The negative control, and the whole reason the pass exists: SPIRV-Cross emits the sampler as 2D
 // and widens the coordinate, then hands the scalar offset straight through. Pinning the upstream
-// behaviour here means that if a future SPIRV-Cross bump fixes it, this test fails and says so,
+// behavior here means that if a future SPIRV-Cross bump fixes it, this test fails and says so,
 // rather than the pass quietly becoming dead weight.
 TEST_F(ProgramUtilTest, SpirvCrossEmitsAScalarOffsetFor1DSamplers) {
     using namespace MG_Util::ShaderTranspiler;
@@ -3742,7 +3818,8 @@ TEST_F(ProgramUtilTest, SpirvCrossEmitsAScalarOffsetFor1DSamplers) {
     const String essl = DecompileToEssl(spirv);
     ASSERT_FALSE(essl.empty());
     EXPECT_NE(essl.find("sampler2DArray"), String::npos)
-        << "SPIRV-Cross declares the 1D array sampler as 2D on ES; that half it does do:\n" << essl;
+        << "SPIRV-Cross declares the 1D array sampler as 2D on ES; that half it does do:\n"
+        << essl;
     EXPECT_EQ(essl.find("ivec2"), String::npos)
         << "SPIRV-Cross is expected to pass the SCALAR offset straight through, so nothing in this "
            "fixture builds an ivec2 - its absence IS the defect, because ESSL has no "
@@ -3774,9 +3851,8 @@ TEST_F(ProgramUtilTest, Lower1DSampledImagesWidensTheOffsetOfA1DArrayLookup) {
     ASSERT_TRUE(ShaderCompiler::Lower1DSampledImagesForEssl(spirv, lowered, true));
     ASSERT_FALSE(lowered.empty());
 
-    EXPECT_EQ(Count1DSampledImageTypes(lowered), 0u)
-        << "no 1D sampled image type may survive the pass:\n"
-        << DisassembleSpirv(lowered);
+    EXPECT_EQ(Count1DSampledImageTypes(lowered), 0u) << "no 1D sampled image type may survive the pass:\n"
+                                                     << DisassembleSpirv(lowered);
     // The point of moving the TYPE rather than only the operand: an ivec2 offset against a type
     // still declared Dim1D is an invalid module, and the validator would say so.
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
@@ -3786,7 +3862,8 @@ TEST_F(ProgramUtilTest, Lower1DSampledImagesWidensTheOffsetOfA1DArrayLookup) {
     const String essl = DecompileToEssl(lowered);
     ASSERT_FALSE(essl.empty());
     EXPECT_NE(essl.find("sampler2DArray"), String::npos)
-        << "the sampler must still be declared as the 2D array the texture is stored as:\n" << essl;
+        << "the sampler must still be declared as the 2D array the texture is stored as:\n"
+        << essl;
     EXPECT_NE(essl.find("ivec2"), String::npos)
         << "the offset must now be the two-component one ESSL's sampler2DArray overload takes:\n"
         << essl;
@@ -3809,8 +3886,7 @@ void main() { ssb.data = textureGrad(g_sampler0, 0.5, 0.25, 0.125); }
 
     Vector<Uint32> spirv;
     ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, spirv));
-    ASSERT_TRUE(Lower1DSampledImagesPass::BinaryHasOffsetOrGrad1DSampledImage(spirv))
-        << DisassembleSpirv(spirv);
+    ASSERT_TRUE(Lower1DSampledImagesPass::BinaryHasOffsetOrGrad1DSampledImage(spirv)) << DisassembleSpirv(spirv);
 
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
@@ -3827,10 +3903,8 @@ void main() { ssb.data = textureGrad(g_sampler0, 0.5, 0.25, 0.125); }
     ASSERT_FALSE(essl.empty());
     EXPECT_NE(essl.find("textureGrad"), String::npos) << essl;
     // Both derivatives have to be widened, not just the first: ESSL's overload takes two vec2s.
-    EXPECT_NE(essl.find("vec2(0.25, 0.0)"), String::npos)
-        << "dPdx must be widened to two components:\n" << essl;
-    EXPECT_NE(essl.find("vec2(0.125, 0.0)"), String::npos)
-        << "dPdy must be widened too:\n" << essl;
+    EXPECT_NE(essl.find("vec2(0.25, 0.0)"), String::npos) << "dPdx must be widened to two components:\n" << essl;
+    EXPECT_NE(essl.find("vec2(0.125, 0.0)"), String::npos) << "dPdy must be widened too:\n" << essl;
 }
 
 // Scope: a 1D sampler that is only SAMPLED or FETCHED is emitted correctly by the very same
@@ -3850,7 +3924,7 @@ void main() {
     ssb.data = texelFetch(g_sampler0, 2, 0) + texture(g_sampler4, vec2(0.5, 1.0));
 }
 )",
-                                                   GL_COMPUTE_SHADER);
+                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
     ASSERT_EQ(Count1DSampledImageTypes(spirv), 2u);
     EXPECT_FALSE(Lower1DSampledImagesPass::BinaryHasOffsetOrGrad1DSampledImage(spirv))
@@ -3903,8 +3977,7 @@ void main() {
     // was rewritten and the stage that was not declare the same ESSL type.
     const String essl = DecompileToEssl(lowered);
     ASSERT_FALSE(essl.empty());
-    EXPECT_EQ(essl.find("sampler1D"), String::npos)
-        << "nothing may reach the driver still spelled 1D:\n" << essl;
+    EXPECT_EQ(essl.find("sampler1D"), String::npos) << "nothing may reach the driver still spelled 1D:\n" << essl;
 }
 
 // The shape that would emit INVALID SPIR-V without the deduplication, and the shape the
@@ -3970,8 +4043,7 @@ void main() {
 
     Vector<Uint32> lowered;
     ASSERT_TRUE(ShaderCompiler::Lower1DSampledImagesForEssl(spirv, lowered, true));
-    EXPECT_EQ(lowered, spirv)
-        << "a declined module must be handed back untouched, not partly rewritten";
+    EXPECT_EQ(lowered, spirv) << "a declined module must be handed back untouched, not partly rewritten";
     EXPECT_EQ(Count1DSampledImageTypes(lowered), 1u)
         << "declining means the 1D type is still there for the driver to reject";
 }
@@ -4016,7 +4088,7 @@ layout (local_size_x = 1) in;
 writeonly uniform uimage2D uni_image;
 void main() { imageStore(uni_image, ivec2(gl_GlobalInvocationID.xy), uvec4(15u, 0u, 0u, 0u)); }
 )",
-                                                   GL_COMPUTE_SHADER);
+                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
     ASSERT_TRUE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv))
         << "the fixture must reproduce the defect before the fix is asked to remove it:\n"
@@ -4037,9 +4109,11 @@ void main() { imageStore(uni_image, ivec2(gl_GlobalInvocationID.xy), uvec4(15u, 
     const String essl = DecompileToEssl(baked);
     ASSERT_FALSE(essl.empty());
     EXPECT_NE(essl.find("r32ui"), String::npos)
-        << "the bound format must reach the declaration as a layout qualifier:\n" << essl;
+        << "the bound format must reach the declaration as a layout qualifier:\n"
+        << essl;
     EXPECT_NE(essl.find("writeonly"), String::npos)
-        << "the access qualifier the declaration already had must survive:\n" << essl;
+        << "the access qualifier the declaration already had must survive:\n"
+        << essl;
 }
 
 // SPIRV-Cross THROWS rather than printing the formats it calls desktop-only when it targets ESSL
@@ -4081,16 +4155,16 @@ layout (local_size_x = 1) in;
 writeonly uniform uimage2D uni_image;
 void main() { imageStore(uni_image, ivec2(0), uvec4(15u)); }
 )",
-                                                   GL_COMPUTE_SHADER);
+                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
 
-    {   // Unprintable AND uncarriable: declined, module untouched, and the stage still transpiles.
+    { // Unprintable AND uncarriable: declined, module untouched, and the stage still transpiles.
         Vector<Uint32> baked;
         ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlRgb8}}, baked));
         EXPECT_EQ(baked, spirv) << "a format nothing can carry must leave the module untouched";
         EXPECT_FALSE(DecompileToEssl(baked).empty());
     }
-    {   // Unprintable but carriable: baked narrow here, then widened into the carrier, which is
+    { // Unprintable but carriable: baked narrow here, then widened into the carrier, which is
         // what finally gives the declaration a qualifier ES accepts.
         Vector<Uint32> baked;
         ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR8ui}}, baked, true));
@@ -4104,8 +4178,7 @@ void main() { imageStore(uni_image, ivec2(0), uvec4(15u)); }
         ASSERT_FALSE(widened.empty());
         const String essl = DecompileToEssl(widened);
         ASSERT_FALSE(essl.empty());
-        EXPECT_NE(essl.find("rgba8ui"), String::npos)
-            << "the baked r8ui must come out as the core carrier:\n" << essl;
+        EXPECT_NE(essl.find("rgba8ui"), String::npos) << "the baked r8ui must come out as the core carrier:\n" << essl;
     }
 }
 
@@ -4120,7 +4193,7 @@ layout (local_size_x = 1) in;
 layout (binding = 0, rgba32ui) writeonly uniform uimage2D uni_image;
 void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
 )",
-                                                   GL_COMPUTE_SHADER);
+                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
     ASSERT_FALSE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv));
 
@@ -4144,7 +4217,7 @@ writeonly uniform uimage2D uni_image;
 void writeIt(writeonly uimage2D img) { imageStore(img, ivec2(0), uvec4(1u)); }
 void main() { writeIt(uni_image); }
 )",
-                                                   GL_COMPUTE_SHADER);
+                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
     ASSERT_TRUE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv));
 
@@ -4170,7 +4243,7 @@ layout (local_size_x = 1) in;
 writeonly uniform image2D uni_image;
 void main() { imageStore(uni_image, ivec2(0), vec4(1.0)); }
 )",
-                                                   GL_COMPUTE_SHADER);
+                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
 
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
@@ -4202,16 +4275,17 @@ void main() {
     imageStore(imgB, ivec2(0), uvec4(2u));
 }
 )",
-                                                   GL_COMPUTE_SHADER);
+                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
     ASSERT_EQ(CountSpirvOpcode(DisassembleSpirv(spirv), "OpTypeImage"), 1u)
-        << "the fixture must have the two images sharing one type:\n" << DisassembleSpirv(spirv);
+        << "the fixture must have the two images sharing one type:\n"
+        << DisassembleSpirv(spirv);
 
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
     Vector<Uint32> baked;
-    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(
-        spirv, {{"imgA", kGlR32ui}, {"imgB", kGlRgba32ui}}, baked, true));
+    ASSERT_TRUE(
+        ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"imgA", kGlR32ui}, {"imgB", kGlRgba32ui}}, baked, true));
     ASSERT_FALSE(baked.empty());
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
         << "splitting the shared type must not leave a dangling or duplicate declaration:\n"
@@ -4239,10 +4313,11 @@ void main() {
     imageStore(declared, ivec2(0), uvec4(2u));
 }
 )",
-                                                   GL_COMPUTE_SHADER);
+                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
     ASSERT_EQ(CountSpirvOpcode(DisassembleSpirv(spirv), "OpTypeImage"), 2u)
-        << "the fixture needs one Unknown-format and one r32ui image type:\n" << DisassembleSpirv(spirv);
+        << "the fixture needs one Unknown-format and one r32ui image type:\n"
+        << DisassembleSpirv(spirv);
 
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
@@ -4253,7 +4328,8 @@ void main() {
         << "the baked image collided with the module's own r32ui image and left a duplicate type:\n"
         << DisassembleSpirv(baked);
     EXPECT_EQ(CountSpirvOpcode(DisassembleSpirv(baked), "OpTypeImage"), 1u)
-        << "the two identical image types must be the same declaration:\n" << DisassembleSpirv(baked);
+        << "the two identical image types must be the same declaration:\n"
+        << DisassembleSpirv(baked);
 }
 
 // An ARRAY of format-less images: the variable's type is a pointer to an array, every use goes
@@ -4268,7 +4344,7 @@ void main() {
     for (int i = 0; i < 2; ++i) imageStore(imgs[i], ivec2(0), uvec4(uint(i)));
 }
 )",
-                                                   GL_COMPUTE_SHADER);
+                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
     ASSERT_TRUE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv));
 
@@ -4295,10 +4371,11 @@ out uvec4 fragColor;
 in vec2 vUv;
 void main() { fragColor = texture(uni_sampler, vUv); }
 )",
-                                                   GL_FRAGMENT_SHADER);
+                                                    GL_FRAGMENT_SHADER);
     ASSERT_FALSE(spirv.empty());
     EXPECT_FALSE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv))
-        << "a sampled image must not read as a format-less STORAGE image:\n" << DisassembleSpirv(spirv);
+        << "a sampled image must not read as a format-less STORAGE image:\n"
+        << DisassembleSpirv(spirv);
 
     Vector<Uint32> baked;
     ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_sampler", kGlR32ui}}, baked, true));
@@ -4412,8 +4489,7 @@ TEST_F(ProgramUtilTest, StorageBlockBindingCeilingIsCheckedAtItsExactBoundary) {
     EXPECT_TRUE(violation("layout(binding = 34) buffer Buffer { int x; } g_array[4];\n").has_value());
 
     // Qualifiers and a second layout list may sit between the binding and the keyword.
-    EXPECT_TRUE(violation("layout(std430) layout(binding = 36) coherent restrict buffer B { int x; };\n")
-                    .has_value());
+    EXPECT_TRUE(violation("layout(std430) layout(binding = 36) coherent restrict buffer B { int x; };\n").has_value());
 
     // Things the scanner must NOT judge: a uniform block (a different ceiling), a storage block
     // with no explicit binding, the bare default-qualifier form, and an instance array whose size
@@ -4423,8 +4499,7 @@ TEST_F(ProgramUtilTest, StorageBlockBindingCeilingIsCheckedAtItsExactBoundary) {
                      .has_value());
     EXPECT_FALSE(violation("buffer Buffer { int x; };\nconst int binding = 40;\n").has_value());
     EXPECT_FALSE(violation("layout(binding = 1) buffer;\nbuffer Buffer { int x; };\n").has_value());
-    EXPECT_FALSE(violation("const int kCount = 4;\nlayout(binding = 34) buffer B { int x; } g[kCount];\n")
-                     .has_value());
+    EXPECT_FALSE(violation("const int kCount = 4;\nlayout(binding = 34) buffer B { int x; } g[kCount];\n").has_value());
 
     // A backend that advertises no binding points has no ceiling to enforce.
     EXPECT_FALSE(FindShaderStorageBindingViolation("layout(binding = 36) buffer B { int x; };\n", 0).has_value());
@@ -4474,6 +4549,40 @@ subroutine(FuncType) void Func0(int coord) {
     auto res = ShaderCompiler::CompileShader(attrib);
     if (!res) {
         FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+// The type declaration only sheds its keyword, so the type NAME still reaches glslang as a function
+// prototype: a reserved word there has to fail the compile (KHR-GL40.CommonBugs.CommonBug_ReservedNames)
+// instead of vanishing with a blanked declaration.
+TEST_F(ProgramUtilTest, PreprocessSubroutineKeepsTheTypeNameVisibleToTheCompiler) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const auto lowerAndCompile = [](const String& typeName) {
+        String source = "#version 400 core\n"
+                        "out vec4 fragColor;\n"
+                        "subroutine void " +
+                        typeName +
+                        "(void);\n"
+                        "subroutine(" +
+                        typeName +
+                        ") void Impl(void) { fragColor = vec4(1.0); }\n"
+                        "subroutine uniform " +
+                        typeName +
+                        " g_routine;\n"
+                        "void main() { g_routine(); }\n";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        EXPECT_EQ(source.find("subroutine"), String::npos) << source;
+        EXPECT_NE(source.find("void " + typeName + "(void);"), String::npos)
+            << "the type declaration must survive as a prototype:\n"
+            << source;
+        ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+        return Bool(ShaderCompiler::CompileShader(attrib));
+    };
+
+    EXPECT_TRUE(lowerAndCompile("Routine"));
+    for (const char* reserved : {"const", "vec4", "asm", "sampler2D"}) {
+        EXPECT_FALSE(lowerAndCompile(reserved)) << "a subroutine type named '" << reserved << "' must not compile";
     }
 }
 
@@ -4569,7 +4678,6 @@ subroutine(FuncType) void Func0(int coord) { fragColor = vec4(float(coord)); }
     EXPECT_EQ(conditional, conditionalBefore)
         << "an inactive #if arm must not have an unconditional forwarding body appended for it";
 }
-
 
 // ---------------------------------------------------------------------------------------------
 // gl_NumSamples: glslang declares the built-in only when it is NOT targeting SPIR-V, and MobileGL
@@ -4680,7 +4788,7 @@ void main() { v = gl_NumSamples; }
     }
 }
 
-TEST_F(ProgramUtilTest, NumSamplesShimHonoursTheVersionAndExtensionGate) {
+TEST_F(ProgramUtilTest, NumSamplesShimHonorsTheVersionAndExtensionGate) {
     using namespace MG_Util::ShaderTranspiler;
 
     struct Case {
@@ -4696,33 +4804,25 @@ TEST_F(ProgramUtilTest, NumSamplesShimHonoursTheVersionAndExtensionGate) {
         {"desktop 460 core", "#version 460 core\n", true},
         {"desktop 400 core", "#version 400 core\n", true},
         {"desktop 330 core, no extension", "#version 330 core\n", false},
-        {"desktop 330 core + ARB_sample_shading",
-         "#version 330 core\n#extension GL_ARB_sample_shading : require\n", true},
-        {"desktop 330 core + all : warn",
-         "#version 330 core\n#extension all : warn\n", true},
+        {"desktop 330 core + ARB_sample_shading", "#version 330 core\n#extension GL_ARB_sample_shading : require\n",
+         true},
+        {"desktop 330 core + all : warn", "#version 330 core\n#extension all : warn\n", true},
         {"desktop 120, no extension", "#version 120\n", false},
-        {"desktop 120 + all : warn (below the 1.30 floor)",
-         "#version 120\n#extension all : warn\n", false},
+        {"desktop 120 + all : warn (below the 1.30 floor)", "#version 120\n#extension all : warn\n", false},
         {"ESSL 320", "#version 320 es\n", true},
         {"ESSL 310, no extension", "#version 310 es\n", false},
-        {"ESSL 310 + OES_sample_variables",
-         "#version 310 es\n#extension GL_OES_sample_variables : require\n", true},
+        {"ESSL 310 + OES_sample_variables", "#version 310 es\n#extension GL_OES_sample_variables : require\n", true},
         // The AEP spellings. glslang applies the directive's behavior to all twelve AEP members,
         // GL_OES_sample_variables among them, so these are legal ES 3.1 shaders.
-        {"ESSL 310 + AEP : require",
-         "#version 310 es\n#extension GL_ANDROID_extension_pack_es31a : require\n", true},
-        {"ESSL 310 + AEP : enable",
-         "#version 310 es\n#extension GL_ANDROID_extension_pack_es31a : enable\n", true},
-        {"ESSL 310 + AEP : warn",
-         "#version 310 es\n#extension GL_ANDROID_extension_pack_es31a : warn\n", true},
+        {"ESSL 310 + AEP : require", "#version 310 es\n#extension GL_ANDROID_extension_pack_es31a : require\n", true},
+        {"ESSL 310 + AEP : enable", "#version 310 es\n#extension GL_ANDROID_extension_pack_es31a : enable\n", true},
+        {"ESSL 310 + AEP : warn", "#version 310 es\n#extension GL_ANDROID_extension_pack_es31a : warn\n", true},
         // ...but `disable` is not an opt-in, and the implication carries the behavior with it.
-        {"ESSL 310 + AEP : disable",
-         "#version 310 es\n#extension GL_ANDROID_extension_pack_es31a : disable\n", false},
-        {"ESSL 310 + all : warn",
-         "#version 310 es\n#extension all : warn\n", true},
+        {"ESSL 310 + AEP : disable", "#version 310 es\n#extension GL_ANDROID_extension_pack_es31a : disable\n", false},
+        {"ESSL 310 + all : warn", "#version 310 es\n#extension all : warn\n", true},
         // An AEP member that does NOT imply sample variables must not open the gate.
-        {"ESSL 310 + EXT_geometry_shader only",
-         "#version 310 es\n#extension GL_EXT_geometry_shader : require\n", false},
+        {"ESSL 310 + EXT_geometry_shader only", "#version 310 es\n#extension GL_EXT_geometry_shader : require\n",
+         false},
         {"ESSL 300", "#version 300 es\n", false},
         {"ESSL 300 + AEP (below the 3.10 floor)",
          "#version 300 es\n#extension GL_ANDROID_extension_pack_es31a : require\n", false},
@@ -4847,10 +4947,9 @@ TEST_F(ProgramUtilTest, RepeatedIdenticalVersionDirectiveIsElided) {
 
     // Byte-for-byte the concatenation the CTS produces: kGLSLPrec ends without a newline, so the
     // subcase's own "#version 310 es" lands mid-line.
-    String source =
-        "#version 310 es\n\nprecision highp float;\nprecision highp uimage2DArray;#version 310 es\n"
-        "layout(location = 0) in vec4 i_position;\n"
-        "void main() { gl_Position = i_position; }\n";
+    String source = "#version 310 es\n\nprecision highp float;\nprecision highp uimage2DArray;#version 310 es\n"
+                    "layout(location = 0) in vec4 i_position;\n"
+                    "void main() { gl_Position = i_position; }\n";
 
     const SizeT lineCountBefore = static_cast<SizeT>(std::count(source.begin(), source.end(), '\n'));
     PreprocessShaderSource(ShaderStage::Vertex, source);
@@ -4877,8 +4976,7 @@ TEST_F(ProgramUtilTest, OnlyAnExactVersionRepeatIsElided) {
         SCOPED_TRACE("a lone non-first #version is still a lone non-first #version");
         // KHR-GL33.shaders.preprocessor.directive.version_not_first_statement_1 requires this to
         // fail to compile, and it only does so because the directive is left where it was.
-        String source =
-            "precision mediump float;\n#version 330\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n";
+        String source = "precision mediump float;\n#version 330\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n";
         PreprocessShaderSource(ShaderStage::Fragment, source);
         const SizeT versionPos = source.find("#version");
         ASSERT_NE(versionPos, String::npos) << source;
@@ -4891,8 +4989,7 @@ TEST_F(ProgramUtilTest, OnlyAnExactVersionRepeatIsElided) {
 
     {
         SCOPED_TRACE("a MALFORMED repeat is left alone");
-        String source =
-            "#version 330 core\nout vec4 c;\n#version 330 foobar\nvoid main() { c = vec4(1.0); }\n";
+        String source = "#version 330 core\nout vec4 c;\n#version 330 foobar\nvoid main() { c = vec4(1.0); }\n";
         PreprocessShaderSource(ShaderStage::Fragment, source);
         EXPECT_NE(source.find("#version 330 foobar"), String::npos) << source;
     }
@@ -4923,14 +5020,13 @@ void main() { fragColor = vec4(float(gl_NumSamples)); }
     // Both halves of the AEP path: the built-in shim AND the restored member macros.
     EXPECT_TRUE(HasNumSamplesShim(source)) << source;
     const String defines = CollectEsPreambleMacroDefines(source);
-    for (const char* member : {"GL_ANDROID_extension_pack_es31a", "GL_OES_sample_variables",
-                               "GL_OES_shader_image_atomic", "GL_OES_shader_multisample_interpolation",
-                               "GL_OES_texture_storage_multisample_2d_array", "GL_EXT_geometry_shader",
-                               "GL_EXT_gpu_shader5", "GL_EXT_primitive_bounding_box",
-                               "GL_EXT_shader_io_blocks", "GL_EXT_tessellation_shader",
-                               "GL_EXT_texture_buffer", "GL_EXT_texture_cube_map_array"}) {
-        EXPECT_NE(defines.find(String("#define ") + member + " 1\n"), String::npos)
-            << member << " missing from:\n" << defines;
+    for (const char* member :
+         {"GL_ANDROID_extension_pack_es31a", "GL_OES_sample_variables", "GL_OES_shader_image_atomic",
+          "GL_OES_shader_multisample_interpolation", "GL_OES_texture_storage_multisample_2d_array",
+          "GL_EXT_geometry_shader", "GL_EXT_gpu_shader5", "GL_EXT_primitive_bounding_box", "GL_EXT_shader_io_blocks",
+          "GL_EXT_tessellation_shader", "GL_EXT_texture_buffer", "GL_EXT_texture_cube_map_array"}) {
+        EXPECT_NE(defines.find(String("#define ") + member + " 1\n"), String::npos) << member << " missing from:\n"
+                                                                                    << defines;
     }
     // GL_KHR_blend_equation_advanced is an AEP member glslang propagates to, but its macro is in
     // the DESKTOP preamble too - so the rewrite never took it away and it must not be restored.

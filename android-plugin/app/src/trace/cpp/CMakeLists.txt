@@ -234,6 +234,10 @@ target_link_libraries(glretrace_common PUBLIC retrace_common glhelpers glproc)
 add_library(trace_replay_runner SHARED
         trace_replay_core.cpp
         trace_replay_jni.cpp
+        # P0 spike A. Android-only, and deliberately its own TU: trace_replay_core.cpp is
+        # shared verbatim with the desktop mobilegl_trace_replay runner
+        # (tools/trace_replay/CMakeLists.txt), which cannot see <android/log.h>.
+        spawn_spike.cpp
         "${CMAKE_CURRENT_LIST_DIR}/../../../../../tools/trace_replay/apitrace_fbo_dump.cpp")
 
 target_compile_features(trace_replay_runner PRIVATE cxx_std_17)
@@ -249,4 +253,52 @@ target_link_libraries(trace_replay_runner
         retrace_common
         image
         android
+        log
         dl)
+
+# ---------------------------------------------------------------------------
+# P11 B1 (gate tooling, opt-in): the adb-shell retrace CLI (tools/trace_replay's
+# mobilegl_trace_replay) packaged into the trace APK as a PIE executable named like
+# a library, so an app - the external client of the B1 device gate, launched through
+# the app_process helper - can exec it from nativeLibraryDir (targetSdk 34 forbids
+# exec anywhere else). The shape of MobileGLServer's delivery (root CMakeLists):
+# lib-prefixed .so name, $ORIGIN rpath, runtime output in the AGP jniLibs dir. It
+# dlopens libMobileGL.so at run time (--mobilegl-library) and links none of it.
+# Off unless -DMOBILEGL_PACKAGE_RETRACE_EXE=ON (-Pmobilegl.packageRetraceExe=ON).
+# ---------------------------------------------------------------------------
+if(MOBILEGL_PACKAGE_RETRACE_EXE)
+    set(MOBILEGL_TRACE_TOOLS "${CMAKE_CURRENT_LIST_DIR}/../../../../../tools/trace_replay")
+    add_executable(MobileGLRetrace
+            trace_replay_core.cpp
+            "${MOBILEGL_TRACE_TOOLS}/trace_replay_cli.cpp"
+            "${MOBILEGL_TRACE_TOOLS}/apitrace_fbo_dump.cpp")
+    target_compile_features(MobileGLRetrace PRIVATE cxx_std_17)
+    target_compile_definitions(MobileGLRetrace PRIVATE
+            MOBILEGL_APITRACE_RETRACE_MAIN=mobilegl_apitrace_main)
+    target_include_directories(MobileGLRetrace PRIVATE
+            "${CMAKE_CURRENT_LIST_DIR}"
+            "${APITRACE_ROOT}/lib/image"
+            "${MOBILEGL_TRACE_TOOLS}")
+    target_link_libraries(MobileGLRetrace
+            "-Wl,--start-group"
+            glretrace_common
+            retrace_common
+            image
+            common
+            glhelpers
+            glproc
+            "-Wl,--end-group"
+            android
+            log
+            dl)
+    set_target_properties(MobileGLRetrace PROPERTIES
+            PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "MobileGLRetrace"
+            POSITION_INDEPENDENT_CODE ON
+            BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN" BUILD_WITH_INSTALL_RPATH TRUE)
+    target_compile_options(MobileGLRetrace PRIVATE -fPIE)
+    target_link_options(MobileGLRetrace PRIVATE -pie)
+    if(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+        set_target_properties(MobileGLRetrace PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+    endif()
+endif()

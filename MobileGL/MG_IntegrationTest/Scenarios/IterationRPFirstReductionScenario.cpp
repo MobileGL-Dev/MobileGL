@@ -108,7 +108,8 @@ namespace MGITest {
 
         bool DrainGlErrors() {
             bool hadError = false;
-            while (glGetError() != GL_NO_ERROR) hadError = true;
+            while (glGetError() != GL_NO_ERROR)
+                hadError = true;
             return hadError;
         }
 
@@ -116,7 +117,8 @@ namespace MGITest {
             GLint extensionCount = 0;
             glGetIntegerv(GL_NUM_EXTENSIONS, &extensionCount);
             for (GLint i = 0; i < extensionCount; ++i) {
-                const auto* extension = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
+                const auto* extension =
+                    reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
                 if (extension != nullptr && std::string(extension) == wanted) return true;
             }
             return false;
@@ -137,22 +139,18 @@ namespace MGITest {
             // invocations, i.e. an advertised subgroup width in [16, 256]. A device
             // outside that window (lavapipe's 8-lane subgroups give 64 subgroups) cannot
             // run the fixture's verbatim reduction at all, so the scenario SKIPS there -
-            // the pack itself replays through the MagmaFixIterationRPSubgroupScratch patch, which
+            // the pack itself replays through the MOBILEGL_ITRP_FIX scratch patch, which
             // this probe deliberately does not model. The width only gates the domain;
             // lane placement and group counts still come from observed values alone.
-            bool SubgroupWidthInSourceDomain() const {
-                return subgroupSize >= 16 && subgroupSize <= 256;
-            }
+            bool SubgroupWidthInSourceDomain() const { return subgroupSize >= 16 && subgroupSize <= 256; }
 
             bool SupportsProbe() const {
                 const auto stages = static_cast<GLbitfield>(supportedStages);
                 const auto features = static_cast<GLbitfield>(supportedFeatures);
-                return !queryHadError && subgroupExtension &&
-                       (stages & GL_COMPUTE_SHADER_BIT) != 0 &&
+                return !queryHadError && subgroupExtension && (stages & GL_COMPUTE_SHADER_BIT) != 0 &&
                        (features & (GL_SUBGROUP_FEATURE_BASIC_BIT_KHR | GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR)) ==
                            (GL_SUBGROUP_FEATURE_BASIC_BIT_KHR | GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR) &&
-                       SubgroupWidthInSourceDomain() &&
-                       maxComputeStorageBlocks >= 2 && maxStorageBindings >= 2 &&
+                       SubgroupWidthInSourceDomain() && maxComputeStorageBlocks >= 2 && maxStorageBindings >= 2 &&
                        maxWorkGroupInvocations >= static_cast<GLint>(kInvocationCount) && maxWorkGroupSize[0] >= 32 &&
                        maxWorkGroupSize[1] >= 16 && maxWorkGroupSize[2] >= 1;
             }
@@ -172,10 +170,9 @@ namespace MGITest {
                     missing.emplace_back("basic|arithmetic in GL_SUBGROUP_SUPPORTED_FEATURES_KHR");
                 }
                 if (!SubgroupWidthInSourceDomain()) {
-                    missing.emplace_back(
-                        "GL_SUBGROUP_SIZE_KHR in [16, 256] (iterationRP's source contract needs "
-                        "gl_NumSubgroups in [2, 32] for 512 invocations; width " +
-                        std::to_string(subgroupSize) + " is outside the fixture's domain)");
+                    missing.emplace_back("GL_SUBGROUP_SIZE_KHR in [16, 256] (iterationRP's source contract needs "
+                                         "gl_NumSubgroups in [2, 32] for 512 invocations; width " +
+                                         std::to_string(subgroupSize) + " is outside the fixture's domain)");
                 }
                 if (maxComputeStorageBlocks < 2 || maxStorageBindings < 2) {
                     missing.emplace_back("two compute SSBO bindings");
@@ -213,18 +210,15 @@ namespace MGITest {
 
         void PrintMetadata(const CapabilityInfo& info, std::ostream& output) {
             output << "IterationRPFirstReductionScenario metadata: "
-                   << "GL_SUBGROUP_SIZE_KHR=" << info.subgroupSize
-                   << ", GL_SUBGROUP_SUPPORTED_STAGES_KHR=0x" << std::hex
-                   << static_cast<GLbitfield>(info.supportedStages)
-                   << ", GL_SUBGROUP_SUPPORTED_FEATURES_KHR=0x"
-                   << static_cast<GLbitfield>(info.supportedFeatures) << std::dec
-                   << ", subgroupExtension=" << info.subgroupExtension
+                   << "GL_SUBGROUP_SIZE_KHR=" << info.subgroupSize << ", GL_SUBGROUP_SUPPORTED_STAGES_KHR=0x"
+                   << std::hex << static_cast<GLbitfield>(info.supportedStages)
+                   << ", GL_SUBGROUP_SUPPORTED_FEATURES_KHR=0x" << static_cast<GLbitfield>(info.supportedFeatures)
+                   << std::dec << ", subgroupExtension=" << info.subgroupExtension
                    << ", GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS=" << info.maxComputeStorageBlocks
                    << ", GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS=" << info.maxStorageBindings
                    << ", GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS=" << info.maxWorkGroupInvocations
-                   << ", GL_MAX_COMPUTE_WORK_GROUP_SIZE=" << info.maxWorkGroupSize[0] << 'x'
-                   << info.maxWorkGroupSize[1] << 'x' << info.maxWorkGroupSize[2]
-                   << ", queryHadError=" << info.queryHadError << '\n';
+                   << ", GL_MAX_COMPUTE_WORK_GROUP_SIZE=" << info.maxWorkGroupSize[0] << 'x' << info.maxWorkGroupSize[1]
+                   << 'x' << info.maxWorkGroupSize[2] << ", queryHadError=" << info.queryHadError << '\n';
         }
 
         bool DumpRequested() {
@@ -371,10 +365,22 @@ layout(std430, binding = 0) readonly buffer Input {
             return result;
         }
 
+        // The sequential binary32 sum. The shader's dot() may round differently - GLSL leaves a
+        // dot product's rounding (fused or not) to the implementation, and llvmpipe's ES
+        // compiler answers 1.0 where lavapipe answers this - so the probe accepts any value
+        // within one ulp of it, the same in every invocation, and checks the reduction against
+        // the value the driver actually produced.
         constexpr float kSampledLuminance = 0.2125f + 0.7154f + 0.0721f;
 
-        float ExpectedInput(InputMode mode, std::uint32_t localIndex) {
-            return mode == InputMode::SampledRgba32f ? kSampledLuminance : static_cast<float>(localIndex + 1u);
+        bool WithinOneUlp(float lhs, float rhs) {
+            const std::uint32_t a = FloatBits(lhs);
+            const std::uint32_t b = FloatBits(rhs);
+            if ((a ^ b) >> 31) return false; // never across a sign
+            return (a > b ? a - b : b - a) <= 1u;
+        }
+
+        float ExpectedInput(InputMode mode, std::uint32_t localIndex, float sampledLuminance) {
+            return mode == InputMode::SampledRgba32f ? sampledLuminance : static_cast<float>(localIndex + 1u);
         }
 
         ValidationResult ValidateProbe(const ProbeOutput& output, InputMode mode) {
@@ -405,6 +411,16 @@ layout(std430, binding = 0) readonly buffer Input {
                     return Failure("record identity", message.str());
                 }
             }
+            float sampledLuminance = kSampledLuminance;
+            if (mode == InputMode::SampledRgba32f) {
+                sampledLuminance = output.reduction[slotForLocal[0]].x;
+                if (!WithinOneUlp(sampledLuminance, kSampledLuminance)) {
+                    std::ostringstream message;
+                    message << "localIndex 0 input was " << FormatFloat(sampledLuminance) << ", expected "
+                            << FormatFloat(kSampledLuminance) << " within one ulp";
+                    return Failure("input", message.str());
+                }
+            }
             for (std::size_t localIndex = 0; localIndex < kInvocationCount; ++localIndex) {
                 const std::size_t slot = slotForLocal[localIndex];
                 const UVec4& invocation = output.invocation[slot];
@@ -417,7 +433,8 @@ layout(std430, binding = 0) readonly buffer Input {
                             << ",0)";
                     return Failure("record identity", message.str());
                 }
-                const float expectedInput = ExpectedInput(mode, static_cast<std::uint32_t>(localIndex));
+                const float expectedInput =
+                    ExpectedInput(mode, static_cast<std::uint32_t>(localIndex), sampledLuminance);
                 const float actualInput = output.reduction[slot].x;
                 if (!SameBits(actualInput, expectedInput)) {
                     std::ostringstream message;
@@ -458,8 +475,8 @@ layout(std430, binding = 0) readonly buffer Input {
                 }
                 if (subgroup.z >= reportedNumSubgroups) {
                     std::ostringstream message;
-                    message << "localIndex " << localIndex << " reported subgroupID=" << subgroup.z
-                            << " outside [0, " << (reportedNumSubgroups - 1u) << ']';
+                    message << "localIndex " << localIndex << " reported subgroupID=" << subgroup.z << " outside [0, "
+                            << (reportedNumSubgroups - 1u) << ']';
                     return Failure("observed topology", message.str());
                 }
                 if (subgroup.w >= subgroup.x) {
@@ -473,8 +490,8 @@ layout(std430, binding = 0) readonly buffer Input {
             for (std::uint32_t subgroupID = 0; subgroupID < reportedNumSubgroups; ++subgroupID) {
                 if (subgroupSlots[subgroupID].empty()) {
                     std::ostringstream message;
-                    message << "reported gl_NumSubgroups=" << reportedNumSubgroups
-                            << " but subgroupID " << subgroupID << " has no recorded members";
+                    message << "reported gl_NumSubgroups=" << reportedNumSubgroups << " but subgroupID " << subgroupID
+                            << " has no recorded members";
                     return Failure("observed topology", message.str());
                 }
                 auto& members = subgroupSlots[subgroupID];
@@ -500,7 +517,7 @@ layout(std430, binding = 0) readonly buffer Input {
                 float inclusive = 0.0f;
                 for (const std::size_t slot : subgroupSlots[subgroupID]) {
                     const std::uint32_t localIndex = output.invocation[slot].x;
-                    inclusive += ExpectedInput(mode, localIndex);
+                    inclusive += ExpectedInput(mode, localIndex, sampledLuminance);
                     nativePrefix[slot] = inclusive;
                     const float actualNative = output.reduction[slot].y;
                     if (!SameBits(actualNative, inclusive)) {
@@ -582,8 +599,7 @@ layout(std430, binding = 0) readonly buffer Input {
             std::array<float, kInvocationCount> mergedPrefix = nativePrefix;
             std::vector<float> cache = nativeSubtotal;
             std::uint32_t loopLength = std::bit_width(reportedNumSubgroups) - 1u;
-            loopLength +=
-                static_cast<std::uint32_t>(reportedNumSubgroups - (1u << (loopLength - 1u)) > 0u);
+            loopLength += static_cast<std::uint32_t>(reportedNumSubgroups - (1u << (loopLength - 1u)) > 0u);
             for (std::uint32_t scanStage = 0u; scanStage < loopLength; ++scanStage) {
                 std::vector<float> cacheAfterStage = cache;
                 for (std::uint32_t subgroupID = 0; subgroupID < reportedNumSubgroups; ++subgroupID) {
@@ -630,8 +646,8 @@ layout(std430, binding = 0) readonly buffer Input {
                 const float actualAverage = output.finalAverage[slotForLocal[localIndex]];
                 if (!SameBits(actualAverage, firstAverage)) {
                     std::ostringstream message;
-                    message << "finalAverage differs: localIndex 0 has " << FormatFloat(firstAverage)
-                            << ", localIndex " << localIndex << " has " << FormatFloat(actualAverage);
+                    message << "finalAverage differs: localIndex 0 has " << FormatFloat(firstAverage) << ", localIndex "
+                            << localIndex << " has " << FormatFloat(actualAverage);
                     return Failure("final average", message.str());
                 }
             }
@@ -645,15 +661,14 @@ layout(std430, binding = 0) readonly buffer Input {
             }
             const std::size_t index511Slot = slotForLocal[kInvocationCount - 1u];
             const UVec4& index511Subgroup = output.subgroup[index511Slot];
-            ownerResult.index511IsSourceLastLaneWriter =
-                index511Subgroup.w == index511Subgroup.x - 1u;
-            ownerResult.index511IsHighestSubgroupMember =
-                index511Subgroup.z == ownerResult.highestObservedSubgroup;
+            ownerResult.index511IsSourceLastLaneWriter = index511Subgroup.w == index511Subgroup.x - 1u;
+            ownerResult.index511IsHighestSubgroupMember = index511Subgroup.z == ownerResult.highestObservedSubgroup;
             if (!ownerResult.index511IsSourceLastLaneWriter || !ownerResult.index511IsHighestSubgroupMember) {
                 std::ostringstream message;
                 message << "iterationRP topology incompatibility: localIndex 511 is sourceLastLaneWriter="
-                        << ownerResult.index511IsSourceLastLaneWriter << ", highestSubgroupMember="
-                        << ownerResult.index511IsHighestSubgroupMember << " (subgroupID=" << index511Subgroup.z
+                        << ownerResult.index511IsSourceLastLaneWriter
+                        << ", highestSubgroupMember=" << ownerResult.index511IsHighestSubgroupMember
+                        << " (subgroupID=" << index511Subgroup.z
                         << ", highest observed subgroupID=" << ownerResult.highestObservedSubgroup << ')';
                 ownerResult.ok = false;
                 ownerResult.phase = "final average";
@@ -662,9 +677,11 @@ layout(std430, binding = 0) readonly buffer Input {
             }
 
             float total = 0.0f;
-            for (const float subtotal : nativeSubtotal) total += subtotal;
+            for (const float subtotal : nativeSubtotal)
+                total += subtotal;
             float sampledExpectedTotal = 0.0f;
-            for (std::size_t i = 0; i < kInvocationCount; ++i) sampledExpectedTotal += kSampledLuminance;
+            for (std::size_t i = 0; i < kInvocationCount; ++i)
+                sampledExpectedTotal += sampledLuminance;
             const float expectedTotal = mode == InputMode::IndexedSsbo ? 131328.0f : sampledExpectedTotal;
             if (!SameBits(total, expectedTotal) || !SameBits(mergedPrefix[index511Slot], expectedTotal)) {
                 std::ostringstream message;
@@ -689,8 +706,8 @@ layout(std430, binding = 0) readonly buffer Input {
             return ownerResult;
         }
 
-        void DumpProbe(const ProbeOutput& output, const CapabilityInfo& capabilities, const ValidationResult& validation,
-                       bool includeScanStages) {
+        void DumpProbe(const ProbeOutput& output, const CapabilityInfo& capabilities,
+                       const ValidationResult& validation, bool includeScanStages) {
             PrintMetadata(capabilities, std::cout);
             if (validation.ok) {
                 std::cout << "IterationRPFirstReductionScenario firstFailure=none\n";
@@ -804,7 +821,8 @@ layout(std430, binding = 0) readonly buffer Input {
 
                 if (mode == InputMode::IndexedSsbo) {
                     std::array<float, kInvocationCount> values{};
-                    for (std::size_t i = 0; i < values.size(); ++i) values[i] = static_cast<float>(i + 1u);
+                    for (std::size_t i = 0; i < values.size(); ++i)
+                        values[i] = static_cast<float>(i + 1u);
                     glGenBuffers(1, &m_inputBuffer);
                     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_inputBuffer);
                     glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(values), values.data(), GL_STATIC_DRAW);
@@ -866,9 +884,9 @@ layout(std430, binding = 0) readonly buffer Input {
                     RecordProperty("iterationrp_highest_observed_subgroup",
                                    std::to_string(validation.highestObservedSubgroup));
                     std::cout << "IterationRPFirstReductionScenario owner: localIndex511 sourceLastLaneWriter="
-                              << validation.index511IsSourceLastLaneWriter << ", highestSubgroupMember="
-                              << validation.index511IsHighestSubgroupMember << ", highestObservedSubgroup="
-                              << validation.highestObservedSubgroup << '\n';
+                              << validation.index511IsSourceLastLaneWriter
+                              << ", highestSubgroupMember=" << validation.index511IsHighestSubgroupMember
+                              << ", highestObservedSubgroup=" << validation.highestObservedSubgroup << '\n';
                 }
                 if (!validation.ok || DumpRequested()) {
                     DumpProbe(output, m_capabilities, validation, validation.scanStageMismatch || DumpRequested());

@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# MobileGL - tools/trace_replay/skills/renderdoc-debug-on-trace-replay/scripts/queue_android_frame.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """Queue an exact RenderDoc frame through an Android TargetControl socket."""
 
 from __future__ import annotations

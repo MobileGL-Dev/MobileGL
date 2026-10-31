@@ -108,8 +108,10 @@ void main()
                 if (!Ready()) return;
                 glBindProgramPipeline(0);
                 glUseProgram(0);
-                for (GLuint p : m_programs) glDeleteProgram(p);
-                for (GLuint p : m_pipelines) glDeleteProgramPipelines(1, &p);
+                for (GLuint p : m_programs)
+                    glDeleteProgram(p);
+                for (GLuint p : m_pipelines)
+                    glDeleteProgramPipelines(1, &p);
                 m_programs.clear();
                 m_pipelines.clear();
             }
@@ -454,7 +456,7 @@ void main() { o_color = u_color; }
     //
     // Runs on both backends. glShaderStorageBlockBinding is a GL 4.3 entry point with no ES
     // equivalent - ES fixes a storage block's binding at link from its layout(binding=)
-    // qualifier - so Espryt honours a rebinding by writing the effective binding into the ESSL
+    // qualifier - so Espryt honors a rebinding by writing the effective binding into the ESSL
     // it generates (the Binding decoration is rewritten before SPIRV-Cross emits, and the draw
     // path rebuilds a program whose override set has moved).
     TEST_F(ProgramPipelineScenario, AStorageBlockRebindingHoldsWithoutAPipeline) {
@@ -551,16 +553,16 @@ void main() { o_color = vec4(1.0); }
         const int height = gl.Height();
 
         static const char* kUniformBlockFS = R"(#version 430 core
-layout(std140) uniform Colour { vec4 u_colour; };
+layout(std140) uniform Color { vec4 u_color; };
 out vec4 o_color;
-void main() { o_color = u_colour; }
+void main() { o_color = u_color; }
 )";
         const GLuint vs = MakeSeparable(GL_VERTEX_SHADER, kSeparableVS);
         const GLuint fs = MakeSeparable(GL_FRAGMENT_SHADER, kUniformBlockFS);
         if (vs == 0 || fs == 0) return;
 
         constexpr GLuint kBinding = 3; // not the default 0 the declaration implies
-        const GLuint blockIndex = glGetUniformBlockIndex(fs, "Colour");
+        const GLuint blockIndex = glGetUniformBlockIndex(fs, "Color");
         ASSERT_NE(blockIndex, GL_INVALID_INDEX);
         glUniformBlockBinding(fs, blockIndex, kBinding);
         ASSERT_EQ(FirstGLError(), 0u) << "glUniformBlockBinding on a separable program errored";
@@ -696,15 +698,15 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, u_mvp[3][3]); }
         const int height = gl.Height();
 
         static const char* kUniformBlockFS = R"(#version 430 core
-layout(std140) uniform Colour { vec4 u_colour; };
+layout(std140) uniform Color { vec4 u_color; };
 out vec4 o_color;
-void main() { o_color = u_colour; }
+void main() { o_color = u_color; }
 )";
         const GLuint vs = MakeSeparable(GL_VERTEX_SHADER, kSeparableVS);
         const GLuint fs = MakeSeparable(GL_FRAGMENT_SHADER, kUniformBlockFS);
         if (vs == 0 || fs == 0) return;
 
-        // Two buffers on two different binding points, holding two different colours.
+        // Two buffers on two different binding points, holding two different colors.
         const GLfloat red[4] = {1.0f, 0.0f, 0.0f, 1.0f};
         const GLfloat green[4] = {0.0f, 1.0f, 0.0f, 1.0f};
         constexpr GLuint kFirstBinding = 2;
@@ -719,7 +721,7 @@ void main() { o_color = u_colour; }
         glBindBufferBase(GL_UNIFORM_BUFFER, kSecondBinding, buffers[1]);
         glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
-        const GLuint blockIndex = glGetUniformBlockIndex(fs, "Colour");
+        const GLuint blockIndex = glGetUniformBlockIndex(fs, "Color");
         ASSERT_NE(blockIndex, GL_INVALID_INDEX);
         glUniformBlockBinding(fs, blockIndex, kFirstBinding);
 
@@ -742,7 +744,7 @@ void main() { o_color = u_colour; }
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         const Image first = ReadPixels(width, height);
         EXPECT_TRUE(RegionIsMostly(first, 2, width - 3, 2, height - 3, "red", 0.0,
-                                   "the first pipeline draw, with Colour on binding 2"));
+                                   "the first pipeline draw, with Color on binding 2"));
         ASSERT_EQ(FirstGLError(), 0u) << "the first uniform-block pipeline draw leaked a GL error";
 
         // Move the block to the other binding point, with the composite already built and cached.
@@ -754,7 +756,7 @@ void main() { o_color = u_colour; }
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         const Image second = ReadPixels(width, height);
         EXPECT_TRUE(RegionIsMostly(second, 2, width - 3, 2, height - 3, "green", 0.0,
-                                   "the second pipeline draw, after Colour was rebound to binding 5"));
+                                   "the second pipeline draw, after Color was rebound to binding 5"));
         EXPECT_EQ(FirstGLError(), 0u) << "the rebound uniform-block pipeline draw leaked a GL error";
 
         glBindVertexArray(0);
@@ -783,17 +785,17 @@ void main() { o_color = texture(u_tex, vec2(0.5)); }
         const GLuint fs = MakeSeparable(GL_FRAGMENT_SHADER, kSamplerFS);
         if (vs == 0 || fs == 0) return;
 
-        // One texture per unit, each a different solid colour, so the pixels say which unit the
+        // One texture per unit, each a different solid color, so the pixels say which unit the
         // draw actually sampled.
         constexpr int kUnits = 4;
-        const GLubyte colours[kUnits][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255}};
+        const GLubyte colors[kUnits][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255}};
         const char* names[kUnits] = {"red", "green", "blue", "yellow"};
         GLuint textures[kUnits] = {};
         glGenTextures(kUnits, textures);
         for (int unit = 0; unit < kUnits; ++unit) {
             glActiveTexture(GL_TEXTURE0 + unit);
             glBindTexture(GL_TEXTURE_2D, textures[unit]);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, colours[unit]);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, colors[unit]);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         }
@@ -851,9 +853,9 @@ void main() { o_color = texture(u_tex, vec2(0.5)); }
         glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
 
         std::string error;
-        const unsigned int monolithic = CompileProgram(
-            "#version 330 core\nin vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos,0.0,1.0); }\n",
-            "#version 330 core\nout vec4 o;\nvoid main(){ o = vec4(1.0,0.0,0.0,1.0); }\n", &error);
+        const unsigned int monolithic =
+            CompileProgram("#version 330 core\nin vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos,0.0,1.0); }\n",
+                           "#version 330 core\nout vec4 o;\nvoid main(){ o = vec4(1.0,0.0,0.0,1.0); }\n", &error);
         ASSERT_NE(monolithic, 0u) << error;
         m_programs.push_back(monolithic);
 

@@ -16,6 +16,7 @@
 #include "ProgramState/ProgramState.h"
 #include "ProgramState/ProgramPipelineObject.h"
 #include "SamplerState/SamplerState.h"
+#include "ShareGroupState.h"
 #include "TextureState/TextureState.h"
 #include "FramebufferState/FramebufferState.h"
 #include "VertexArrayState/VertexArrayState.h"
@@ -23,21 +24,50 @@
 
 namespace MobileGL::MG_Util::ShaderTranspiler {
     struct CompileEnv;
-}
+} // namespace MobileGL::MG_Util::ShaderTranspiler
 
 namespace MobileGL {
     namespace MG_State {
         void Init();
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // THE SERVER SESSION GENERATION. A split client advances it each time a session with a
+        // server comes up; every GLContext records the value it was built under. A device loss
+        // ends a session, and once a fresh one replaces it every context built before is lost:
+        // its objects exist only on the dead session's server. 0 is "no session yet" (a monolith
+        // run, or a context built before the first bring-up), which no later session ends.
+        Uint64 CurrentWireEpoch();
+        void AdvanceWireEpoch();
+#endif
+
         namespace GLState {
+            // MGPAttribValue::ValueClass' encoding (MG_Pipe/MGPipeTypes.h documents the order
+            // "Float | Int | Uint | Double"). It lives here rather than in MG_Pipe because the
+            // FRONTEND is the only thing that knows which of the three views below a value was
+            // written through - the other two are numeric conversions of it - and MG_Pipe has
+            // no enum for the field yet. If package A introduces one, this becomes its alias.
+            inline constexpr Uint32 kVertexAttribValueClassFloat = 0;
+            inline constexpr Uint32 kVertexAttribValueClassInt = 1;
+            inline constexpr Uint32 kVertexAttribValueClassUint = 2;
+
             struct CurrentVertexAttributeValue {
                 Array<Float, 4> floatValue{0.f, 0.f, 0.f, 1.f};
                 Array<Int32, 4> intValue{0, 0, 0, 1};
                 Array<Uint32, 4> uintValue{0u, 0u, 0u, 1u};
+                // Three scalar arrays and NOTHING ELSE. MG_Backend/MGPipe/PipeInputs.cpp
+                // compares this storage with one memcmp and asserts that size, so a fourth
+                // member here is a build break in a file P2 package B does not own. The
+                // written-class discriminator set_vertex_attrib_defaults needs therefore
+                // lives beside the array on GLContext, not inside the value.
             };
 
             // Which of the three views above a shader input of a given GLSL type consumes.
-            enum class VertexAttribBaseType { Unsupported, Float, Int, Uint };
+            enum class VertexAttribBaseType {
+                Unsupported,
+                Float,
+                Int,
+                Uint
+            };
 
             struct VertexAttribTypeInfo {
                 VertexAttribBaseType baseType = VertexAttribBaseType::Unsupported;
@@ -60,7 +90,42 @@ namespace MobileGL {
 
             class GLContext {
             public:
-                GLContext() = default;
+                // A context with a share group of its own. Created through EGL, a context
+                // either starts a new group or joins the one its share context belongs to;
+                // this constructor is the standalone shape the tests and the process default
+                // context use.
+                GLContext();
+                explicit GLContext(SharedPtr<ShareGroupState> shareGroup);
+
+                // The GL objects this context shares with every context that shares with it.
+                const SharedPtr<ShareGroupState>& GetShareGroup() const { return m_shareGroup; }
+
+                // Installs the process-wide default framebuffer (GL name 0) into this context:
+                // its table entry and the Draw/Read bindings the context starts with.
+                void InstallDefaultFramebuffer(const SharedPtr<FramebufferObject>& framebuffer);
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // The server session this context was built against (CurrentWireEpoch() at its
+                // construction). Its objects live on that session's server and nowhere else, so
+                // once a later session has replaced it - after a device loss - the context is
+                // lost for good: nothing it holds may reach the new session.
+                Uint64 WireEpoch() const { return m_wireEpoch; }
+                Bool IsFromEndedWireSession() const;
+                // GL_CONTEXT_LOST is reported by glGetError once per lost context, then the
+                // error queue is clear again (a caller draining errors in a loop terminates).
+                Bool TakeContextLostReport() {
+                    if (m_contextLostReported) return false;
+                    m_contextLostReported = true;
+                    return true;
+                }
+                // True the first time glGetGraphicsResetStatus reports this context's reset (the
+                // one time it names the cause in the log).
+                Bool TakeResetStatusReport() {
+                    if (m_resetStatusReported) return false;
+                    m_resetStatusReported = true;
+                    return true;
+                }
+#endif
 
                 // Error
                 void RecordError(ErrorCode code, UniquePtr<ErrorInfo> info);
@@ -124,6 +189,12 @@ namespace MobileGL {
                     m_textureState.NoteUnitTouched(unit, bindingChanged);
                 }
                 Int GetMaxTouchedTextureUnit() const { return m_textureState.GetMaxTouchedUnit(); }
+                // The IMAGE-unit high-water mark, which is a different namespace from the
+                // texture-unit one above - see TextureState::NoteImageUnitTouched for why it is a
+                // second mark and why it only grows. Push builds only, so the pull build's
+                // GLContext is untouched (G1).
+                void NoteImageUnitTouched(Int unit) { m_textureState.NoteImageUnitTouched(unit); }
+                Int GetMaxTouchedImageUnit() const { return m_textureState.GetMaxTouchedImageUnit(); }
                 // Monotonic counter bumped whenever a texture bind/unbind/delete changes which
                 // texture is bound at a unit; lets a backend skip re-resolving an unchanged
                 // per-draw sampled-texture set.
@@ -136,7 +207,10 @@ namespace MobileGL {
                 Uint64 GetSamplingResolutionGeneration() const {
                     return m_textureState.GetSamplingResolutionGeneration();
                 }
-                void BumpSamplingResolutionGeneration() { m_textureState.BumpSamplingResolutionGeneration(); }
+                void BumpSamplingResolutionGeneration() {
+                    m_textureState.BumpSamplingResolutionGeneration();
+                    m_shareGroup->BumpSharedClock(ShareGroupState::SharedClock::SamplingResolution);
+                }
                 // Never-reused id of this context, for backend memos keyed on the two counters
                 // above: both restart at 0 in a new context, and a recreated context can land on
                 // the old heap address. See TextureState::GetContextId.
@@ -164,7 +238,7 @@ namespace MobileGL {
                 // P1 stage 6: the per-context index of adoptable compile nodes, for its
                 // adoption counter. Diagnostics and tests only - no GL entry point reads it.
                 ShaderCompileAdoptionMap& GetShaderCompileAdoptionMap() {
-                    return m_programState.GetShaderCompileAdoptionMap();
+                    return Group().Programs().GetShaderCompileAdoptionMap();
                 }
                 void UseProgram(Uint program);
                 const SharedPtr<ProgramObject>& GetCurrentProgram();
@@ -197,6 +271,74 @@ namespace MobileGL {
                 const SharedPtr<ProgramPipelineObject>& GetProgramPipelineObject(Uint index) const;
                 Uint GetBoundProgramPipelineName() const { return m_boundProgramPipeline; }
                 const SharedPtr<ProgramPipelineObject>& GetBoundProgramPipeline() const;
+
+                // ---- the aggregate generations (P2 brief D4) ----
+                //
+                // The bump points sit on OBJECTS - a VertexArrayObject, a TextureObject, a
+                // BufferObject - which have no back-pointer to the state container that owns
+                // them, so MGP_NOTE_AGGREGATE goes through MGPipeNoteAggregate, which finds
+                // the live context and lands here. This facade is the whole reason the
+                // objects need no back-pointer, and it is push-only so the pull build's
+                // GLContext is byte-identical (G1).
+                void NoteVaoAttributeChanged() { m_vertexArrayState.NoteAttributeChanged(); }
+                Uint64 GetAnyVaoAttributeGeneration() const { return m_vertexArrayState.GetAnyAttributeGeneration(); }
+                // The framebuffer and the two texture aggregates (and the sampling resolution
+                // generation above) also bump the share group's twin: the objects behind them are
+                // the group's, and a sibling context's walk has to see the change too
+                // (ShareGroupState's share clocks, C8).
+                void NoteFramebufferAttachmentChanged() {
+                    m_framebufferState.NoteAttachmentChanged();
+                    m_shareGroup->BumpSharedClock(ShareGroupState::SharedClock::FramebufferAttachment);
+                }
+                Uint64 GetAnyFramebufferAttachmentGeneration() const {
+                    return m_framebufferState.GetAnyAttachmentGeneration();
+                }
+                void NoteTextureContentChanged() {
+                    m_textureState.NoteTextureContentChanged();
+                    m_shareGroup->BumpSharedClock(ShareGroupState::SharedClock::TextureContent);
+                }
+                Uint64 GetAnyTextureContentGeneration() const {
+                    return m_textureState.GetAnyTextureContentGeneration();
+                }
+                void NoteTextureParamsChanged() {
+                    m_textureState.NoteTextureParamsChanged();
+                    m_shareGroup->BumpSharedClock(ShareGroupState::SharedClock::TextureParams);
+                }
+                Uint64 GetAnyTextureParamsGeneration() const { return m_textureState.GetAnyTextureParamsGeneration(); }
+                void NoteBufferChanged() { m_bufferState.NoteBufferChanged(); }
+                Uint64 GetAnyBufferChangeGeneration() const { return m_bufferState.GetAnyBufferChangeGeneration(); }
+                // P5e (sb): the per-target INDEXED BINDING POINT generation, which is what dirty
+                // bits 15/16/17 shutter on now. See BufferState::NoteBindPointChanged for why
+                // the content aggregate above could not answer the question.
+                void NoteBufferBindPointChanged(BufferTarget target) { m_bufferState.NoteBindPointChanged(target); }
+                Uint64 GetBufferBindPointGeneration(BufferTarget target) const {
+                    return m_bufferState.GetBindPointGeneration(target);
+                }
+                // The sixth aggregate lives here rather than on a state container because
+                // the values it guards do too (m_currentVertexAttributes).
+                void NoteVertexAttribDefaultChanged() { ++m_anyVertexAttribDefaultGeneration; }
+                Uint64 GetAnyVertexAttribDefaultGeneration() const { return m_anyVertexAttribDefaultGeneration; }
+
+                // Which of the three views of m_currentVertexAttributes[index] the last
+                // glVertexAttrib* write filled DIRECTLY. The other two are NUMERIC
+                // conversions of it (SetCurrentVertexAttribute* below), not bit copies, so
+                // four words on a wire are not the value unless the class travels with them:
+                // glVertexAttrib4f(loc, 1.5f, ...) leaves 1 in intValue and 0x3FC00000 in
+                // floatValue. set_vertex_attrib_defaults carries this as MGPAttribValue's
+                // ValueClass AND, since P5c rv (CONTRACT-P5C.md §5.3), all three views
+                // verbatim - the applier writes each view from its own array rather than
+                // redoing the conversion.
+                //
+                // It is kept BESIDE the array rather than inside CurrentVertexAttributeValue
+                // because that struct is mirrored into PipeInputs and compared there by a
+                // memcmp whose size assertion (MG_Backend/MGPipe/PipeInputs.cpp) is a file
+                // this package does not own - and because it need not be mirrored: the class
+                // only decides how to REBUILD the three views, so two writes that leave the
+                // three views identical rebuild identically whichever class they carried.
+                Uint32 GetCurrentVertexAttributeClass(Uint index) const {
+                    return index < m_currentVertexAttributeClasses.size() ? m_currentVertexAttributeClasses[index]
+                                                                          : kVertexAttribValueClassFloat;
+                }
 
                 // RenderState
                 Uint GetRenderStateParametersVersion() const;
@@ -287,6 +429,11 @@ namespace MobileGL {
                 Uint32 GetSampleMaskValue() const;
                 void SetMinSampleShadingValue(Float value);
                 Float GetMinSampleShadingValue() const;
+                void SetShadingRate(Uint8 rate);
+                Uint8 GetShadingRate() const;
+                void SetShadingRateCombinerOps(Uint8 op0, Uint8 op1);
+                Uint8 GetShadingRateCombinerOp0() const;
+                Uint8 GetShadingRateCombinerOp1() const;
                 void SetPixelStoreParam(PixelStoreParam param, Int value);
                 Int GetPixelStoreParam(PixelStoreParam param) const;
                 PixelStoreParameters GetPixelStoreParameters(Bool isUnpack) const;
@@ -305,6 +452,7 @@ namespace MobileGL {
                 // feedback object currently bound to GL_TRANSFORM_FEEDBACK; see the object
                 // block further down for how a bind swaps them.
                 void BeginTransformFeedback(GLenum primitiveMode, const SharedPtr<ProgramObject>& program) {
+                    ++m_transformFeedbackValuesGeneration;
                     m_transformFeedbackActive = true;
                     m_transformFeedbackPaused = false;
                     m_transformFeedbackPrimitiveMode = primitiveMode;
@@ -314,6 +462,7 @@ namespace MobileGL {
                     m_transformFeedbackInputPrimitives = 0;
                 }
                 void EndTransformFeedback() {
+                    ++m_transformFeedbackValuesGeneration;
                     m_transformFeedbackActive = false;
                     m_transformFeedbackPaused = false;
                     m_transformFeedbackProgram.reset();
@@ -324,7 +473,10 @@ namespace MobileGL {
                 }
                 Bool IsTransformFeedbackActive() const { return m_transformFeedbackActive; }
                 Bool IsTransformFeedbackPaused() const { return m_transformFeedbackPaused; }
-                void SetTransformFeedbackPaused(Bool paused) { m_transformFeedbackPaused = paused; }
+                void SetTransformFeedbackPaused(Bool paused) {
+                    ++m_transformFeedbackValuesGeneration;
+                    m_transformFeedbackPaused = paused;
+                }
                 GLenum GetTransformFeedbackPrimitiveMode() const { return m_transformFeedbackPrimitiveMode; }
                 const SharedPtr<ProgramObject>& GetTransformFeedbackProgram() const {
                     return m_transformFeedbackProgram;
@@ -352,7 +504,16 @@ namespace MobileGL {
                 // Vertices already captured since BeginTransformFeedback (drives the
                 // buffer-capacity clamp on the primitives-written accounting).
                 void AddTransformFeedbackCapturedVertices(Uint64 vertices) {
+                    ++m_transformFeedbackValuesGeneration;
                     m_transformFeedbackCapturedVertices += vertices;
+                }
+                // P14: moves whenever any input of set_context_values does (the active texture
+                // unit, the two touched high-water marks, the transform feedback state of the bound
+                // object). Each half only ever counts up, so the sum moves exactly when one does;
+                // the emitter skips rebuilding the record while it holds.
+                Uint64 GetContextValuesGeneration() const {
+                    return m_textureState.GetContextValuesGeneration() + m_bufferState.GetContextValuesGeneration() +
+                           m_transformFeedbackValuesGeneration;
                 }
                 Uint64 GetTransformFeedbackCapturedVertices() const { return m_transformFeedbackCapturedVertices; }
                 // Raw assembled input primitives fed to the capture stage since Begin
@@ -427,6 +588,28 @@ namespace MobileGL {
                 void BindTransformFeedbackObject(Uint index);
                 void MarkTransformFeedbackObjectForDeletion(Uint index);
                 Uint GetBoundTransformFeedbackName() const { return m_boundTransformFeedback; }
+                // The bound object's never-reused identity, for a backend that keys a per-object
+                // resource on it. The NAME is not an identity: glGenTransformFeedbacks recycles a
+                // deleted one (LIFO), so a memo keyed on the name hands a brand-new object the dead
+                // one's slot. Cached rather than looked up on demand: the backend asks twice per
+                // captured draw, and an operator[] on m_transformFeedbackObjects would be an
+                // INSERT on the draw path - ska::flat_hash_map invalidates every reference into
+                // itself when it rehashes. The cache is refreshed by
+                // RestoreBoundTransformFeedbackState, which every bind (and the revert a delete
+                // performs) goes through, and seeded for the default object by the constructor.
+                // Never returns 0 - the counter starts at 1 so a zero-initialized memo slot cannot
+                // be mistaken for a live object.
+                Uint64 GetBoundTransformFeedbackLifetimeId() const { return m_boundTransformFeedbackLifetimeId; }
+                Uint64 GetTransformFeedbackLifetimeId(Uint index) const;
+                // Whether the object carrying this identity still has an OPEN capture span - one
+                // that glBeginTransformFeedback started and glEndTransformFeedback has not closed,
+                // paused or not. A backend that hands out a bounded set of per-object slots must
+                // never take one of these over: a paused span's counters are precisely what its
+                // resume reads, and GL only lets other objects capture WHILE it is paused, so the
+                // paused object is also the one that looks idle. An identity no live object
+                // carries any more (its object was deleted) answers false, which is what makes
+                // such a slot reclaimable.
+                Bool HasOpenTransformFeedbackSpan(Uint64 lifetimeId) const;
                 // Vertices the object captured in its last completed span; the vertex count
                 // glDrawTransformFeedback replays.
                 Uint64 GetTransformFeedbackRecordedVertices(Uint index) const;
@@ -449,6 +632,11 @@ namespace MobileGL {
                 // Framebuffer
                 void GenFramebufferNames(Uint number, Vector<Uint>& framebuffers);
                 const SharedPtr<FramebufferObject>& GetFramebufferObject(Uint index);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // See FramebufferState::FindFramebufferObjectByLifetimeId - the named-blit
+                // consumer's handle-to-frontend resolution on a backend with no FBO twins.
+                SharedPtr<FramebufferObject> FindFramebufferObjectByLifetimeId(Uint64 lifetimeId) const;
+#endif
                 BindingSlot<FramebufferObject>& GetFramebufferBindingSlot(FramebufferTarget target);
                 const SharedPtr<FramebufferObject>& CreateFramebufferObject(Uint index);
                 void MarkFramebufferObjectForDeletion(Uint index);
@@ -485,6 +673,10 @@ namespace MobileGL {
                 void InvalidateCompileEnv();
 
             private:
+                ShareGroupState& Group() const { return *m_shareGroup; }
+
+                // The GL objects shared with every context that shares with this one.
+                SharedPtr<ShareGroupState> m_shareGroup;
                 // State Components
                 ErrorState m_errorState;
                 BufferState m_bufferState;
@@ -492,8 +684,12 @@ namespace MobileGL {
                 Array<CurrentVertexAttributeValue, VertexArrayObject::MAX_VERTEX_ATTRIBS> m_currentVertexAttributes{};
                 Bool m_transformFeedbackActive = false;
                 Bool m_transformFeedbackPaused = false;
+                Uint64 m_transformFeedbackValuesGeneration = 0;
                 GLenum m_transformFeedbackPrimitiveMode = GL_POINTS;
                 SharedPtr<ProgramObject> m_transformFeedbackProgram;
+                Uint64 m_anyVertexAttribDefaultGeneration = 0;
+                // Parallel to m_currentVertexAttributes; see GetCurrentVertexAttributeClass.
+                Array<Uint32, VertexArrayObject::MAX_VERTEX_ATTRIBS> m_currentVertexAttributeClasses{};
                 Uint64 m_transformFeedbackGeneration = 0;
                 // Source of the per-span ids above; never rolls back with an object switch.
                 Uint64 m_transformFeedbackNextGeneration = 0;
@@ -514,6 +710,9 @@ namespace MobileGL {
                 GLuint m_conditionalRenderQuery = 0;
                 GLenum m_conditionalRenderMode = GL_NONE;
 
+                // Process-wide, never-reused. See GetBoundTransformFeedbackLifetimeId(); same
+                // contract as BufferObject::AllocateLifetimeId().
+                static Uint64 AllocateTransformFeedbackLifetimeId();
                 // Everything a transform feedback object owns while it is NOT the bound one.
                 struct TransformFeedbackObjectState {
                     struct SavedBufferBinding {
@@ -532,14 +731,22 @@ namespace MobileGL {
                     Uint64 recordedVertices = 0;
                     Bool hasCompletedSpan = false;
                     Bool everBound = false;
+                    // Assigned by the default member initializer, so every way an object comes into
+                    // being - operator[] materialization, `= {}` in Gen/Create - gets a fresh one,
+                    // and a recycled NAME never brings the dead object's id back with it.
+                    Uint64 lifetimeId = AllocateTransformFeedbackLifetimeId();
                 };
                 void SaveBoundTransformFeedbackState();
                 void RestoreBoundTransformFeedbackState();
-                // operator[] materialises an entry with the default state on first touch, so
+                // operator[] materializes an entry with the default state on first touch, so
                 // the default object (name 0) needs no seeding here.
                 UnorderedMap<Uint, TransformFeedbackObjectState> m_transformFeedbackObjects;
                 IndexGenerator<Uint> m_transformFeedbackNames;
                 Uint m_boundTransformFeedback = 0;
+                // Mirror of m_transformFeedbackObjects[m_boundTransformFeedback].lifetimeId, so
+                // the per-draw read is a load rather than a hash lookup that could insert.
+                // Seeded by the constructor and rewritten by RestoreBoundTransformFeedbackState.
+                Uint64 m_boundTransformFeedbackLifetimeId = 0;
                 // Map membership is object EXISTENCE, which is not the same as the answer
                 // glIsProgramPipeline gives: any command that needs somewhere to put state
                 // materializes a reserved name, so the object can exist well before it is
@@ -548,20 +755,116 @@ namespace MobileGL {
                 IndexGenerator<Uint> m_programPipelineNames;
                 Uint m_boundProgramPipeline = 0;
                 TextureState m_textureState;
-                ProgramState m_programState;
+                // The program this context has in use. Program STATE (the objects) belongs to
+                // the share group; which of them is current does not.
+                SharedPtr<ProgramObject> m_currentProgram;
                 RenderState m_renderState;
                 FramebufferState m_framebufferState;
-                SamplerState m_samplerState;
                 RenderbufferState m_renderbufferState;
 
                 mutable SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> m_compileEnv;
                 // Identity of the backend object m_compileEnv was captured against; a plain
                 // pointer compare, never dereferenced.
                 const void* m_compileEnvBackend = nullptr;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // See WireEpoch(); taken when the context is constructed.
+                Uint64 m_wireEpoch = CurrentWireEpoch();
+                Bool m_contextLostReported = false;
+                Bool m_resetStatusReported = false;
+#endif
             };
         } // namespace GLState
 
-        extern UniquePtr<GLState::GLContext>& pGLContext;
+        // P14 S3 (docs/Disaggregated/design/11-state-ownership.md): the GL state the CALLING
+        // THREAD's GL entry points read and write. eglMakeCurrent points it at that EGL
+        // context's GLContext, and the EGL release edge puts it back to whatever it was, so a
+        // thread that never crossed an eglMakeCurrent keeps the process default MG_State::Init()
+        // gave it. NULL on a thread for which neither has happened, the same answer a process
+        // that never reached MG_State::Init() (the spawn server image) has always given.
+        //
+        // P15: A PLAIN POINTER IN TLS, WITH THE OWNING REFERENCE KEPT BESIDE IT. Every GL entry
+        // point reads this, often several times. A thread_local with a destructor (the SharedPtr
+        // it used to be) is reached through its TLS init function, which tests a second
+        // thread_local guard first: two TLS address calls per read in a dlopen'ed library, at
+        // every API level. This object is trivially destructible and constant-initialized, so a
+        // read is one TLS address computation and a load. The SharedPtr that keeps the context
+        // alive lives in a separate thread_local in Core.cpp, written only by the assignments
+        // below (eglMakeCurrent and the release edge, MG_State::Init(), tests); at thread exit its
+        // destructor drops the reference and then clears this pointer, so no dangling pointer is
+        // left behind.
+        //
+        // Assignment, reset() and the SharedPtr conversions touch the owner and belong to the
+        // CALLING THREAD only: never assign through a reference to another thread's slot.
+        class CurrentGLContextSlot {
+        public:
+            constexpr CurrentGLContextSlot() = default;
+            CurrentGLContextSlot(const CurrentGLContextSlot&) = delete;
+            CurrentGLContextSlot& operator=(const CurrentGLContextSlot&) = delete;
+
+            GLState::GLContext* get() const { return m_context; }
+            GLState::GLContext* operator->() const { return m_context; }
+            GLState::GLContext& operator*() const { return *m_context; }
+            explicit operator bool() const { return m_context != nullptr; }
+
+            // The owning reference (cold: a second TLS read).
+            const SharedPtr<GLState::GLContext>& Shared() const;
+            operator const SharedPtr<GLState::GLContext>&() const& { return Shared(); }
+            // A move out of the slot is spelled Take(): std::move of the slot does not compile.
+            operator const SharedPtr<GLState::GLContext>&() const&& = delete;
+            SharedPtr<GLState::GLContext> Take();
+
+            CurrentGLContextSlot& operator=(SharedPtr<GLState::GLContext> context);
+            void reset() { *this = nullptr; }
+
+            friend Bool operator==(const CurrentGLContextSlot& slot, std::nullptr_t) {
+                return slot.m_context == nullptr;
+            }
+            friend Bool operator==(const CurrentGLContextSlot& slot, const SharedPtr<GLState::GLContext>& other) {
+                return slot.m_context == other.get();
+            }
+
+        private:
+            friend struct CurrentGLContextOwner;
+            GLState::GLContext* m_context = nullptr;
+        };
+        extern constinit thread_local CurrentGLContextSlot pGLContext;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // True on a thread whose last EGL release let go of a context lost with an ended server
+        // session, until it makes a context current again. The release hands such a thread the
+        // process default rather than the lost context's GL state (which would make the thread's
+        // TLS that state's last owner), so this is what keeps the thread answering as lost: an
+        // application that releases its context before asking glGetGraphicsResetStatus - Qt's
+        // render threads do - still learns that the context is gone and rebuilds it.
+        extern constinit thread_local Bool tThreadReleasedLostContext;
+#endif
+
+        // The fallback pGLContext starts at and an EGL release edge restores to: the process's
+        // one context for every thread that never bound an EGL context to itself, created on
+        // demand and owned here (leak-at-exit, like every other process global).
+        const SharedPtr<GLState::GLContext>& ProcessDefaultGLContext();
+
+        // Drops the process default context and this thread's binding to it, and the default
+        // framebuffer with them. Called on the teardown edge (the last eglTerminate, before
+        // MobileGL::Destroy()) so the objects MG_State::Init() built do not outlive
+        // glslang::FinalizeProcess() through a thread that kept its fallback binding.
+        void ReleaseProcessDefaultGLContext();
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A fresh process default context, after a device loss has ended the session the old one
+        // was built against; the default framebuffer slot is emptied for MG_Impl to rebuild. The
+        // calling thread moves to the new context if it was on the old one. Other threads keep
+        // the old (lost) one until their next EGL release edge, which restores to this one.
+        // Returns the old one, so the caller decides where its last reference goes.
+        SharedPtr<GLState::GLContext> ReplaceProcessDefaultGLContext();
+#endif
+
+        // P14 S3. GL framebuffer 0, built by MG_Impl once the backend is up (it needs texture
+        // objects, which need the backend's resource plumbing) and handed back here so every
+        // GLContext a later eglCreateContext builds starts with the same default framebuffer
+        // bound. Until the backend grows per-context native tuples there is exactly one such
+        // object, which is what the backend's own default-framebuffer identity tests assume.
+        void SetDefaultFramebuffer(SharedPtr<GLState::FramebufferObject> framebuffer);
+        const SharedPtr<GLState::FramebufferObject>& DefaultFramebuffer();
 
         // True when relaxed GL semantics apply. Strict core rules are enforced only when the
         // current EGL context explicitly requested a core profile (core bit in

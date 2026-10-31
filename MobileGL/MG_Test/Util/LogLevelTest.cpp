@@ -30,6 +30,12 @@
 #include <sstream>
 #include <string>
 
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
 
     // ---------------------------------------------------------------------------
@@ -76,6 +82,14 @@ namespace {
     // MOBILEGL_LOG_FILE_PATH at a temp file before gtest runs; this fixture emits one
     // line per level and then reads the file back.
     std::string g_logPath;
+
+    int ProcessId() {
+#if defined(_WIN32)
+        return _getpid();
+#else
+        return static_cast<int>(getpid());
+#endif
+    }
 
     struct Emitted {
         bool debug = false;
@@ -155,9 +169,9 @@ namespace {
         // live" - which is checkable in whichever configuration this was built in,
         // and is what makes the renumbering safe.
         const Emitted e = EmitAndRead();
-        EXPECT_EQ(kAssertsLive, e.debug)
-            << "MOBILEGL_ASSERT liveness (" << kAssertsLive << ") disagrees with MGLOG_D liveness ("
-            << e.debug << "). The Defines.h assert gate and the Log.h MGLOG_D gate have drifted.";
+        EXPECT_EQ(kAssertsLive, e.debug) << "MOBILEGL_ASSERT liveness (" << kAssertsLive
+                                         << ") disagrees with MGLOG_D liveness (" << e.debug
+                                         << "). The Defines.h assert gate and the Log.h MGLOG_D gate have drifted.";
     }
 
     TEST(LogLevel, AssertIsCompiledOutOfProductionBuilds) {
@@ -165,7 +179,7 @@ namespace {
             GTEST_SKIP() << "asserts are live in this configuration; see AssertIsLiveInDebugBuilds";
         } else {
             // If MOBILEGL_ASSERT were live here this would TRAP and take the process
-            // down, which is the behavioural half of the contract.
+            // down, which is the behavioral half of the contract.
             MOBILEGL_ASSERT(false, "this assert must be compiled out at %s", "INFO");
             SUCCEED();
         }
@@ -186,9 +200,11 @@ namespace {
 
 int main(int argc, char** argv) {
     // Must happen before anything logs: MG_Util::Debug::InitFile() reads the variable
-    // once, on the first write, and caches the FILE*.
+    // once, on the first write, and caches the FILE*. The name carries the process id because
+    // ctest runs each case as its own process, in parallel.
     namespace fs = std::filesystem;
-    const fs::path path = fs::temp_directory_path() / "mobilegl-loglevel-test.log";
+    const fs::path path =
+        fs::temp_directory_path() / ("mobilegl-loglevel-test-" + std::to_string(ProcessId()) + ".log");
     std::error_code ec;
     fs::remove(path, ec);
     g_logPath = path.string();
@@ -197,6 +213,12 @@ int main(int argc, char** argv) {
     _putenv_s("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str());
 #else
     setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
+#endif
+    // P6: the sink writes one file per role and the env is a BASE NAME. This suite emits on the
+    // main thread (client role), so the read path is the client-derived one; a pull build has
+    // no split and keeps the base. The env keeps the base either way.
+#if MOBILEGL_BUILD_DISAGGREGATED
+    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(), MobileGL::MG_Util::Debug::LogRole::Client);
 #endif
 
     ::testing::InitGoogleTest(&argc, argv);

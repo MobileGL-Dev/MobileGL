@@ -24,7 +24,7 @@ namespace MobileGL {
             //     '[' : array indexes for fragment outputs must be constant integral expressions
             //
             // The program then links nothing and every draw that uses it is a silent no-op.
-            // Mesa accepts the same source, which is why this only ever showed on the ANGLE
+            // llvmpipe accepts the same source, which is why this only ever showed on the ANGLE
             // lane (see tools/trace_replay/README.md, improved-transparency-minecraft-26.3:
             // the whole translucent layer disappears because the OIT coefficient shader is
             // exactly this shape).

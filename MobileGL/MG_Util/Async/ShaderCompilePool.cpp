@@ -40,7 +40,9 @@ namespace MobileGL::MG_Util::Async {
         // stack-allocated pools a test builds - those join themselves in their destructor.
         std::atomic<ShaderCompilePool*> g_processPool{nullptr};
 
-        Bool InProcessTeardown() { return g_processTeardown; }
+        Bool InProcessTeardown() {
+            return g_processTeardown;
+        }
 
         void EnsureProcessTeardownSentinel() {
             std::call_once(g_teardownSentinelOnce, [] {
@@ -53,15 +55,17 @@ namespace MobileGL::MG_Util::Async {
                     // it just also has to happen for a process that exits without ever
                     // calling eglTerminate, which is the norm for a test binary and legal
                     // for an application. Registered here, during main, so it runs before
-                    // the destructors of statics constructed at load time.
+                    // the destructors of statics constructed at load time. The MSVC runtime
+                    // runs this under its exit lock, so a worker that constructs a static for
+                    // the first time meanwhile deadlocks: a program linking MobileGL statically
+                    // drains before main returns, as MG_Test's TestMain.cpp does.
                     ShaderCompilePool::StopAndDrainProcessPoolAtExit();
                 });
             });
         }
 
         Uint64 ReadCpuMaxFrequencyKHz(const Uint cpu) {
-            const String path =
-                std::format("/sys/devices/system/cpu/cpu{}/cpufreq/cpuinfo_max_freq", cpu);
+            const String path = std::format("/sys/devices/system/cpu/cpu{}/cpufreq/cpuinfo_max_freq", cpu);
             std::FILE* file = std::fopen(path.c_str(), "r");
             if (file == nullptr) return 0;
             unsigned long long value = 0;
@@ -98,9 +102,12 @@ namespace MobileGL::MG_Util::Async {
 
     Bool AsyncShaderCompileEnabled() {
         switch (MG_Config::Features.AsyncShaderCompile) {
-        case MG_Config::QuirkOverride::ForceOn: return true;
-        case MG_Config::QuirkOverride::ForceOff: return false;
-        case MG_Config::QuirkOverride::Auto: break;
+        case MG_Config::QuirkOverride::ForceOn:
+            return true;
+        case MG_Config::QuirkOverride::ForceOff:
+            return false;
+        case MG_Config::QuirkOverride::Auto:
+            break;
         }
         return kAsyncShaderCompileDefault;
     }
@@ -126,16 +133,19 @@ namespace MobileGL::MG_Util::Async {
 
     Bool OptimisticShaderStatusActive() {
         switch (MG_Config::Features.AsyncOptimisticShaderStatus) {
-        case MG_Config::QuirkOverride::ForceOn: return AsyncShaderCompileActive();
-        case MG_Config::QuirkOverride::ForceOff: return false;
-        case MG_Config::QuirkOverride::Auto: break;
+        case MG_Config::QuirkOverride::ForceOn:
+            return AsyncShaderCompileActive();
+        case MG_Config::QuirkOverride::ForceOff:
+            return false;
+        case MG_Config::QuirkOverride::Auto:
+            break;
         }
         return kOptimisticShaderStatusDefault && AsyncShaderCompileActive();
     }
 
     Uint DetectShaderCompileThreadCount() {
         if (const Uint32 configured = MG_Config::Features.AsyncShaderCompileThreads; configured > 0) {
-            // An explicit request is honoured as given - it is the escape hatch for measuring
+            // An explicit request is honored as given - it is the escape hatch for measuring
             // scaling and for working around a device - so it is not squeezed into [1, 4].
             return configured;
         }
@@ -182,7 +192,8 @@ namespace MobileGL::MG_Util::Async {
                 ++inFlight;
                 try {
                     asio::post(*pool, [this, node]() mutable { RunOnWorker(Move(node)); });
-                } catch (...) {
+                }
+                catch (...) {
                     --inFlight;
                     toCancel.push_back(Move(node));
                 }
@@ -192,7 +203,7 @@ namespace MobileGL::MG_Util::Async {
         void RunOnWorker(SharedPtr<JobNode> node) {
             tl_isPoolThread = true;
             // A node that was already handed to Asio when StopAndDrain ran still arrives
-            // here; cancelling it first turns the dispatch into a state transition instead of
+            // here; canceling it first turns the dispatch into a state transition instead of
             // a full compile, so the drain's join() returns promptly. This Cancel() runs
             // before `mutex` is ever taken in this frame, so it is not subject to the
             // re-entrancy hazard DispatchLocked's comment describes.
@@ -215,7 +226,9 @@ namespace MobileGL::MG_Util::Async {
 
     ShaderCompilePool::ShaderCompilePool(const Uint threadCount) : m_impl(MakeUnique<Impl>(threadCount)) {}
 
-    ShaderCompilePool::~ShaderCompilePool() { StopAndDrain(); }
+    ShaderCompilePool::~ShaderCompilePool() {
+        StopAndDrain();
+    }
 
     ShaderCompilePool& ShaderCompilePool::Get() {
         // Leak-at-exit, like the other MobileGL singletons: the object itself is never
@@ -232,9 +245,13 @@ namespace MobileGL::MG_Util::Async {
         return *pool;
     }
 
-    Bool ShaderCompilePool::IsPoolThread() { return tl_isPoolThread; }
+    Bool ShaderCompilePool::IsPoolThread() {
+        return tl_isPoolThread;
+    }
 
-    Uint ShaderCompilePool::GetThreadCount() const { return m_impl->threadCount; }
+    Uint ShaderCompilePool::GetThreadCount() const {
+        return m_impl->threadCount;
+    }
 
     Uint ShaderCompilePool::GetMaxConcurrency() const {
         const std::lock_guard<std::mutex> lock(m_impl->mutex);
@@ -262,7 +279,7 @@ namespace MobileGL::MG_Util::Async {
         // Enqueueing can throw: the thread_pool construction and asio::post both allocate,
         // and under memory pressure a throw here would escape glCompileShader leaving the
         // node Pending with nothing left to dispatch it - the first observable read would
-        // then block the GL thread forever. Settle the node instead: a cancelled node is a
+        // then block the GL thread forever. Settle the node instead: a canceled node is a
         // state every joiner already handles.
         //
         // `node` is still valid in the catch for every throw this try can produce. The
@@ -280,9 +297,10 @@ namespace MobileGL::MG_Util::Async {
                 m_impl->DispatchLocked(toCancel);
                 enqueued = true;
             }
-        } catch (...) {
-            MGLOG_E_ONCE("ShaderCompilePool::Post: enqueue failed; cancelling the job so its joiner "
-                    "cannot block forever");
+        }
+        catch (...) {
+            MGLOG_E_ONCE("ShaderCompilePool::Post: enqueue failed; canceling the job so its joiner "
+                         "cannot block forever");
             if (node) node->Cancel();
             return;
         }

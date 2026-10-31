@@ -64,8 +64,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // vkCmdWriteTimestamp (valid both inside and outside a render pass).
         // Returns null on pool exhaustion, with one warning per pool cycle; the
         // frontend falls back gracefully on a null handle.
-        SharedPtr<TimestampRecord> WriteTimestamp(VkCommandBuffer commandBuffer, Uint32 frameIndex,
-                                                  Uint64 frameSerial);
+        SharedPtr<TimestampRecord> WriteTimestamp(VkCommandBuffer commandBuffer, Uint32 frameIndex, Uint64 frameSerial);
 
         // Non-blocking single-slot read (WITH_AVAILABILITY, no WAIT). Returns
         // true once the record holds its raw ticks. Callers gate this on the

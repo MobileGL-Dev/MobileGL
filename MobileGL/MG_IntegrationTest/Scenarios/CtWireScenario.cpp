@@ -1,0 +1,397 @@
+// MobileGL - MobileGL/MG_IntegrationTest/Scenarios/CtWireScenario.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// P5c ct (§5): the two control records, end to end over inproc.
+//
+// applier_reset (§5.1): this process's first validate primes the pipe tracker, and the
+// FreshlyPrimed edge is the record's producer (MG_Impl/Pipe/PipeFill.cpp). What the scenario
+// asserts is the server's own count of the control records it applied (`ar` and `od` on the
+// server role's PipeStats line, moved by nobody else) plus the pixels, so a reset that never
+// crossed is red by the count and a client that fell through to the driver is red by
+// ScenarioFixture's emit-ordinal rule.
+//
+// object_death (§5.2): a texture and a framebuffer die, the deaths cross, and the slots
+// recycle. The picture after recycling is the behavioral half: a stale twin answering for
+// the recycled object renders the DEAD object's content (or errors), which is the exact
+// shape LiveGenAt's generation check exists to refuse.
+//
+// RED ONCE for the reset (executed, recorded in the package report): reverting PipeFill's
+// FreshlyPrimed arm to the GL-thread direct MGPipeApplierReset() call aborts this whole lane
+// with Fatal{RoleViolation, "g_applier"} out of the applier's layer-2 guard. The automated
+// half of that control is TheDirectApplierResetCallOnTheGLThreadIsRoleViolation below, and
+// the guard's two non-Fatal arms are pinned in PipeWireCodecTest's CtWireFatals suite.
+
+#include "../Harness/PipeSlotPeek.h"
+#include "../Harness/PipeStatsWindow.h"
+#include "../Harness/ScenarioFixture.h"
+#include "../Harness/SplitRuntimePeek.h"
+
+#include <MG_Pipe/PipeApply.h>
+
+#if !defined(_WIN32)
+#include <csignal>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#endif
+
+#ifdef GLAPI
+#undef GLAPI
+#endif
+#define GL_GLEXT_PROTOTYPES
+#include <GL/gl.h>
+#include <GL/glcorearb.h>
+#undef GL_GLEXT_PROTOTYPES
+
+namespace MGITest {
+    namespace {
+
+        class CtWireScenario : public ScenarioTest {
+        protected:
+            void SetUp() override {
+                ScenarioTest::SetUp();
+                if (!Ready()) return;
+                const auto why = SplitRuntimeSkipReason();
+                if (!why.empty()) GTEST_SKIP() << why;
+            }
+
+            // One 4x4 RGBA8 texture whose every texel is `rgba`, uploaded so the object crosses
+            // (no handle, no record - CONTRACT-P5C.md §5.2: an object that never crossed emits
+            // nothing at death, and this case needs a real death).
+            GLuint MakeSolidTexture(const GLubyte rgba[4]) {
+                GLuint texture = 0;
+                glGenTextures(1, &texture);
+                glBindTexture(GL_TEXTURE_2D, texture);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+                GLubyte texels[4 * 4 * 4];
+                for (int i = 0; i < 4 * 4; ++i) {
+                    for (int c = 0; c < 4; ++c)
+                        texels[i * 4 + c] = rgba[c];
+                }
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+                return texture;
+            }
+
+            // The texture's level-0 content, read back through a throwaway FBO, as four bytes.
+            // The FBO is bound AND deleted here, so its death lands in whichever window is open
+            // and a case that counts deaths reads it outside the window it counts.
+            void ReadTextureLevel(GLuint texture, GLubyte out[4]) {
+                GLuint fbo = 0;
+                glGenFramebuffers(1, &fbo);
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+                glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, out);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                glDeleteFramebuffers(1, &fbo);
+            }
+
+            // The control records the server applied in one window: `ar` (applier_reset records
+            // accepted) and `od` (object_death records dispatched) on the server role's PipeStats
+            // line. The entries set MOBILEGL_PIPE_STATS=1 and MOBILEGL_PIPE_STATS_PERIOD=1, so every
+            // swap ends a window and writes one line: under inproc the apply thread writes it to the
+            // server role's log, under spawn and tcp the server process writes or forwards it there.
+            struct ControlRecords {
+                bool valid = false;
+                long long applierResets = -1;
+                long long objectDeaths = -1;
+            };
+
+            // Ends the current window. The records and the present that ends it are kWaitNone, so
+            // the client moves on and the server counts them when it applies them. A readback is
+            // kWaitReply on every arm, and its answer is posted only after its record and every
+            // earlier one were applied, the present and the line it writes included. The harness's
+            // applied-seq wait is not that boundary off inproc: there the client's progress page
+            // moves with frames rather than with the peer's apply.
+            void EndWindow() {
+                Gl().EndFrame();
+                GLubyte fence[4]{};
+                glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, fence);
+                EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the window's fence readback left a GL error behind";
+            }
+
+            // Ends the setup's window, so that the next one counts only what follows the mark.
+            PipeStatsWindow::LogMark StartWindow() {
+                EndWindow();
+                return PipeStatsWindow::MarkLaneLog();
+            }
+
+            ControlRecords EndWindowAndReadControlRecords(const PipeStatsWindow::LogMark& mark) {
+                EndWindow();
+                const PipeStatsWindow::Window window = PipeStatsWindow::LastFromServerLogSince(mark);
+                if (window.found) RecordProperty("stats_line_server", window.line);
+                ControlRecords records;
+                records.applierResets = PipeStatsWindow::CounterOrAbsent(window, "ar");
+                records.objectDeaths = PipeStatsWindow::CounterOrAbsent(window, "od");
+                records.valid = records.applierResets >= 0 && records.objectDeaths >= 0;
+                return records;
+            }
+        };
+
+        TEST_F(CtWireScenario, ApplierResetCrossesAtThePrimedEdgeInSerialOrder) {
+            if (!Ready()) return;
+            // The first verb of the process primes the tracker; the edge is the producer. The
+            // clear also gives the case its pixels, so a lane that emitted nothing is red twice
+            // (here and in the fixture's emit-ordinal rule).
+            const PipeStatsWindow::LogMark mark = PipeStatsWindow::MarkLaneLog();
+            glClearColor(0.2f, 0.4f, 0.6f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            GLubyte pixel[4]{};
+            glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "Ct.ApplierReset.error";
+            const int expected[4] = {51, 102, 153, 255};
+            for (int i = 0; i < 4; ++i)
+                EXPECT_NEAR(pixel[i], expected[i], 1) << "Ct.ApplierReset.pixels";
+
+            // No swap precedes this one in the process, so its window holds the edge wherever the
+            // first validate ran (this clear or the fixture's state reset). The serial needs no
+            // check of its own: OnApplierReset counts only a record whose serial it accepted, and
+            // any other latches Fatal{ProtocolCorruption, "ApplierReset.ContextSerial"}.
+            const ControlRecords counters = EndWindowAndReadControlRecords(mark);
+            ASSERT_TRUE(counters.valid) << "server control-record telemetry missing";
+            EXPECT_GE(counters.applierResets, 1)
+                << "the FreshlyPrimed edge emitted no applier_reset; the server's g_applier was "
+                   "never reset for this session";
+        }
+
+        TEST_F(CtWireScenario, TextureDeathCrossesAndTheRecycledSlotAnswersTheNewObject) {
+            if (!Ready()) return;
+            // P7 wave 2 package C: THE BACKEND GUARD IS GONE, and both halves of why it was here
+            // are answered rather than waived. The producer used to be Espryt-side only
+            // (OnFrontendStateObjectDestroyed, CONTRACT-P5C.md §5.2), so a DirectVulkan run had
+            // no death record to watch; Magma now installs its own StateObjectDeathOps
+            // (DirectVulkan.cpp, CONTRACT-P7 §5.5) and emits the same `object_death`. Package L
+            // measured that the SPAWN arm already passed once the WireTables install condition
+            // went backend-agnostic and that the INPROC arm failed here with `deaths` 0 vs 0
+            // (§6); the table is what closes the inproc
+            // half, and this case is the gate on it. It is also the RED-ONCE for that table: with
+            // the install site short-circuited, both cases red on their `od` assertions below.
+            const GLubyte red[4] = {255, 0, 0, 255};
+            const GLubyte green[4] = {0, 255, 0, 255};
+
+            // A texture lives and crosses (the upload emits its records). It is also READ BACK
+            // once before it dies: the read forces the server-side sync that creates the twin -
+            // and, one level down, resolves the Espryt slot arm that INSTALLS the death-notice
+            // ops, which no process has before its first twin lookup. The red picture is the
+            // pre-death control the recycle below is read against.
+            GLuint texture = MakeSolidTexture(red);
+            GLubyte before[4]{};
+            ReadTextureLevel(texture, before);
+            const int redExpected[4] = {255, 0, 0, 255};
+            for (int i = 0; i < 4; ++i)
+                ASSERT_NEAR(before[i], redExpected[i], 1) << "Ct.TextureDeath.before";
+
+            // The object dies unbound so the destructor - and the death record - fire at the
+            // delete. The counted window holds the delete alone: the FBO ReadTextureLevel deleted
+            // died in the setup's window, which StartWindow ends.
+            glBindTexture(GL_TEXTURE_2D, 0);
+            const PipeStatsWindow::LogMark mark = StartWindow();
+            glDeleteTextures(1, &texture);
+            const ControlRecords counters = EndWindowAndReadControlRecords(mark);
+            ASSERT_TRUE(counters.valid) << "server object-death telemetry missing";
+            EXPECT_GE(counters.objectDeaths, 1)
+                << "the texture's death produced no object_death record; the server's twin was "
+                   "never told to let go";
+
+            // The slot recycles forward: a new texture (the frontend hands the same GL name back
+            // more often than not, which is exactly the ABA shape) must answer with ITS content,
+            // not the dead twin's. Red then green, read back as pixels: a stale twin is red.
+            texture = MakeSolidTexture(green);
+            GLubyte pixel[4]{};
+            ReadTextureLevel(texture, pixel);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glDeleteTextures(1, &texture);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "Ct.TextureDeath.error";
+            const int expected[4] = {0, 255, 0, 255};
+            for (int i = 0; i < 4; ++i)
+                EXPECT_NEAR(pixel[i], expected[i], 1)
+                    << "Ct.TextureDeath.pixels - the recycled texture read back the dead twin's content";
+        }
+
+        // ------------------------------------------------------------------------------------
+        // P7 wave 2 package C, OQ-10 (CONTRACT-P7 §5.4): the resident-sub-data capability, read
+        // on the CLIENT, on a real session, on both backends and all three transports.
+        //
+        // WHAT IT PINS AND WHY IT IS HERE RATHER THAN IN A BUFFER SCENARIO. `kCapResidentSubData`
+        // is the one thing the frontend can ask, under a transport, about whether the side that
+        // will APPLY a write implements the resident arm: the client has no op table of its own
+        // to probe (MGPipeResourceOpsHaveSubDataResident says so in as many words) and reads this
+        // bit instead. Until this package nothing ever ORed it into the server's mask, so the
+        // answer was permanently "no" - which silently pinned BOTH backends to the ordered
+        // in-place host memcpy and made Magma's own SubDataResident arm
+        // (VkBufferManager.cpp's g_vulkanWireResourceOps) dead code on the wire. A capability
+        // that is never published is indistinguishable from one that does not exist, and no
+        // pixel, GL query or error can tell the two apart - so the bit itself is the assertion.
+        //
+        // THE SERVER HALF IS ASSERTED ELSEWHERE, deliberately: RemoteClientTest's
+        // MagmaTransportPublishesRealBufferConsumersWithoutRunAhead pins that the bit is DERIVED
+        // FROM THE SERVER'S OWN RESOURCE TABLE (`ops->SubDataResident != nullptr`) and never from
+        // a backend enum, which is ID-39's lesson. This case pins the other half - that what the
+        // server published actually reached the client - and the two together are what make the
+        // frontend's read of it mean anything.
+        //
+        // WHAT IT DOES NOT PIN, AND THE REASON IS R-6 RATHER THAN AN OMISSION. This does not
+        // assert that a `buffer_subdata_resident` record (opcode 49) crossed, because under a
+        // transport none can yet: the resident arm is reached only from a store that is GPU
+        // RESIDENT, residency comes only from AdoptPersistentMap, and every persistent-map
+        // acquisition declines under split by R-6 (PipeApply.cpp's MGPipeApplyMapPersistent:
+        // "A SPLIT BUILD RUNS AT TIER T2 AND DECLINES EVERY ACQUISITION, ALWAYS"; T0/T1 are
+        // unimplemented, refused by name at the handshake since P11 A1). So the capability is wired
+        // AHEAD of its consumer on purpose, and `rsd=` on the PipeStats line is the counter that
+        // will show the records the day P11 lands a tier that adopts. See the phase notes.
+        TEST_F(CtWireScenario, TheServerPublishesTheResidentSubDataCapabilityFromItsOwnTable) {
+            if (!Ready()) return;
+            // A REAL WORKLOAD FIRST, and it is not decoration: ScenarioFixture's arming rule
+            // (ScenarioFixture.h:90) fails a case that runs in an armed split lane without moving
+            // the client encoder's record ordinal, because a case that emits nothing cannot tell
+            // "the transport resolved and carried this session" from "the emit table resolved and
+            // then put nothing on the wire". The bit below is a property OF that session, so the
+            // session has to have carried something before the reading means anything.
+            glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            GLubyte pixel[4]{};
+            glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "Ct.ResidentSubDataCap.workload";
+            const int expected[4] = {64, 128, 191, 255};
+            for (int i = 0; i < 4; ++i)
+                EXPECT_NEAR(pixel[i], expected[i], 1) << "Ct.ResidentSubDataCap.pixels";
+
+            const auto runtime = PeekSplitRuntime();
+            if (!runtime.peekAvailable || !runtime.sessionActive) {
+                GTEST_SKIP() << "no split runtime peek or no live client session: 'could not look' "
+                                "and 'the bit was withheld' are the same false";
+            }
+            EXPECT_TRUE(runtime.residentSubDataCap)
+                << "the client's caps mirror did not receive kCapResidentSubData on a " << runtime.transportName
+                << " session with backend " << Gl().BackendName()
+                << ". The server publishes it in MG_Backend/Init.cpp's InitServerRoleCommon from "
+                   "its own wire resource table; without it every resident write falls back to "
+                   "the in-place memcpy and opcode 49 never crosses on either backend";
+        }
+
+        TEST_F(CtWireScenario, FramebufferDeathCrossesAndTheRecycledSlotAnswersTheNewObject) {
+            if (!Ready()) return;
+            // Backend-agnostic for the texture case's reason (P7 wave 2 package C): both
+            // backends now install a StateObjectDeathOps table and both emit `object_death`.
+            // Framebuffer is the kind object_death EXISTS for: it has no other wire delete
+            // opcode (CONTRACT-P5C.md §5.2) - which is exactly why the missing Magma table was
+            // a SERVER-side twin leak and not merely a missing counter: with no consumer for
+            // the notice, nothing on the wire ever told the server this framebuffer had died.
+            // The renderbuffer goes along so the FBO has storage.
+            GLuint fbo = 0, renderbuffer = 0;
+            glGenFramebuffers(1, &fbo);
+            glGenRenderbuffers(1, &renderbuffer);
+            glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 4, 4);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
+            ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE))
+                << "Ct.FramebufferDeath.setup";
+            glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            GLubyte pixel[4]{};
+            glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+            const int blue[4] = {0, 0, 255, 255};
+            for (int i = 0; i < 4; ++i)
+                ASSERT_NEAR(pixel[i], blue[i], 1) << "Ct.FramebufferDeath.first";
+
+            // Die unbound, framebuffer first so the attachment's own death is a separate record.
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindRenderbuffer(GL_RENDERBUFFER, 0);
+            const PipeStatsWindow::LogMark mark = StartWindow();
+            // THE CLIENT'S OWN ACCOUNTING, read beside the server's (P7 wave 2 package C,
+            // CONTRACT-P7 §5.5's PipeSlotPeek clause). The two numbers answer DIFFERENT halves of
+            // one death and neither implies the other, which is exactly why both are read here:
+            //   * `od` below says the SERVER was told - the half the missing Magma table
+            //     broke, and the only delivery a framebuffer has (no wire delete opcode at all);
+            //   * this one says the CLIENT returned the slot. That half has been backend-neutral
+            //     since P4a (PipeFill.cpp's NotifyAndFree frees whatever the notice does), so it
+            //     is a CONTROL rather than the subject: if it ever regressed, a green `od`
+            //     would be measuring an object that never let go of its handle.
+            // `false` means the allocator is out of reach (a pull build, or Android's hidden
+            // symbols), and the peek is then simply not asserted - "could not look" is not
+            // "did not leak", so nothing is concluded from it either way.
+            unsigned fboSlotsBefore = 0;
+            const bool slotsReadable = PeekPipeSlotLiveCount(PipeSlotKind::Framebuffer, &fboSlotsBefore);
+            glDeleteFramebuffers(1, &fbo);
+            const ControlRecords counters = EndWindowAndReadControlRecords(mark);
+            ASSERT_TRUE(counters.valid) << "server object-death telemetry missing";
+            EXPECT_GE(counters.objectDeaths, 1)
+                << "the framebuffer's death produced no object_death record - and no other "
+                   "opcode can carry it. Backend "
+                << Gl().BackendName();
+            if (slotsReadable) {
+                unsigned fboSlotsAfter = 0;
+                ASSERT_TRUE(PeekPipeSlotLiveCount(PipeSlotKind::Framebuffer, &fboSlotsAfter));
+                EXPECT_LT(fboSlotsAfter, fboSlotsBefore)
+                    << "the dead framebuffer kept its client slot: live count " << fboSlotsBefore << " -> "
+                    << fboSlotsAfter << " across the delete. Backend " << Gl().BackendName();
+            }
+            glDeleteRenderbuffers(1, &renderbuffer);
+
+            // Recycle: a new FBO and a new backing store, cleared to a different color. A stale
+            // twin answering for the recycled framebuffer renders the blue of the dead one.
+            glGenFramebuffers(1, &fbo);
+            glGenRenderbuffers(1, &renderbuffer);
+            glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 4, 4);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
+            ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE))
+                << "Ct.FramebufferDeath.recycle";
+            glClearColor(1.0f, 1.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindRenderbuffer(GL_RENDERBUFFER, 0);
+            glDeleteFramebuffers(1, &fbo);
+            glDeleteRenderbuffers(1, &renderbuffer);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "Ct.FramebufferDeath.error";
+            const int yellow[4] = {255, 255, 0, 255};
+            for (int i = 0; i < 4; ++i)
+                EXPECT_NEAR(pixel[i], yellow[i], 1)
+                    << "Ct.FramebufferDeath.pixels - the recycled framebuffer read back the dead twin's content";
+        }
+
+#if !defined(_WIN32)
+        TEST_F(CtWireScenario, TheDirectApplierResetCallOnTheGLThreadIsRoleViolation) {
+            if (!Ready()) return;
+            // A verb in the PARENT, so the fixture's emit-ordinal rule has something to see: the
+            // death statement below runs only in the child, and a parent that emitted nothing
+            // is the shape that rule exists to fail.
+            glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            // THE RED-ONCE FOR §5.1, AUTOMATED. This process has a LIVE inproc session, and the
+            // GL-thread direct call the applier_reset record replaced is a named Fatal there
+            // (CONTRACT-P5C.md §5.1 / §6 layer 2) - which is exactly the shape reverting
+            // PipeFill's FreshlyPrimed arm would take, so the guard is what turns that revert
+            // red. EXPECT_EXIT re-runs the case in a child process: the child brings up its own
+            // session (its SetUp is this same fixture's) and aborts at the statement. The two
+            // NON-Fatal arms - monolith, and a transport with no client session - are the unit
+            // suite's CtWireFatals.TheDirectApplierResetCallSurvivesMonolithAndAWirelessTransport.
+            //
+            // The regex is ".*" because the library's Fatal line goes to its log file, not to
+            // the stderr a death test matches (ServerLoopEglTest's own EXPECT_EXIT does the
+            // same); the NAME is asserted from the log below, which the child truncated and
+            // wrote before it died.
+            EXPECT_EXIT(MobileGL::MG_Pipe::MGPipeApplierReset(), ::testing::KilledBySignal(SIGABRT), ".*");
+            // THE CLIENT'S LOG: MGPipeApplierReset is called here, on the GL thread, so the guard's
+            // line is written under the client role. P6 splits the lane's log per role and the
+            // suffix rule lives in PipeStatsWindow.
+            if (const std::string logPath = MGITest::PipeStatsWindow::LibraryLogPath(); !logPath.empty()) {
+                std::ifstream in(logPath, std::ios::binary);
+                std::ostringstream log;
+                log << in.rdbuf();
+                EXPECT_NE(log.str().find("Fatal{RoleViolation, \"g_applier\"}"), std::string::npos)
+                    << "the child aborted, but not with the layer-2 guard's own line:\n"
+                    << log.str();
+            }
+        }
+#endif
+
+    } // namespace
+} // namespace MGITest

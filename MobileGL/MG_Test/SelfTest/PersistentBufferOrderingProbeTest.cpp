@@ -27,21 +27,33 @@ namespace {
             Int channel = 0;
             Vector<Uint8> staging;
         };
-        struct Draw { GLuint fbo, buffer; Int channel; Bool late; };
+        struct Draw {
+            GLuint fbo, buffer;
+            Int channel;
+            Bool late;
+        };
         std::map<GLuint, Buffer> buffers;
         std::map<GLuint, GLuint> vaoBuffers;
         std::map<GLuint, Int> colors;
         Vector<Draw> draws;
         std::set<GLuint> live;
-        std::map<GLenum, GLint> state = {
-            {GL_CURRENT_PROGRAM, 1}, {GL_VERTEX_ARRAY_BINDING, 2}, {GL_ARRAY_BUFFER, 3},
-            {GL_COPY_READ_BUFFER, 4}, {GL_COPY_WRITE_BUFFER, 5},
-            {GL_DRAW_FRAMEBUFFER_BINDING, 6}, {GL_READ_FRAMEBUFFER_BINDING, 7},
-            {GL_TEXTURE_BINDING_2D, 8}, {GL_PIXEL_PACK_BUFFER, 9},
-            {GL_PACK_ALIGNMENT, 8}, {GL_PACK_ROW_LENGTH, 31},
-            {GL_PACK_SKIP_PIXELS, 4}, {GL_PACK_SKIP_ROWS, 5}};
-        std::map<GLenum, GLboolean> enabled = {{GL_BLEND, GL_TRUE}, {GL_SCISSOR_TEST, GL_TRUE},
-            {GL_SAMPLE_MASK, GL_TRUE}, {GL_RASTERIZER_DISCARD, GL_TRUE}};
+        std::map<GLenum, GLint> state = {{GL_CURRENT_PROGRAM, 1},
+                                         {GL_VERTEX_ARRAY_BINDING, 2},
+                                         {GL_ARRAY_BUFFER, 3},
+                                         {GL_COPY_READ_BUFFER, 4},
+                                         {GL_COPY_WRITE_BUFFER, 5},
+                                         {GL_DRAW_FRAMEBUFFER_BINDING, 6},
+                                         {GL_READ_FRAMEBUFFER_BINDING, 7},
+                                         {GL_TEXTURE_BINDING_2D, 8},
+                                         {GL_PIXEL_PACK_BUFFER, 9},
+                                         {GL_PACK_ALIGNMENT, 8},
+                                         {GL_PACK_ROW_LENGTH, 31},
+                                         {GL_PACK_SKIP_PIXELS, 4},
+                                         {GL_PACK_SKIP_ROWS, 5}};
+        std::map<GLenum, GLboolean> enabled = {{GL_BLEND, GL_TRUE},
+                                               {GL_SCISSOR_TEST, GL_TRUE},
+                                               {GL_SAMPLE_MASK, GL_TRUE},
+                                               {GL_RASTERIZER_DISCARD, GL_TRUE}};
         std::array<GLint, 4> viewport = {3, 4, 5, 6};
         std::array<GLfloat, 4> clear = {.25f, .5f, .75f, 0};
         std::array<GLboolean, 4> mask = {GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE};
@@ -54,8 +66,14 @@ namespace {
         Uint arenaAllocations = 0;
         Uint8 pointerSentinel = 0;
 
-        GLuint Create() { live.insert(next); return next++; }
-        void Generate(GLsizei count, GLuint* ids) { for (Int i = 0; i < count; ++i) ids[i] = Create(); }
+        GLuint Create() {
+            live.insert(next);
+            return next++;
+        }
+        void Generate(GLsizei count, GLuint* ids) {
+            for (Int i = 0; i < count; ++i)
+                ids[i] = Create();
+        }
         void Delete(GLsizei count, const GLuint* ids) {
             for (Int i = 0; i < count; ++i) {
                 live.erase(ids[i]);
@@ -84,13 +102,20 @@ namespace {
     MG_External::GLESFunctionsTable Table() {
         MG_External::GLESFunctionsTable gl{};
         gl.glGetIntegerv = [](GLenum name, GLint* out) {
-            if (name == GL_MAJOR_VERSION) *out = 3;
-            else if (name == GL_MINOR_VERSION) *out = 2;
-            else if (name == GL_NUM_EXTENSIONS) *out = driver.extension ? 1 : 0;
-            else if (name == GL_VIEWPORT) std::copy(driver.viewport.begin(), driver.viewport.end(), out);
-            else if (name == GL_ARRAY_BUFFER_BINDING) *out = driver.Get(GL_ARRAY_BUFFER);
-            else if (name == GL_PIXEL_PACK_BUFFER_BINDING) *out = driver.Get(GL_PIXEL_PACK_BUFFER);
-            else *out = driver.Get(name);
+            if (name == GL_MAJOR_VERSION)
+                *out = 3;
+            else if (name == GL_MINOR_VERSION)
+                *out = 2;
+            else if (name == GL_NUM_EXTENSIONS)
+                *out = driver.extension ? 1 : 0;
+            else if (name == GL_VIEWPORT)
+                std::copy(driver.viewport.begin(), driver.viewport.end(), out);
+            else if (name == GL_ARRAY_BUFFER_BINDING)
+                *out = driver.Get(GL_ARRAY_BUFFER);
+            else if (name == GL_PIXEL_PACK_BUFFER_BINDING)
+                *out = driver.Get(GL_PIXEL_PACK_BUFFER);
+            else
+                *out = driver.Get(name);
         };
         gl.glGetBooleanv = [](GLenum, GLboolean* out) { std::copy(driver.mask.begin(), driver.mask.end(), out); };
         gl.glGetFloatv = [](GLenum, GLfloat* out) { std::copy(driver.clear.begin(), driver.clear.end(), out); };
@@ -136,7 +161,8 @@ namespace {
             if (buffer.arena) {
                 buffer.channel = FakeDriver::Channel(data);
                 buffer.copied = false;
-            } else std::memcpy(buffer.staging.data() + offset, data, size);
+            } else
+                std::memcpy(buffer.staging.data() + offset, data, size);
         };
         gl.glCopyBufferSubData = [](GLenum read, GLenum write, GLintptr offset, GLintptr, GLsizeiptr) {
             auto& source = driver.buffers[driver.Get(read)];
@@ -173,8 +199,8 @@ namespace {
         gl.glDrawArrays = [](GLenum, GLint, GLsizei) {
             const GLuint id = driver.vaoBuffers.at(driver.Get(GL_VERTEX_ARRAY_BINDING));
             const auto& buffer = driver.buffers.at(id);
-            const Bool late = buffer.mapped ? (buffer.copied ? driver.corruptCopy : driver.corruptSubData)
-                                            : driver.corruptUnmapped;
+            const Bool late =
+                buffer.mapped ? (buffer.copied ? driver.corruptCopy : driver.corruptSubData) : driver.corruptUnmapped;
             driver.draws.push_back({GLuint(driver.Get(GL_DRAW_FRAMEBUFFER_BINDING)), id, buffer.channel, late});
         };
         gl.glFinish = []() { driver.Finish(); };
@@ -191,7 +217,8 @@ namespace {
             const Int channel = driver.colors.at(driver.Get(GL_READ_FRAMEBUFFER_BINDING));
             auto* pixels = static_cast<Uint8*>(data);
             for (Int i = 0; i < width * height; ++i)
-                for (Int c = 0; c < 4; ++c) pixels[4 * i + c] = c == channel || c == 3 ? 255 : 0;
+                for (Int c = 0; c < 4; ++c)
+                    pixels[4 * i + c] = c == channel || c == 3 ? 255 : 0;
         };
         return gl;
     }
@@ -199,9 +226,12 @@ namespace {
     class PersistentBufferOrderingProbeTest : public ::testing::Test {
     protected:
         void SetUp() override { driver = FakeDriver{}; }
-        void TearDown() override { EXPECT_TRUE(driver.live.empty()); EXPECT_TRUE(driver.draws.empty()); }
+        void TearDown() override {
+            EXPECT_TRUE(driver.live.empty());
+            EXPECT_TRUE(driver.draws.empty());
+        }
     };
-}
+} // namespace
 
 TEST_F(PersistentBufferOrderingProbeTest, RequiresExtensionAndCompleteDispatchBeforeAllocating) {
     auto gl = Table();
@@ -282,7 +312,8 @@ TEST_F(PersistentBufferOrderingProbeTest, CorruptNeverMappedControlCannotAccuseP
 TEST_F(PersistentBufferOrderingProbeTest, CorruptSerializedControlCannotConfirmOrderingDefect) {
     driver.corruptSubData = driver.corruptCopy = driver.corruptSerialized = true;
     const auto measurement = ProbePersistentBufferUpdateOrdering(Table());
-    for (const auto& row : measurement.uploads) EXPECT_GT(row.finishBoth.badFrames, 0u);
+    for (const auto& row : measurement.uploads)
+        EXPECT_GT(row.finishBoth.badFrames, 0u);
     EXPECT_FALSE(DescribePersistentBufferOrderingBug(measurement));
 }
 

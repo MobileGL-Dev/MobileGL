@@ -18,7 +18,7 @@
 // dereferenced it with nothing there: a SIGSEGV inside the draw or the dispatch, taking the whole
 // process with it. It now answers with a zeroed block of the reflected size.
 //
-// The block is STATICALLY USED in every case, because an unreferenced block is optimised out
+// The block is STATICALLY USED in every case, because an unreferenced block is optimized out
 // before it ever reaches a descriptor and would prove nothing. Its one read sits behind a
 // uniform-controlled branch that is false whenever the point is empty, so no undefined value
 // reaches an assertion. Each case also binds a buffer at the same point and reads it back through
@@ -166,15 +166,15 @@ void main() {
             }
 
             // The block must be ACTIVE and at kUniformPoint, and the guard uniform must exist:
-            // if either were optimised away the program would never ask for the empty point and
+            // if either were optimized away the program would never ask for the empty point and
             // every case below would pass without testing anything.
             static void ExpectTheBlockIsLiveAtThePoint(GLuint program) {
                 const GLuint block = glGetUniformBlockIndex(program, "Target");
-                ASSERT_NE(block, GL_INVALID_INDEX) << "the uniform block was optimised out - the case proves nothing";
+                ASSERT_NE(block, GL_INVALID_INDEX) << "the uniform block was optimized out - the case proves nothing";
                 GLint binding = -1;
                 glGetActiveUniformBlockiv(program, block, GL_UNIFORM_BLOCK_BINDING, &binding);
                 ASSERT_EQ(binding, static_cast<GLint>(kUniformPoint)) << "the block is not at the point under test";
-                ASSERT_NE(glGetUniformLocation(program, "u_read"), -1) << "the guard uniform was optimised out";
+                ASSERT_NE(glGetUniformLocation(program, "u_read"), -1) << "the guard uniform was optimized out";
                 ASSERT_EQ(FirstGLError(), 0u) << "querying the block raised a GL error";
             }
 

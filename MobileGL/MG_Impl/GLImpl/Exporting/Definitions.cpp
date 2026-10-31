@@ -22,6 +22,8 @@
 #include "../Sync/GL_Sync.h"
 #include "../Debug/GL_Debug.h"
 #include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/BufferState/BufferObject.h>
+#include <MG_Impl/EGLImpl/EGLImpl.h>
 
 #define DECLARE_GL_FUNCTION_STUB_HEAD(type, name, ...) MOBILEGL_GL_API type gl##name(__VA_ARGS__) {
 
@@ -40,22 +42,26 @@
 #define DECLARE_GL_FUNCTION_END(type, name, ...)                                                                       \
     ZoneScopedC(TRACY_ZONECOLOR_ENTRY);                                                                                \
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);                                                           \
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;                                                    \
     return MobileGL::MG_Impl::GLImpl::name(__VA_ARGS__);                                                               \
     }
 
 #define DECLARE_GL_FUNCTION_END_NO_RETURN(type, name, ...)                                                             \
     ZoneScopedC(TRACY_ZONECOLOR_ENTRY);                                                                                \
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);                                                           \
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;                                                    \
     MobileGL::MG_Impl::GLImpl::name(__VA_ARGS__);                                                                      \
     }
 #else
 #define DECLARE_GL_FUNCTION_END(type, name, ...)                                                                       \
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);                                                           \
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;                                                    \
     return MobileGL::MG_Impl::GLImpl::name(__VA_ARGS__);                                                               \
     }
 
 #define DECLARE_GL_FUNCTION_END_NO_RETURN(type, name, ...)                                                             \
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);                                                           \
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;                                                    \
     MobileGL::MG_Impl::GLImpl::name(__VA_ARGS__);                                                                      \
     }
 #endif
@@ -108,8 +114,34 @@ DECLARE_GL_FUNCTION_HEAD(void, DrawArrays, GLenum mode, GLint first, GLsizei cou
 DECLARE_GL_FUNCTION_HEAD(void, DrawElements, GLenum mode, GLsizei count, GLenum type, const void* indices) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DrawElements, mode, count, type, indices)
 DECLARE_GL_FUNCTION_HEAD(void, Enable, GLenum cap) DECLARE_GL_FUNCTION_END_NO_RETURN(void, Enable, cap)
 DECLARE_GL_FUNCTION_HEAD(void, EnableVertexAttribArray, GLuint index) DECLARE_GL_FUNCTION_END_NO_RETURN(void, EnableVertexAttribArray, index)
-MOBILEGL_GL_API void glFinish() { MGLOG_D("Implementing function: %s(...)", __FUNCTION__); }
-MOBILEGL_GL_API void glFlush() { MGLOG_D("Implementing function: %s(...)", __FUNCTION__); }
+// P5e (ra), CONTRACT-P5E §2.5. STILL NOTHING ON THE WIRE - Flush and Finish have no record
+// (ARCHITECTURE §11) and this stays a no-op on every monolith build. What it is not any more
+// is a no-op on a RUN-AHEAD client: "the commands issued so far have completed" is a promise a
+// queue the client never waits on can break, and this is the only place an application can ask
+// for it. Under lockstep the client had already waited out every command it issued, so the
+// call really did have nothing to do; MGPipeClientFinish answers false-cheap there too.
+MOBILEGL_GL_API void glFinish() {
+    MGLOG_D("Implementing function: %s(...)", __FUNCTION__);
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // A shared-image producer's boundary first (implicit sync; EGLImpl/SharedImageFlushPolicy.h).
+    MobileGL::MG_Impl::EGLImpl::FlushSharedImageAccesses();
+    MobileGL::MG_Pipe::MGPipeClientFinish();
+#endif
+    // Everything issued has completed, so a persistent read map now has to show the GPU's
+    // writes (GL 4.6 core 7.13).
+    if (MobileGL::MG_State::pGLContext != nullptr) {
+        MobileGL::MG_State::GLState::SyncPersistentReadMapsFromGpu();
+    }
+}
+MOBILEGL_GL_API void glFlush() {
+    MGLOG_D("Implementing function: %s(...)", __FUNCTION__);
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
+#if MOBILEGL_BUILD_DISAGGREGATED
+    MobileGL::MG_Impl::EGLImpl::FlushSharedImageAccesses();
+    MobileGL::MG_Pipe::MGPipeClientFlush();
+#endif
+}
 DECLARE_GL_FUNCTION_HEAD(void, FramebufferRenderbuffer, GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer) DECLARE_GL_FUNCTION_END_NO_RETURN(void, FramebufferRenderbuffer, target, attachment, renderbuffertarget, renderbuffer)
 DECLARE_GL_FUNCTION_HEAD(void, FramebufferTexture2D, GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) DECLARE_GL_FUNCTION_END_NO_RETURN(void, FramebufferTexture2D, target, attachment, textarget, texture, level)
 DECLARE_GL_FUNCTION_HEAD(void, FrontFace, GLenum mode) DECLARE_GL_FUNCTION_END_NO_RETURN(void, FrontFace, mode)
@@ -133,7 +165,7 @@ DECLARE_GL_FUNCTION_HEAD(void, GetProgramInfoLog, GLuint program, GLsizei bufSiz
 DECLARE_GL_FUNCTION_HEAD(void, GetRenderbufferParameteriv, GLenum target, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetRenderbufferParameteriv, target, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, GetShaderiv, GLuint shader, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetShaderiv, shader, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, GetShaderInfoLog, GLuint shader, GLsizei bufSize, GLsizei* length, GLchar* infoLog) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetShaderInfoLog, shader, bufSize, length, infoLog)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetShaderPrecisionFormat, GLenum shadertype, GLenum precisiontype, GLint* range, GLint* precision) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetShaderPrecisionFormat, shadertype, precisiontype, range, precision)
+DECLARE_GL_FUNCTION_HEAD(void, GetShaderPrecisionFormat, GLenum shadertype, GLenum precisiontype, GLint* range, GLint* precision) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetShaderPrecisionFormat, shadertype, precisiontype, range, precision)
 DECLARE_GL_FUNCTION_HEAD(void, GetShaderSource, GLuint shader, GLsizei bufSize, GLsizei* length, GLchar* source) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetShaderSource, shader, bufSize, length, source)
 DECLARE_GL_FUNCTION_HEAD(void, GetTexParameterfv, GLenum target, GLenum pname, GLfloat* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetTexParameterfv, target, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, GetTexParameteriv, GLenum target, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetTexParameteriv, target, pname, params)
@@ -169,6 +201,7 @@ DECLARE_GL_FUNCTION_HEAD(void, StencilMaskSeparate, GLenum face, GLuint mask) DE
 DECLARE_GL_FUNCTION_HEAD(void, StencilOp, GLenum fail, GLenum zfail, GLenum zpass) DECLARE_GL_FUNCTION_END_NO_RETURN(void, StencilOp, fail, zfail, zpass)
 DECLARE_GL_FUNCTION_HEAD(void, StencilOpSeparate, GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass) DECLARE_GL_FUNCTION_END_NO_RETURN(void, StencilOpSeparate, face, sfail, dpfail, dppass)
 DECLARE_GL_FUNCTION_HEAD(void, TexImage2D, GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels) DECLARE_GL_FUNCTION_END_NO_RETURN(void, TexImage2D, target, level, internalformat, width, height, border, format, type, pixels)
+DECLARE_GL_FUNCTION_HEAD(void, EGLImageTargetTexture2DOES, GLenum target, GLeglImageOES image) DECLARE_GL_FUNCTION_END_NO_RETURN(void, EGLImageTargetTexture2DOES, target, image)
 DECLARE_GL_FUNCTION_HEAD(void, TexParameterf, GLenum target, GLenum pname, GLfloat param) DECLARE_GL_FUNCTION_END_NO_RETURN(void, TexParameterf, target, pname, param)
 DECLARE_GL_FUNCTION_HEAD(void, TexParameterfv, GLenum target, GLenum pname, const GLfloat* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, TexParameterfv, target, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, TexParameteri, GLenum target, GLenum pname, GLint param) DECLARE_GL_FUNCTION_END_NO_RETURN(void, TexParameteri, target, pname, param)
@@ -408,9 +441,9 @@ DECLARE_GL_FUNCTION_HEAD(void, FramebufferTexture, GLenum target, GLenum attachm
 DECLARE_GL_FUNCTION_STUB_HEAD(void, PrimitiveBoundingBox, GLfloat minX, GLfloat minY, GLfloat minZ, GLfloat minW, GLfloat maxX, GLfloat maxY, GLfloat maxZ, GLfloat maxW) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, PrimitiveBoundingBox, minX, minY, minZ, minW, maxX, maxY, maxZ, maxW)
 DECLARE_GL_FUNCTION_HEAD(GLenum, GetGraphicsResetStatus) DECLARE_GL_FUNCTION_END(GLenum, GetGraphicsResetStatus)
 DECLARE_GL_FUNCTION_HEAD(void, ReadnPixels, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLsizei bufSize, void* data) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ReadnPixels, x, y, width, height, format, type, bufSize, data)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformfv, GLuint program, GLint location, GLsizei bufSize, GLfloat* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnUniformfv, program, location, bufSize, params)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformiv, GLuint program, GLint location, GLsizei bufSize, GLint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnUniformiv, program, location, bufSize, params)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformuiv, GLuint program, GLint location, GLsizei bufSize, GLuint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnUniformuiv, program, location, bufSize, params)
+DECLARE_GL_FUNCTION_HEAD(void, GetnUniformfv, GLuint program, GLint location, GLsizei bufSize, GLfloat* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetnUniformfv, program, location, bufSize, params)
+DECLARE_GL_FUNCTION_HEAD(void, GetnUniformiv, GLuint program, GLint location, GLsizei bufSize, GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetnUniformiv, program, location, bufSize, params)
+DECLARE_GL_FUNCTION_HEAD(void, GetnUniformuiv, GLuint program, GLint location, GLsizei bufSize, GLuint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetnUniformuiv, program, location, bufSize, params)
 DECLARE_GL_FUNCTION_HEAD(void, MinSampleShading, GLfloat value) DECLARE_GL_FUNCTION_END_NO_RETURN(void, MinSampleShading, value)
 DECLARE_GL_FUNCTION_HEAD(void, PatchParameteri, GLenum pname, GLint value) DECLARE_GL_FUNCTION_END_NO_RETURN(void, PatchParameteri, pname, value)
 DECLARE_GL_FUNCTION_HEAD(void, TexParameterIiv, GLenum target, GLenum pname, const GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, TexParameterIiv, target, pname, params)
@@ -1091,10 +1124,10 @@ DECLARE_GL_FUNCTION_HEAD(void, GetQueryBufferObjectiv, GLuint id, GLuint buffer,
 DECLARE_GL_FUNCTION_HEAD(void, GetQueryBufferObjectui64v, GLuint id, GLuint buffer, GLenum pname, GLintptr offset) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetQueryBufferObjectui64v, id, buffer, pname, offset)
 DECLARE_GL_FUNCTION_HEAD(void, GetQueryBufferObjectuiv, GLuint id, GLuint buffer, GLenum pname, GLintptr offset) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetQueryBufferObjectuiv, id, buffer, pname, offset)
 DECLARE_GL_FUNCTION_HEAD(void, GetTextureSubImage, GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, GLsizei bufSize, void* pixels) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetTextureSubImage, texture, level, xoffset, yoffset, zoffset, width, height, depth, format, type, bufSize, pixels)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetCompressedTextureSubImage, GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLsizei bufSize, void* pixels) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetCompressedTextureSubImage, texture, level, xoffset, yoffset, zoffset, width, height, depth, bufSize, pixels)
+DECLARE_GL_FUNCTION_HEAD(void, GetCompressedTextureSubImage, GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLsizei bufSize, void* pixels) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetCompressedTextureSubImage, texture, level, xoffset, yoffset, zoffset, width, height, depth, bufSize, pixels)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnCompressedTexImage, GLenum target, GLint lod, GLsizei bufSize, void* pixels) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnCompressedTexImage, target, lod, bufSize, pixels)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnTexImage, GLenum target, GLint level, GLenum format, GLenum type, GLsizei bufSize, void* pixels) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnTexImage, target, level, format, type, bufSize, pixels)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformdv, GLuint program, GLint location, GLsizei bufSize, GLdouble* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnUniformdv, program, location, bufSize, params)
+DECLARE_GL_FUNCTION_HEAD(void, GetnUniformdv, GLuint program, GLint location, GLsizei bufSize, GLdouble* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetnUniformdv, program, location, bufSize, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMapdv, GLenum target, GLenum query, GLsizei bufSize, GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnMapdv, target, query, bufSize, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMapfv, GLenum target, GLenum query, GLsizei bufSize, GLfloat* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnMapfv, target, query, bufSize, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMapiv, GLenum target, GLenum query, GLsizei bufSize, GLint* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnMapiv, target, query, bufSize, v)
@@ -1265,7 +1298,6 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, PointParameterfARB, GLenum pname, GLfloat pa
 DECLARE_GL_FUNCTION_STUB_HEAD(void, PointParameterfvARB, GLenum pname, const GLfloat* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, PointParameterfvARB, pname, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnTexImageARB, GLenum target, GLint level, GLenum format, GLenum type, GLsizei bufSize, void* img) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnTexImageARB, target, level, format, type, bufSize, img)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnCompressedTexImageARB, GLenum target, GLint lod, GLsizei bufSize, void* img) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnCompressedTexImageARB, target, lod, bufSize, img)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformdvARB, GLuint program, GLint location, GLsizei bufSize, GLdouble* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnUniformdvARB, program, location, bufSize, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMapdvARB, GLenum target, GLenum query, GLsizei bufSize, GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnMapdvARB, target, query, bufSize, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMapfvARB, GLenum target, GLenum query, GLsizei bufSize, GLfloat* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnMapfvARB, target, query, bufSize, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMapivARB, GLenum target, GLenum query, GLsizei bufSize, GLint* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnMapivARB, target, query, bufSize, v)
@@ -1281,17 +1313,6 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMinmaxARB, GLenum target, GLboolean rese
 DECLARE_GL_FUNCTION_STUB_HEAD(void, FramebufferSampleLocationsfvARB, GLenum target, GLuint start, GLsizei count, const GLfloat* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, FramebufferSampleLocationsfvARB, target, start, count, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, NamedFramebufferSampleLocationsfvARB, GLuint framebuffer, GLuint start, GLsizei count, const GLfloat* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, NamedFramebufferSampleLocationsfvARB, framebuffer, start, count, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, EvaluateDepthValuesARB, void) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, EvaluateDepthValuesARB, )
-DECLARE_GL_FUNCTION_STUB_HEAD(void, DeleteObjectARB, GLhandleARB obj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DeleteObjectARB, obj)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLhandleARB, GetHandleARB, GLenum pname) DECLARE_GL_FUNCTION_STUB_END(GLhandleARB, GetHandleARB, pname)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, DetachObjectARB, GLhandleARB containerObj, GLhandleARB attachedObj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DetachObjectARB, containerObj, attachedObj)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLhandleARB, CreateShaderObjectARB, GLenum shaderType) DECLARE_GL_FUNCTION_STUB_END(GLhandleARB, CreateShaderObjectARB, shaderType)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLhandleARB, CreateProgramObjectARB, void) DECLARE_GL_FUNCTION_STUB_END(GLhandleARB, CreateProgramObjectARB, )
-DECLARE_GL_FUNCTION_STUB_HEAD(void, AttachObjectARB, GLhandleARB containerObj, GLhandleARB obj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, AttachObjectARB, containerObj, obj)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, UseProgramObjectARB, GLhandleARB programObj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, UseProgramObjectARB, programObj)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetObjectParameterfvARB, GLhandleARB obj, GLenum pname, GLfloat* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetObjectParameterfvARB, obj, pname, params)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetObjectParameterivARB, GLhandleARB obj, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetObjectParameterivARB, obj, pname, params)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetInfoLogARB, GLhandleARB obj, GLsizei maxLength, GLsizei* length, GLcharARB* infoLog) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetInfoLogARB, obj, maxLength, length, infoLog)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetAttachedObjectsARB, GLhandleARB containerObj, GLsizei maxCount, GLsizei* count, GLhandleARB* obj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetAttachedObjectsARB, containerObj, maxCount, count, obj)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, NamedStringARB, GLenum type, GLint namelen, const GLchar* name, GLint strinen, const GLchar* string) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, NamedStringARB, type, namelen, name, strinen, string)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, DeleteNamedStringARB, GLint namelen, const GLchar* name) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DeleteNamedStringARB, namelen, name)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, CompileShaderIncludeARB, GLuint shader, GLsizei count, const GLchar* const* path, const GLint* length) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, CompileShaderIncludeARB, shader, count, path, length)
@@ -1320,35 +1341,6 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, WeightuivARB, GLint size, const GLuint* weig
 DECLARE_GL_FUNCTION_STUB_HEAD(void, WeightPointerARB, GLint size, GLenum type, GLsizei stride, const void* pointer) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, WeightPointerARB, size, type, stride, pointer)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexBlendARB, GLint count) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexBlendARB, count)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetBufferSubDataARB, GLenum target, GLintptrARB offset, GLsizeiptrARB size, void* data) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetBufferSubDataARB, target, offset, size, data)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib1dARB, GLuint index, GLdouble x) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib1dARB, index, x)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib1dvARB, GLuint index, const GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib1dvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib1sARB, GLuint index, GLshort x) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib1sARB, index, x)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib1svARB, GLuint index, const GLshort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib1svARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib2dARB, GLuint index, GLdouble x, GLdouble y) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib2dARB, index, x, y)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib2dvARB, GLuint index, const GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib2dvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib2sARB, GLuint index, GLshort x, GLshort y) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib2sARB, index, x, y)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib2svARB, GLuint index, const GLshort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib2svARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib3dARB, GLuint index, GLdouble x, GLdouble y, GLdouble z) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib3dARB, index, x, y, z)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib3dvARB, GLuint index, const GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib3dvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib3sARB, GLuint index, GLshort x, GLshort y, GLshort z) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib3sARB, index, x, y, z)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib3svARB, GLuint index, const GLshort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib3svARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NbvARB, GLuint index, const GLbyte* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NbvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NivARB, GLuint index, const GLint* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NivARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NsvARB, GLuint index, const GLshort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NsvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NubARB, GLuint index, GLubyte x, GLubyte y, GLubyte z, GLubyte w) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NubARB, index, x, y, z, w)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NubvARB, GLuint index, const GLubyte* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NubvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NuivARB, GLuint index, const GLuint* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NuivARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NusvARB, GLuint index, const GLushort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NusvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4bvARB, GLuint index, const GLbyte* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4bvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4dARB, GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4dARB, index, x, y, z, w)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4dvARB, GLuint index, const GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4dvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4ivARB, GLuint index, const GLint* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4ivARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4sARB, GLuint index, GLshort x, GLshort y, GLshort z, GLshort w) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4sARB, index, x, y, z, w)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4svARB, GLuint index, const GLshort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4svARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4ubvARB, GLuint index, const GLubyte* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4ubvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4uivARB, GLuint index, const GLuint* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4uivARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4usvARB, GLuint index, const GLushort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4usvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetVertexAttribdvARB, GLuint index, GLenum pname, GLdouble* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetVertexAttribdvARB, index, pname, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, DepthRangeArraydvNV, GLuint first, GLsizei count, const GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DepthRangeArraydvNV, first, count, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, DepthRangeIndexeddNV, GLuint index, GLdouble n, GLdouble f) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DepthRangeIndexeddNV, index, n, f)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, WindowPos2dARB, GLdouble x, GLdouble y) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, WindowPos2dARB, x, y)
@@ -2049,6 +2041,9 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, GetPixelTransformParameterivEXT, GLenum targ
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetPixelTransformParameterfvEXT, GLenum target, GLenum pname, GLfloat* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetPixelTransformParameterfvEXT, target, pname, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, PointParameterfEXT, GLenum pname, GLfloat param) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, PointParameterfEXT, pname, param)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, PointParameterfvEXT, GLenum pname, const GLfloat* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, PointParameterfvEXT, pname, params)
+DECLARE_GL_FUNCTION_HEAD(void, GetFragmentShadingRatesEXT, GLsizei samples, GLsizei maxCount, GLsizei* count, GLenum* shadingRates) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetFragmentShadingRatesEXT, samples, maxCount, count, shadingRates)
+DECLARE_GL_FUNCTION_HEAD(void, ShadingRateEXT, GLenum rate) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ShadingRateEXT, rate)
+DECLARE_GL_FUNCTION_HEAD(void, ShadingRateCombinerOpsEXT, GLenum combinerOp0, GLenum combinerOp1) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ShadingRateCombinerOpsEXT, combinerOp0, combinerOp1)
 DECLARE_GL_FUNCTION_HEAD(void, PolygonOffsetClampEXT, GLfloat factor, GLfloat units, GLfloat clamp) DECLARE_GL_FUNCTION_END_NO_RETURN(void, PolygonOffsetClamp, factor, units, clamp)
 DECLARE_GL_FUNCTION_HEAD(void, ProvokingVertexEXT, GLenum mode) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ProvokingVertex, mode)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, RasterSamplesEXT, GLuint samples, GLboolean fixedsamplelocations) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, RasterSamplesEXT, samples, fixedsamplelocations)
@@ -2963,6 +2958,265 @@ MOBILEGL_GL_API void glGetnUniformivARB(GLuint program, GLint location, GLsizei 
 }
 
 MOBILEGL_GL_API void glGetnUniformuivARB(GLuint program, GLint location, GLsizei bufSize, GLuint* params) {
+    glGetnUniformuiv(program, location, bufSize, params);
+}
+
+MOBILEGL_GL_API void glGetnUniformdvARB(GLuint program, GLint location, GLsizei bufSize, GLdouble* params) {
+    glGetnUniformdv(program, location, bufSize, params);
+}
+
+// ---- GL_ARB_shader_objects --------------------------------------------------------------------
+// A handle is a name of the core's one shared shader/program name space: CreateShaderObjectARB and
+// CreateProgramObjectARB hand out exactly what glCreateShader / glCreateProgram would, so an ARB
+// handle works with every core call and a core name with every ARB call. The calls whose meaning
+// is the core one under another name forward to the core entry point; the ones that ask which
+// kind of object a handle names (DeleteObjectARB, GetHandleARB, GetObjectParameter*ARB,
+// GetInfoLogARB) are GLImpl's (Program/GL_ShaderObjectsARB.cpp). GLhandleARB is GLuint everywhere
+// but Apple, where the header makes it a pointer - hence the two conversions.
+namespace {
+    inline GLuint ArbName(GLhandleARB handle) {
+#if defined(__APPLE__)
+        return static_cast<GLuint>(reinterpret_cast<uintptr_t>(handle));
+#else
+        return handle;
+#endif
+    }
+    inline GLhandleARB ArbHandle(GLuint name) {
+#if defined(__APPLE__)
+        return reinterpret_cast<GLhandleARB>(static_cast<uintptr_t>(name));
+#else
+        return name;
+#endif
+    }
+} // namespace
+
+MOBILEGL_GL_API GLhandleARB glCreateShaderObjectARB(GLenum shaderType) { return ArbHandle(glCreateShader(shaderType)); }
+
+MOBILEGL_GL_API GLhandleARB glCreateProgramObjectARB(void) { return ArbHandle(glCreateProgram()); }
+
+MOBILEGL_GL_API void glDeleteObjectARB(GLhandleARB obj) {
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
+    MobileGL::MG_Impl::GLImpl::DeleteObjectARB(ArbName(obj));
+}
+
+MOBILEGL_GL_API GLhandleARB glGetHandleARB(GLenum pname) {
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
+    return ArbHandle(MobileGL::MG_Impl::GLImpl::GetHandleARB(pname));
+}
+
+MOBILEGL_GL_API void glDetachObjectARB(GLhandleARB containerObj, GLhandleARB attachedObj) {
+    glDetachShader(ArbName(containerObj), ArbName(attachedObj));
+}
+
+MOBILEGL_GL_API void glAttachObjectARB(GLhandleARB containerObj, GLhandleARB obj) {
+    glAttachShader(ArbName(containerObj), ArbName(obj));
+}
+
+MOBILEGL_GL_API void glShaderSourceARB(GLhandleARB shaderObj, GLsizei count, const GLcharARB** string,
+                                       const GLint* length) {
+    glShaderSource(ArbName(shaderObj), count, string, length);
+}
+
+MOBILEGL_GL_API void glCompileShaderARB(GLhandleARB shaderObj) { glCompileShader(ArbName(shaderObj)); }
+
+MOBILEGL_GL_API void glLinkProgramARB(GLhandleARB programObj) { glLinkProgram(ArbName(programObj)); }
+
+MOBILEGL_GL_API void glUseProgramObjectARB(GLhandleARB programObj) { glUseProgram(ArbName(programObj)); }
+
+MOBILEGL_GL_API void glValidateProgramARB(GLhandleARB programObj) { glValidateProgram(ArbName(programObj)); }
+
+MOBILEGL_GL_API void glGetObjectParameterfvARB(GLhandleARB obj, GLenum pname, GLfloat* params) {
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
+    MobileGL::MG_Impl::GLImpl::GetObjectParameterfvARB(ArbName(obj), pname, params);
+}
+
+MOBILEGL_GL_API void glGetObjectParameterivARB(GLhandleARB obj, GLenum pname, GLint* params) {
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
+    MobileGL::MG_Impl::GLImpl::GetObjectParameterivARB(ArbName(obj), pname, params);
+}
+
+MOBILEGL_GL_API void glGetInfoLogARB(GLhandleARB obj, GLsizei maxLength, GLsizei* length, GLcharARB* infoLog) {
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
+    MobileGL::MG_Impl::GLImpl::GetInfoLogARB(ArbName(obj), maxLength, length, infoLog);
+}
+
+MOBILEGL_GL_API void glGetAttachedObjectsARB(GLhandleARB containerObj, GLsizei maxCount, GLsizei* count,
+                                             GLhandleARB* obj) {
+#if defined(__APPLE__)
+    Vector<GLuint> names(maxCount > 0 ? static_cast<SizeT>(maxCount) : 0);
+    GLsizei written = 0;
+    glGetAttachedShaders(ArbName(containerObj), maxCount, &written, names.empty() ? nullptr : names.data());
+    if (obj != nullptr) {
+        for (GLsizei i = 0; i < written; ++i) obj[i] = ArbHandle(names[static_cast<SizeT>(i)]);
+    }
+    if (count != nullptr) *count = written;
+#else
+    glGetAttachedShaders(ArbName(containerObj), maxCount, count, obj);
+#endif
+}
+
+MOBILEGL_GL_API GLint glGetUniformLocationARB(GLhandleARB programObj, const GLcharARB* name) {
+    return glGetUniformLocation(ArbName(programObj), name);
+}
+
+MOBILEGL_GL_API void glGetActiveUniformARB(GLhandleARB programObj, GLuint index, GLsizei maxLength, GLsizei* length,
+                                           GLint* size, GLenum* type, GLcharARB* name) {
+    glGetActiveUniform(ArbName(programObj), index, maxLength, length, size, type, name);
+}
+
+MOBILEGL_GL_API void glGetUniformfvARB(GLhandleARB programObj, GLint location, GLfloat* params) {
+    glGetUniformfv(ArbName(programObj), location, params);
+}
+
+MOBILEGL_GL_API void glGetUniformivARB(GLhandleARB programObj, GLint location, GLint* params) {
+    glGetUniformiv(ArbName(programObj), location, params);
+}
+
+MOBILEGL_GL_API void glGetShaderSourceARB(GLhandleARB obj, GLsizei maxLength, GLsizei* length, GLcharARB* source) {
+    glGetShaderSource(ArbName(obj), maxLength, length, source);
+}
+
+MOBILEGL_GL_API void glUniform1fARB(GLint location, GLfloat v0) { glUniform1f(location, v0); }
+MOBILEGL_GL_API void glUniform2fARB(GLint location, GLfloat v0, GLfloat v1) { glUniform2f(location, v0, v1); }
+MOBILEGL_GL_API void glUniform3fARB(GLint location, GLfloat v0, GLfloat v1, GLfloat v2) {
+    glUniform3f(location, v0, v1, v2);
+}
+MOBILEGL_GL_API void glUniform4fARB(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) {
+    glUniform4f(location, v0, v1, v2, v3);
+}
+MOBILEGL_GL_API void glUniform1iARB(GLint location, GLint v0) { glUniform1i(location, v0); }
+MOBILEGL_GL_API void glUniform2iARB(GLint location, GLint v0, GLint v1) { glUniform2i(location, v0, v1); }
+MOBILEGL_GL_API void glUniform3iARB(GLint location, GLint v0, GLint v1, GLint v2) { glUniform3i(location, v0, v1, v2); }
+MOBILEGL_GL_API void glUniform4iARB(GLint location, GLint v0, GLint v1, GLint v2, GLint v3) {
+    glUniform4i(location, v0, v1, v2, v3);
+}
+MOBILEGL_GL_API void glUniform1fvARB(GLint location, GLsizei count, const GLfloat* value) {
+    glUniform1fv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform2fvARB(GLint location, GLsizei count, const GLfloat* value) {
+    glUniform2fv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform3fvARB(GLint location, GLsizei count, const GLfloat* value) {
+    glUniform3fv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform4fvARB(GLint location, GLsizei count, const GLfloat* value) {
+    glUniform4fv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform1ivARB(GLint location, GLsizei count, const GLint* value) {
+    glUniform1iv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform2ivARB(GLint location, GLsizei count, const GLint* value) {
+    glUniform2iv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform3ivARB(GLint location, GLsizei count, const GLint* value) {
+    glUniform3iv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform4ivARB(GLint location, GLsizei count, const GLint* value) {
+    glUniform4iv(location, count, value);
+}
+MOBILEGL_GL_API void glUniformMatrix2fvARB(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+    glUniformMatrix2fv(location, count, transpose, value);
+}
+MOBILEGL_GL_API void glUniformMatrix3fvARB(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+    glUniformMatrix3fv(location, count, transpose, value);
+}
+MOBILEGL_GL_API void glUniformMatrix4fvARB(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+    glUniformMatrix4fv(location, count, transpose, value);
+}
+
+// ---- GL_ARB_vertex_shader -----------------------------------------------------------------------
+// Advertised beside ARB_shader_objects (see BackendObject_*'s extension lists); every entry point is
+// the core one under the ARB name, and the three that take a program take an ARB handle.
+MOBILEGL_GL_API void glVertexAttrib1sARB(GLuint index, GLshort x) { glVertexAttrib1s(index, x); }
+MOBILEGL_GL_API void glVertexAttrib1svARB(GLuint index, const GLshort* v) { glVertexAttrib1sv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib1fARB(GLuint index, GLfloat x) { glVertexAttrib1f(index, x); }
+MOBILEGL_GL_API void glVertexAttrib1fvARB(GLuint index, const GLfloat* v) { glVertexAttrib1fv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib1dARB(GLuint index, GLdouble x) { glVertexAttrib1d(index, x); }
+MOBILEGL_GL_API void glVertexAttrib1dvARB(GLuint index, const GLdouble* v) { glVertexAttrib1dv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib2sARB(GLuint index, GLshort x, GLshort y) { glVertexAttrib2s(index, x, y); }
+MOBILEGL_GL_API void glVertexAttrib2svARB(GLuint index, const GLshort* v) { glVertexAttrib2sv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib2fARB(GLuint index, GLfloat x, GLfloat y) { glVertexAttrib2f(index, x, y); }
+MOBILEGL_GL_API void glVertexAttrib2fvARB(GLuint index, const GLfloat* v) { glVertexAttrib2fv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib2dARB(GLuint index, GLdouble x, GLdouble y) { glVertexAttrib2d(index, x, y); }
+MOBILEGL_GL_API void glVertexAttrib2dvARB(GLuint index, const GLdouble* v) { glVertexAttrib2dv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib3sARB(GLuint index, GLshort x, GLshort y, GLshort z) { glVertexAttrib3s(index, x, y, z); }
+MOBILEGL_GL_API void glVertexAttrib3svARB(GLuint index, const GLshort* v) { glVertexAttrib3sv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib3fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z) { glVertexAttrib3f(index, x, y, z); }
+MOBILEGL_GL_API void glVertexAttrib3fvARB(GLuint index, const GLfloat* v) { glVertexAttrib3fv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib3dARB(GLuint index, GLdouble x, GLdouble y, GLdouble z) { glVertexAttrib3d(index, x, y, z); }
+MOBILEGL_GL_API void glVertexAttrib3dvARB(GLuint index, const GLdouble* v) { glVertexAttrib3dv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4sARB(GLuint index, GLshort x, GLshort y, GLshort z, GLshort w) { glVertexAttrib4s(index, x, y, z, w); }
+MOBILEGL_GL_API void glVertexAttrib4svARB(GLuint index, const GLshort* v) { glVertexAttrib4sv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w) { glVertexAttrib4f(index, x, y, z, w); }
+MOBILEGL_GL_API void glVertexAttrib4fvARB(GLuint index, const GLfloat* v) { glVertexAttrib4fv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4dARB(GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w) { glVertexAttrib4d(index, x, y, z, w); }
+MOBILEGL_GL_API void glVertexAttrib4dvARB(GLuint index, const GLdouble* v) { glVertexAttrib4dv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NubARB(GLuint index, GLubyte x, GLubyte y, GLubyte z, GLubyte w) { glVertexAttrib4Nub(index, x, y, z, w); }
+MOBILEGL_GL_API void glVertexAttrib4bvARB(GLuint index, const GLbyte* v) { glVertexAttrib4bv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4ivARB(GLuint index, const GLint* v) { glVertexAttrib4iv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4ubvARB(GLuint index, const GLubyte* v) { glVertexAttrib4ubv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4usvARB(GLuint index, const GLushort* v) { glVertexAttrib4usv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4uivARB(GLuint index, const GLuint* v) { glVertexAttrib4uiv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NbvARB(GLuint index, const GLbyte* v) { glVertexAttrib4Nbv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NsvARB(GLuint index, const GLshort* v) { glVertexAttrib4Nsv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NivARB(GLuint index, const GLint* v) { glVertexAttrib4Niv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NubvARB(GLuint index, const GLubyte* v) { glVertexAttrib4Nubv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NusvARB(GLuint index, const GLushort* v) { glVertexAttrib4Nusv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NuivARB(GLuint index, const GLuint* v) { glVertexAttrib4Nuiv(index, v); }
+MOBILEGL_GL_API void glVertexAttribPointerARB(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer) { glVertexAttribPointer(index, size, type, normalized, stride, pointer); }
+MOBILEGL_GL_API void glEnableVertexAttribArrayARB(GLuint index) { glEnableVertexAttribArray(index); }
+MOBILEGL_GL_API void glDisableVertexAttribArrayARB(GLuint index) { glDisableVertexAttribArray(index); }
+MOBILEGL_GL_API void glGetVertexAttribdvARB(GLuint index, GLenum pname, GLdouble* params) { glGetVertexAttribdv(index, pname, params); }
+MOBILEGL_GL_API void glGetVertexAttribfvARB(GLuint index, GLenum pname, GLfloat* params) { glGetVertexAttribfv(index, pname, params); }
+MOBILEGL_GL_API void glGetVertexAttribivARB(GLuint index, GLenum pname, GLint* params) { glGetVertexAttribiv(index, pname, params); }
+MOBILEGL_GL_API void glGetVertexAttribPointervARB(GLuint index, GLenum pname, void** pointer) { glGetVertexAttribPointerv(index, pname, pointer); }
+MOBILEGL_GL_API void glBindAttribLocationARB(GLhandleARB programObj, GLuint index, const GLcharARB* name) {
+    glBindAttribLocation(ArbName(programObj), index, name);
+}
+MOBILEGL_GL_API void glGetActiveAttribARB(GLhandleARB programObj, GLuint index, GLsizei maxLength, GLsizei* length, GLint* size, GLenum* type, GLcharARB* name) {
+    glGetActiveAttrib(ArbName(programObj), index, maxLength, length, size, type, name);
+}
+MOBILEGL_GL_API GLint glGetAttribLocationARB(GLhandleARB programObj, const GLcharARB* name) {
+    return glGetAttribLocation(ArbName(programObj), name);
+}
+
+// KHR_robustness and EXT_robustness name the same entry points with their own suffixes (an ES
+// application, ANGLE's GL backend among them, looks them up by those names).
+MOBILEGL_GL_API GLenum glGetGraphicsResetStatusKHR(void) {
+    return glGetGraphicsResetStatus();
+}
+
+MOBILEGL_GL_API GLenum glGetGraphicsResetStatusEXT(void) {
+    return glGetGraphicsResetStatus();
+}
+
+MOBILEGL_GL_API void glReadnPixelsKHR(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                      GLsizei bufSize, void* data) {
+    glReadnPixels(x, y, width, height, format, type, bufSize, data);
+}
+
+MOBILEGL_GL_API void glReadnPixelsEXT(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                      GLsizei bufSize, void* data) {
+    glReadnPixels(x, y, width, height, format, type, bufSize, data);
+}
+
+MOBILEGL_GL_API void glGetnUniformfvKHR(GLuint program, GLint location, GLsizei bufSize, GLfloat* params) {
+    glGetnUniformfv(program, location, bufSize, params);
+}
+
+MOBILEGL_GL_API void glGetnUniformfvEXT(GLuint program, GLint location, GLsizei bufSize, GLfloat* params) {
+    glGetnUniformfv(program, location, bufSize, params);
+}
+
+MOBILEGL_GL_API void glGetnUniformivKHR(GLuint program, GLint location, GLsizei bufSize, GLint* params) {
+    glGetnUniformiv(program, location, bufSize, params);
+}
+
+MOBILEGL_GL_API void glGetnUniformivEXT(GLuint program, GLint location, GLsizei bufSize, GLint* params) {
+    glGetnUniformiv(program, location, bufSize, params);
+}
+
+MOBILEGL_GL_API void glGetnUniformuivKHR(GLuint program, GLint location, GLsizei bufSize, GLuint* params) {
     glGetnUniformuiv(program, location, bufSize, params);
 }
 

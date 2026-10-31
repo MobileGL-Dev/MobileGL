@@ -48,7 +48,9 @@ namespace MobileGL {
                 constexpr uint32_t kGlslFindILsb = 73u;
                 constexpr uint32_t kGlslFindUMsb = 75u;
 
-                Operand IdOp(uint32_t id) { return {SPV_OPERAND_TYPE_ID, {id}}; }
+                Operand IdOp(uint32_t id) {
+                    return {SPV_OPERAND_TYPE_ID, {id}};
+                }
 
                 Instruction* FindBuiltinDefinition(IRContext* context, spv::BuiltIn builtin) {
                     auto* defUseMgr = context->get_def_use_mgr();
@@ -69,13 +71,18 @@ namespace MobileGL {
                 }
 
                 // The scalar shapes a value participating in an emulated exchange may have.
-                enum class ScalarKind { Float, SInt, UInt, Bool };
+                enum class ScalarKind {
+                    Float,
+                    SInt,
+                    UInt,
+                    Bool
+                };
 
                 struct ValueTypeInfo {
                     ScalarKind kind = ScalarKind::UInt;
-                    uint32_t componentCount = 1;  // 1 for scalars, 2..4 for vectors
-                    uint32_t typeId = 0;          // the value's own type
-                    uint32_t scalarTypeId = 0;    // the component type
+                    uint32_t componentCount = 1; // 1 for scalars, 2..4 for vectors
+                    uint32_t typeId = 0;         // the value's own type
+                    uint32_t scalarTypeId = 0;   // the component type
                 };
 
                 bool ClassifyScalar(const Instruction* type, ScalarKind* kind) {
@@ -121,14 +128,14 @@ namespace MobileGL {
 
                     uint32_t Emit(spv::Op opcode, uint32_t typeId, Instruction::OperandList operands) {
                         const uint32_t resultId = m_context->TakeNextId();
-                        m_anchor->InsertBefore(spvtools::MakeUnique<Instruction>(
-                            m_context, opcode, typeId, resultId, std::move(operands)));
+                        m_anchor->InsertBefore(spvtools::MakeUnique<Instruction>(m_context, opcode, typeId, resultId,
+                                                                                 std::move(operands)));
                         return resultId;
                     }
 
                     void EmitNoResult(spv::Op opcode, Instruction::OperandList operands) {
-                        m_anchor->InsertBefore(spvtools::MakeUnique<Instruction>(
-                            m_context, opcode, 0, 0, std::move(operands)));
+                        m_anchor->InsertBefore(
+                            spvtools::MakeUnique<Instruction>(m_context, opcode, 0, 0, std::move(operands)));
                     }
 
                 private:
@@ -142,11 +149,11 @@ namespace MobileGL {
                     Instruction* inst = nullptr;
                     spv::Op opcode = spv::Op::OpNop;
                     spv::GroupOperation groupOperation = spv::GroupOperation::Reduce;
-                    uint32_t clusterSize = 0;    // ClusteredReduce only
-                    uint32_t quadDirection = 0;  // QuadSwap only
-                    ValueTypeInfo valueType{};   // participating value (where applicable)
+                    uint32_t clusterSize = 0;   // ClusteredReduce only
+                    uint32_t quadDirection = 0; // QuadSwap only
+                    ValueTypeInfo valueType{};  // participating value (where applicable)
                     uint32_t valueId = 0;
-                    uint32_t indexId = 0;        // broadcast/shuffle/extract index operand
+                    uint32_t indexId = 0; // broadcast/shuffle/extract index operand
                 };
 
                 struct BarrierSite {
@@ -156,8 +163,7 @@ namespace MobileGL {
                 };
 
                 bool IsGroupNonUniformOpcode(spv::Op opcode) {
-                    return opcode >= spv::Op::OpGroupNonUniformElect &&
-                           opcode <= spv::Op::OpGroupNonUniformQuadSwap;
+                    return opcode >= spv::Op::OpGroupNonUniformElect && opcode <= spv::Op::OpGroupNonUniformQuadSwap;
                 }
             } // namespace
 
@@ -188,17 +194,15 @@ namespace MobileGL {
 
                 // Subgroup builtin variables and their loads.
                 static constexpr std::array<spv::BuiltIn, 9> kSubgroupBuiltins = {
-                    spv::BuiltIn::SubgroupSize,      spv::BuiltIn::SubgroupLocalInvocationId,
-                    spv::BuiltIn::SubgroupId,        spv::BuiltIn::NumSubgroups,
-                    spv::BuiltIn::SubgroupEqMask,    spv::BuiltIn::SubgroupGeMask,
-                    spv::BuiltIn::SubgroupGtMask,    spv::BuiltIn::SubgroupLeMask,
+                    spv::BuiltIn::SubgroupSize,   spv::BuiltIn::SubgroupLocalInvocationId,
+                    spv::BuiltIn::SubgroupId,     spv::BuiltIn::NumSubgroups,
+                    spv::BuiltIn::SubgroupEqMask, spv::BuiltIn::SubgroupGeMask,
+                    spv::BuiltIn::SubgroupGtMask, spv::BuiltIn::SubgroupLeMask,
                     spv::BuiltIn::SubgroupLtMask};
 
                 const auto isMaskBuiltin = [](spv::BuiltIn builtin) {
-                    return builtin == spv::BuiltIn::SubgroupEqMask ||
-                           builtin == spv::BuiltIn::SubgroupGeMask ||
-                           builtin == spv::BuiltIn::SubgroupGtMask ||
-                           builtin == spv::BuiltIn::SubgroupLeMask ||
+                    return builtin == spv::BuiltIn::SubgroupEqMask || builtin == spv::BuiltIn::SubgroupGeMask ||
+                           builtin == spv::BuiltIn::SubgroupGtMask || builtin == spv::BuiltIn::SubgroupLeMask ||
                            builtin == spv::BuiltIn::SubgroupLtMask;
                 };
                 struct BuiltinUse {
@@ -221,8 +225,7 @@ namespace MobileGL {
                     defUseMgr->ForEachUser(variable, [&](Instruction* user) {
                         switch (user->opcode()) {
                         case spv::Op::OpLoad:
-                            if (user->NumInOperands() >= 1 &&
-                                user->GetSingleWordInOperand(0) == variableId) {
+                            if (user->NumInOperands() >= 1 && user->GetSingleWordInOperand(0) == variableId) {
                                 use.loads.push_back(user);
                             } else {
                                 sawUnexpectedUser = true;
@@ -236,8 +239,7 @@ namespace MobileGL {
                                 sawUnexpectedUser = true;
                                 return;
                             }
-                            const Instruction* index =
-                                defUseMgr->GetDef(user->GetSingleWordInOperand(1));
+                            const Instruction* index = defUseMgr->GetDef(user->GetSingleWordInOperand(1));
                             if (index == nullptr || index->opcode() != spv::Op::OpConstant ||
                                 (component = index->GetSingleWordInOperand(0)) > 3u) {
                                 sawUnexpectedUser = true;
@@ -245,8 +247,7 @@ namespace MobileGL {
                             }
                             const uint32_t chainId = user->result_id();
                             defUseMgr->ForEachUser(user, [&](Instruction* chainUser) {
-                                if (chainUser->opcode() == spv::Op::OpLoad &&
-                                    chainUser->NumInOperands() >= 1 &&
+                                if (chainUser->opcode() == spv::Op::OpLoad && chainUser->NumInOperands() >= 1 &&
                                     chainUser->GetSingleWordInOperand(0) == chainId) {
                                     use.componentLoads.emplace_back(chainUser, component);
                                 } else {
@@ -349,15 +350,13 @@ namespace MobileGL {
                                 break;
                             case spv::Op::OpGroupNonUniformQuadSwap:
                                 site.valueId = inst.GetSingleWordInOperand(1);
-                                if (!resolveUintConstant(inst.GetSingleWordInOperand(2),
-                                                         &site.quadDirection) ||
+                                if (!resolveUintConstant(inst.GetSingleWordInOperand(2), &site.quadDirection) ||
                                     site.quadDirection > 2u) {
                                     sawUnsupported = true;
                                 }
                                 break;
                             case spv::Op::OpGroupNonUniformBallotBitCount:
-                                site.groupOperation = static_cast<spv::GroupOperation>(
-                                    inst.GetSingleWordInOperand(1));
+                                site.groupOperation = static_cast<spv::GroupOperation>(inst.GetSingleWordInOperand(1));
                                 site.valueId = inst.GetSingleWordInOperand(2);
                                 break;
                             case spv::Op::OpGroupNonUniformIAdd:
@@ -376,15 +375,12 @@ namespace MobileGL {
                             case spv::Op::OpGroupNonUniformLogicalAnd:
                             case spv::Op::OpGroupNonUniformLogicalOr:
                             case spv::Op::OpGroupNonUniformLogicalXor:
-                                site.groupOperation = static_cast<spv::GroupOperation>(
-                                    inst.GetSingleWordInOperand(1));
+                                site.groupOperation = static_cast<spv::GroupOperation>(inst.GetSingleWordInOperand(1));
                                 site.valueId = inst.GetSingleWordInOperand(2);
                                 if (site.groupOperation == spv::GroupOperation::ClusteredReduce) {
                                     if (inst.NumInOperands() < 4 ||
-                                        !resolveUintConstant(inst.GetSingleWordInOperand(3),
-                                                             &site.clusterSize) ||
-                                        site.clusterSize == 0u ||
-                                        (site.clusterSize & (site.clusterSize - 1u)) != 0u) {
+                                        !resolveUintConstant(inst.GetSingleWordInOperand(3), &site.clusterSize) ||
+                                        site.clusterSize == 0u || (site.clusterSize & (site.clusterSize - 1u)) != 0u) {
                                         sawUnsupported = true;
                                     }
                                 } else if (site.groupOperation != spv::GroupOperation::Reduce &&
@@ -415,8 +411,7 @@ namespace MobileGL {
                                 const Instruction* value = defUseMgr->GetDef(site.valueId);
                                 if (value == nullptr ||
                                     !ClassifyValueType(irContext, value->type_id(), &site.valueType) ||
-                                    site.valueType.kind != ScalarKind::Bool ||
-                                    site.valueType.componentCount != 1u) {
+                                    site.valueType.kind != ScalarKind::Bool || site.valueType.componentCount != 1u) {
                                     sawUnsupported = true;
                                 }
                                 break;
@@ -452,14 +447,12 @@ namespace MobileGL {
                 // is accepted; spec-constant sizes are not (GL has no specialization).
                 uint32_t localSize[3] = {0, 0, 0};
                 bool haveLocalSize = false;
-                if (Instruction* workgroupSize =
-                        FindBuiltinDefinition(irContext, spv::BuiltIn::WorkgroupSize)) {
+                if (Instruction* workgroupSize = FindBuiltinDefinition(irContext, spv::BuiltIn::WorkgroupSize)) {
                     if (workgroupSize->opcode() == spv::Op::OpConstantComposite &&
                         workgroupSize->NumInOperands() == 3) {
-                        haveLocalSize =
-                            resolveUintConstant(workgroupSize->GetSingleWordInOperand(0), &localSize[0]) &&
-                            resolveUintConstant(workgroupSize->GetSingleWordInOperand(1), &localSize[1]) &&
-                            resolveUintConstant(workgroupSize->GetSingleWordInOperand(2), &localSize[2]);
+                        haveLocalSize = resolveUintConstant(workgroupSize->GetSingleWordInOperand(0), &localSize[0]) &&
+                                        resolveUintConstant(workgroupSize->GetSingleWordInOperand(1), &localSize[1]) &&
+                                        resolveUintConstant(workgroupSize->GetSingleWordInOperand(2), &localSize[2]);
                     }
                 }
                 if (!haveLocalSize) {
@@ -478,8 +471,7 @@ namespace MobileGL {
                 if (!haveLocalSize || localSize[0] == 0u || localSize[1] == 0u || localSize[2] == 0u) {
                     return Status::Failure;
                 }
-                const uint64_t total64 =
-                    static_cast<uint64_t>(localSize[0]) * localSize[1] * localSize[2];
+                const uint64_t total64 = static_cast<uint64_t>(localSize[0]) * localSize[1] * localSize[2];
                 if (total64 == 0u || total64 > (1u << 20)) {
                     return Status::Failure;
                 }
@@ -501,13 +493,12 @@ namespace MobileGL {
                     std::set<uint32_t> scratchTypeKeys;
                     uint64_t scratchBytes = 0;
                     for (const GroupOpSite& site : groupOps) {
-                        if (site.valueType.typeId == 0u) continue;  // no shared-memory exchange
+                        if (site.valueType.typeId == 0u) continue; // no shared-memory exchange
                         const uint32_t key = site.valueType.kind == ScalarKind::Bool
                                                  ? (0x80000000u | site.valueType.componentCount)
                                                  : site.valueType.typeId;
                         if (!scratchTypeKeys.insert(key).second) continue;
-                        scratchBytes += static_cast<uint64_t>(paddedSlots) * 4u *
-                                        site.valueType.componentCount;
+                        scratchBytes += static_cast<uint64_t>(paddedSlots) * 4u * site.valueType.componentCount;
                     }
                     if (scratchBytes > scratchBudgetBytes) {
                         return Status::Failure;
@@ -528,38 +519,31 @@ namespace MobileGL {
                     const analysis::Type* type = typeMgr->GetType(uintTypeId);
                     const analysis::Constant* constant = constMgr->GetConstant(type, {value});
                     const Instruction* inst =
-                        constant != nullptr ? constMgr->GetDefiningInstruction(constant, uintTypeId)
-                                            : nullptr;
+                        constant != nullptr ? constMgr->GetDefiningInstruction(constant, uintTypeId) : nullptr;
                     return inst != nullptr ? inst->result_id() : 0u;
                 };
                 const auto boolConst = [&](bool value) -> uint32_t {
                     const analysis::Type* type = typeMgr->GetType(boolTypeId);
-                    const analysis::Constant* constant =
-                        constMgr->GetConstant(type, {value ? 1u : 0u});
+                    const analysis::Constant* constant = constMgr->GetConstant(type, {value ? 1u : 0u});
                     const Instruction* inst =
-                        constant != nullptr ? constMgr->GetDefiningInstruction(constant, boolTypeId)
-                                            : nullptr;
+                        constant != nullptr ? constMgr->GetDefiningInstruction(constant, boolTypeId) : nullptr;
                     return inst != nullptr ? inst->result_id() : 0u;
                 };
                 // A constant of an arbitrary 32-bit scalar type from its bit pattern, splat
                 // to the value type when it is a vector.
                 const auto typedConst = [&](const ValueTypeInfo& info, uint32_t scalarBits,
-                                            uint32_t scratchScalarTypeId,
-                                            uint32_t scratchTypeId) -> uint32_t {
+                                            uint32_t scratchScalarTypeId, uint32_t scratchTypeId) -> uint32_t {
                     const analysis::Type* scalarType = typeMgr->GetType(scratchScalarTypeId);
                     const analysis::Constant* scalar = constMgr->GetConstant(scalarType, {scalarBits});
                     if (scalar == nullptr) return 0u;
-                    const Instruction* scalarInst =
-                        constMgr->GetDefiningInstruction(scalar, scratchScalarTypeId);
+                    const Instruction* scalarInst = constMgr->GetDefiningInstruction(scalar, scratchScalarTypeId);
                     if (scalarInst == nullptr) return 0u;
                     if (info.componentCount == 1u) return scalarInst->result_id();
                     const analysis::Type* vectorType = typeMgr->GetType(scratchTypeId);
-                    std::vector<uint32_t> componentIds(info.componentCount,
-                                                       scalarInst->result_id());
+                    std::vector<uint32_t> componentIds(info.componentCount, scalarInst->result_id());
                     const analysis::Constant* vector = constMgr->GetConstant(vectorType, componentIds);
                     if (vector == nullptr) return 0u;
-                    const Instruction* vectorInst =
-                        constMgr->GetDefiningInstruction(vector, scratchTypeId);
+                    const Instruction* vectorInst = constMgr->GetDefiningInstruction(vector, scratchTypeId);
                     return vectorInst != nullptr ? vectorInst->result_id() : 0u;
                 };
 
@@ -571,16 +555,15 @@ namespace MobileGL {
                 const uint32_t cTotal = uintConst(totalInvocations);
                 const uint32_t cAllOnes = uintConst(0xffffffffu);
                 const uint32_t cTrue = boolConst(true);
-                if (c0 == 0u || c1 == 0u || c31 == 0u || c32 == 0u || cNotLane == 0u ||
-                    cTotal == 0u || cAllOnes == 0u || cTrue == 0u) {
+                if (c0 == 0u || c1 == 0u || c31 == 0u || c32 == 0u || cNotLane == 0u || cTotal == 0u ||
+                    cAllOnes == 0u || cTrue == 0u) {
                     return Status::Failure;
                 }
 
                 // GLSL.std.450 import (for min/max combines and ballot find ops).
                 uint32_t glslStd450Id = 0;
                 for (const Instruction& import : irContext->module()->ext_inst_imports()) {
-                    const std::string importName =
-                        spvtools::utils::MakeString(import.GetInOperand(0).words);
+                    const std::string importName = spvtools::utils::MakeString(import.GetInOperand(0).words);
                     if (importName == "GLSL.std.450") {
                         glslStd450Id = import.result_id();
                         break;
@@ -592,34 +575,29 @@ namespace MobileGL {
                     irContext->module()->AddExtInstImport(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpExtInstImport, 0, glslStd450Id,
                         Instruction::OperandList{
-                            {SPV_OPERAND_TYPE_LITERAL_STRING,
-                             spvtools::utils::MakeVector("GLSL.std.450")}}));
+                            {SPV_OPERAND_TYPE_LITERAL_STRING, spvtools::utils::MakeVector("GLSL.std.450")}}));
                     return glslStd450Id;
                 };
 
                 // gl_LocalInvocationIndex drives the whole virtual topology; synthesize the
                 // builtin when the module never declared it.
-                Instruction* liiVariable =
-                    FindBuiltinDefinition(irContext, spv::BuiltIn::LocalInvocationIndex);
+                Instruction* liiVariable = FindBuiltinDefinition(irContext, spv::BuiltIn::LocalInvocationIndex);
                 uint32_t liiVariableId = 0;
                 if (liiVariable != nullptr && liiVariable->opcode() == spv::Op::OpVariable) {
                     liiVariableId = liiVariable->result_id();
                 } else {
-                    const uint32_t pointerTypeId =
-                        typeMgr->FindPointerToType(uintTypeId, spv::StorageClass::Input);
+                    const uint32_t pointerTypeId = typeMgr->FindPointerToType(uintTypeId, spv::StorageClass::Input);
                     if (pointerTypeId == 0u) return Status::Failure;
                     liiVariableId = irContext->TakeNextId();
                     irContext->AddGlobalValue(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpVariable, pointerTypeId, liiVariableId,
                         Instruction::OperandList{
-                            {SPV_OPERAND_TYPE_STORAGE_CLASS,
-                             {static_cast<uint32_t>(spv::StorageClass::Input)}}}));
+                            {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<uint32_t>(spv::StorageClass::Input)}}}));
                     irContext->AddAnnotationInst(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpDecorate, 0, 0,
                         Instruction::OperandList{
                             IdOp(liiVariableId),
-                            {SPV_OPERAND_TYPE_DECORATION,
-                             {static_cast<uint32_t>(spv::Decoration::BuiltIn)}},
+                            {SPV_OPERAND_TYPE_DECORATION, {static_cast<uint32_t>(spv::Decoration::BuiltIn)}},
                             {SPV_OPERAND_TYPE_LITERAL_INTEGER,
                              {static_cast<uint32_t>(spv::BuiltIn::LocalInvocationIndex)}}}));
                     for (Instruction& entryPoint : irContext->module()->entry_points()) {
@@ -637,13 +615,21 @@ namespace MobileGL {
                 std::map<uint32_t, Scratch> scratchByType;
                 const uint32_t cPadded = uintConst(paddedSlots);
                 if (cPadded == 0u) return Status::Failure;
-                const auto scratchFor = [&](uint32_t elementTypeId) -> const Scratch* {
-                    auto it = scratchByType.find(elementTypeId);
+                // `elementTypeId` is the scratch element type; with atomic scratch reads its
+                // array is instead a flat run of uint words, `wordsPerSlot` per slot (an atomic
+                // load needs a scalar integer pointer). Still one array per element type, so
+                // the types never share slots - the same aliasing as without atomic reads.
+                const auto scratchFor = [&](uint32_t elementTypeId, uint32_t wordsPerSlot) -> const Scratch* {
+                    const uint32_t key = elementTypeId;
+                    if (m_atomicScratchReads) elementTypeId = uintTypeId;
+                    auto it = scratchByType.find(key);
                     if (it != scratchByType.end()) return &it->second;
+                    const uint32_t lengthId = m_atomicScratchReads ? uintConst(paddedSlots * wordsPerSlot) : cPadded;
+                    if (lengthId == 0u) return nullptr;
                     const uint32_t arrayTypeId = irContext->TakeNextId();
                     irContext->AddType(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpTypeArray, 0, arrayTypeId,
-                        Instruction::OperandList{IdOp(elementTypeId), IdOp(cPadded)}));
+                        Instruction::OperandList{IdOp(elementTypeId), IdOp(lengthId)}));
                     const uint32_t arrayPointerTypeId =
                         typeMgr->FindPointerToType(arrayTypeId, spv::StorageClass::Workgroup);
                     const uint32_t elementPointerTypeId =
@@ -653,16 +639,15 @@ namespace MobileGL {
                     irContext->AddGlobalValue(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpVariable, arrayPointerTypeId, variableId,
                         Instruction::OperandList{
-                            {SPV_OPERAND_TYPE_STORAGE_CLASS,
-                             {static_cast<uint32_t>(spv::StorageClass::Workgroup)}}}));
+                            {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<uint32_t>(spv::StorageClass::Workgroup)}}}));
                     Scratch scratch{variableId, elementTypeId, elementPointerTypeId};
-                    return &scratchByType.emplace(elementTypeId, scratch).first->second;
+                    return &scratchByType.emplace(key, scratch).first->second;
                 };
 
                 // The uint-domain twin of a participating type: bools travel as 0/1 words.
                 struct ScratchTypeInfo {
-                    uint32_t typeId = 0;        // element type stored in scratch
-                    uint32_t scalarTypeId = 0;  // its component type
+                    uint32_t typeId = 0;       // element type stored in scratch
+                    uint32_t scalarTypeId = 0; // its component type
                     bool boolConverted = false;
                 };
                 const auto scratchTypeFor = [&](const ValueTypeInfo& info) -> ScratchTypeInfo {
@@ -691,47 +676,31 @@ namespace MobileGL {
                 if (numVirtualConstId == 0u) return Status::Failure;
 
                 // The x word of one of the five ballot-mask builtins for the calling
-                // invocation's virtual subgroup, bounded to lanes that exist (words y..w
-                // are zero at 32 lanes).
+                // invocation's virtual subgroup (words y..w are zero at 32 lanes). Defined
+                // over gl_SubgroupSize bits, NOT clipped to the lanes a partial last subgroup
+                // actually has: the masks name lane positions, and GL/Vulkan define them for
+                // every position below the subgroup size.
                 const auto emitMaskWord = [&](Emitter& em, spv::BuiltIn builtin) -> uint32_t {
-                    const uint32_t index =
-                        em.Emit(spv::Op::OpLoad, uintTypeId, {IdOp(liiVariableId)});
-                    const uint32_t lane =
-                        em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(index), IdOp(c31)});
-                    const uint32_t base = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                                  {IdOp(index), IdOp(cNotLane)});
-                    const uint32_t tailBits =
-                        em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(cTotal), IdOp(base)});
-                    const uint32_t full = em.Emit(spv::Op::OpUGreaterThanEqual, boolTypeId,
-                                                  {IdOp(tailBits), IdOp(c32)});
-                    const uint32_t tailShift = em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId,
-                                                       {IdOp(c1), IdOp(tailBits)});
-                    const uint32_t tailMask =
-                        em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(tailShift), IdOp(c1)});
-                    const uint32_t exists = em.Emit(spv::Op::OpSelect, uintTypeId,
-                                                    {IdOp(full), IdOp(cAllOnes), IdOp(tailMask)});
+                    const uint32_t index = em.Emit(spv::Op::OpLoad, uintTypeId, {IdOp(liiVariableId)});
+                    const uint32_t lane = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(index), IdOp(c31)});
                     const auto lowMaskThroughLane = [&](bool inclusive) -> uint32_t {
                         if (!inclusive) {
-                            const uint32_t bit = em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId,
-                                                         {IdOp(c1), IdOp(lane)});
+                            const uint32_t bit =
+                                em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId, {IdOp(c1), IdOp(lane)});
                             return em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(bit), IdOp(c1)});
                         }
-                        const uint32_t lanePlusOne =
-                            em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(lane), IdOp(c1)});
-                        const uint32_t atTop = em.Emit(spv::Op::OpUGreaterThanEqual, boolTypeId,
-                                                       {IdOp(lanePlusOne), IdOp(c32)});
-                        const uint32_t shifted = em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId,
-                                                         {IdOp(c1), IdOp(lanePlusOne)});
-                        const uint32_t below =
-                            em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(shifted), IdOp(c1)});
-                        return em.Emit(spv::Op::OpSelect, uintTypeId,
-                                       {IdOp(atTop), IdOp(cAllOnes), IdOp(below)});
+                        const uint32_t lanePlusOne = em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(lane), IdOp(c1)});
+                        const uint32_t atTop =
+                            em.Emit(spv::Op::OpUGreaterThanEqual, boolTypeId, {IdOp(lanePlusOne), IdOp(c32)});
+                        const uint32_t shifted =
+                            em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId, {IdOp(c1), IdOp(lanePlusOne)});
+                        const uint32_t below = em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(shifted), IdOp(c1)});
+                        return em.Emit(spv::Op::OpSelect, uintTypeId, {IdOp(atTop), IdOp(cAllOnes), IdOp(below)});
                     };
                     uint32_t word = 0;
                     switch (builtin) {
                     case spv::BuiltIn::SubgroupEqMask:
-                        word = em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId,
-                                       {IdOp(c1), IdOp(lane)});
+                        word = em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId, {IdOp(c1), IdOp(lane)});
                         break;
                     case spv::BuiltIn::SubgroupLtMask:
                         word = lowMaskThroughLane(false);
@@ -748,7 +717,7 @@ namespace MobileGL {
                     default:
                         return 0u;
                     }
-                    return em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(word), IdOp(exists)});
+                    return word;
                 };
 
                 for (const BuiltinUse& use : builtinUses) {
@@ -764,15 +733,13 @@ namespace MobileGL {
                             load->SetInOperands({IdOp(numVirtualConstId)});
                             break;
                         case spv::BuiltIn::SubgroupLocalInvocationId: {
-                            const uint32_t index =
-                                em.Emit(spv::Op::OpLoad, uintTypeId, {IdOp(liiVariableId)});
+                            const uint32_t index = em.Emit(spv::Op::OpLoad, uintTypeId, {IdOp(liiVariableId)});
                             load->SetOpcode(spv::Op::OpBitwiseAnd);
                             load->SetInOperands({IdOp(index), IdOp(c31)});
                             break;
                         }
                         case spv::BuiltIn::SubgroupId: {
-                            const uint32_t index =
-                                em.Emit(spv::Op::OpLoad, uintTypeId, {IdOp(liiVariableId)});
+                            const uint32_t index = em.Emit(spv::Op::OpLoad, uintTypeId, {IdOp(liiVariableId)});
                             load->SetOpcode(spv::Op::OpShiftRightLogical);
                             load->SetInOperands({IdOp(index), IdOp(uintConst(kIdShift))});
                             break;
@@ -781,8 +748,7 @@ namespace MobileGL {
                             const uint32_t word = emitMaskWord(em, use.builtin);
                             if (word == 0u) return Status::Failure;
                             load->SetOpcode(spv::Op::OpCompositeConstruct);
-                            load->SetInOperands(
-                                {IdOp(word), IdOp(c0), IdOp(c0), IdOp(c0)});
+                            load->SetInOperands({IdOp(word), IdOp(c0), IdOp(c0), IdOp(c0)});
                             break;
                         }
                         }
@@ -806,69 +772,106 @@ namespace MobileGL {
                     Instruction* inst = site.inst;
                     Emitter em(irContext, inst);
 
-                    const uint32_t lii =
-                        em.Emit(spv::Op::OpLoad, uintTypeId, {IdOp(liiVariableId)});
-                    const uint32_t lane =
-                        em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(lii), IdOp(c31)});
-                    const uint32_t base =
-                        em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(lii), IdOp(cNotLane)});
+                    const uint32_t lii = em.Emit(spv::Op::OpLoad, uintTypeId, {IdOp(liiVariableId)});
+                    const uint32_t lane = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(lii), IdOp(c31)});
+                    const uint32_t base = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(lii), IdOp(cNotLane)});
 
                     const auto barrier = [&]() {
                         const uint32_t scopeId = uintConst(static_cast<uint32_t>(spv::Scope::Workgroup));
-                        const uint32_t semanticsId = uintConst(
-                            static_cast<uint32_t>(spv::MemorySemanticsMask::AcquireRelease) |
-                            static_cast<uint32_t>(spv::MemorySemanticsMask::WorkgroupMemory));
-                        em.EmitNoResult(spv::Op::OpControlBarrier,
-                                        {IdOp(scopeId), IdOp(scopeId), IdOp(semanticsId)});
+                        const uint32_t semanticsId =
+                            uintConst(static_cast<uint32_t>(spv::MemorySemanticsMask::AcquireRelease) |
+                                      static_cast<uint32_t>(spv::MemorySemanticsMask::WorkgroupMemory));
+                        em.EmitNoResult(spv::Op::OpControlBarrier, {IdOp(scopeId), IdOp(scopeId), IdOp(semanticsId)});
                     };
 
                     const ScratchTypeInfo scratchType = scratchTypeFor(site.valueType);
                     const auto toScratch = [&](uint32_t valueId) -> uint32_t {
                         if (!scratchType.boolConverted) return valueId;
-                        const uint32_t ones =
-                            typedConst(site.valueType, 1u, uintTypeId, scratchType.typeId);
-                        const uint32_t zeros =
-                            typedConst(site.valueType, 0u, uintTypeId, scratchType.typeId);
-                        return em.Emit(spv::Op::OpSelect, scratchType.typeId,
-                                       {IdOp(valueId), IdOp(ones), IdOp(zeros)});
+                        const uint32_t ones = typedConst(site.valueType, 1u, uintTypeId, scratchType.typeId);
+                        const uint32_t zeros = typedConst(site.valueType, 0u, uintTypeId, scratchType.typeId);
+                        return em.Emit(spv::Op::OpSelect, scratchType.typeId, {IdOp(valueId), IdOp(ones), IdOp(zeros)});
                     };
                     const auto fromScratch = [&](uint32_t valueId) -> uint32_t {
                         if (!scratchType.boolConverted) return valueId;
-                        const uint32_t zeros =
-                            typedConst(site.valueType, 0u, uintTypeId, scratchType.typeId);
-                        return em.Emit(spv::Op::OpINotEqual, site.valueType.typeId,
-                                       {IdOp(valueId), IdOp(zeros)});
+                        const uint32_t zeros = typedConst(site.valueType, 0u, uintTypeId, scratchType.typeId);
+                        return em.Emit(spv::Op::OpINotEqual, site.valueType.typeId, {IdOp(valueId), IdOp(zeros)});
+                    };
+
+                    // Atomic scratch reads keep each slot as componentCount uint words; the
+                    // value crosses into that domain by bitcast (a no-op for uint data).
+                    const uint32_t wordsPerSlot = site.valueType.componentCount;
+                    const uint32_t wordTypeId = [&]() -> uint32_t {
+                        if (!m_atomicScratchReads || wordsPerSlot == 1u) return uintTypeId;
+                        const analysis::Type* registeredUint = typeMgr->GetType(uintTypeId);
+                        analysis::Vector vectorType(registeredUint, wordsPerSlot);
+                        return typeMgr->GetTypeInstruction(&vectorType);
+                    }();
+                    const bool wordsNeedBitcast = scratchType.scalarTypeId != uintTypeId;
+                    const auto wordIndex = [&](uint32_t slotId, uint32_t component) -> uint32_t {
+                        if (wordsPerSlot == 1u) return slotId;
+                        const uint32_t scaled =
+                            em.Emit(spv::Op::OpIMul, uintTypeId, {IdOp(slotId), IdOp(uintConst(wordsPerSlot))});
+                        return em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(scaled), IdOp(uintConst(component))});
                     };
 
                     const Scratch* scratch = nullptr;
                     const auto storeOwnSlot = [&](uint32_t valueId) -> bool {
-                        scratch = scratchFor(scratchType.typeId);
+                        scratch = scratchFor(scratchType.typeId, wordsPerSlot);
                         if (scratch == nullptr) return false;
-                        const uint32_t pointer =
-                            em.Emit(spv::Op::OpAccessChain, scratch->pointerTypeId,
-                                    {IdOp(scratch->variableId), IdOp(lii)});
-                        em.EmitNoResult(spv::Op::OpStore, {IdOp(pointer), IdOp(valueId)});
+                        if (!m_atomicScratchReads) {
+                            const uint32_t pointer = em.Emit(spv::Op::OpAccessChain, scratch->pointerTypeId,
+                                                             {IdOp(scratch->variableId), IdOp(lii)});
+                            em.EmitNoResult(spv::Op::OpStore, {IdOp(pointer), IdOp(valueId)});
+                        } else {
+                            const uint32_t words =
+                                wordsNeedBitcast ? em.Emit(spv::Op::OpBitcast, wordTypeId, {IdOp(valueId)}) : valueId;
+                            for (uint32_t c = 0; c < wordsPerSlot; ++c) {
+                                const uint32_t word =
+                                    wordsPerSlot == 1u
+                                        ? words
+                                        : em.Emit(spv::Op::OpCompositeExtract, uintTypeId,
+                                                  {IdOp(words), {SPV_OPERAND_TYPE_LITERAL_INTEGER, {c}}});
+                                const uint32_t pointer = em.Emit(spv::Op::OpAccessChain, scratch->pointerTypeId,
+                                                                 {IdOp(scratch->variableId), IdOp(wordIndex(lii, c))});
+                                em.EmitNoResult(spv::Op::OpStore, {IdOp(pointer), IdOp(word)});
+                            }
+                        }
                         barrier();
                         return true;
                     };
                     const auto readSlot = [&](uint32_t indexId) -> uint32_t {
-                        const uint32_t pointer =
-                            em.Emit(spv::Op::OpAccessChain, scratch->pointerTypeId,
-                                    {IdOp(scratch->variableId), IdOp(indexId)});
-                        return em.Emit(spv::Op::OpLoad, scratchType.typeId, {IdOp(pointer)});
+                        if (!m_atomicScratchReads) {
+                            const uint32_t pointer = em.Emit(spv::Op::OpAccessChain, scratch->pointerTypeId,
+                                                             {IdOp(scratch->variableId), IdOp(indexId)});
+                            return em.Emit(spv::Op::OpLoad, scratchType.typeId, {IdOp(pointer)});
+                        }
+                        const uint32_t scopeId = uintConst(static_cast<uint32_t>(spv::Scope::Workgroup));
+                        Instruction::OperandList words;
+                        uint32_t packed = 0;
+                        for (uint32_t c = 0; c < wordsPerSlot; ++c) {
+                            const uint32_t pointer = em.Emit(spv::Op::OpAccessChain, scratch->pointerTypeId,
+                                                             {IdOp(scratch->variableId), IdOp(wordIndex(indexId, c))});
+                            packed =
+                                em.Emit(spv::Op::OpAtomicLoad, uintTypeId, {IdOp(pointer), IdOp(scopeId), IdOp(c0)});
+                            words.push_back(IdOp(packed));
+                        }
+                        if (wordsPerSlot > 1u) {
+                            packed = em.Emit(spv::Op::OpCompositeConstruct, wordTypeId, std::move(words));
+                        }
+                        return wordsNeedBitcast ? em.Emit(spv::Op::OpBitcast, scratchType.typeId, {IdOp(packed)})
+                                                : packed;
                     };
                     // A select whose condition is a scalar bool but whose values may be
                     // vectors; pre-SPIR-V-1.4 needs the condition splat to a bvec.
-                    const auto guardedSelect = [&](uint32_t condId, uint32_t thenId,
-                                                   uint32_t elseId) -> uint32_t {
+                    const auto guardedSelect = [&](uint32_t condId, uint32_t thenId, uint32_t elseId) -> uint32_t {
                         const uint32_t componentCount = site.valueType.componentCount;
                         uint32_t conditionId = condId;
                         if (componentCount > 1u) {
                             const uint32_t conditionTypeId = boolVectorTypeId(componentCount);
                             Instruction::OperandList splat;
-                            for (uint32_t i = 0; i < componentCount; ++i) splat.push_back(IdOp(condId));
-                            conditionId =
-                                em.Emit(spv::Op::OpCompositeConstruct, conditionTypeId, std::move(splat));
+                            for (uint32_t i = 0; i < componentCount; ++i)
+                                splat.push_back(IdOp(condId));
+                            conditionId = em.Emit(spv::Op::OpCompositeConstruct, conditionTypeId, std::move(splat));
                         }
                         return em.Emit(spv::Op::OpSelect, scratchType.typeId,
                                        {IdOp(conditionId), IdOp(thenId), IdOp(elseId)});
@@ -879,15 +882,14 @@ namespace MobileGL {
                         return em.Emit(spv::Op::OpExtInst, typeId,
                                        {IdOp(setId),
                                         {SPV_OPERAND_TYPE_EXTENSION_INSTRUCTION_NUMBER, {instNumber}},
-                                        IdOp(a), IdOp(b)});
+                                        IdOp(a),
+                                        IdOp(b)});
                     };
-                    const auto extInst1 = [&](uint32_t typeId, uint32_t instNumber,
-                                              uint32_t a) -> uint32_t {
+                    const auto extInst1 = [&](uint32_t typeId, uint32_t instNumber, uint32_t a) -> uint32_t {
                         const uint32_t setId = ensureGlslStd450();
-                        return em.Emit(spv::Op::OpExtInst, typeId,
-                                       {IdOp(setId),
-                                        {SPV_OPERAND_TYPE_EXTENSION_INSTRUCTION_NUMBER, {instNumber}},
-                                        IdOp(a)});
+                        return em.Emit(
+                            spv::Op::OpExtInst, typeId,
+                            {IdOp(setId), {SPV_OPERAND_TYPE_EXTENSION_INSTRUCTION_NUMBER, {instNumber}}, IdOp(a)});
                     };
 
                     // Combine two scratch-domain values with the site's operation.
@@ -966,20 +968,6 @@ namespace MobileGL {
                         }
                     };
 
-                    // The lanes-that-exist word for this virtual subgroup (tail handling).
-                    const auto existsWord = [&]() -> uint32_t {
-                        const uint32_t tailBits =
-                            em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(cTotal), IdOp(base)});
-                        const uint32_t full = em.Emit(spv::Op::OpUGreaterThanEqual, boolTypeId,
-                                                      {IdOp(tailBits), IdOp(c32)});
-                        const uint32_t shifted = em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId,
-                                                         {IdOp(c1), IdOp(tailBits)});
-                        const uint32_t mask =
-                            em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(shifted), IdOp(c1)});
-                        return em.Emit(spv::Op::OpSelect, uintTypeId,
-                                       {IdOp(full), IdOp(cAllOnes), IdOp(mask)});
-                    };
-
                     const auto finish = [&](uint32_t finalId) {
                         inst->SetOpcode(spv::Op::OpCopyObject);
                         inst->SetInOperands({IdOp(finalId)});
@@ -1001,15 +989,14 @@ namespace MobileGL {
                         for (uint32_t k = 0; k < kWidth; ++k) {
                             const uint32_t slot =
                                 em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(base), IdOp(uintConst(k))});
-                            const uint32_t exists = em.Emit(spv::Op::OpULessThan, boolTypeId,
-                                                            {IdOp(slot), IdOp(cTotal)});
+                            const uint32_t exists =
+                                em.Emit(spv::Op::OpULessThan, boolTypeId, {IdOp(slot), IdOp(cTotal)});
                             const uint32_t value = readSlot(slot);
-                            const uint32_t guarded = em.Emit(
-                                spv::Op::OpSelect, uintTypeId,
-                                {IdOp(exists), IdOp(value), IdOp(neutral)});
+                            const uint32_t guarded =
+                                em.Emit(spv::Op::OpSelect, uintTypeId, {IdOp(exists), IdOp(value), IdOp(neutral)});
                             acc = k == 0 ? guarded
-                                         : em.Emit(isAll ? spv::Op::OpBitwiseAnd : spv::Op::OpBitwiseOr,
-                                                   uintTypeId, {IdOp(acc), IdOp(guarded)});
+                                         : em.Emit(isAll ? spv::Op::OpBitwiseAnd : spv::Op::OpBitwiseOr, uintTypeId,
+                                                   {IdOp(acc), IdOp(guarded)});
                         }
                         barrier();
                         finish(em.Emit(spv::Op::OpINotEqual, boolTypeId, {IdOp(acc), IdOp(c0)}));
@@ -1023,28 +1010,23 @@ namespace MobileGL {
                         for (uint32_t k = 0; k < kWidth; ++k) {
                             const uint32_t slot =
                                 em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(base), IdOp(uintConst(k))});
-                            const uint32_t exists = em.Emit(spv::Op::OpULessThan, boolTypeId,
-                                                            {IdOp(slot), IdOp(cTotal)});
+                            const uint32_t exists =
+                                em.Emit(spv::Op::OpULessThan, boolTypeId, {IdOp(slot), IdOp(cTotal)});
                             const uint32_t value = readSlot(slot);
-                            const spv::Op compareOpcode = site.valueType.kind == ScalarKind::Float
-                                                              ? spv::Op::OpFOrdEqual
-                                                              : spv::Op::OpIEqual;
+                            const spv::Op compareOpcode =
+                                site.valueType.kind == ScalarKind::Float ? spv::Op::OpFOrdEqual : spv::Op::OpIEqual;
                             uint32_t equal = 0;
                             if (site.valueType.componentCount == 1u) {
-                                equal = em.Emit(compareOpcode, boolTypeId,
-                                                {IdOp(value), IdOp(reference)});
+                                equal = em.Emit(compareOpcode, boolTypeId, {IdOp(value), IdOp(reference)});
                             } else {
-                                const uint32_t comparisonTypeId =
-                                    boolVectorTypeId(site.valueType.componentCount);
-                                const uint32_t componentsEqual = em.Emit(
-                                    compareOpcode, comparisonTypeId, {IdOp(value), IdOp(reference)});
+                                const uint32_t comparisonTypeId = boolVectorTypeId(site.valueType.componentCount);
+                                const uint32_t componentsEqual =
+                                    em.Emit(compareOpcode, comparisonTypeId, {IdOp(value), IdOp(reference)});
                                 equal = em.Emit(spv::Op::OpAll, boolTypeId, {IdOp(componentsEqual)});
                             }
-                            const uint32_t guarded = em.Emit(
-                                spv::Op::OpSelect, boolTypeId,
-                                {IdOp(exists), IdOp(equal), IdOp(cTrue)});
-                            acc = em.Emit(spv::Op::OpLogicalAnd, boolTypeId,
-                                          {IdOp(acc), IdOp(guarded)});
+                            const uint32_t guarded =
+                                em.Emit(spv::Op::OpSelect, boolTypeId, {IdOp(exists), IdOp(equal), IdOp(cTrue)});
+                            acc = em.Emit(spv::Op::OpLogicalAnd, boolTypeId, {IdOp(acc), IdOp(guarded)});
                         }
                         barrier();
                         finish(acc);
@@ -1067,46 +1049,39 @@ namespace MobileGL {
                             break;
                         case spv::Op::OpGroupNonUniformBroadcast:
                         case spv::Op::OpGroupNonUniformShuffle:
-                            sourceLane = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                                 {IdOp(site.indexId), IdOp(c31)});
+                            sourceLane = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(site.indexId), IdOp(c31)});
                             break;
                         case spv::Op::OpGroupNonUniformShuffleXor: {
-                            const uint32_t flipped = em.Emit(
-                                spv::Op::OpBitwiseXor, uintTypeId, {IdOp(lane), IdOp(site.indexId)});
-                            sourceLane = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                                 {IdOp(flipped), IdOp(c31)});
+                            const uint32_t flipped =
+                                em.Emit(spv::Op::OpBitwiseXor, uintTypeId, {IdOp(lane), IdOp(site.indexId)});
+                            sourceLane = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(flipped), IdOp(c31)});
                             break;
                         }
                         case spv::Op::OpGroupNonUniformShuffleUp: {
                             const uint32_t shifted =
                                 em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(lane), IdOp(site.indexId)});
-                            sourceLane = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                                 {IdOp(shifted), IdOp(c31)});
+                            sourceLane = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(shifted), IdOp(c31)});
                             break;
                         }
                         case spv::Op::OpGroupNonUniformShuffleDown: {
                             const uint32_t shifted =
                                 em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(lane), IdOp(site.indexId)});
-                            sourceLane = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                                 {IdOp(shifted), IdOp(c31)});
+                            sourceLane = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(shifted), IdOp(c31)});
                             break;
                         }
                         case spv::Op::OpGroupNonUniformQuadBroadcast: {
-                            const uint32_t quadBase =
-                                em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                        {IdOp(lane), IdOp(uintConst(~3u & kLaneMask))});
+                            const uint32_t quadBase = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
+                                                              {IdOp(lane), IdOp(uintConst(~3u & kLaneMask))});
                             const uint32_t withinQuad =
-                                em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                        {IdOp(site.indexId), IdOp(uintConst(3u))});
-                            sourceLane = em.Emit(spv::Op::OpIAdd, uintTypeId,
-                                                 {IdOp(quadBase), IdOp(withinQuad)});
+                                em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(site.indexId), IdOp(uintConst(3u))});
+                            sourceLane = em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(quadBase), IdOp(withinQuad)});
                             break;
                         }
                         case spv::Op::OpGroupNonUniformQuadSwap: {
-                            const uint32_t partnerMask = uintConst(
-                                site.quadDirection == 0u ? 1u : site.quadDirection == 1u ? 2u : 3u);
-                            sourceLane = em.Emit(spv::Op::OpBitwiseXor, uintTypeId,
-                                                 {IdOp(lane), IdOp(partnerMask)});
+                            const uint32_t partnerMask = uintConst(site.quadDirection == 0u   ? 1u
+                                                                   : site.quadDirection == 1u ? 2u
+                                                                                              : 3u);
+                            sourceLane = em.Emit(spv::Op::OpBitwiseXor, uintTypeId, {IdOp(lane), IdOp(partnerMask)});
                             break;
                         }
                         default:
@@ -1126,13 +1101,13 @@ namespace MobileGL {
                         for (uint32_t k = 0; k < kWidth; ++k) {
                             const uint32_t slot =
                                 em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(base), IdOp(uintConst(k))});
-                            const uint32_t exists = em.Emit(spv::Op::OpULessThan, boolTypeId,
-                                                            {IdOp(slot), IdOp(cTotal)});
+                            const uint32_t exists =
+                                em.Emit(spv::Op::OpULessThan, boolTypeId, {IdOp(slot), IdOp(cTotal)});
                             const uint32_t value = readSlot(slot);
-                            const uint32_t guarded = em.Emit(
-                                spv::Op::OpSelect, uintTypeId, {IdOp(exists), IdOp(value), IdOp(c0)});
-                            const uint32_t bit = em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId,
-                                                         {IdOp(guarded), IdOp(uintConst(k))});
+                            const uint32_t guarded =
+                                em.Emit(spv::Op::OpSelect, uintTypeId, {IdOp(exists), IdOp(value), IdOp(c0)});
+                            const uint32_t bit =
+                                em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId, {IdOp(guarded), IdOp(uintConst(k))});
                             word = em.Emit(spv::Op::OpBitwiseOr, uintTypeId, {IdOp(word), IdOp(bit)});
                         }
                         barrier();
@@ -1142,12 +1117,10 @@ namespace MobileGL {
                     }
                     case spv::Op::OpGroupNonUniformInverseBallot: {
                         const uint32_t word = em.Emit(spv::Op::OpCompositeExtract, uintTypeId,
-                                                      {IdOp(site.valueId),
-                                                       {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}}});
-                        const uint32_t shifted = em.Emit(spv::Op::OpShiftRightLogical, uintTypeId,
-                                                         {IdOp(word), IdOp(lane)});
-                        const uint32_t bit =
-                            em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(shifted), IdOp(c1)});
+                                                      {IdOp(site.valueId), {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}}});
+                        const uint32_t shifted =
+                            em.Emit(spv::Op::OpShiftRightLogical, uintTypeId, {IdOp(word), IdOp(lane)});
+                        const uint32_t bit = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(shifted), IdOp(c1)});
                         finish(em.Emit(spv::Op::OpINotEqual, boolTypeId, {IdOp(bit), IdOp(c0)}));
                         break;
                     }
@@ -1161,63 +1134,54 @@ namespace MobileGL {
                                     {IdOp(site.valueId), {SPV_OPERAND_TYPE_LITERAL_INTEGER, {2u}}}),
                             em.Emit(spv::Op::OpCompositeExtract, uintTypeId,
                                     {IdOp(site.valueId), {SPV_OPERAND_TYPE_LITERAL_INTEGER, {3u}}})};
-                        const uint32_t inFirstPair = em.Emit(
-                            spv::Op::OpULessThan, boolTypeId, {IdOp(site.indexId), IdOp(uintConst(64u))});
-                        const uint32_t inWord0 = em.Emit(
-                            spv::Op::OpULessThan, boolTypeId, {IdOp(site.indexId), IdOp(c32)});
-                        const uint32_t inWord2 = em.Emit(
-                            spv::Op::OpULessThan, boolTypeId, {IdOp(site.indexId), IdOp(uintConst(96u))});
-                        const uint32_t firstPair = em.Emit(
-                            spv::Op::OpSelect, uintTypeId,
-                            {IdOp(inWord0), IdOp(words[0]), IdOp(words[1])});
-                        const uint32_t secondPair = em.Emit(
-                            spv::Op::OpSelect, uintTypeId,
-                            {IdOp(inWord2), IdOp(words[2]), IdOp(words[3])});
-                        const uint32_t word = em.Emit(
-                            spv::Op::OpSelect, uintTypeId,
-                            {IdOp(inFirstPair), IdOp(firstPair), IdOp(secondPair)});
-                        const uint32_t bitIndex = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                                          {IdOp(site.indexId), IdOp(c31)});
-                        const uint32_t shifted = em.Emit(spv::Op::OpShiftRightLogical, uintTypeId,
-                                                         {IdOp(word), IdOp(bitIndex)});
-                        const uint32_t bit =
-                            em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(shifted), IdOp(c1)});
+                        const uint32_t inFirstPair =
+                            em.Emit(spv::Op::OpULessThan, boolTypeId, {IdOp(site.indexId), IdOp(uintConst(64u))});
+                        const uint32_t inWord0 =
+                            em.Emit(spv::Op::OpULessThan, boolTypeId, {IdOp(site.indexId), IdOp(c32)});
+                        const uint32_t inWord2 =
+                            em.Emit(spv::Op::OpULessThan, boolTypeId, {IdOp(site.indexId), IdOp(uintConst(96u))});
+                        const uint32_t firstPair =
+                            em.Emit(spv::Op::OpSelect, uintTypeId, {IdOp(inWord0), IdOp(words[0]), IdOp(words[1])});
+                        const uint32_t secondPair =
+                            em.Emit(spv::Op::OpSelect, uintTypeId, {IdOp(inWord2), IdOp(words[2]), IdOp(words[3])});
+                        const uint32_t word = em.Emit(spv::Op::OpSelect, uintTypeId,
+                                                      {IdOp(inFirstPair), IdOp(firstPair), IdOp(secondPair)});
+                        const uint32_t bitIndex =
+                            em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(site.indexId), IdOp(c31)});
+                        const uint32_t shifted =
+                            em.Emit(spv::Op::OpShiftRightLogical, uintTypeId, {IdOp(word), IdOp(bitIndex)});
+                        const uint32_t bit = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(shifted), IdOp(c1)});
                         finish(em.Emit(spv::Op::OpINotEqual, boolTypeId, {IdOp(bit), IdOp(c0)}));
                         break;
                     }
                     case spv::Op::OpGroupNonUniformBallotBitCount: {
                         const uint32_t word = em.Emit(spv::Op::OpCompositeExtract, uintTypeId,
-                                                      {IdOp(site.valueId),
-                                                       {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}}});
+                                                      {IdOp(site.valueId), {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}}});
                         uint32_t masked = 0;
+                        // Counted over the gl_SubgroupSize (32) bits of the x word - the value is
+                        // an arbitrary uvec4, and bits of lanes a partial subgroup lacks still
+                        // count (subgroupBallotBitCount(uvec4(~0u)) == gl_SubgroupSize).
                         if (site.groupOperation == spv::GroupOperation::Reduce) {
-                            masked = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                             {IdOp(word), IdOp(existsWord())});
+                            masked = word;
                         } else {
-                            const bool inclusive =
-                                site.groupOperation == spv::GroupOperation::InclusiveScan;
+                            const bool inclusive = site.groupOperation == spv::GroupOperation::InclusiveScan;
                             uint32_t laneMask = 0;
                             if (inclusive) {
                                 const uint32_t lanePlusOne =
                                     em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(lane), IdOp(c1)});
                                 const uint32_t atTop =
-                                    em.Emit(spv::Op::OpUGreaterThanEqual, boolTypeId,
-                                            {IdOp(lanePlusOne), IdOp(c32)});
+                                    em.Emit(spv::Op::OpUGreaterThanEqual, boolTypeId, {IdOp(lanePlusOne), IdOp(c32)});
                                 const uint32_t shifted =
-                                    em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId,
-                                            {IdOp(c1), IdOp(lanePlusOne)});
-                                const uint32_t below =
-                                    em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(shifted), IdOp(c1)});
-                                laneMask = em.Emit(spv::Op::OpSelect, uintTypeId,
-                                                   {IdOp(atTop), IdOp(cAllOnes), IdOp(below)});
-                            } else {
-                                const uint32_t bit = em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId,
-                                                             {IdOp(c1), IdOp(lane)});
+                                    em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId, {IdOp(c1), IdOp(lanePlusOne)});
+                                const uint32_t below = em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(shifted), IdOp(c1)});
                                 laneMask =
-                                    em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(bit), IdOp(c1)});
+                                    em.Emit(spv::Op::OpSelect, uintTypeId, {IdOp(atTop), IdOp(cAllOnes), IdOp(below)});
+                            } else {
+                                const uint32_t bit =
+                                    em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId, {IdOp(c1), IdOp(lane)});
+                                laneMask = em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(bit), IdOp(c1)});
                             }
-                            masked = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                             {IdOp(word), IdOp(laneMask)});
+                            masked = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(word), IdOp(laneMask)});
                         }
                         finish(em.Emit(spv::Op::OpBitCount, uintTypeId, {IdOp(masked)}));
                         break;
@@ -1225,13 +1189,11 @@ namespace MobileGL {
                     case spv::Op::OpGroupNonUniformBallotFindLSB:
                     case spv::Op::OpGroupNonUniformBallotFindMSB: {
                         const uint32_t word = em.Emit(spv::Op::OpCompositeExtract, uintTypeId,
-                                                      {IdOp(site.valueId),
-                                                       {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}}});
-                        const uint32_t masked = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                                        {IdOp(word), IdOp(existsWord())});
+                                                      {IdOp(site.valueId), {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}}});
+                        // Over the gl_SubgroupSize (32) bits of the x word, like the bit count.
+                        const uint32_t masked = word;
                         const uint32_t instNumber =
-                            site.opcode == spv::Op::OpGroupNonUniformBallotFindLSB ? kGlslFindILsb
-                                                                                   : kGlslFindUMsb;
+                            site.opcode == spv::Op::OpGroupNonUniformBallotFindLSB ? kGlslFindILsb : kGlslFindUMsb;
                         finish(extInst1(uintTypeId, instNumber, masked));
                         break;
                     }
@@ -1246,13 +1208,16 @@ namespace MobileGL {
                         case spv::GroupOperation::Reduce: {
                             uint32_t acc = readSlot(base);
                             for (uint32_t k = 1; k < kWidth; ++k) {
-                                const uint32_t slot = em.Emit(spv::Op::OpIAdd, uintTypeId,
-                                                              {IdOp(base), IdOp(uintConst(k))});
-                                const uint32_t exists = em.Emit(spv::Op::OpULessThan, boolTypeId,
-                                                                {IdOp(slot), IdOp(cTotal)});
+                                const uint32_t slot =
+                                    em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(base), IdOp(uintConst(k))});
+                                const uint32_t exists =
+                                    em.Emit(spv::Op::OpULessThan, boolTypeId, {IdOp(slot), IdOp(cTotal)});
                                 const uint32_t value = readSlot(slot);
                                 const uint32_t combined = combine(acc, value);
-                                if (combined == 0u) { ok = false; break; }
+                                if (combined == 0u) {
+                                    ok = false;
+                                    break;
+                                }
                                 acc = guardedSelect(exists, combined, acc);
                             }
                             result = acc;
@@ -1264,13 +1229,15 @@ namespace MobileGL {
                             uint32_t acc = readSlot(base);
                             for (uint32_t k = 1; k < kWidth; ++k) {
                                 const uint32_t included =
-                                    em.Emit(spv::Op::OpULessThanEqual, boolTypeId,
-                                            {IdOp(uintConst(k)), IdOp(lane)});
-                                const uint32_t slot = em.Emit(spv::Op::OpIAdd, uintTypeId,
-                                                              {IdOp(base), IdOp(uintConst(k))});
+                                    em.Emit(spv::Op::OpULessThanEqual, boolTypeId, {IdOp(uintConst(k)), IdOp(lane)});
+                                const uint32_t slot =
+                                    em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(base), IdOp(uintConst(k))});
                                 const uint32_t value = readSlot(slot);
                                 const uint32_t combined = combine(acc, value);
-                                if (combined == 0u) { ok = false; break; }
+                                if (combined == 0u) {
+                                    ok = false;
+                                    break;
+                                }
                                 acc = guardedSelect(included, combined, acc);
                             }
                             result = acc;
@@ -1278,37 +1245,45 @@ namespace MobileGL {
                         }
                         case spv::GroupOperation::ExclusiveScan: {
                             uint32_t acc = identity();
-                            if (acc == 0u) { ok = false; break; }
+                            if (acc == 0u) {
+                                ok = false;
+                                break;
+                            }
                             for (uint32_t k = 0; k < kWidth; ++k) {
-                                const uint32_t included = em.Emit(
-                                    spv::Op::OpULessThan, boolTypeId, {IdOp(uintConst(k)), IdOp(lane)});
-                                const uint32_t slot = em.Emit(spv::Op::OpIAdd, uintTypeId,
-                                                              {IdOp(base), IdOp(uintConst(k))});
+                                const uint32_t included =
+                                    em.Emit(spv::Op::OpULessThan, boolTypeId, {IdOp(uintConst(k)), IdOp(lane)});
+                                const uint32_t slot =
+                                    em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(base), IdOp(uintConst(k))});
                                 const uint32_t value = readSlot(slot);
                                 const uint32_t combined = combine(acc, value);
-                                if (combined == 0u) { ok = false; break; }
+                                if (combined == 0u) {
+                                    ok = false;
+                                    break;
+                                }
                                 acc = guardedSelect(included, combined, acc);
                             }
                             result = acc;
                             break;
                         }
                         case spv::GroupOperation::ClusteredReduce: {
-                            const uint32_t cluster =
-                                site.clusterSize >= kWidth ? kWidth : site.clusterSize;
-                            const uint32_t clusterBase = em.Emit(
-                                spv::Op::OpBitwiseAnd, uintTypeId,
-                                {IdOp(lane), IdOp(uintConst(~(cluster - 1u) & kLaneMask))});
-                            const uint32_t firstSlot = em.Emit(spv::Op::OpIAdd, uintTypeId,
-                                                               {IdOp(base), IdOp(clusterBase)});
+                            const uint32_t cluster = site.clusterSize >= kWidth ? kWidth : site.clusterSize;
+                            const uint32_t clusterBase =
+                                em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
+                                        {IdOp(lane), IdOp(uintConst(~(cluster - 1u) & kLaneMask))});
+                            const uint32_t firstSlot =
+                                em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(base), IdOp(clusterBase)});
                             uint32_t acc = readSlot(firstSlot);
                             for (uint32_t k = 1; k < cluster; ++k) {
-                                const uint32_t slot = em.Emit(spv::Op::OpIAdd, uintTypeId,
-                                                              {IdOp(firstSlot), IdOp(uintConst(k))});
-                                const uint32_t exists = em.Emit(spv::Op::OpULessThan, boolTypeId,
-                                                                {IdOp(slot), IdOp(cTotal)});
+                                const uint32_t slot =
+                                    em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(firstSlot), IdOp(uintConst(k))});
+                                const uint32_t exists =
+                                    em.Emit(spv::Op::OpULessThan, boolTypeId, {IdOp(slot), IdOp(cTotal)});
                                 const uint32_t value = readSlot(slot);
                                 const uint32_t combined = combine(acc, value);
-                                if (combined == 0u) { ok = false; break; }
+                                if (combined == 0u) {
+                                    ok = false;
+                                    break;
+                                }
                                 acc = guardedSelect(exists, combined, acc);
                             }
                             result = acc;
@@ -1334,8 +1309,7 @@ namespace MobileGL {
 
                 // Widen subgroup-scoped barriers to the workgroup scope the emulation
                 // synchronizes at anyway; strictly stronger, so always safe.
-                const uint32_t workgroupScopeId =
-                    uintConst(static_cast<uint32_t>(spv::Scope::Workgroup));
+                const uint32_t workgroupScopeId = uintConst(static_cast<uint32_t>(spv::Scope::Workgroup));
                 if (workgroupScopeId == 0u) return Status::Failure;
                 for (const BarrierSite& site : barriers) {
                     if (site.inst->opcode() == spv::Op::OpControlBarrier) {
@@ -1386,8 +1360,7 @@ namespace MobileGL {
                     spv::Capability::GroupNonUniformPartitionedNV};
                 std::vector<Instruction*> deadCapabilities;
                 for (Instruction& capability : irContext->module()->capabilities()) {
-                    const auto value =
-                        static_cast<spv::Capability>(capability.GetSingleWordInOperand(0));
+                    const auto value = static_cast<spv::Capability>(capability.GetSingleWordInOperand(0));
                     for (const spv::Capability candidate : kSubgroupCapabilities) {
                         if (value == candidate) {
                             deadCapabilities.push_back(&capability);
@@ -1404,9 +1377,9 @@ namespace MobileGL {
             }
 
             spvtools::Optimizer::PassToken EmulateSubgroupsPass::CreateEmulateSubgroupsPass(
-                const Uint32 maxWorkgroupScratchBytes) {
+                const Uint32 maxWorkgroupScratchBytes, const bool atomicScratchReads) {
                 return spvtools::Optimizer::PassToken(
-                    MakeUnique<EmulateSubgroupsPass>(maxWorkgroupScratchBytes));
+                    MakeUnique<EmulateSubgroupsPass>(maxWorkgroupScratchBytes, atomicScratchReads));
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

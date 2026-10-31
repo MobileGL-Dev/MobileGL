@@ -40,9 +40,8 @@ namespace MobileGL::MG_Util::SelfTest {
                    fns.vkCreateShaderModule != nullptr && fns.vkDestroyShaderModule != nullptr &&
                    fns.vkCreatePipelineLayout != nullptr && fns.vkDestroyPipelineLayout != nullptr &&
                    fns.vkCreateGraphicsPipelines != nullptr && fns.vkDestroyPipeline != nullptr &&
-                   fns.vkCmdBindPipeline != nullptr && fns.vkCmdDraw != nullptr &&
-                   fns.vkCreateFence != nullptr && fns.vkDestroyFence != nullptr &&
-                   fns.vkQueueSubmit != nullptr && fns.vkWaitForFences != nullptr &&
+                   fns.vkCmdBindPipeline != nullptr && fns.vkCmdDraw != nullptr && fns.vkCreateFence != nullptr &&
+                   fns.vkDestroyFence != nullptr && fns.vkQueueSubmit != nullptr && fns.vkWaitForFences != nullptr &&
                    fns.vkGetQueryPoolResults != nullptr && fns.vkDeviceWaitIdle != nullptr;
         }
     } // namespace
@@ -111,12 +110,10 @@ namespace MobileGL::MG_Util::SelfTest {
             }
             fns.vkDeviceWaitIdle(device);
             if (fence != VK_NULL_HANDLE) fns.vkDestroyFence(device, fence, nullptr);
-            if (trianglePlainPipeline != VK_NULL_HANDLE)
-                fns.vkDestroyPipeline(device, trianglePlainPipeline, nullptr);
+            if (trianglePlainPipeline != VK_NULL_HANDLE) fns.vkDestroyPipeline(device, trianglePlainPipeline, nullptr);
             if (triangleDiscardPipeline != VK_NULL_HANDLE)
                 fns.vkDestroyPipeline(device, triangleDiscardPipeline, nullptr);
-            if (patchDiscardPipeline != VK_NULL_HANDLE)
-                fns.vkDestroyPipeline(device, patchDiscardPipeline, nullptr);
+            if (patchDiscardPipeline != VK_NULL_HANDLE) fns.vkDestroyPipeline(device, patchDiscardPipeline, nullptr);
             if (pipelineLayout != VK_NULL_HANDLE) fns.vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
             if (vertModule != VK_NULL_HANDLE) fns.vkDestroyShaderModule(device, vertModule, nullptr);
             if (tescModule != VK_NULL_HANDLE) fns.vkDestroyShaderModule(device, tescModule, nullptr);
@@ -159,8 +156,7 @@ namespace MobileGL::MG_Util::SelfTest {
             pgqPoolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
             pgqPoolInfo.queryType = VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT;
             pgqPoolInfo.queryCount = kShapeSlots;
-            if (fns.vkCreateQueryPool(device, &pgqPoolInfo, nullptr, &primitivesGeneratedQueryPool) !=
-                VK_SUCCESS) {
+            if (fns.vkCreateQueryPool(device, &pgqPoolInfo, nullptr, &primitivesGeneratedQueryPool) != VK_SUCCESS) {
                 return fail("vkCreateQueryPool(PRIMITIVES_GENERATED_EXT) failed");
             }
         }
@@ -305,8 +301,7 @@ namespace MobileGL::MG_Util::SelfTest {
             pipelineInfo.layout = pipelineLayout;
             pipelineInfo.renderPass = renderPass;
             pipelineInfo.subpass = 0;
-            return fns.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &out) ==
-                   VK_SUCCESS;
+            return fns.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &out) == VK_SUCCESS;
         };
         if (!makePipeline(false, false, trianglePlainPipeline)) {
             return fail("vkCreateGraphicsPipelines(triangles) failed");
@@ -451,9 +446,8 @@ namespace MobileGL::MG_Util::SelfTest {
         if (!measurement.ran || !measurement.trianglesPlain.drawn || !measurement.trianglesDiscard.drawn) {
             return PrimitivesGeneratedNoXfbVerdict::Inconclusive;
         }
-        const PrimitivesGeneratedNoXfbShapeMeasurement* shapes[3] = {&measurement.trianglesPlain,
-                                                                     &measurement.trianglesDiscard,
-                                                                     &measurement.patchesDiscard};
+        const PrimitivesGeneratedNoXfbShapeMeasurement* shapes[3] = {
+            &measurement.trianglesPlain, &measurement.trianglesDiscard, &measurement.patchesDiscard};
         Bool anyStreamSilent = false;
         Bool allStreamExact = true;
         Bool allPrimitivesGeneratedExtExact = true;
@@ -464,7 +458,7 @@ namespace MobileGL::MG_Util::SelfTest {
         // armed on a device whose stream query was RIGHT on a shape the statistics get
         // wrong - and the renderer reroutes every XFB-inactive draw, so that shape would
         // be downgraded from correct to wrong. "Never worse per draw" is what makes
-        // arming on an uncharacterised driver defensible; it has to be measured, not
+        // arming on an uncharacterized driver defensible; it has to be measured, not
         // assumed.
         Bool statisticsDominateStream = true;
         for (const auto* shape : shapes) {
@@ -483,12 +477,10 @@ namespace MobileGL::MG_Util::SelfTest {
                     return PrimitivesGeneratedNoXfbVerdict::Inconclusive;
                 }
             }
-            if (!shape->primitivesGeneratedExtMeasured ||
-                shape->primitivesGeneratedExt != shape->expectedPrimitives) {
+            if (!shape->primitivesGeneratedExtMeasured || shape->primitivesGeneratedExt != shape->expectedPrimitives) {
                 allPrimitivesGeneratedExtExact = false;
             }
-            if (!shape->statisticsMeasured ||
-                shape->statisticsClippingInput != shape->expectedPrimitives) {
+            if (!shape->statisticsMeasured || shape->statisticsClippingInput != shape->expectedPrimitives) {
                 allStatisticsExact = false;
                 // Only a shape the stream query was silent on may be left behind by
                 // the substitute; a shape it answered exactly must not be traded away.
@@ -533,8 +525,7 @@ namespace MobileGL::MG_Util::SelfTest {
             if (primitivesGeneratedQueryUsable) {
                 return PrimGenRerouteKind::PrimitivesGeneratedExt;
             }
-            return pipelineStatisticsEnabled ? PrimGenRerouteKind::ClippingStatistics
-                                             : PrimGenRerouteKind::None;
+            return pipelineStatisticsEnabled ? PrimGenRerouteKind::ClippingStatistics : PrimGenRerouteKind::None;
         case MG_Config::QuirkOverride::Auto:
             break;
         }
@@ -544,8 +535,7 @@ namespace MobileGL::MG_Util::SelfTest {
                                                   : PrimGenRerouteKind::None;
         case PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitute:
         case PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitutePlainOnly:
-            return pipelineStatisticsEnabled ? PrimGenRerouteKind::ClippingStatistics
-                                             : PrimGenRerouteKind::None;
+            return pipelineStatisticsEnabled ? PrimGenRerouteKind::ClippingStatistics : PrimGenRerouteKind::None;
         case PrimitivesGeneratedNoXfbVerdict::Inconclusive:
         case PrimitivesGeneratedNoXfbVerdict::StreamCounts:
         case PrimitivesGeneratedNoXfbVerdict::Unfixable:

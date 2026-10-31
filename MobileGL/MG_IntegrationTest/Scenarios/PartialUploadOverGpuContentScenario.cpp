@@ -19,7 +19,7 @@
 //
 // Every case uploads a level, lets the GPU clear it, writes one 2x2 box, and reads the level back:
 // the clear outside the box, the write inside. The formats are picked by what they cost the ES
-// upload, which is per driver - on Mesa llvmpipe GL_SRGB8, GL_RGB8_SNORM and GL_RGB8UI are stored
+// upload, which is per driver - on llvmpipe GL_SRGB8, GL_RGB8_SNORM and GL_RGB8UI are stored
 // four-channel (see ThreeChannelAttachmentScenario) while GL_RGB16F is native; ES has no renderable
 // three-channel format at all, so on a phone all four are converted. GL_RGBA8 is the control that
 // never converts. A format a backend cannot attach is skipped, not failed.
@@ -29,7 +29,9 @@
 // a write issued after a clear of (or a draw into) the level reached the image FIRST and the
 // earlier clear or draw landed over it: the box read back green. Each order is covered - the
 // clear already recorded, still queued, synced by a draw or by the readback, the reverse order
-// in which the clear must win, and a draw instead of a clear.
+// in which the clear must win, and a draw instead of a clear. One more order is Espryt's: an upload
+// into a texture bound only to an image unit, ahead of a draw that stores over it, has to land
+// before the draw and not at the next readback.
 //
 // The last part is about SCATTER: several boxes written between two syncs, with the GPU's clear in
 // the gaps between them. Everything a backend has to go on is the union box and the storage's
@@ -73,7 +75,12 @@ void main() {
 
         // How a value in [0, 1] is spelled in the client data, and how the level is cleared and
         // read back. Integer levels spell 1 as kIntegerOne.
-        enum class Encoding { Unorm8, Snorm8, Float32, Uint8 };
+        enum class Encoding {
+            Unorm8,
+            Snorm8,
+            Float32,
+            Uint8
+        };
         constexpr unsigned kIntegerOne = 9;
 
         struct Format {
@@ -93,12 +100,18 @@ void main() {
                     std::uint8_t* dst = out.data() + (static_cast<std::size_t>(t) * f.components + c) * componentBytes;
                     const float v = rgba[c];
                     switch (f.encoding) {
-                    case Encoding::Unorm8: *dst = static_cast<std::uint8_t>(std::lround(v * 255.0f)); break;
+                    case Encoding::Unorm8:
+                        *dst = static_cast<std::uint8_t>(std::lround(v * 255.0f));
+                        break;
                     case Encoding::Snorm8:
                         *dst = static_cast<std::uint8_t>(static_cast<std::int8_t>(std::lround(v * 127.0f)));
                         break;
-                    case Encoding::Float32: std::memcpy(dst, &v, sizeof(v)); break;
-                    case Encoding::Uint8: *dst = static_cast<std::uint8_t>(std::lround(v * kIntegerOne)); break;
+                    case Encoding::Float32:
+                        std::memcpy(dst, &v, sizeof(v));
+                        break;
+                    case Encoding::Uint8:
+                        *dst = static_cast<std::uint8_t>(std::lround(v * kIntegerOne));
+                        break;
                     }
                 }
             }
@@ -119,7 +132,8 @@ void main() {
             void TearDown() override {
                 if (!Ready()) return;
                 glUseProgram(0);
-                for (GLuint p : m_programs) glDeleteProgram(p);
+                for (GLuint p : m_programs)
+                    glDeleteProgram(p);
                 if (!m_textures.empty()) glDeleteTextures(static_cast<GLsizei>(m_textures.size()), m_textures.data());
                 if (m_vao) glDeleteVertexArrays(1, &m_vao);
                 if (m_fbo) glDeleteFramebuffers(1, &m_fbo);
@@ -207,7 +221,8 @@ void main() {
                     std::vector<GLfloat> texels(static_cast<std::size_t>(width * height) * 4u, -7.0f);
                     glReadPixels(0, 0, width, height, GL_RGBA, GL_FLOAT, texels.data());
                     for (int i = 0; i < width * height; ++i)
-                        for (int c = 0; c < 3; ++c) rgb[i * 3 + c] = texels[i * 4 + c];
+                        for (int c = 0; c < 3; ++c)
+                            rgb[i * 3 + c] = texels[i * 4 + c];
                 }
                 EXPECT_EQ(FirstGLError(), 0u) << "readback";
                 return rgb;
@@ -224,7 +239,8 @@ void main() {
                         const float want[3] = {0.0f, inBox ? 0.0f : 1.0f, inBox ? 1.0f : 0.0f};
                         const float* got = &rgb[static_cast<std::size_t>(y * width + x) * 3u];
                         bool texelBad = false;
-                        for (int c = 0; c < 3; ++c) texelBad |= std::fabs(got[c] - want[c]) > 0.02f;
+                        for (int c = 0; c < 3; ++c)
+                            texelBad |= std::fabs(got[c] - want[c]) > 0.02f;
                         if (texelBad && bad++ == 0) {
                             first << "(" << x << "," << y << ") got " << got[0] << "," << got[1] << "," << got[2]
                                   << " want " << want[0] << "," << want[1] << "," << want[2];
@@ -266,6 +282,68 @@ void main() {
                 const auto rgb = ReadRgb(f, kEdge, kEdge);
                 Detach();
                 ExpectClearAroundBox(rgb, kEdge, kEdge, kBoxAt, kBoxAt, kBoxEdge, kBoxEdge);
+            }
+
+            // P11 M: TWO SCATTERED WRITES INTO ONE LEVEL, so the level carries a rect list (their
+            // area is well under 3/4 of their union box) and not just a box. Under a transport
+            // (and on the push builds' monolith arm) the list crosses in the client's record,
+            // whose regions state their source pitch and offset in the CLIENT's layout; a level
+            // whose upload is converted is cut from the conversion's wider buffer, so those
+            // numbers must not address it (Managers.cpp, carriedLayoutApplies). The whole level
+            // is uploaded green first, so every texel the union box spans outside the two boxes
+            // is green in the shadow too: this case is about WHERE the boxes land, not about GPU
+            // content between them. Green everywhere but the two blue boxes.
+            void Run2DScatter(const Format& f) {
+                constexpr int kFirstAt = 1, kSecondAt = 5;
+                const GLuint t = NewTexture(GL_TEXTURE_2D);
+                const bool integer = f.encoding == Encoding::Uint8;
+                const char* sampler = integer ? "usampler2D" : "sampler2D";
+                const auto green = Fill(f, kEdge * kEdge, 0.0f, 1.0f, 0.0f);
+                glBindTexture(GL_TEXTURE_2D, t);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(f.internalFormat), kEdge, kEdge, 0, f.clientFormat,
+                             f.clientType, green.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                ASSERT_EQ(FirstGLError(), 0u) << "definition";
+                SyncBySampling(GL_TEXTURE_2D, t, sampler, "ivec2(0)");
+                if (!Attach(t, -1)) {
+                    Detach();
+                    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                    GTEST_SKIP() << "the format does not attach on backend " << Gl().BackendName();
+                }
+                Detach();
+                const auto blue = Fill(f, kBoxEdge * kBoxEdge, 0.0f, 0.0f, 1.0f);
+                glBindTexture(GL_TEXTURE_2D, t);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, kFirstAt, kFirstAt, kBoxEdge, kBoxEdge, f.clientFormat, f.clientType,
+                                blue.data());
+                glTexSubImage2D(GL_TEXTURE_2D, 0, kSecondAt, kSecondAt, kBoxEdge, kBoxEdge, f.clientFormat,
+                                f.clientType, blue.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                SyncBySampling(GL_TEXTURE_2D, t, sampler, "ivec2(0)");
+                ASSERT_TRUE(Attach(t, -1));
+                const auto rgb = ReadRgb(f, kEdge, kEdge);
+                Detach();
+                int bad = 0;
+                std::ostringstream first;
+                for (int y = 0; y < kEdge; ++y)
+                    for (int x = 0; x < kEdge; ++x) {
+                        const auto inBox = [&](int at) {
+                            return x >= at && x < at + kBoxEdge && y >= at && y < at + kBoxEdge;
+                        };
+                        const bool blueHere = inBox(kFirstAt) || inBox(kSecondAt);
+                        const float want[3] = {0.0f, blueHere ? 0.0f : 1.0f, blueHere ? 1.0f : 0.0f};
+                        const float* got = &rgb[static_cast<std::size_t>(y * kEdge + x) * 3u];
+                        bool texelBad = false;
+                        for (int c = 0; c < 3; ++c)
+                            texelBad |= std::fabs(got[c] - want[c]) > 0.02f;
+                        if (texelBad && bad++ == 0) {
+                            first << "(" << x << "," << y << ") got " << got[0] << "," << got[1] << "," << got[2]
+                                  << " want " << want[0] << "," << want[1] << "," << want[2];
+                        }
+                    }
+                EXPECT_EQ(bad, 0) << bad << " of " << kEdge * kEdge << " texels wrong; first " << first.str()
+                                  << " (a box read at the wrong pitch or offset lands the wrong bytes)";
             }
 
             // Building blocks of the RGBA8 ordering cases: the same texels, issued in the orders
@@ -366,7 +444,8 @@ void main() {
                         const float want[3] = {0.0f, inBox ? 0.0f : 1.0f, inBox ? 1.0f : 0.0f};
                         const float* got = &rgb[static_cast<std::size_t>(y * edge + x) * 3u];
                         bool texelBad = false;
-                        for (int c = 0; c < 3; ++c) texelBad |= std::fabs(got[c] - want[c]) > 0.02f;
+                        for (int c = 0; c < 3; ++c)
+                            texelBad |= std::fabs(got[c] - want[c]) > 0.02f;
                         if (!texelBad) continue;
                         stale += got[0] > 0.5f;
                         if (bad++ == 0) {
@@ -409,6 +488,24 @@ void main() {
         TEST_F(PartialUploadOverGpuContentScenario, Rgb8uiSubImageKeepsTheGpuClear) {
             if (!Ready()) return;
             Run2D({GL_RGB8UI, GL_RGB_INTEGER, GL_UNSIGNED_BYTE, 3, Encoding::Uint8});
+        }
+
+        // P11 M: the rect-list shape of the same upload (Run2DScatter). RGBA8 is the control whose
+        // record pitch does address the uploaded bytes; the other two are stored four-channel on
+        // llvmpipe and on every ES driver, so their boxes are cut from the conversion's buffer.
+        TEST_F(PartialUploadOverGpuContentScenario, Rgba8ScatteredSubImagesLandWhereWritten) {
+            if (!Ready()) return;
+            Run2DScatter({GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, 4, Encoding::Unorm8});
+        }
+
+        TEST_F(PartialUploadOverGpuContentScenario, Srgb8ScatteredSubImagesLandWhereWritten) {
+            if (!Ready()) return;
+            Run2DScatter({GL_SRGB8, GL_RGB, GL_UNSIGNED_BYTE, 3, Encoding::Unorm8});
+        }
+
+        TEST_F(PartialUploadOverGpuContentScenario, Rgb8uiScatteredSubImagesLandWhereWritten) {
+            if (!Ready()) return;
+            Run2DScatter({GL_RGB8UI, GL_RGB_INTEGER, GL_UNSIGNED_BYTE, 3, Encoding::Uint8});
         }
 
         // A 1D array's ES image is a 2D array one texel high with the layers in depth, so the
@@ -488,6 +585,96 @@ void main() {
             ExpectRgba8(t, true);
         }
 
+        // A texture bound ONLY to an image unit, rewritten by the client before every draw that
+        // imageStore()s over all of it. Nothing samples or attaches it between the upload and the
+        // draw, so only the draw's image-unit sync can land the upload ahead of the stores; a
+        // skipped one leaves it pending until the readback syncs it, over the stores - the level
+        // reads back red. The first pass is synced by the image bind itself, so it takes several.
+        TEST_F(PartialUploadOverGpuContentScenario, SubImageBeforeAnImageStoreDrawLandsUnderTheStores) {
+            if (!Ready()) return;
+            const GLuint t = NewTexture(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, t);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kEdge, kEdge);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            std::string error;
+            const GLuint program = CompileProgram(kVS,
+                                                  "#version 430 core\n"
+                                                  "layout(rgba8, binding = 0) writeonly uniform image2D u_img;\n"
+                                                  "void main() { imageStore(u_img, ivec2(gl_FragCoord.xy), "
+                                                  "vec4(0.0, 1.0, 0.0, 1.0)); }\n",
+                                                  &error);
+            ASSERT_NE(program, 0u) << error;
+            m_programs.push_back(program);
+            ColorFbo target = MakeColorFbo(kEdge, kEdge);
+            glBindImageTexture(0, t, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+            ASSERT_EQ(FirstGLError(), 0u) << "setup";
+            const auto red = Fill(Rgba8(), kEdge * kEdge, 1.0f, 0.0f, 0.0f);
+            for (int pass = 0; pass < 3; ++pass) {
+                SCOPED_TRACE(::testing::Message() << "pass " << pass);
+                glBindTexture(GL_TEXTURE_2D, t);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kEdge, kEdge, GL_RGBA, GL_UNSIGNED_BYTE, red.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                BindFbo(target);
+                glUseProgram(program);
+                glBindVertexArray(m_vao);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+                glBindVertexArray(0);
+                glUseProgram(0);
+                glMemoryBarrier(GL_ALL_BARRIER_BITS);
+                BindDefaultFramebuffer();
+                glViewport(0, 0, Gl().Width(), Gl().Height());
+                ASSERT_EQ(FirstGLError(), 0u) << "draw";
+                ExpectRgba8(t, false);
+            }
+            glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+            DestroyColorFbo(target);
+        }
+
+        // The dispatch form of the case above, which is KHR-GL43.compute_shader.resource-image's
+        // shape: every pass re-uploads into the SAME image-bound texture and a dispatch stores
+        // over all of it. The upload is applied at the dispatch's own Prepare, after any barrier
+        // the application issued, so it is the backend that has to order it ahead of the stores.
+        TEST_F(PartialUploadOverGpuContentScenario, SubImageBeforeAnImageStoreDispatchLandsUnderTheStores) {
+            if (!Ready()) return;
+            const GLuint t = NewTexture(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, t);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kEdge, kEdge);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            const char* computeSource =
+                "#version 430 core\n"
+                "layout(local_size_x = 8, local_size_y = 8) in;\n"
+                "layout(rgba8, binding = 0) writeonly uniform image2D u_img;\n"
+                "void main() { imageStore(u_img, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 1.0, 0.0, 1.0)); }\n";
+            const GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+            glShaderSource(shader, 1, &computeSource, nullptr);
+            glCompileShader(shader);
+            const GLuint program = glCreateProgram();
+            glAttachShader(program, shader);
+            glLinkProgram(program);
+            glDeleteShader(shader);
+            m_programs.push_back(program);
+            GLint linked = GL_FALSE;
+            glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            ASSERT_EQ(linked, GL_TRUE) << "compute program did not link";
+            glBindImageTexture(0, t, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+            ASSERT_EQ(FirstGLError(), 0u) << "setup";
+            const auto red = Fill(Rgba8(), kEdge * kEdge, 1.0f, 0.0f, 0.0f);
+            for (int pass = 0; pass < 3; ++pass) {
+                SCOPED_TRACE(::testing::Message() << "pass " << pass);
+                glBindTexture(GL_TEXTURE_2D, t);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kEdge, kEdge, GL_RGBA, GL_UNSIGNED_BYTE, red.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glMemoryBarrier(GL_ALL_BARRIER_BITS);
+                glUseProgram(program);
+                glDispatchCompute(1, 1, 1);
+                glUseProgram(0);
+                glMemoryBarrier(GL_ALL_BARRIER_BITS);
+                ASSERT_EQ(FirstGLError(), 0u) << "dispatch";
+                ExpectRgba8(t, false);
+            }
+            glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+        }
+
         // Two boxes in opposite corners: their union box is 7x7, of which the writes are 8 texels.
         TEST_F(PartialUploadOverGpuContentScenario, TwoDistantSubImagesKeepTheGpuClearBetweenThem) {
             if (!Ready()) return;
@@ -495,18 +682,20 @@ void main() {
         }
 
         // A hundred 2x2 boxes two texels apart: more than the 96 rects the storage keeps, so its
-        // list folds neighbours together, gaps and all.
+        // list folds neighbors together, gaps and all.
         TEST_F(PartialUploadOverGpuContentScenario, AHundredSubImagesKeepTheGpuClearBetweenThem) {
             if (!Ready()) return;
             std::vector<Box> boxes;
             for (int j = 0; j < 10; ++j)
-                for (int i = 0; i < 10; ++i) boxes.push_back({4 * i + 1, 4 * j + 1, 2, 2});
+                for (int i = 0; i < 10; ++i)
+                    boxes.push_back({4 * i + 1, 4 * j + 1, 2, 2});
             RunScatteredWrites(40, boxes);
         }
 
         // Four 4x4 boxes around a one-texel cross: 64 of their union's 81 texels, past the 3/4 at
         // which the storage stops handing its rect list out.
-        TEST_F(PartialUploadOverGpuContentScenario, SubImagesFillingThreeQuartersOfTheirUnionKeepTheGpuClearBetweenThem) {
+        TEST_F(PartialUploadOverGpuContentScenario,
+               SubImagesFillingThreeQuartersOfTheirUnionKeepTheGpuClearBetweenThem) {
             if (!Ready()) return;
             RunScatteredWrites(16, {{2, 2, 4, 4}, {7, 2, 4, 4}, {2, 7, 4, 4}, {7, 7, 4, 4}});
         }

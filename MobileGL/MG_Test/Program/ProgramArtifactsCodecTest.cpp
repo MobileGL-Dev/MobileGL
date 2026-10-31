@@ -1,0 +1,581 @@
+// MobileGL - MobileGL/MG_Test/Program/ProgramArtifactsCodecTest.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// The reflection ARCHIVE's serializer (P4a): create_shader_state's payload is per-stage SPIR-V
+// plus LinkArtifacts + SpirvArtifacts, whole structs, and the codec is what turns them into
+// bytes. In monolith it is never called on the hot path - the two structs ride beside the
+// record through the apply entry point's companion pointers - so THIS SUITE plus the verify
+// lane's round trip are the only things that exercise it until a transport exists.
+//
+// WHAT IT HAS TO PIN, and each of the three is a different failure:
+//   * a fully populated archive survives a round trip FIELD BY FIELD, including both of
+//     XfbVarying's spellings (the GL name AND the block instance / member / element triple)
+//     and every one of TypeFacts' twenty members - a codec that dropped one would be invisible
+//     until a backend read a reflection answer that had quietly become zero;
+//   * a TRUNCATED stream is refused rather than guessed at;
+//   * a VERSION or wire-schema mismatch is refused before decoding; native STL object
+//     sizes do not describe a cross-platform serialized archive.
+//
+// AND ONE PROPERTY THAT IS NOT ABOUT BYTES AT ALL: LinkArtifacts has 58 members and its
+// VisitFields table visits 57. The 58th is the live SharedPtr<glslang::TProgram>, which is
+// null for every archived instance by construction and points into an arena no archive owns.
+// The codec has no arm for it, and the count is asserted here because that is the only place
+// it can be: VisitFields needs an instance, and these structs carry strings, vectors and maps,
+// so no static_assert can walk them.
+//
+// Every case is a visible SKIP in a pull build rather than a vanishing test, so `ctest -N`
+// stays name-for-name identical between the pull and the push trees.
+
+#include <gtest/gtest.h>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <string>
+
+#if !defined(_WIN32)
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
+
+#include "Includes.h"
+#include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
+
+using namespace MobileGL;
+using namespace MobileGL::MG_State::GLState;
+
+namespace {
+    TypeFacts MakeTypeFacts() {
+        // Every member set to something that is NOT its default, so a field the codec skips
+        // reads back as the default and the comparison names it.
+        TypeFacts facts{};
+        facts.isArray = true;
+        facts.isSizedArray = true;
+        facts.isMatrix = true;
+        facts.isVector = true;
+        facts.isOpaque = true;
+        facts.isTexture = true;
+        facts.isImage = true;
+        facts.isDouble = true;
+        facts.isVoid = true;
+        facts.isBuffer = true;
+        facts.isPatch = true;
+        facts.hasIndex = true;
+        facts.hasFormat = true;
+        facts.vectorSize = 3;
+        facts.matrixCols = 4;
+        facts.matrixRows = 2;
+        facts.layoutIndex = 7;
+        facts.layoutFormat = 0x8814u;
+        facts.layoutMatrix = 1;
+        facts.basicType = 11;
+        return facts;
+    }
+
+    ResourceReflection MakeReflection(const char* name, Int location) {
+        ResourceReflection reflection{};
+        reflection.name = name;
+        reflection.glDefineType = GL_FLOAT_VEC4;
+        reflection.offset = 16;
+        reflection.size = 4;
+        reflection.index = 2;
+        reflection.counterIndex = 3;
+        reflection.arrayStride = 16;
+        reflection.topLevelArraySize = 5;
+        reflection.topLevelArrayStride = 32;
+        reflection.binding = 6;
+        reflection.location = location;
+        reflection.stages = 0x3u;
+        reflection.arraySize = 8;
+        reflection.type = MakeTypeFacts();
+        return reflection;
+    }
+
+    XfbVarying MakeXfbVarying() {
+        XfbVarying varying{};
+        // BOTH SPELLINGS. `name` is the GL one ("Block.member"), which the interface queries
+        // and the ESSL driver-side capture list need; the triple below is what a SPIR-V
+        // backend needs instead, because the decoration target is the block's instance
+        // variable and the member index inside it.
+        varying.name = "Captured.position";
+        varying.type = GL_FLOAT_VEC3;
+        varying.size = 2;
+        varying.bufferIndex = 1;
+        varying.offsetBytes = 12;
+        varying.byteSize = 24;
+        varying.packedOffsetBytes = 8;
+        varying.blockInstanceName = "capturedInstance";
+        varying.blockName = "Captured";
+        varying.blockMemberIndex = 1;
+        varying.blockMemberElement = 3;
+        return varying;
+    }
+
+    LinkArtifacts MakeLinkArtifacts() {
+        LinkArtifacts link{};
+        link.uniformReflection = {MakeReflection("uColor", 0), MakeReflection("uMatrix", 1)};
+        link.blockReflection = {MakeReflection("Block", -1)};
+        link.pipeInputReflection = {MakeReflection("inPosition", 0)};
+        link.pipeOutputReflection = {MakeReflection("outColor", 0)};
+        link.lastStageIsFragment = true;
+        link.computeLocalSize = {8u, 4u, 2u};
+        link.uniformIndexByName = {{"uColor", 0}, {"uMatrix", 1}};
+        link.attribs = {"inPosition", "inNormal"};
+        link.attribTypes = {GL_FLOAT_VEC3, GL_FLOAT_VEC3};
+        link.linkedFragDataLocation = {{"outColor", 0u}};
+        link.linkedFragDataIndex = {{"outColor", 1u}};
+        link.glUniformIndexToTProgram = {0, 1};
+        link.tProgramUniformIndexToGl = {0, 1};
+        link.glBlockIndexToTProgram = {0};
+        link.tProgramBlockIndexToGl = {-1};
+        link.glUniformBlockIndexToBlock = {0};
+        link.blockIndexToGlUniformBlock = {0};
+        link.linkedExplicitUniformLocations = {{"uColor", 3}};
+        link.uniformLocations = {{"uColor", 0u}, {"uMatrix", 4u}};
+        link.writtenUniformLocationBits = {0x5ull};
+        link.writtenUniformIndexBits = {0x3ull};
+        link.writtenUniformIndices = {0u, 1u};
+        link.uniformIndexInTProgram = {0, 1};
+        link.uniformSamplerOrImageUnitIndex = {-1, 2};
+        link.explicitOpaqueUniformBindings = {{"uSampler", 5u}};
+        link.uniformBlockIndexByName = {{"Block", 0u}};
+        link.uniformBlockBinding = {2};
+        link.shaderStorageBlockBinding = {{"Storage", 1}};
+        link.storageBlocksWithoutBinding = {"Storage"};
+        link.uniformBlocksWithoutBinding = {"Block"};
+        link.activeUniformCount = 2u;
+        link.usesReservedNumSamples = true;
+        link.maxUniformLocation = 4u;
+        link.uniformNameMaxLength = 9;
+        link.attribInNameMaxLength = 11;
+        link.uniformBlockNameMaxLength = 6;
+        link.infoLog = "linked with warnings";
+        link.linkStatus = true;
+        link.xfbVaryings = {MakeXfbVarying()};
+        link.xfbInterfaceNames = {"gl_NextBuffer", "Captured.position"};
+        link.xfbStrides = {32u, 0u};
+        link.gsStripTriangles = {3u, 5u};
+        link.gsStripCaptureFixup = true;
+        link.gsInputPrimitive = GL_TRIANGLES;
+        link.tcsOutputVertices = 3;
+        link.gsOutputPrimitive = GL_TRIANGLE_STRIP;
+        link.gsMaxVertices = 12;
+        link.gsInvocations = 2;
+        link.tessGenMode = GL_QUADS;
+        link.tessGenSpacing = GL_FRACTIONAL_ODD;
+        link.tessGenVertexOrder = GL_CW;
+        link.tessGenPointMode = true;
+        link.xfbBufferMode = GL_SEPARATE_ATTRIBS;
+        link.xfbVaryingNameMaxLength = 18;
+        link.xfbNeedsScatteredCapture = true;
+        link.xfbPackedStride = 24u;
+
+        // The one glslang-typed member that DOES travel: a plain aggregate of a string,
+        // scalars and two vectors. The codec has a hand-written arm for it because
+        // ProgramArtifacts.h gives it no VisitFields table.
+        glslang::TIntermediate::TUniformInitializer initializer;
+        initializer.name = "uInitialized";
+        initializer.basicType = glslang::EbtInt;
+        initializer.vectorSize = 2;
+        initializer.matrixCols = 0;
+        initializer.matrixRows = 0;
+        initializer.arraySize = 3;
+        initializer.intValues = {1, 2, 3, 4, 5, 6};
+        initializer.floatValues = {};
+        link.uniformInitialValues.push_back(initializer);
+        return link;
+    }
+
+    // How many archive bytes follow a u64 `count` that is itself followed by `next` - the LAST such
+    // spot, so a fixture can find the count of a field near the archive's end. This is
+    // Remaining() at the moment TakeCount reads that count. SIZE_MAX when there is no such spot.
+    SizeT BytesAfterTheCount(const Vector<Uint8>& bytes, Uint64 count, const Vector<Uint8>& next) {
+        Vector<Uint8> needle(sizeof(count));
+        std::memcpy(needle.data(), &count, sizeof(count));
+        needle.insert(needle.end(), next.begin(), next.end());
+        if (bytes.size() < needle.size()) return static_cast<SizeT>(-1);
+        for (SizeT at = bytes.size() - needle.size() + 1; at-- > 0;) {
+            if (std::memcmp(bytes.data() + at, needle.data(), needle.size()) == 0) {
+                return bytes.size() - at - sizeof(count);
+            }
+        }
+        return static_cast<SizeT>(-1);
+    }
+
+    // The encoded width of one DEFAULT element of LinkArtifacts::uniformReflection, measured
+    // through the encoder itself: an archive with one such element minus an archive with none.
+    // A default ResourceReflection has an empty name, so this is the smallest encoding one can
+    // have - the charge PH-5's TakeCount makes per element.
+    SizeT EncodedBytesOfOneDefaultResourceReflection() {
+        Vector<Uint8> none;
+        EncodeProgramArtifacts(LinkArtifacts{}, SpirvArtifacts{}, none);
+        LinkArtifacts one{};
+        one.uniformReflection.resize(1);
+        Vector<Uint8> withOne;
+        EncodeProgramArtifacts(one, SpirvArtifacts{}, withOne);
+        return withOne.size() - none.size();
+    }
+
+    SpirvArtifacts MakeSpirvArtifacts() {
+        SpirvArtifacts spirv{};
+        spirv.generatedSpirv = {{0x07230203u, 0x00010300u, 0u}, {0x07230203u, 0x00010300u, 1u}};
+        spirv.enableSpirvValidation = true;
+        spirv.uniformOffsets = {0u, 16u, kInvalidUniformOffset};
+        spirv.globalUboScratch = {1, 2, 3, 4, 5, 6, 7, 8};
+        spirv.reservedNumSamplesOffset = 32u;
+        spirv.spirvStatus = true;
+        spirv.nativeFloat64 = true;
+        spirv.pointSizeDemoted = true;
+        return spirv;
+    }
+} // namespace
+
+// The round trip, field by field. A re-encode equality alone would prove the codec is
+// self-consistent and nothing else - a field it skips in BOTH directions round-trips
+// perfectly - so the members are read back explicitly first, and the byte comparison is the
+// catch-all underneath them.
+TEST(ProgramArtifactsCodec, RoundTripsAFullyPopulatedArchive) {
+    const LinkArtifacts link = MakeLinkArtifacts();
+    const SpirvArtifacts spirv = MakeSpirvArtifacts();
+
+    Vector<Uint8> bytes;
+    EncodeProgramArtifacts(link, spirv, bytes);
+    ASSERT_FALSE(bytes.empty());
+
+    LinkArtifacts decodedLink;
+    SpirvArtifacts decodedSpirv;
+    ASSERT_TRUE(DecodeProgramArtifacts(bytes.data(), bytes.size(), decodedLink, decodedSpirv));
+
+    // The four reflection vectors, with their TypeFacts.
+    ASSERT_EQ(decodedLink.uniformReflection.size(), 2u);
+    EXPECT_EQ(decodedLink.uniformReflection[0].name, "uColor");
+    EXPECT_EQ(decodedLink.uniformReflection[1].location, 1);
+    EXPECT_EQ(decodedLink.uniformReflection[0].arrayStride, 16);
+    EXPECT_EQ(decodedLink.uniformReflection[0].stages, 0x3u);
+    EXPECT_TRUE(decodedLink.uniformReflection[0].type.isSizedArray);
+    EXPECT_EQ(decodedLink.uniformReflection[0].type.matrixCols, 4);
+    EXPECT_EQ(decodedLink.uniformReflection[0].type.layoutFormat, 0x8814u);
+    EXPECT_EQ(decodedLink.uniformReflection[0].type.basicType, 11);
+    ASSERT_EQ(decodedLink.blockReflection.size(), 1u);
+    ASSERT_EQ(decodedLink.pipeInputReflection.size(), 1u);
+    ASSERT_EQ(decodedLink.pipeOutputReflection.size(), 1u);
+
+    // BOTH XfbVarying SPELLINGS.
+    ASSERT_EQ(decodedLink.xfbVaryings.size(), 1u);
+    EXPECT_EQ(decodedLink.xfbVaryings[0].name, "Captured.position");
+    EXPECT_EQ(decodedLink.xfbVaryings[0].blockInstanceName, "capturedInstance");
+    EXPECT_EQ(decodedLink.xfbVaryings[0].blockName, "Captured");
+    EXPECT_EQ(decodedLink.xfbVaryings[0].blockMemberIndex, 1);
+    EXPECT_EQ(decodedLink.xfbVaryings[0].blockMemberElement, 3);
+    EXPECT_EQ(decodedLink.xfbVaryings[0].packedOffsetBytes, 8u);
+
+    // The maps, the set and the fixed array - the four container shapes the archive is made
+    // of, each with a reader that has to agree with its writer about the length prefix.
+    EXPECT_EQ(decodedLink.uniformIndexByName.size(), 2u);
+    EXPECT_EQ(decodedLink.uniformIndexByName.at("uMatrix"), 1);
+    EXPECT_EQ(decodedLink.shaderStorageBlockBinding.at("Storage"), 1);
+    EXPECT_EQ(decodedLink.storageBlocksWithoutBinding.count("Storage"), 1u);
+    EXPECT_EQ(decodedLink.uniformBlocksWithoutBinding.count("Block"), 1u);
+    EXPECT_EQ(decodedLink.computeLocalSize[0], 8u);
+    EXPECT_EQ(decodedLink.computeLocalSize[2], 2u);
+
+    // The glslang-typed aggregate, through the codec's one hand-written arm.
+    ASSERT_EQ(decodedLink.uniformInitialValues.size(), 1u);
+    EXPECT_EQ(decodedLink.uniformInitialValues[0].name, "uInitialized");
+    EXPECT_EQ(decodedLink.uniformInitialValues[0].basicType, glslang::EbtInt);
+    EXPECT_EQ(decodedLink.uniformInitialValues[0].arraySize, 3);
+    ASSERT_EQ(decodedLink.uniformInitialValues[0].intValues.size(), 6u);
+    EXPECT_EQ(decodedLink.uniformInitialValues[0].intValues[5], 6);
+    EXPECT_TRUE(decodedLink.uniformInitialValues[0].floatValues.empty());
+
+    // The scalars at the tail, which is where a length-prefix that drifted by one would first
+    // read as garbage rather than as a short read.
+    EXPECT_EQ(decodedLink.infoLog, "linked with warnings");
+    EXPECT_TRUE(decodedLink.linkStatus);
+    EXPECT_EQ(decodedLink.tessGenSpacing, static_cast<GLenum>(GL_FRACTIONAL_ODD));
+    EXPECT_TRUE(decodedLink.tessGenPointMode);
+    EXPECT_EQ(decodedLink.xfbPackedStride, 24u);
+
+    // SpirvArtifacts, including the nested vector of SPIR-V words and the sentinel offset.
+    ASSERT_EQ(decodedSpirv.generatedSpirv.size(), 2u);
+    ASSERT_EQ(decodedSpirv.generatedSpirv[0].size(), 3u);
+    EXPECT_EQ(decodedSpirv.generatedSpirv[1][2], 1u);
+    ASSERT_EQ(decodedSpirv.uniformOffsets.size(), 3u);
+    EXPECT_EQ(decodedSpirv.uniformOffsets[2], kInvalidUniformOffset);
+    EXPECT_EQ(decodedSpirv.globalUboScratch.size(), 8u);
+    EXPECT_EQ(decodedSpirv.reservedNumSamplesOffset, 32u);
+    EXPECT_TRUE(decodedSpirv.nativeFloat64);
+    EXPECT_TRUE(decodedSpirv.pointSizeDemoted);
+
+    // THE LIVE TProgram IS NEVER CARRIED and never reconstructed.
+    EXPECT_EQ(decodedLink.program, nullptr);
+
+    // The catch-all: re-encoding what came back has to produce the same bytes, which covers
+    // every member the explicit reads above do not name.
+    Vector<Uint8> reencoded;
+    EncodeProgramArtifacts(decodedLink, decodedSpirv, reencoded);
+    EXPECT_EQ(reencoded, bytes);
+}
+
+// A COMPACT archive - one whose wire form is SMALLER than its in-memory form - is still an archive
+// this encoder wrote, and it has to come back (codex closeout finding 3). Ten one-character
+// xfbInterfaceNames are 90 bytes on the wire and ten 32-byte std::strings in memory; with every
+// vector behind them empty, the bytes that remain at their count are fewer than 10 x sizeof(String),
+// and PH-5's first bound - which charged sizeof(value_type) per element - refused the archive. The
+// same holds one level down for SpirvArtifacts::generatedSpirv: ten EMPTY modules are ten u64
+// counts on the wire and ten 24-byte vectors in memory (the next case). Red with TakeCount's vector
+// charge put back to sizeof(Element): the decode answers false. Each case's ASSERT_LT is the
+// fixture's own proof that it can go red that way.
+TEST(ProgramArtifactsCodec, ACompactArchiveOfTenShortXfbNamesRoundTrips) {
+    {
+        LinkArtifacts link{};
+        link.xfbInterfaceNames = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"};
+        Vector<Uint8> bytes;
+        EncodeProgramArtifacts(link, SpirvArtifacts{}, bytes);
+        const Uint64 one = 1;
+        Vector<Uint8> firstName(sizeof(one));
+        std::memcpy(firstName.data(), &one, sizeof(one));
+        firstName.push_back(static_cast<Uint8>('a'));
+        const SizeT remaining = BytesAfterTheCount(bytes, link.xfbInterfaceNames.size(), firstName);
+        ASSERT_LT(remaining, link.xfbInterfaceNames.size() * sizeof(String))
+            << "fixture: a sizeof(value_type) charge would admit this count, so the case could not go red";
+
+        LinkArtifacts decodedLink;
+        SpirvArtifacts decodedSpirv;
+        ASSERT_TRUE(DecodeProgramArtifacts(bytes.data(), bytes.size(), decodedLink, decodedSpirv))
+            << "a LinkArtifacts with ten short XFB interface names, which this encoder wrote, was refused";
+        EXPECT_EQ(decodedLink.xfbInterfaceNames, link.xfbInterfaceNames);
+        EXPECT_TRUE(decodedLink.xfbStrides.empty());
+        EXPECT_TRUE(decodedLink.gsStripTriangles.empty());
+        Vector<Uint8> reencoded;
+        EncodeProgramArtifacts(decodedLink, decodedSpirv, reencoded);
+        EXPECT_EQ(reencoded, bytes);
+    }
+}
+
+// The same compact shape one level down: a Vector<Vector<unsigned>> element (one SPIR-V module) is
+// its u64 count on the wire when empty and a 24-byte object in memory.
+TEST(ProgramArtifactsCodec, ACompactArchiveOfTenEmptySpirvModulesRoundTrips) {
+    {
+        SpirvArtifacts spirv{};
+        spirv.generatedSpirv.resize(10);
+        Vector<Uint8> bytes;
+        EncodeProgramArtifacts(LinkArtifacts{}, spirv, bytes);
+        const SizeT remaining =
+            BytesAfterTheCount(bytes, spirv.generatedSpirv.size(), Vector<Uint8>(10 * sizeof(Uint64), 0));
+        ASSERT_LT(remaining, spirv.generatedSpirv.size() * sizeof(Vector<unsigned>))
+            << "fixture: a sizeof(value_type) charge would admit this count, so the case could not go red";
+
+        LinkArtifacts decodedLink;
+        SpirvArtifacts decodedSpirv;
+        ASSERT_TRUE(DecodeProgramArtifacts(bytes.data(), bytes.size(), decodedLink, decodedSpirv))
+            << "a SpirvArtifacts with ten empty modules, which this encoder wrote, was refused";
+        ASSERT_EQ(decodedSpirv.generatedSpirv.size(), 10u);
+        for (const auto& module : decodedSpirv.generatedSpirv)
+            EXPECT_TRUE(module.empty());
+        Vector<Uint8> reencoded;
+        EncodeProgramArtifacts(decodedLink, decodedSpirv, reencoded);
+        EXPECT_EQ(reencoded, bytes);
+    }
+}
+
+// Negative control 1. Every prefix length is checked against the bytes that REMAIN, so a
+// stream cut anywhere has to come back false with both outputs defaulted - never a partially
+// filled archive, and never a resize driven by a count the stream cannot back.
+TEST(ProgramArtifactsCodec, ATruncatedStreamIsRefusedNotGuessed) {
+    Vector<Uint8> bytes;
+    EncodeProgramArtifacts(MakeLinkArtifacts(), MakeSpirvArtifacts(), bytes);
+    ASSERT_GT(bytes.size(), 64u);
+
+    // Cut at a spread of points rather than one: the header, a length prefix, the middle of a
+    // string and the last byte all fail through different branches.
+    for (const SizeT cut : {SizeT{0}, SizeT{4}, SizeT{9}, bytes.size() / 3, bytes.size() / 2, bytes.size() - 1}) {
+        LinkArtifacts link;
+        SpirvArtifacts spirv;
+        link.infoLog = "must be cleared";
+        EXPECT_FALSE(DecodeProgramArtifacts(bytes.data(), cut, link, spirv))
+            << "a stream truncated at " << cut << " was accepted";
+        EXPECT_TRUE(link.infoLog.empty()) << "a refused decode left the output half-filled";
+        EXPECT_TRUE(link.uniformReflection.empty());
+        EXPECT_TRUE(spirv.generatedSpirv.empty());
+    }
+
+    // And TRAILING bytes are a mismatch too: the format accounts for every byte it writes, so
+    // anything left over means the reader and the writer disagree about the shape.
+    Vector<Uint8> withTail = bytes;
+    withTail.push_back(0);
+    LinkArtifacts link;
+    SpirvArtifacts spirv;
+    EXPECT_FALSE(DecodeProgramArtifacts(withTail.data(), withTail.size(), link, spirv));
+}
+
+// A count is not permission to reserve a container larger than the bytes left in the
+// untrusted archive can back. This mutates the first LinkArtifacts vector count to the boundary
+// value one element past PH-5's bound - the smallest count the remaining bytes cannot hold at
+// the element's minimum encoded size - which the former raw <= Remaining check accepted. (Not
+// discriminating on its own: under the byte bound the resize is small and the element reads run
+// out of bytes, so the decode is false either way. ACountOnlyTheByteBoundAdmitsIsRefusedBeforeItsResize
+// is the case that goes red.)
+TEST(ProgramArtifactsCodec, AVectorCountCannotReservePastTheRemainingArchiveBytes) {
+    Vector<Uint8> bytes;
+    EncodeProgramArtifacts(LinkArtifacts{}, SpirvArtifacts{}, bytes);
+    constexpr SizeT countOffset = sizeof(Uint32) + sizeof(Uint64);
+    ASSERT_GT(bytes.size(), countOffset + sizeof(Uint64));
+    const SizeT available = bytes.size() - countOffset - sizeof(Uint64);
+    const SizeT perElement = EncodedBytesOfOneDefaultResourceReflection();
+    // What finding 3 is about, stated: an element's wire floor is below its object size, and
+    // above the one byte the former bound charged.
+    ASSERT_GT(perElement, 1u);
+    ASSERT_LT(perElement, sizeof(UniformReflection));
+    const Uint64 forgedCount = static_cast<Uint64>(available / perElement) + 1;
+    ASSERT_LT(forgedCount, static_cast<Uint64>(available)) << "fixture must pass the old count <= remaining check";
+    std::memcpy(bytes.data() + countOffset, &forgedCount, sizeof(forgedCount));
+
+    LinkArtifacts link;
+    SpirvArtifacts spirv;
+    EXPECT_FALSE(DecodeProgramArtifacts(bytes.data(), bytes.size(), link, spirv));
+    EXPECT_TRUE(link.uniformReflection.empty());
+    EXPECT_TRUE(spirv.generatedSpirv.empty());
+}
+
+// PH-5's DISCRIMINATING control (P7 F2 latch). The case above cannot fail on PH-5's account: its
+// count is one element past PH-5's bound, and with TakeCount put back to the old one-byte-per-
+// element charge the same count is admitted, resize() is tiny, and the element reads run out of
+// bytes - DecodeProgramArtifacts answers false either way (red-once: it stays green). What PH-5
+// actually changed is the ALLOCATION a count may cause before the reads, so this case forges the
+// count BETWEEN the two bounds - `count == Remaining()`, in an archive padded to 7 MiB - and
+// decodes it in a forked child whose address space has 64 MiB of headroom. PH-5 charges each
+// element its minimum encoded size (a ResourceReflection's is ~100 bytes; the codex closeout
+// finding 3 fix, not sizeof), refuses before the resize, and the child exits 0; the old bound
+// resizes to Remaining() elements of sizeof(UniformReflection) each, far past the headroom, and
+// the child dies of std::bad_alloc. The same shape crosses the wire in PeerLatchTest's
+// D11ArchiveVectorCount row.
+#if !defined(_WIN32)
+namespace {
+    [[noreturn]] void DecodeACountOnlyTheByteBoundAdmitsUnderACapAndExit() {
+        Vector<Uint8> bytes;
+        EncodeProgramArtifacts(LinkArtifacts{}, SpirvArtifacts{}, bytes);
+        constexpr SizeT countOffset = sizeof(Uint32) + sizeof(Uint64);
+        bytes.resize(SizeT{7} << 20, 0);
+        const Uint64 remaining = bytes.size() - countOffset - sizeof(Uint64);
+        std::memcpy(bytes.data() + countOffset, &remaining, sizeof(remaining));
+        constexpr Uint64 kHeadroom = Uint64{64} << 20;
+        if (remaining * sizeof(UniformReflection) < 4 * kHeadroom) ::_exit(64); // the case would prove nothing
+        Uint64 vmKb = 0;
+        {
+            std::ifstream status("/proc/self/status");
+            std::string line;
+            while (std::getline(status, line)) {
+                if (line.rfind("VmSize:", 0) == 0) vmKb = std::strtoull(line.c_str() + 7, nullptr, 10);
+            }
+        }
+        if (vmKb == 0) ::_exit(65);
+        rlimit cap{};
+        if (::getrlimit(RLIMIT_AS, &cap) != 0) ::_exit(66);
+        cap.rlim_cur = static_cast<rlim_t>(vmKb * 1024 + kHeadroom);
+        if (::setrlimit(RLIMIT_AS, &cap) != 0) ::_exit(67);
+        LinkArtifacts link;
+        SpirvArtifacts spirv;
+        const Bool decoded = DecodeProgramArtifacts(bytes.data(), bytes.size(), link, spirv);
+        ::_exit(!decoded && link.uniformReflection.empty() ? 0 : 3);
+    }
+} // namespace
+#endif
+
+TEST(ProgramArtifactsCodec, ACountOnlyTheByteBoundAdmitsIsRefusedBeforeItsResize) {
+#if !defined(_WIN32)
+    EXPECT_EXIT(DecodeACountOnlyTheByteBoundAdmitsUnderACapAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "std::bad_alloc escaping the child is the resize PH-5 exists to refuse: the vector count was "
+           "charged one byte per element instead of its minimum encoded size; exit 3 is a decode that "
+           "did not refuse; 64+ is the fixture";
+#else
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off (the archive codec is push-only), or no RLIMIT_AS / fork here";
+#endif
+}
+
+// Negative control 2: both the version and schema word must refuse mismatches.
+// Monolith v1 retains the old native-size echo in that second word.
+TEST(ProgramArtifactsCodec, AVersionMismatchIsRefused) {
+    Vector<Uint8> bytes;
+    EncodeProgramArtifacts(MakeLinkArtifacts(), MakeSpirvArtifacts(), bytes);
+    ASSERT_GT(bytes.size(), 12u);
+
+    LinkArtifacts link;
+    SpirvArtifacts spirv;
+    ASSERT_TRUE(DecodeProgramArtifacts(bytes.data(), bytes.size(), link, spirv));
+
+    // The version word first: a reader that saw a format it does not know must not try to
+    // guess the layout.
+    Vector<Uint8> wrongVersion = bytes;
+    ++wrongVersion[0];
+    EXPECT_FALSE(DecodeProgramArtifacts(wrongVersion.data(), wrongVersion.size(), link, spirv));
+
+    // Then the wire schema (v2) or local native-size echo (v1). Neither may be ignored.
+    Vector<Uint8> wrongSize = bytes;
+    ++wrongSize[4];
+    EXPECT_FALSE(DecodeProgramArtifacts(wrongSize.data(), wrongSize.size(), link, spirv));
+
+    // A null pointer is refused rather than dereferenced.
+    EXPECT_FALSE(DecodeProgramArtifacts(nullptr, 0, link, spirv));
+}
+
+// The codec walks the VisitFields tables and nothing else, so what those tables visit IS the
+// archive. LinkArtifacts has 58 members and its table visits 57: the 58th is the live glslang
+// TProgram, which is null for every archived instance by construction and points into an arena
+// no archive owns. A codec arm for it would be a use-after-free waiting for a cache hit.
+TEST(ProgramArtifactsCodec, TheTablesVisitEveryMemberExceptTheLiveProgram) {
+    // P7 OQ-8: 59 members, 58 visited. The 59th is still the live TProgram; the 58th is
+    // storageBlocks, which follows the record arm's guard (ProgramArtifacts.h). esOrigin then
+    // made it 60 and 59.
+    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<LinkArtifacts>(), 59u);
+    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<StorageBlockReflection>(), 3u);
+    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<SpirvArtifacts>(), 8u);
+    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<ResourceReflection>(), 14u);
+    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<XfbVarying>(), 11u);
+    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<TypeFacts>(), 20u);
+}
+
+TEST(ProgramArtifactsCodec, PortableHeaderUsesWireSchemaRatherThanNativeContainerSize) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Vector<Uint8> bytes;
+    EncodeProgramArtifacts(MakeLinkArtifacts(), MakeSpirvArtifacts(), bytes);
+    ASSERT_GT(bytes.size(), 12u);
+    Uint32 version = 0;
+    Uint64 schema = 0;
+    std::memcpy(&version, bytes.data(), sizeof(version));
+    std::memcpy(&schema, bytes.data() + sizeof(version), sizeof(schema));
+    // 3 since P7 OQ-8 (CONTRACT-P7 §5.3): LinkArtifacts gained storageBlocks, so a v2 reader
+    // would run out of bytes mid-stream rather than notice. The schema word beside it moved
+    // too - it is derived from the VisitFields tables - and so did `wireFingerprint`, which is
+    // what makes a mixed-version pair refuse at the handshake instead of at the first program.
+    EXPECT_EQ(version, kProgramArtifactsCodecVersion);
+    EXPECT_EQ(version, 3u);
+    EXPECT_EQ(schema, ProgramArtifactsSchemaFingerprint());
+    EXPECT_NE(schema, 0u);
+    EXPECT_NE(schema, sizeof(LinkArtifacts));
+    RecordProperty("program_archive_wire_schema", std::to_string(schema));
+
+    // The old Linux/native echo (1056) and unpinned libc++ echo (0) both fail.
+    // This control distinguishes a portable schema from simply deleting the check.
+    for (const Uint64 legacyEcho : {Uint64{1056}, Uint64{0}}) {
+        auto legacy = bytes;
+        std::memcpy(legacy.data() + sizeof(version), &legacyEcho, sizeof(legacyEcho));
+        LinkArtifacts link;
+        SpirvArtifacts spirv;
+        EXPECT_FALSE(DecodeProgramArtifacts(legacy.data(), legacy.size(), link, spirv));
+        EXPECT_TRUE(link.uniformReflection.empty());
+        EXPECT_TRUE(spirv.generatedSpirv.empty());
+    }
+    auto v1 = bytes;
+    v1[0] = 1;
+    LinkArtifacts link;
+    SpirvArtifacts spirv;
+    EXPECT_FALSE(DecodeProgramArtifacts(v1.data(), v1.size(), link, spirv));
+#else
+    GTEST_SKIP() << "portable archive headers apply to the disaggregated wire";
+#endif
+}

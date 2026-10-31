@@ -11,7 +11,7 @@
 //
 // The conformance suite exposed a whole family of transform feedback failures that no
 // existing scenario could reproduce, because every one of them ran ONE capture, from a
-// VERTEX stage, in a freshly initialised process. What the suite actually does is
+// VERTEX stage, in a freshly initialized process. What the suite actually does is
 // different in three ways at once, and each of them turned out to matter:
 //
 //   * it runs case after case in ONE GL context, resetting state between them - and the
@@ -181,8 +181,7 @@ void main()
             static constexpr int kInputVertices = 4;
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             static bool BackendHostsGeometry() {
@@ -234,8 +233,7 @@ void main()
                 return buffer.data();
             }
 
-            GLuint BuildCaptureProgram(const std::vector<std::pair<GLenum, const char*>>& stages,
-                                       const char* varying) {
+            GLuint BuildCaptureProgram(const std::vector<std::pair<GLenum, const char*>>& stages, const char* varying) {
                 return BuildCaptureProgram(stages, std::vector<const char*>{varying});
             }
 
@@ -308,8 +306,8 @@ void main()
                 glDisable(GL_RASTERIZER_DISCARD);
 
                 std::vector<int> readback(capturedInts, kPoison);
-                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                   static_cast<GLsizeiptr>(capturedInts * sizeof(int)), readback.data());
+                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(capturedInts * sizeof(int)),
+                                   readback.data());
                 glUseProgram(0);
                 glDeleteBuffers(1, &xfbBuffer);
                 return readback;
@@ -423,9 +421,9 @@ void main()
                 GTEST_SKIP() << "no geometry stage on " << Gl().BackendName() << " (" << Gl().RendererString() << ")";
             }
 
-            const GLuint program = BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource},
-                                                        {GL_GEOMETRY_SHADER, kPointAmplifyingGeometrySource}},
-                                                       "gs_out_value");
+            const GLuint program = BuildCaptureProgram(
+                {{GL_VERTEX_SHADER, kPassthroughVertexSource}, {GL_GEOMETRY_SHADER, kPointAmplifyingGeometrySource}},
+                "gs_out_value");
             ASSERT_NE(program, 0u) << "fragmentless capture program failed to build: " << m_buildLog;
 
             const std::vector<int> expected = {10, 10, 11, 11, 12, 12, 13, 13};
@@ -472,8 +470,7 @@ void main()
         TEST_F(XfbRepeatedCaptureScenario, AVertexOnlyAdjacencyCaptureRecords) {
             if (!Ready()) GTEST_SKIP();
 
-            const GLuint program =
-                BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource}}, "vs_out_value");
+            const GLuint program = BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource}}, "vs_out_value");
             ASSERT_NE(program, 0u) << "vertex-only capture program failed to build: " << m_buildLog;
 
             // Four vertices of GL_LINES_ADJACENCY are one line whose real endpoints are the
@@ -524,8 +521,7 @@ void main()
             const GLsizeiptr captureBytes = static_cast<GLsizeiptr>(capturedInts * sizeof(int));
 
             // Span A: an ordinary capture, so capture point 0 is left holding bufferA.
-            const GLuint programA =
-                BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource}}, "vs_out_value");
+            const GLuint programA = BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource}}, "vs_out_value");
             ASSERT_NE(programA, 0u) << "plain capture program failed to build: " << m_buildLog;
 
             std::vector<int> poison(capturedInts, kPoison);
@@ -551,8 +547,8 @@ void main()
             ASSERT_TRUE(CapturedIs(afterA, spanAExpected)) << "the setup span itself did not capture";
 
             // Span B: gl_NextBuffer first, so buffer 0 captures nothing and only point 1 is bound.
-            const GLuint programB = BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource}},
-                                                        {"gl_NextBuffer", "vs_out_value"});
+            const GLuint programB =
+                BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource}}, {"gl_NextBuffer", "vs_out_value"});
             if (programB == 0) {
                 GTEST_SKIP() << "gl_NextBuffer capture lists are not linkable on " << Gl().BackendName() << " ("
                              << Gl().RendererString() << "): " << m_buildLog;
@@ -586,31 +582,16 @@ void main()
 
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
 
-            // ...and, where the backend places this layout at all, the buffer it WAS asked to
-            // write gets the records. That placement is the DirectGLES scatter path, whose
-            // scratch sizing used to read each target's stride at its POSITION in a list that
-            // skips unbound capture buffers - which for a leading gl_NextBuffer read stride 0
-            // for every target and sized the scratch at zero. DirectVulkan does not implement a
-            // leading-gl_NextBuffer layout at all (it captures nothing into bufferB); that is a
-            // pre-existing gap of its own, and the assertion above - that it corrupts nothing
-            // while declining - is what matters for it.
-            const bool backendPlacesLeadingNextBuffer = Gl().BackendName() != "DirectVulkan";
-            if (backendPlacesLeadingNextBuffer) {
-                std::vector<int> bufferBAfter(capturedInts, kPoison);
-                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, captureBytes, bufferBAfter.data());
-                EXPECT_TRUE(CapturedIs(bufferBAfter, spanAExpected));
-            }
+            // Sparse binding indices must be preserved by both GLES scatter and
+            // Vulkan capture: slot 1 receives the values while slot 0 stays untouched.
+            std::vector<int> bufferBAfter(capturedInts, kPoison);
+            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, captureBytes, bufferBAfter.data());
+            EXPECT_TRUE(CapturedIs(bufferBAfter, spanAExpected));
 
-            // Unbound and deleted BEFORE any skip: a capture point left pointing at a buffer
-            // this test deleted would follow the process into the next scenario.
+            // A capture point must not retain a buffer deleted by this scenario.
             glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 1, 0);
             glDeleteBuffers(1, &bufferA);
             glDeleteBuffers(1, &bufferB);
-
-            if (!backendPlacesLeadingNextBuffer) {
-                GTEST_SKIP() << "DirectVulkan does not place a capture list beginning with gl_NextBuffer; it "
-                                "captures nothing, which the no-corruption assertion above has already covered.";
-            }
         }
 
         // The control for all of the above: a span that never draws must leave the capture
@@ -645,8 +626,8 @@ void main()
             glUseProgram(0);
 
             std::vector<int> readback(capturedInts, 0);
-            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                               static_cast<GLsizeiptr>(capturedInts * sizeof(int)), readback.data());
+            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(capturedInts * sizeof(int)),
+                               readback.data());
             EXPECT_TRUE(CapturedNothing(readback));
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
 

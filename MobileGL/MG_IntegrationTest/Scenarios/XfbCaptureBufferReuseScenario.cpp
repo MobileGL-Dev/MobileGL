@@ -159,7 +159,7 @@ void main() {
                     const float expected = value + static_cast<float>(i);
                     const float got = data[i];
                     // isfinite first: every ordered comparison against a NaN is false, so a
-                    // pair of one-sided range tests REPORTS SUCCESS for uninitialised
+                    // pair of one-sided range tests REPORTS SUCCESS for uninitialized
                     // storage that happens to read as NaN - which is exactly the failure
                     // these scenarios exist to catch.
                     if (!std::isfinite(got) || std::fabs(got - expected) > 0.01f) {
@@ -260,8 +260,8 @@ void main() {
                 RunSpan();
 
                 std::vector<float> readback(floats, kPoison);
-                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                   static_cast<GLsizeiptr>(floats * sizeof(float)), readback.data());
+                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(floats * sizeof(float)),
+                                   readback.data());
                 EXPECT_TRUE(CapturedIs(readback.data(), value)) << "span " << span;
                 // The bytes past the one point the draw produced must still be the
                 // poison the respecification put there, not whatever the previous
@@ -287,7 +287,7 @@ void main() {
             glGenBuffers(1, &xfbBuffer);
             glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuffer);
             // Poisoned at creation - the storage is immutable, so this is the only chance to
-            // put a recognisable value there, and without it a span that captured nothing
+            // put a recognizable value there, and without it a span that captured nothing
             // would be indistinguishable from one that captured the right thing whenever the
             // untouched bytes happened to read back as the expected number.
             const std::vector<float> poison(kCaptureFloats, kPoison);

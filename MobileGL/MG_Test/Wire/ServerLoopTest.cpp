@@ -1,0 +1,4448 @@
+// MobileGL - MobileGL/MG_Test/Wire/ServerLoopTest.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// Package v1's suite: the apply thread, the blocking control mailbox, the verb stamp, the
+// bounded shutdown, and R-11's server-owned staging copy.
+//
+// WHAT THIS SUITE REFUSES TO DO, and why it is written the way it is (R-16).
+//
+// Every case here drives the REAL path: a real ServerSession over four real ShmSegment-backed
+// segments, a real apply thread parked on a real Doorbell, and records that go in through w1's
+// encoder and come out through w1's decoder. None of them writes a record field by hand, none
+// of them calls PipeApplier::ApplyOne directly, and none of them sets a flag the case then
+// observes. That matters because the three defects the first P5 wave shipped were all of that
+// shape - a persistent-map case that wrote the record field itself still passed with the
+// producer deleted, and a lane probe armed against stub SOURCE TEXT went green having run
+// monolith on 8 of 11 lanes.
+//
+// The two things this suite deliberately CANNOT reach are named rather than faked:
+//   * there is no GL context here, so ServerLoop::CreateBackend is not called and the five
+//     class-B verbs DECLINE. That is asserted as a decline, not skipped - a Clear that was
+//     APPLIED with no backend would mean the sink found a table it should not have.
+//   * R-11's end-to-end control is MOBILEGL_IPC_AUDIT=1 over the reduced path, which needs the
+//     client's emit table (package c1). What IS reachable here is the property that control
+//     exists to test: bytes that were copied survive the source being overwritten with 0xDD.
+
+#include <Config.h>
+#include <MG_Util/Debug/Log.h>
+#include <MG_Backend/BackendObject.h>
+#include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
+#include <MG_Backend/DirectGLES/DirectGLES.h>
+#include <MG_Backend/DirectGLES/Managers.h>
+#include <MG_Backend/DirectGLES/Utils.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h>
+#include <MG_Backend/DirectVulkan/Renderer/OffscreenSurfaceRoute.h>
+#include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Impl/Pipe/ResourceTracker.h>
+#include <MG_Pipe/MGPipe.h>
+#include <MG_Pipe/MGPipeCallbacks.h>
+#include <MG_Pipe/PipeApply.h>
+#include <MG_Remote/CapsCodec.h>
+#include <MG_Remote/Client/ClientSession.h>
+#include <MG_Remote/Client/EmitTables.h>
+#include <MG_Remote/FatalFunnel.h>
+#include <MG_Remote/Protocol/generated/protocol_generated.h>
+#include <MG_Remote/Protocol/SurfaceOpCodec.h>
+#include <MG_Remote/Server/PipeApplier.h>
+#include <MG_Remote/Server/ServerLoop.h>
+#include <MG_Remote/Server/ServerSession.h>
+#include <MG_Backend/Record/StagedShadow.h>
+#include <MG_Remote/Transport/InProcessTransport.h>
+#include <MG_Remote/Transport/ReplySlot.h>
+#include <MG_Remote/Transport/Ring.h>
+#include <MG_Remote/Transport/SessionRings.h>
+#include <MG_Remote/Wire/PipeWireCodec.h>
+#include <MG_State/GLState/BufferState/BufferObject.h>
+#include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/ErrorState/ErrorInfo.h>
+#include <MG_State/GLState/TextureState/TextureEnum.h>
+#include <MGGitHash.h>
+
+#include <csignal>
+
+#include <gtest/gtest.h>
+
+#include <atomic>
+#include <chrono>
+#include <cstring>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+#if defined(__linux__) || defined(__ANDROID__)
+#include <sched.h>
+#endif
+
+using namespace MobileGL;
+
+// NOT `using namespace MobileGL::MG_Remote`. MobileGL::Wire (the flatbuffers control-plane
+// schema) and MobileGL::MG_Remote::Wire (the G3 codec) are two different namespaces with the
+// same last name, and a using-directive over the second makes every mention of `Wire`
+// ambiguous - including the ones in the generated header.
+namespace Transport = MobileGL::MG_Remote::Transport;
+namespace Server = MobileGL::MG_Remote::Server;
+namespace Codec = MobileGL::MG_Remote::Wire;
+using MobileGL::MG_Remote::CapsAbiFingerprint;
+
+namespace {
+
+    std::string g_logPath;
+
+    std::string ReadLog() {
+        // BOTH ROLES' LOGS (P6). A death test asserts that the CHILD said something; which
+        // role's thread said it is not what these cases are about, and refusals raised on the
+        // apply thread are written under the SERVER role by construction.
+        return MobileGL::MG_Util::Debug::ReadRoleLogs(g_logPath.c_str());
+    }
+
+    unsigned ProcessId() {
+#if defined(_WIN32)
+        return static_cast<unsigned>(_getpid());
+#else
+        return static_cast<unsigned>(::getpid());
+#endif
+    }
+
+    Transport::SessionSegmentSizes TestSizes() {
+        Transport::SessionSegmentSizes sizes;
+        sizes.CmdRingBytes = 64ull * 1024;
+        sizes.StageBytes = 64ull * 1024;
+        sizes.ReplyBytes = 64ull * 1024;
+        // 1 MiB, not 16 KiB: the EGL cases have the server republish its caps snapshot into the
+        // event ring several times with no client draining it, and a ring that fills would turn a
+        // "no republish" assertion into a ring-full one.
+        sizes.EventRingBytes = 1024ull * 1024;
+        sizes.ReplySlotCount = 8;
+        return sizes;
+    }
+
+    // The client half of a session, wired exactly the way ClientSession::Start wires it: the
+    // transport pair, a real Hello, the server's Accept, the client's attach to the SAME
+    // mapping, and w1's encoder over the shared SEG_CMD ring. It is NOT ClientSession itself,
+    // because ClientSession::Start finishes by installing package c1's BackendObject_Remote,
+    // which does not exist yet - and a fixture that skipped the handshake to get around that
+    // would be testing a session this tree does not build.
+    struct ServerFixture {
+        std::unique_ptr<Transport::InProcessTransport> clientTransport;
+        std::unique_ptr<Transport::InProcessTransport> serverTransport;
+        Transport::SessionSegments clientSegments;
+        Transport::RingProducer cmd;
+        Transport::SessionProducer producer;
+        Codec::SegmentTable clientTable;
+        Codec::PipeWireEncoder encoder;
+        Server::ServerSession* session = nullptr;
+
+        bool Handshake(Server::ServerSession* owner = nullptr) {
+            Transport::InProcessTransport::CreatePair(clientTransport, serverTransport);
+            {
+                ::flatbuffers::FlatBufferBuilder builder(512);
+                auto stamp = builder.CreateString(GIT_COMMIT_HASH_SHORT);
+                auto hello = ::MobileGL::Wire::CreateHello(
+                    builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, stamp,
+                    /*backendType=*/0u, /*pid=*/0u, /*configBlob=*/0, CapsAbiFingerprint(), CapsAbiFingerprint(),
+                    ::MobileGL::Wire::CreateLinkTerms(builder));
+                auto root =
+                    ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::Hello, hello.Union());
+                ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
+                if (clientTransport->SendFrame(MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()}) !=
+                    MOBILEGL_OK) {
+                    return false;
+                }
+            }
+            session = owner != nullptr ? owner : &Server::ServerSessionInstance();
+            session->SetSegmentSizes(TestSizes());
+            // The two halves v1 owns. Neither has a default and CallMask() Fatals on an unset
+            // one, which is s1's BLOCKER fix and the reason this is stated rather than derived.
+            session->SetCapabilityBits(0);
+            session->SetConsumedSubsystems(MG_Pipe::kMGPipeSubsystemsMigratedAtP4a);
+            if (session->Accept(*serverTransport) != MOBILEGL_OK) return false;
+            if (clientSegments.AttachInProcess(session->Shm(), Transport::MemoryRole::Client) != MOBILEGL_OK) {
+                return false;
+            }
+            Transport::RingControl* control = clientSegments.CmdControl();
+            cmd = Transport::RingProducer(control, clientSegments.CmdRingBase(), clientSegments.CmdRingCapacity(),
+                                          Transport::RingCursorSet::Cmd);
+            if (!cmd.Valid()) return false;
+            producer.Attach(control, &cmd, &clientTransport->PeerDoorbell(), &clientTransport->SelfDoorbell(),
+                            MG_Config::Ipc.SpinUs);
+            clientTable.Install(Codec::kSegCmd,
+                                Codec::SegmentView{clientSegments.CmdRingBase(), clientSegments.CmdRingCapacity()});
+            clientTable.Install(Codec::kSegStage,
+                                Codec::SegmentView{clientSegments.StageBase(), clientSegments.StageBytes()});
+            clientTable.Install(Codec::kSegReply,
+                                Codec::SegmentView{clientSegments.ReplyBase(), clientSegments.ReplyBytes()});
+            encoder = Codec::PipeWireEncoder(control, &cmd, nullptr, &clientTable);
+            return true;
+        }
+
+        bool StartLoop() { return Server::ServerLoopInstance().Start(*session) == MOBILEGL_OK; }
+
+        // Emit one record and wait for the server to apply it. This is the verb barrier's own
+        // wait (R-3/R-5) - appliedSeq, not a sleep - so a case that goes green here has really
+        // seen the apply thread move the watermark.
+        bool EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes, Uint32 timeoutMs = 5000) {
+            const Uint64 seq = encoder.EncodeRecord(op, payload, payloadBytes);
+            if (seq == Codec::kInvalidSeq) return false;
+            encoder.Publish();
+            producer.PublishAndNotify(seq);
+            return producer.WaitForApplied(seq, timeoutMs) == Transport::SessionWait::Reached;
+        }
+
+        bool EmitAndWaitWithTail(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes, const void* tail,
+                                 Uint64 tailBytes, Uint32 timeoutMs = 5000) {
+            const Uint64 seq = encoder.EncodeRecord(op, payload, payloadBytes, tail, tailBytes);
+            if (seq == Codec::kInvalidSeq) return false;
+            encoder.Publish();
+            producer.PublishAndNotify(seq);
+            return producer.WaitForApplied(seq, timeoutMs) == Transport::SessionWait::Reached;
+        }
+
+        // C10: poll the flag the Doorbell sets ONLY while it is actually blocked in Park
+        // (RingControl::consumerParked, stored inside Doorbell::Wait's blocking section and
+        // cleared on wake), NOT ServerLoop::ParkCount(), which increments on the way TOWARD a park
+        // and stays set even if Wait returns without ever blocking. A loop whose wait was replaced
+        // by `true` never sets this, so a poll for it TIMES OUT - which is what makes "the apply
+        // thread really parked" a claim that can go red for its own reason.
+        bool WaitUntilTrulyParked(Uint32 timeoutMs = 5000) {
+            Transport::RingControl* control = clientSegments.CmdControl();
+            if (control == nullptr) return false;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (control->consumerParked.load(std::memory_order_acquire) == 1u) return true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return false;
+        }
+
+        void Stop() {
+            // Table 3's order: the client publishes and lets the server drain (EmitAndWait
+            // already did), then Doorbell::Kill through the transport's Shutdown, THEN the
+            // bounded join, and only then is anything an emitter owns released.
+            if (clientTransport) clientTransport->Shutdown();
+            Server::ServerLoopInstance().Stop();
+            producer.Detach();
+            encoder = Codec::PipeWireEncoder();
+            cmd = Transport::RingProducer();
+            clientSegments.Close();
+            if (session != nullptr) session->Close();
+            clientTransport.reset();
+            serverTransport.reset();
+        }
+    };
+
+    MG_Pipe::MGPClear WholeFramebufferClear() {
+        MG_Pipe::MGPClear clear{};
+        clear.Kind = Server::kMGPClearKindWhole;
+        clear.BufferMask = 0x00004000; // GL_COLOR_BUFFER_BIT
+        clear.DrawBufferIndex = -1;
+        clear.ValueClass = Server::kMGPClearValueClassFloat;
+        return clear;
+    }
+
+} // namespace
+
+// =====================================================================================
+// The thread
+// =====================================================================================
+
+// A control request must be able to un-park a thread waiting on kWaitForever. A Notify alone
+// cannot do that - Doorbell::Wait consumes it with one Park, re-tests a condition nothing
+// published, finds the bell alive and parks again - so the park predicate has to carry the
+// control flag too. The case asserts the thread REALLY PARKED first, because a loop that
+// spun instead would pass this without the predicate ever mattering.
+TEST(ServerLoopTest, AControlRequestRunsOnTheApplyThreadAndUnparksIt) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    // C10: arm on the ACTUAL blocked park (consumerParked), not ParkCount() - a loop that spun
+    // instead of blocking would pass a ParkCount() check without the wait ever mattering, which
+    // was the whole finding.
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked())
+        << "the apply thread never entered the blocking park, so this case would prove nothing "
+           "about waking it (ParkCount() counts an intention, not a park)";
+
+    struct Probe {
+        std::thread::id ranOn{};
+        Bool onApplyThread = false;
+    } probe;
+    // POSTED FROM A HELPER THREAD AND WAITED FOR WITH A DEADLINE (review v2 N-9). A park predicate
+    // that lost the control flag never un-parks the apply thread and the post blocks for ever; the
+    // case has to SAY that, in its own words, rather than hit ctest's timeout - a timeout is what an
+    // unrelated hang produces too. Stop() afterwards is what frees the helper: m_stopRequested is in
+    // the predicate, the thread exits, and its exit block answers the still-posted request
+    // NOT_INITIALIZED (C2's block), so the join below cannot wedge either.
+    MobileGLResult rc = MOBILEGL_ERR_INVALID_ARGUMENT;
+    std::atomic<Bool> answered{false};
+    std::thread::id posterId{};
+    std::thread poster([&] {
+        posterId = std::this_thread::get_id();
+        rc = loop.RunProbeOnApplyThreadForTesting(
+            +[](void* user) -> MobileGLResult {
+                auto* p = static_cast<Probe*>(user);
+                p->ranOn = std::this_thread::get_id();
+                p->onApplyThread = Server::ServerLoop::OnApplyThread();
+                return MOBILEGL_OK;
+            },
+            &probe);
+        answered.store(true, std::memory_order_release);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!answered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!answered.load(std::memory_order_acquire)) {
+        ADD_FAILURE() << "a posted control request did not un-park the apply thread within 5 s: the park "
+                         "predicate no longer carries the control flag, so a Notify alone cannot break a "
+                         "kWaitForever park (Doorbell::Wait consumes it, re-tests a condition nothing "
+                         "published, and parks again)";
+        fixture.Stop();
+        poster.join();
+        return;
+    }
+    poster.join();
+
+    EXPECT_EQ(rc, MOBILEGL_OK);
+    // The CALLER is the poster thread, not the test thread (N-9 moved the post onto a helper).
+    EXPECT_NE(probe.ranOn, posterId)
+        << "the control request ran on the CALLER, which means the EGL lifecycle calls would "
+           "reach the driver from the app thread and the context would never migrate";
+    EXPECT_NE(probe.ranOn, std::this_thread::get_id());
+    EXPECT_TRUE(probe.onApplyThread)
+        << "the control request ran on the CALLER (OnApplyThread() answered false inside it)";
+    EXPECT_FALSE(Server::ServerLoop::OnApplyThread());
+
+    fixture.Stop();
+}
+
+// P5d round 3, package T item 1: the mailbox's one-bit shadow. ControlIsPending() no longer
+// takes m_controlMutex - it reads m_controlPosted - and that word has TWO failure modes, only
+// one of which any existing case can see.
+//
+// THE SET SIDE is already covered: a poster that failed to publish the shadow leaves the park
+// predicate with nothing to see, and AControlRequestRunsOnTheApplyThreadAndUnparksIt above says
+// so in its own words within five seconds.
+//
+// THE CLEAR SIDE IS THIS CASE, and it is the one nothing else can reach. A shadow that the pump
+// takes the request from but never clears makes `ready` permanently true: the loop then spins at
+// full clock for the rest of the session, never sets consumerParked again, and every symptom is
+// a performance one - the process stays correct, the phone gets hot and a core is gone.
+//
+// IT HAS TO OBSERVE THE WINDOW, NOT THE END STATE, and that is the whole shape of the case.
+// PumpControlRequest clears the shadow TWICE: once when it takes the request (the load-bearing
+// clear) and once defensively, on the next iteration, when it finds the shadow set with
+// m_controlPending false. Assert only "the shadow is clear after the request was answered" and
+// the defensive clear covers for a missing take-clear on the very next pump - the case then
+// passes with the line it exists to pin deleted. So the request's work BLOCKS on a gate this
+// thread holds, and the shadow is read while the apply thread is still inside work(): in that
+// window m_controlPending is still true, the pump is not running, and the ONLY thing that can
+// make ControlIsPending() false is the clear at the take. Delete it and this read returns true,
+// deterministically, on every run.
+TEST(ServerLoopTest, TheControlShadowIsClearedWhenThePumpTakesTheRequest) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked())
+        << "the apply thread never parked in the first place, so this case could prove nothing "
+           "about it parking AGAIN";
+    EXPECT_FALSE(loop.ControlIsPending())
+        << "the shadow is set with no request posted: `ready` is true for ever and the loop "
+           "will never park";
+
+    // The gate the posted work blocks on. `running` is released by the apply thread once it is
+    // INSIDE work(); `release` is set by this thread once it has read the shadow.
+    struct Gate {
+        std::atomic<Bool> running{false};
+        std::atomic<Bool> release{false};
+    };
+    Gate gate;
+
+    // Posted from a helper for N-9's reason - a predicate that cannot see the request blocks the
+    // poster for ever, and the case has to say that rather than hit ctest's timeout.
+    std::atomic<Bool> answered{false};
+    MobileGLResult rc = MOBILEGL_ERR_INVALID_ARGUMENT;
+    std::thread poster([&] {
+        rc = loop.RunProbeOnApplyThreadForTesting(
+            +[](void* user) -> MobileGLResult {
+                Gate* g = static_cast<Gate*>(user);
+                g->running.store(true, std::memory_order_release);
+                const auto gateDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                while (!g->release.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < gateDeadline) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                return MOBILEGL_OK;
+            },
+            &gate);
+        answered.store(true, std::memory_order_release);
+    });
+
+    // Wait until the work is really running, i.e. until the pump has taken the request.
+    const auto startDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!gate.running.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < startDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const Bool started = gate.running.load(std::memory_order_acquire);
+    if (started) {
+        // THE ASSERTION. The apply thread is inside work(), so nothing is pumping and
+        // m_controlPending is still true; the shadow is false only because the take cleared it.
+        EXPECT_FALSE(loop.ControlIsPending())
+            << "the pump took a control request and left the shadow set: `ready` stays true for "
+               "as long as the request runs, and if the take-clear is gone entirely the idle "
+               "poll spins a core at full clock for the rest of the session";
+    } else {
+        ADD_FAILURE() << "the posted control request never started running: the shadow's SET side "
+                         "is broken, so the park predicate no longer carries the control flag";
+    }
+    gate.release.store(true, std::memory_order_release);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!answered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const Bool gotAnswer = answered.load(std::memory_order_acquire);
+    if (!gotAnswer) {
+        ADD_FAILURE() << "the posted control request was never answered";
+        fixture.Stop();
+        poster.join();
+        return;
+    }
+    poster.join();
+    EXPECT_EQ(rc, MOBILEGL_OK);
+
+    // And the loop must be able to BLOCK again - the end state the defensive clear also
+    // guarantees, kept because it is the symptom an operator would actually see.
+    EXPECT_TRUE(fixture.WaitUntilTrulyParked())
+        << "the apply thread never re-entered the blocking park after a control request: the "
+           "shadow is stuck set, so the idle poll now spins a core at full clock for the rest "
+           "of the session";
+
+    fixture.Stop();
+}
+
+// =====================================================================================
+// p7/spawnhang: the poster reports a frame the apply thread is RUNNING, and only that
+// =====================================================================================
+//
+// retrace-split run 35912252677: a spawned server's first CreatePbufferSurface ran its lazy native
+// bring-up (eglInitialize, a software rasteriser read off a cold runner disk) for ~20 s - the whole
+// cold-start reply budget - and the client, which could not tell a busy server from a wedged one,
+// gave up while the server was about to answer. The poster now waits in slices and, after every
+// slice the apply thread spent RUNNING its frame, tells the installed sink (ServerMain's sends
+// Wire::SurfaceProgress; ServerSpawnTest's cold-bring-up case is the end-to-end half). Two
+// halves, each red for its own reason:
+//   - a frame the apply thread runs for several slices IS reported, with its kind, one seq and a
+//     growing elapsed time - with the old untimed wait there is no report at all;
+//   - a frame POSTED BUT NOT TAKEN (the apply thread is held in a drain) is NOT, however long it
+//     waits: that silence is what the client's budget still names, and a poster that reported
+//     every slice regardless would turn a stuck apply thread into an endless wait.
+namespace {
+    struct ProgressLog {
+        struct Report {
+            Server::SurfaceControlOp kind;
+            Uint64 seq;
+            Uint32 elapsedMs;
+        };
+        std::mutex mutex;
+        std::vector<Report> reports;
+
+        static void Sink(void* user, Server::SurfaceControlOp kind, Uint64 seq, Uint32 elapsedMs) {
+            auto* log = static_cast<ProgressLog*>(user);
+            const std::lock_guard<std::mutex> lock(log->mutex);
+            log->reports.push_back(Report{kind, seq, elapsedMs});
+        }
+        std::vector<Report> Snapshot() {
+            const std::lock_guard<std::mutex> lock(mutex);
+            return reports;
+        }
+    };
+
+    // Six slices: long enough that a poster oversleeping by most of a second under a loaded `-j`
+    // still wakes at least once while the frame runs.
+    constexpr Uint32 kProgressProbeRunMs = 6 * Server::ServerLoop::kControlProgressIntervalMs;
+
+    // Posts `hook` from a helper thread (N-9's reason: a lost post must be said in the case's own
+    // words, not as ctest's timeout) and waits for its answer within `deadlineMs`.
+    bool PostProbeAndWait(Server::ServerLoop::ControlProbeHook hook, void* user, Uint32 deadlineMs, MobileGLResult* rc,
+                          long long* waitedMs) {
+        std::atomic<Bool> answered{false};
+        std::thread poster([&] {
+            const auto start = std::chrono::steady_clock::now();
+            *rc = Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(hook, user);
+            *waitedMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+            answered.store(true, std::memory_order_release);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(deadlineMs);
+        while (!answered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const Bool ok = answered.load(std::memory_order_acquire);
+        if (!ok) Server::ServerLoopInstance().Stop(); // frees the poster (C2's exit block answers it)
+        poster.join();
+        return ok;
+    }
+} // namespace
+
+TEST(ServerLoopTest, AFrameTheApplyThreadIsRunningIsReportedToTheProgressSinkWhileItRuns) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ProgressLog log;
+    loop.SetControlProgressSink(&ProgressLog::Sink, &log);
+
+    MobileGLResult rc = MOBILEGL_ERR_INVALID_ARGUMENT;
+    long long waitedMs = 0;
+    const Bool answered = PostProbeAndWait(
+        +[](void*) -> MobileGLResult {
+            std::this_thread::sleep_for(std::chrono::milliseconds(kProgressProbeRunMs));
+            return MOBILEGL_OK;
+        },
+        nullptr, 20000, &rc, &waitedMs);
+    loop.SetControlProgressSink(nullptr, nullptr);
+    // EXPECT, never ASSERT, from here to Stop(): a case that returns early leaves the apply thread
+    // parked and the process does not exit.
+    EXPECT_TRUE(answered) << "a posted probe was never answered";
+    EXPECT_EQ(rc, MOBILEGL_OK);
+
+    const std::vector<ProgressLog::Report> reports = log.Snapshot();
+    EXPECT_FALSE(reports.empty())
+        << "the apply thread ran the frame for " << waitedMs << " ms and the poster said nothing: "
+        << "a spawn client would have seen silence for the whole of a cold bring-up and given up "
+           "on a server that was about to answer";
+    for (std::size_t i = 0; i < reports.size(); ++i) {
+        EXPECT_EQ(reports[i].kind, Server::SurfaceControlOp::ProbeForTesting) << "report " << i;
+        EXPECT_NE(reports[i].seq, 0u) << "report " << i << " names no seq";
+        EXPECT_EQ(reports[i].seq, reports.front().seq) << "one frame, one seq (report " << i << ")";
+        EXPECT_GE(reports[i].elapsedMs, Server::ServerLoop::kControlProgressIntervalMs)
+            << "report " << i << " came before one whole interval had passed";
+        if (i != 0) EXPECT_GT(reports[i].elapsedMs, reports[i - 1].elapsedMs) << "report " << i;
+    }
+
+    // THE SERVER LOG NAMES THE SLOW DISPATCH TOO: the line the investigation did not have.
+    const std::string text = ReadLog();
+    EXPECT_NE(text.find("ProbeForTesting seq"), std::string::npos)
+        << "a dispatch that ran " << waitedMs << " ms was not named in the server log";
+    EXPECT_NE(text.find("ms on mgl-srv-apply"), std::string::npos);
+
+    fixture.Stop();
+}
+
+TEST(ServerLoopTest, AFramePostedButNotYetTakenIsNotReportedHoweverLongItWaits) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+
+    // HOLD THE APPLY THREAD IN A DRAIN, where it cannot take a posted frame: the retire hook runs
+    // on the apply thread after a record is applied and before it is retired (DrainRing).
+    static std::atomic<Bool> s_inDrain{false};
+    static std::atomic<Bool> s_releaseDrain{false};
+    s_inDrain.store(false);
+    s_releaseDrain.store(false);
+    loop.SetBeforeRetireHookForTesting(+[] {
+        s_inDrain.store(true, std::memory_order_release);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!s_releaseDrain.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    const MG_Pipe::MGPClear clear = WholeFramebufferClear();
+    const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::Clear, &clear, sizeof(clear));
+    ASSERT_NE(seq, Codec::kInvalidSeq);
+    fixture.encoder.Publish();
+    fixture.producer.PublishAndNotify(seq);
+    const auto holdDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!s_inDrain.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < holdDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(s_inDrain.load(std::memory_order_acquire)) << "the apply thread never reached the drain";
+
+    ProgressLog log;
+    loop.SetControlProgressSink(&ProgressLog::Sink, &log);
+    // The probe is posted from a helper while the drain holds the apply thread for six slices,
+    // then the drain is let go from here and the probe - instant once taken - is answered.
+    std::thread releaser([] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kProgressProbeRunMs));
+        s_releaseDrain.store(true, std::memory_order_release);
+    });
+    MobileGLResult rc = MOBILEGL_ERR_INVALID_ARGUMENT;
+    long long waitedMs = 0;
+    const Bool answered =
+        PostProbeAndWait(+[](void*) -> MobileGLResult { return MOBILEGL_OK; }, nullptr, 20000, &rc, &waitedMs);
+    releaser.join();
+    loop.SetControlProgressSink(nullptr, nullptr);
+    loop.SetBeforeRetireHookForTesting(nullptr);
+    EXPECT_TRUE(answered) << "a posted probe was never answered once the drain let go";
+    EXPECT_EQ(rc, MOBILEGL_OK);
+
+    // THE WINDOW WAS REAL: the probe waited behind the drain for several slices.
+    EXPECT_GE(waitedMs, static_cast<long long>(2 * Server::ServerLoop::kControlProgressIntervalMs))
+        << "the probe was answered after " << waitedMs
+        << " ms, so it was never posted-and-waiting "
+           "long enough for this case to say anything";
+    EXPECT_TRUE(log.Snapshot().empty())
+        << log.Snapshot().size() << " progress report(s) for a frame the apply thread had NOT "
+        << "taken: the poster reports every slice, so a client would wait on a server whose apply "
+           "thread never started its op";
+
+    fixture.Stop();
+}
+
+// Re-entrancy is not a deadlock: ~BackendObject_DirectGLES reaches ReleaseEGLResources FROM the
+// apply thread, so a post from there must run inline.
+TEST(ServerLoopTest, APostFromTheApplyThreadItselfRunsInlineRatherThanDeadlocking) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    struct Outer {
+        Bool innerRan = false;
+        MobileGLResult innerRc = MOBILEGL_ERR_INVALID_ARGUMENT;
+    } outer;
+    const MobileGLResult rc = Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+        +[](void* user) -> MobileGLResult {
+            auto* o = static_cast<Outer*>(user);
+            o->innerRc = Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                +[](void* inner) -> MobileGLResult {
+                    *static_cast<Bool*>(inner) = true;
+                    return MOBILEGL_OK;
+                },
+                &o->innerRan);
+            return MOBILEGL_OK;
+        },
+        &outer);
+
+    EXPECT_EQ(rc, MOBILEGL_OK);
+    EXPECT_EQ(outer.innerRc, MOBILEGL_OK);
+    EXPECT_TRUE(outer.innerRan);
+
+    fixture.Stop();
+}
+
+TEST(ServerLoopTest, WireSequenceSurvivesRealDispatchAndFailureReply) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    flatbuffers::FlatBufferBuilder builder(256);
+    const auto op = ::MobileGL::Wire::CreateSurfaceOp(builder, 4242, ::MobileGL::Wire::SurfaceOpKind::SetSwapInterval);
+    const auto envelope =
+        ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
+    ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
+    Server::SurfaceControlFrame reply;
+    EXPECT_EQ(MG_Remote::ServerApplyWireSurfaceOp(
+                  *::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceOp(), &reply),
+              MOBILEGL_ERR_NOT_INITIALIZED);
+    EXPECT_EQ(Server::ServerLoopInstance().ControlFramesDispatched(), 1u);
+    flatbuffers::FlatBufferBuilder replies(256);
+    MG_Remote::EncodeSurfaceReplyFrame(reply, &replies);
+    const auto* wireReply = ::MobileGL::Wire::GetCtrlEnvelope(replies.GetBufferPointer())->msg_as_SurfaceReply();
+    EXPECT_EQ(wireReply->seq(), 4242u);
+    EXPECT_FALSE(wireReply->ok());
+    fixture.Stop();
+}
+
+TEST(ServerLoopTest, ConcurrentProbesKeepTheirArgumentsAcrossNestedProbes) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    constexpr int kPosters = 8;
+    constexpr int kCalls = 128;
+    struct Probe {
+        std::atomic<int> calls{0};
+        std::atomic<int> nested{0};
+        std::atomic<int> errors{0};
+    } probes[kPosters];
+    std::atomic<bool> go{false};
+    std::vector<std::thread> posters;
+    for (auto& probe : probes) {
+        posters.emplace_back([&go, &probe] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            for (int i = 0; i < kCalls; ++i) {
+                const auto rc = Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                    +[](void* user) -> MobileGLResult {
+                        auto* p = static_cast<Probe*>(user);
+                        p->calls.fetch_add(1);
+                        // Same argument type keeps a regressed mixed pair observable without UB.
+                        return Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                            +[](void* nestedUser) -> MobileGLResult {
+                                static_cast<Probe*>(nestedUser)->nested.fetch_add(1);
+                                return MOBILEGL_OK;
+                            },
+                            p);
+                    },
+                    &probe);
+                if (rc != MOBILEGL_OK) probe.errors.fetch_add(1);
+            }
+        });
+    }
+    go.store(true, std::memory_order_release);
+    for (auto& poster : posters)
+        poster.join();
+    for (const auto& probe : probes) {
+        EXPECT_EQ(probe.calls.load(), kCalls) << "another poster or nested probe replaced this hook/user pair";
+        EXPECT_EQ(probe.nested.load(), kCalls);
+        EXPECT_EQ(probe.errors.load(), 0);
+    }
+    EXPECT_EQ(Server::ServerLoopInstance().ControlFramesDispatched(), 2u * kPosters * kCalls);
+    fixture.Stop();
+}
+
+// The bounded join. The thread is parked on kWaitForever when Stop() is called, so this is the
+// exact lost-wakeup shape table 3 step 2 is about - and the bound is what turns a regression
+// into a red test rather than a wedged CI job.
+TEST(ServerLoopTest, StopKillsTheDoorbellJoinsAndTheThreadReallyExits) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+
+    // C10: the same actual-park arming - a shutdown test whose thread never blocked would not be
+    // exercising the lost-wakeup path table 3 step 2 is about.
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked())
+        << "the thread must be BLOCKED in the park for this to be a shutdown test";
+    ASSERT_TRUE(loop.Running());
+
+    const auto began = std::chrono::steady_clock::now();
+    fixture.Stop();
+    const auto took = std::chrono::steady_clock::now() - began;
+
+    EXPECT_FALSE(loop.Running());
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(took).count(), 5000)
+        << "Stop() took the whole bound, which means it hit the join timeout rather than a "
+           "wakeup";
+}
+
+// MOBILEGL_IPC_SERVER_AFFINITY is kept as the raw string BECAUSE the resolved mask is what gets
+// logged: an affinity that silently did nothing looks exactly like one that worked. So the
+// resolved mask has to be readable, and `off` has to resolve to zero rather than to "auto".
+TEST(ServerLoopTest, TheAffinityStringResolvesToAMaskAndTheMaskIsLogged) {
+    const String saved = MG_Config::Ipc.ServerAffinity;
+    MG_Config::Ipc.ServerAffinity = "off";
+
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+    EXPECT_EQ(Server::ServerLoopInstance().ResolvedAffinityMask(), 0u) << "`off` did not resolve to no-affinity";
+
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("RESOLVED mask"), std::string::npos)
+        << "the apply thread did not log its resolved affinity mask; an affinity that silently "
+           "did nothing is indistinguishable from one that worked";
+    EXPECT_NE(log.find("mgl-srv-apply started"), std::string::npos);
+    // M-4: `off` must be a RECOGNIZED string, not fall through to the numeric-parse "not
+    // recognized" arm. Deleting the `off` branch in RequestedAffinityMask makes off unrecognized;
+    // this asserts it did not, so that branch's deletion goes red here (its own reason).
+    EXPECT_EQ(log.find("is not `auto`, `off` or a number"), std::string::npos)
+        << "`off` was treated as an unrecognized affinity string; its own branch is gone";
+
+    fixture.Stop();
+    MG_Config::Ipc.ServerAffinity = saved;
+}
+
+// M-4, the explicit-mask half: an EXPLICIT mask the box can honor must resolve to itself and be
+// LOGGED. `off` -> 0 and `0x3` -> 0x3 are two answers that must DIFFER, so the resolver cannot be a
+// constant. This case does NOT gate codex 11's effective-mask read-back - on an unrestricted box the
+// request and the effective set are the same and `return requested` stays green here (review v2
+// item 6, which struck the claim the first version of this comment made); the read-back's own gate
+// is TheResolvedAffinityMaskIsTheKernelsEffectiveSetNotTheRequest below. Red once by making the
+// resolver return a constant 0: the explicit-mask assert reads 0.
+TEST(ServerLoopTest, TheExplicitAffinityMaskResolvesToItselfAndIsLogged) {
+#if defined(__linux__) || defined(__ANDROID__)
+    if (std::thread::hardware_concurrency() < 2) {
+        GTEST_SKIP() << "needs at least 2 online cpus to honor 0x3";
+    }
+    const String saved = MG_Config::Ipc.ServerAffinity;
+    MG_Config::Ipc.ServerAffinity = "0x3"; // cpu 0 and cpu 1, both online on any 2+-cpu box
+
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+
+    EXPECT_EQ(Server::ServerLoopInstance().ResolvedAffinityMask(), 0x3u)
+        << "an explicit mask the box can honor did not resolve to itself (0x3); the effective "
+           "mask read back from the kernel differs from the request, or the resolver is broken";
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("RESOLVED mask 0x3"), std::string::npos) << "the logged RESOLVED mask is not the effective 0x3";
+
+    fixture.Stop();
+    MG_Config::Ipc.ServerAffinity = saved;
+#else
+    GTEST_SKIP() << "affinity is a Linux/Android facility";
+#endif
+}
+
+// =====================================================================================
+// The record path: stamp, apply, watermark
+// =====================================================================================
+
+// The whole phase's prerequisite. MGPipeApplyAccess deliberately does not stamp the poison
+// generations, so under split NOTHING stamps unless the applier does - every FilledGen[] stays
+// 0, MGPipeInputFieldIsFresh answers false for everything, and a server-side read aborts on the
+// FIRST field inside SyncRenderState. This case asserts the stamp happened by reading the verb
+// the stamp SET, which the case itself never writes.
+TEST(ServerLoopTest, AClearRecordCrossesAndIsStampedAsAVerbBoundary) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    // The pre-state is the honest one: nothing has stamped yet in this process.
+    ASSERT_NE(MG_Pipe::gPipeInputs->CurrentVerb(), MG_Pipe::MGPipeVerb::Clear);
+
+    const MG_Pipe::MGPClear clear = WholeFramebufferClear();
+    ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::Clear, &clear, sizeof(clear)));
+
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    EXPECT_EQ(loop.DrainedRecords(), 1u);
+    EXPECT_EQ(MG_Pipe::gPipeInputs->CurrentVerb(), MG_Pipe::MGPipeVerb::Clear)
+        << "PipeApplier::StampVerbBoundary did not run, so every server-side PipeInputs read "
+           "would abort on the first field inside SyncRenderState";
+
+    // MANDATORY on leaving the applier (p1's M-5): without it a SPAWNED server latches the flag
+    // for its whole life, every later read is judged against the last verb's mask, and the
+    // sticky forwards start aborting under strict on the very case their exemption exists for.
+    EXPECT_FALSE(MG_Pipe::gPipeInputs->ServerStampedVerb())
+        << "MGPipeServerClearVerbBoundary was not called when the apply thread left the applier";
+
+    // No backend object in this process, so the five class-B verbs DECLINE. Asserted rather
+    // than skipped: a Clear that was APPLIED here would mean the sink found a function table
+    // it had no business finding.
+    EXPECT_EQ(fixture.session->Applier().Verbs().Clears(), 0u);
+
+    fixture.Stop();
+}
+
+// R-9's batching ban, made checkable rather than merely stated. RingControl::appliedSeq has ONE
+// writer (SessionConsumer::ApplyOne, +1 per record) and PipeWireDecoder keeps its own tally; a
+// batched publish moves one and not the other, which a single counter could never tell apart.
+TEST(ServerLoopTest, TheSessionWatermarkAndTheDecoderTallyAgreeAfterEveryRecord) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    const MG_Pipe::MGPClear clear = WholeFramebufferClear();
+    for (int i = 0; i < 8; ++i) {
+        ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::Clear, &clear, sizeof(clear))) << i;
+        EXPECT_EQ(fixture.session->Consumer().AppliedSeq(), static_cast<Uint64>(i + 1));
+        EXPECT_EQ(fixture.session->Applier().DecoderAppliedSeq(), static_cast<Uint64>(i + 1));
+    }
+    EXPECT_EQ(Server::ServerLoopInstance().DrainedRecords(), 8u)
+        << "the loop's own record tally (DrainedRecords) did not move with the eight records it "
+           "applied, so the ordering-defect control has nothing of its own to hold against appliedSeq";
+
+    // retiredSeq is the watermark w1's SEG_STAGE allocator reclaims against; a loop that
+    // applies and never retires ends the first MOBILEGL_IPC_STAGE_MB in Fatal{RingOverrun}.
+    //
+    // IT IS POLLED, NOT READ ONCE, and that is R-9's own rule rather than a papered-over race:
+    // appliedSeq is the ONLY watermark P5 forbids batching, and every other one "may be
+    // published LATE but never EARLY". The apply thread retires after the drain batch and
+    // before it parks, so the barrier can release the client between the two - reading it
+    // instantly would be asserting a promise R-9 deliberately does not make. The BOUND is what
+    // keeps this a check: a loop that never retires times out here instead of passing.
+    const auto retireDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (fixture.clientSegments.CmdControl()->Progress.retiredSeq.load() < 8u &&
+           std::chrono::steady_clock::now() < retireDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_GE(fixture.clientSegments.CmdControl()->Progress.retiredSeq.load(), 8u)
+        << "the apply loop advanced appliedSeq but never retired within 2 s, so SEG_STAGE would "
+           "never be reclaimed and the first MOBILEGL_IPC_STAGE_MB would end in "
+           "Fatal{RingOverrun}";
+
+    fixture.Stop();
+}
+
+// =====================================================================================
+// R-2.5 / rule C's mechanical control, running for real
+// =====================================================================================
+
+// MOBILEGL_IPC_AUDIT=1 fills a retired SEG_STAGE run with 0xDD once the applier has RETURNED,
+// so an applier that kept the pointer reads the poison on the next frame instead of bytes that
+// happen to still be there. Without this, an inproc implementation that kept a pointer is
+// INDISTINGUISHABLE from one that copied - which is R-2's entire argument.
+//
+// The case asserts three separate things, because each one alone can be true for the wrong
+// reason: that the record's bytes really crossed (memcmp before the poison), that the poison
+// really ran (PoisonedStageBytes moved), and that it landed on the run the record named (the
+// bytes read 0xDD afterwards, through the CLIENT's mapping of the same segment).
+TEST(ServerLoopTest, TheAuditPoisonFillsExactlyTheStagedRunAfterTheApplierReturns) {
+    const Bool savedAudit = MG_Config::Ipc.Audit;
+    // Set BEFORE the loop starts: PipeWireDecoder reads it in its constructor, and its
+    // constructor runs on the apply thread inside ServerLoop::Start.
+    MG_Config::Ipc.Audit = true;
+
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    MG_Pipe::MGPResourceDesc create{};
+    create.Resource.Slot = 61;
+    create.Resource.Gen = 1;
+    create.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
+    // RGBA8, because the 64 staged bytes below are 4x4 texels of four bytes: PH-4 bounds the run
+    // by the declared level's w*h*d*bpp, and the old `1` (R8Snorm, one byte) bounded it at 16.
+    create.InternalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8);
+    create.Width = 4;
+    create.Height = 4;
+    create.Depth = 1;
+    create.ArrayLayers = 1;
+    create.Levels = 1;
+    create.Samples = 1;
+    ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::ResourceCreate, &create, sizeof(create)));
+    // PH-4: a level exists for resource_subdata only once a respecify declared it (the emitter's
+    // glTexImage*D always does). Declare level 0 at upload target 0 - the target the upload below
+    // packs - at the 4x4x1 extent the upload's descriptor-derived extent will name.
+    MG_Pipe::MGPResourceDesc respecify = create;
+    respecify.HasDefinedContent = 1;
+    MG_Pipe::MGPipeSetRespecifiedLevel(
+        respecify, MG_Pipe::MGPipePackSubDataTarget(static_cast<Uint32>(MG_Pipe::MGPipeResourceTarget::Tex2D), 0u), 0,
+        4, 4, 1);
+    ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::ResourceRespecify, &respecify, sizeof(respecify)));
+
+    Vector<Uint8> texels(4 * 4 * 4, 0x5A);
+    MG_Pipe::MGPSubData upload{};
+    upload.Res = create.Resource;
+    upload.Target = MG_Pipe::MGPipePackSubDataTarget(static_cast<Uint32>(MG_Pipe::MGPipeResourceTarget::Tex2D), 0u);
+    upload.Level = 0;
+    upload.UnionBox = MG_Pipe::MGPBox{0, 0, 0, 4, 4, 1};
+    upload.RegionCount = 1;
+    upload.Blob = fixture.encoder.StageBytes(texels.data(), texels.size());
+    ASSERT_NE(upload.Blob.Size, 0u) << "rule A: a content record must declare non-zero bytes";
+
+    // The bytes are in SEG_STAGE and readable through the CLIENT's own mapping right now - the
+    // record has not been published yet, so nothing has retired it.
+    const void* stagedBefore = fixture.clientTable.Resolve(upload.Blob.Seg, upload.Blob.Offset, upload.Blob.Size);
+    ASSERT_NE(stagedBefore, nullptr);
+    ASSERT_EQ(std::memcmp(stagedBefore, texels.data(), texels.size()), 0);
+
+    MG_Pipe::MGPSubRegion region{};
+    region.W = 4;
+    region.H = 4;
+    region.D = 1;
+    ASSERT_TRUE(fixture.EmitAndWaitWithTail(MG_Pipe::MGPWireOp::ResourceSubData, &upload, sizeof(upload), &region,
+                                            sizeof(region)));
+
+    EXPECT_GT(fixture.session->Applier().PoisonedStageBytes(), 0u)
+        << "MOBILEGL_IPC_AUDIT=1 poisoned nothing, so R-2.5's only mechanical control against a "
+           "retained SEG_STAGE pointer never ran";
+
+    const auto* poisoned =
+        static_cast<const Uint8*>(fixture.clientTable.Resolve(upload.Blob.Seg, upload.Blob.Offset, upload.Blob.Size));
+    ASSERT_NE(poisoned, nullptr);
+    for (Uint64 i = 0; i < upload.Blob.Size; ++i) {
+        ASSERT_EQ(poisoned[i], 0xDD) << "staged byte " << i
+                                     << " was not poisoned; an applier "
+                                        "that kept this pointer would still read real bytes and "
+                                        "the control would prove nothing";
+    }
+
+    fixture.Stop();
+    MG_Config::Ipc.Audit = savedAudit;
+}
+
+// =====================================================================================
+// R-11 - the server's own copy of the staged bytes
+// =====================================================================================
+
+// THIS IS THE PROPERTY MOBILEGL_IPC_AUDIT=1's 0xDD FILL EXISTS TO TEST, at unit scope: after
+// the source bytes are overwritten - which is exactly what the decoder does to a retired
+// SEG_STAGE run - the server's copy still reads the original. An implementation that returned
+// `raw - offset` cannot pass this, and the monolith arm below is the control that says so: it
+// is the SAME call with the same inputs, and it must see the 0xDD.
+TEST(StagedShadowTest, TheSplitArmCopiesAndSurvivesTheSourceBeingPoisoned) {
+    MG_Record::StagedShadowStore splitStore(/*copies=*/true);
+    MG_Record::StagedShadowStore monolithStore(/*copies=*/false);
+    const int key = 0;
+
+    Vector<Uint8> staged(32, 0xAB);
+    const Uint8* splitBase = splitStore.Adopt(&key, 64, staged.data(), 16, staged.size());
+    const Uint8* monolithBase = monolithStore.Adopt(&key, 64, staged.data(), 16, staged.size());
+
+    ASSERT_NE(splitBase, nullptr);
+    EXPECT_EQ(monolithBase, staged.data() - 16)
+        << "the monolith arm must be the ORIGINAL expression, character for character, or every "
+           "push and verify lane is running new code it was never measured against";
+    EXPECT_NE(splitBase, monolithBase);
+
+    // w1's retired-stage poison, by hand and at the right moment: the record has retired, so
+    // the staging run is dead.
+    std::fill(staged.begin(), staged.end(), Uint8{0xDD});
+
+    for (SizeT i = 0; i < 32; ++i) {
+        EXPECT_EQ(splitBase[16 + i], 0xAB) << "byte " << i
+                                           << " of the server's copy is the "
+                                              "poison, so the copy never happened";
+    }
+    // And the control: the monolith arm reads the poison, which is what makes the assertion
+    // above a statement about copying rather than about the test's own buffer.
+    EXPECT_EQ(monolithBase[16], 0xDD);
+}
+
+// The extent is EXACTLY what the record declared. Adjacent runs merge because there is no gap
+// between them; runs with a gap do not, and that is the whole mechanism - it is what makes a
+// missing record detectable instead of papered over by a widened INVALIDATE_RANGE.
+TEST(StagedShadowTest, CoverageIsExactAndAGapIsNotCovered) {
+    MG_Record::StagedShadowStore store(/*copies=*/true);
+    const int key = 0;
+    Vector<Uint8> bytes(16, 0x11);
+
+    store.Adopt(&key, 64, bytes.data(), 0, 16);
+    store.Adopt(&key, 64, bytes.data(), 32, 16);
+    EXPECT_EQ(store.CoveredRunCount(&key), 2u) << "two runs with a 16-byte gap merged into one";
+    EXPECT_TRUE(store.IsCovered(&key, 0, 16));
+    EXPECT_TRUE(store.IsCovered(&key, 32, 48));
+    EXPECT_FALSE(store.IsCovered(&key, 16, 32)) << "the gap reads as covered";
+    EXPECT_FALSE(store.IsCovered(&key, 0, 48)) << "a span across the gap reads as covered";
+    EXPECT_FALSE(store.IsCovered(&key, 8, 40));
+
+    // Filling the gap merges all three into one run, which is the proof that adjacency (not
+    // proximity) is the merge rule.
+    store.Adopt(&key, 64, bytes.data(), 16, 16);
+    EXPECT_EQ(store.CoveredRunCount(&key), 1u);
+    EXPECT_TRUE(store.IsCovered(&key, 0, 48));
+}
+
+// m-5's discriminator, at unit scope: HasShadow is TRUE for a key that was Adopted and FALSE once
+// DropAll has run - which is exactly what tells the generation-reset block whether a twin's
+// hostBytes names a live server shadow (keep it) or a freed one (null it). A version that answered
+// "always live" would let a freed base reach the driver; "always gone" would drop a base a subdata
+// just staged in the same generation (that regression really happened - TriangleScenario read a
+// shifted VBO). Both directions are asserted here.
+TEST(StagedShadowTest, HasShadowIsTrueAfterAdoptAndFalseAfterTheShadowIsDropped) {
+    MG_Record::StagedShadowStore store(/*copies=*/true);
+    const int key = 0;
+    Vector<Uint8> bytes(16, Uint8{0x44});
+    EXPECT_FALSE(store.HasShadow(&key)) << "nothing staged yet";
+    store.Adopt(&key, 16, bytes.data(), 0, 16);
+    EXPECT_TRUE(store.HasShadow(&key)) << "a staged key must read live, or the reset block nulls a "
+                                          "base a subdata just filled";
+    store.DropAll();
+    EXPECT_FALSE(store.HasShadow(&key)) << "after DropAll the base is freed and must read gone, or "
+                                           "a surviving twin hands the driver a dangling pointer";
+}
+
+TEST(StagedShadowTest, DropForgetsOneResourceAndDropAllForgetsEveryOne) {
+    MG_Record::StagedShadowStore store(/*copies=*/true);
+    const int a = 0;
+    const int b = 0;
+    Vector<Uint8> bytes(8, 0x22);
+    store.Adopt(&a, 8, bytes.data(), 0, 8);
+    store.Adopt(&b, 8, bytes.data(), 0, 8);
+    ASSERT_EQ(store.TrackedResources(), 2u);
+    store.Drop(&a);
+    EXPECT_EQ(store.TrackedResources(), 1u);
+    EXPECT_FALSE(store.IsCovered(&a, 0, 8));
+    EXPECT_TRUE(store.IsCovered(&b, 0, 8));
+    store.DropAll();
+    EXPECT_EQ(store.TrackedResources(), 0u);
+}
+
+// The Fatal, and it asserts ITS OWN failure string rather than "the process died". A death
+// test that only checks for a crash goes green on any other abort in the same body, which is
+// exactly the shape this wave shipped three of.
+#if !defined(_WIN32)
+TEST(StagedShadowTest, ADrainOutsideTheStagedCoverageIsFatalByName) {
+    MG_Record::StagedShadowStore store(/*copies=*/true);
+    const int key = 0;
+    Vector<Uint8> bytes(16, 0x33);
+    const Uint8* base = store.Adopt(&key, 64, bytes.data(), 0, 16);
+
+    // In coverage: no Fatal, and this is asserted first so that the death below cannot be a
+    // function that aborts on everything.
+    store.RequireCoverage(&key, base, 0, 16, "unit");
+    // A base that is not this resource's shadow is not this rule's subject - that is the
+    // legacy arm, whose MappedData() is valid for the whole store.
+    store.RequireCoverage(&key, bytes.data(), 0, 64, "unit");
+
+    // m-2: name the death MODE and the diagnostic, not just "the process died". The empty regex
+    // accepted any death, including a SIGSEGV inside RequireCoverage; KilledBySignal(SIGABRT) pins
+    // it to the Fatal's abort() (a segfault is SIGSEGV and fails this), and the log grep names the
+    // exact wording. The log flush is pinned: Log.cpp's WriteToFile fflushes after every write and
+    // MGLOG_F logs before abort(), so the line is on disk in the forked child before it dies.
+    EXPECT_EXIT(store.RequireCoverage(&key, base, 0, 64, "unit_out_of_range"), ::testing::KilledBySignal(SIGABRT),
+                ".*");
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("Fatal{StageSnapshotTooNarrow, \"unit_out_of_range\"}"), std::string::npos)
+        << "the abort happened but not for this rule's reason; the log says: " << log;
+}
+#endif
+
+// =====================================================================================
+// R-11's PRODUCTION wiring (M-1 / codex 8), the EGL lifecycle seams (C2/M-6/M-7/C6/C7)
+// =====================================================================================
+
+// M-1 / codex 8: the R-11 gate that drives the PRODUCTION path - the real resource op table
+// installed by RegisterBufferBackendOps, dispatched through MGPipeGetResourceOps()->SubData, i.e.
+// the exact MGL_SERVER_STAGED_ADOPT call site in Ops_H_SubData - and not StagedShadowStore in isolation.
+// StagedShadowTest stays as the container test; this is the gate that goes red under the two
+// perturbations the reviewer used (restore `hostBytes = raw - offset`, neuter the coverage clamp).
+#if !defined(_WIN32)
+TEST(StagedShadowProductionTest, SubDataThroughTheRealOpsTableCopiesAndSurvivesTheSourcePoison) {
+    // MG_Config::Transport is InProcess (main), so ServerStaged() latches its copying arm on.
+    MG_Backend::DirectGLES::BufferImpl::RegisterBufferBackendOps();
+    const MG_Pipe::MGPipeResourceOps* ops = MG_Pipe::MGPipeGetResourceOps();
+    ASSERT_NE(ops, nullptr) << "RegisterBufferBackendOps did not install the resource op table";
+    ASSERT_NE(ops->SubData, nullptr);
+
+    MG_Pipe::MGPipeHandle res{};
+    res.Slot = 7;
+    res.Gen = 1;
+    auto* twin = MG_Backend::DirectGLES::BufferImpl::GetOrCreateBufferResourceForHandle(res);
+    ASSERT_NE(twin, nullptr);
+
+    Vector<Uint8> src(32, Uint8{0xAB});
+    MG_Pipe::MGPSubData rec{};
+    rec.Res = res;
+    rec.Target = MG_Pipe::MGPipePackSubDataTarget(MG_Pipe::kMGPipeResourceTargetBuffer, 0u);
+    ASSERT_TRUE(MG_Pipe::MGPipeSetSubDataBufferRange(rec, 0, src.size()));
+    // THE PRODUCTION CALL. Not StagedShadowStore::Adopt directly - the whole point of M-1.
+    ops->SubData(res, rec, src.data());
+
+    auto* found = MG_Backend::DirectGLES::BufferImpl::FindBufferResourceForHandle(res);
+    ASSERT_NE(found, nullptr);
+    ASSERT_NE(found->hostBytes, nullptr) << "Ops_H_SubData recorded no base at all";
+    EXPECT_NE(found->hostBytes, static_cast<const Uint8*>(src.data()))
+        << "hostBytes points into the CLIENT's staging bytes (raw - offset), the exact rule-C "
+           "violation R-11 exists to fix - restore that line and this goes red";
+
+    // w1's retired-stage poison, by hand and at the right moment: the record has 'retired', so the
+    // client's staging run is dead. A server that copied still reads the original bytes.
+    std::fill(src.begin(), src.end(), Uint8{0xDD});
+    for (SizeT i = 0; i < src.size(); ++i) {
+        ASSERT_EQ(found->hostBytes[i], 0xAB) << "byte " << i
+                                             << " of the server base is the poison: Ops_H_SubData kept a pointer "
+                                                "into SEG_STAGE instead of copying";
+    }
+    MG_Backend::DirectGLES::BufferImpl::UnregisterBufferBackendOps();
+}
+#endif
+
+// C2: after the loop has stopped, a forwarder call must return NOT_INITIALIZED and must NOT run
+// inline on the caller. The pre-fix code read m_running outside the control mutex and ran work
+// inline for !m_running - which in the race the verifier's latch harness reproduced
+// (v1-codex-verify.md C2) hung forever posting into a mailbox no thread pumps. The fix clears
+// m_running UNDER the mutex and re-checks it there; this is the deterministic half of it (no
+// latch needed: after Stop() m_running is false for certain).
+TEST(ServerLoopTest, AForwarderCallAfterTheLoopStoppedReturnsNotInitializedAndDoesNotRunInline) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+    fixture.Stop();
+    ASSERT_FALSE(Server::ServerLoopInstance().Running());
+
+    struct Probe {
+        Bool ran = false;
+    } probe;
+    const MobileGLResult rc = Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+        +[](void* user) -> MobileGLResult {
+            static_cast<Probe*>(user)->ran = true;
+            return MOBILEGL_OK;
+        },
+        &probe);
+
+    EXPECT_EQ(rc, MOBILEGL_ERR_NOT_INITIALIZED)
+        << "a forwarder call after Stop() did not return NOT_INITIALIZED (old code ran it inline)";
+    EXPECT_FALSE(probe.ran) << "the work ran on the caller after the loop stopped";
+}
+
+// P5f (fc): the frame channel's own red-once handle. A forwarder no longer posts a function
+// pointer and a stack address; it packs a SurfaceControlFrame and the loop's dispatch counter is
+// the proof the frame crossed. The revert this guards: turn ServerSetEGLSwapInterval back into a
+// direct `Backend()->SetEGLSwapInterval(...)` (or any shape that skips the frame) and the counter
+// below does not move - the test goes red even though the swap interval itself would still reach a
+// backend in an inproc build, which is exactly why "the EGL call happened" cannot be the check.
+TEST(ServerLoopTest, AVoidForwarderCrossesAsOneDispatchedFrame) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+    ASSERT_EQ(loop.ControlFramesDispatched(), 0u);
+
+    // No backend lives in this process, so the dispatch declines with NOT_INITIALIZED - but the
+    // frame must still have CROSSED the channel, which is the property under test.
+    Server::ServerSetEGLSwapInterval(1);
+
+    EXPECT_EQ(loop.ControlFramesDispatched(), 1u)
+        << "ServerSetEGLSwapInterval did not dispatch exactly one control frame; the forwarder "
+           "reached the backend (or did nothing) without crossing the frame channel";
+
+    fixture.Stop();
+}
+
+// P10 B: THE EMIT TABLE'S SetSwapInterval SLOT REACHES THE SERVER. It was the last class-C slot
+// (Fatal{UnmigratedVerb, "SetSwapInterval"}) and is now the forwarder above, which is what
+// BackendObject::SetEGLSwapInterval calls for every eglSwapInterval on the client. The case goes
+// through the TABLE, not the forwarder by name, and requires the frame to have crossed: the same
+// dispatch counter as the case above. Red once by pointing the slot at a no-op lambda in
+// BuildRemoteEmitTable - the counter stays 0 - and with the P5 stub restored the call aborts
+// with Fatal{UnmigratedVerb, "SetSwapInterval"}.
+TEST(ServerLoopTest, TheEmitTableSwapIntervalSlotCrossesAsOneDispatchedFrame) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+    ASSERT_EQ(loop.ControlFramesDispatched(), 0u);
+
+    const auto slot = MobileGL::MG_Remote::Client::RemoteEmitTable().SetSwapInterval;
+    ASSERT_NE(slot, nullptr);
+    slot(1);
+
+    EXPECT_EQ(loop.ControlFramesDispatched(), 1u)
+        << "the emit table's SetSwapInterval slot did not put exactly one control frame on the "
+           "server's channel; eglSwapInterval under split would not reach the server";
+
+    fixture.Stop();
+}
+
+// P5d round 3, package D: THE IDENTITY MUST DIE WITH THE THREAD, and this is the case that says
+// so. OnApplyThread() is no longer `m_running && id == mine` - it is one relaxed load of
+// Server::Detail::g_applyThreadKey compared against the caller's own thread pointer - so there
+// is no second term left to make a stale identity harmless. If ApplyThreadMain's exit block
+// stops clearing the key (deleted, or lost in a merge with a package that rewrites that same C2
+// critical section), the key keeps naming a thread that no longer exists, and libc hands that
+// thread's freed TLS block - hence the very thread-pointer value the key holds - to the NEXT
+// thread the process creates: a ShaderCompilePool worker, or the GL thread of a second context
+// after a context-loss restart. That thread then answers OnApplyThread() TRUE, which inverts
+// RunsAsTheServerRole() and PersistentMapTracker::OnServerRole() on the client, aborts
+// BufferObject's accessors with Fatal{RoleViolation, "buffer-legacy-arm"}, and makes
+// RunSurfaceControlFrame run EGL work inline on it - the "EGL on the app thread" outcome R-1 exists to
+// make impossible.
+//
+// Two halves, because the mechanism and the consequence fail differently. (a) is deterministic
+// on every platform: after the join the key is 0, full stop. (b) is the one that would have
+// caught the real bug: threads created after the join must not inherit the answer. (b) is not
+// guaranteed to reproduce recycling on every allocator, which is exactly why (a) is here too.
+TEST(ServerLoopTest, AThreadCreatedAfterTheLoopStoppedIsNotMistakenForTheApplyThread) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+
+    // The key really was published while the thread ran - otherwise (a) below would pass for the
+    // wrong reason (a key that was never set is also 0).
+    ASSERT_NE(Server::Detail::g_applyThreadKey.load(std::memory_order_relaxed), 0ull)
+        << "the apply thread is parked and running but published no identity: ApplyThreadMain's "
+           "first statement no longer stores Detail::CurrentThreadKey()";
+
+    fixture.Stop();
+    ASSERT_FALSE(Server::ServerLoopInstance().Running());
+
+    // (a) the clear itself.
+    EXPECT_EQ(Server::Detail::g_applyThreadKey.load(std::memory_order_relaxed), 0ull)
+        << "the apply-thread identity outlived the apply thread: ApplyThreadMain's C2 exit block "
+           "no longer clears Detail::g_applyThreadKey beside m_running";
+
+    // (b) what the clear is FOR. Sequentially, so each thread is created after the previous one
+    // has been joined and is therefore the likeliest candidate to receive the recycled block.
+    for (int i = 0; i < 8; ++i) {
+        std::atomic<Bool> onApplyThread{true};
+        std::thread probe([&] { onApplyThread.store(Server::ServerLoop::OnApplyThread(), std::memory_order_release); });
+        probe.join();
+        ASSERT_FALSE(onApplyThread.load(std::memory_order_acquire))
+            << "thread " << i
+            << " created after the apply thread was joined answers "
+               "OnApplyThread() TRUE - it inherited the exited thread's TLS block and the stale "
+               "key still names it. Every role guard in the tree is now inverted on that thread";
+    }
+}
+
+// M-7: the OTHER !m_running arm - a backend built but no thread (Start refused / std::thread
+// threw) - must be a NAMED Fatal, never a silent inline EGL-on-the-app-thread fallback. A split
+// lane that ran eglMakeCurrent on the app thread would render correctly with the context on the
+// wrong thread, which is the one outcome R-1 exists to make impossible.
+#if !defined(_WIN32)
+TEST(ServerLoopTest, AForwarderWithABackendButNoThreadIsFatalNotAnAppThreadFallback) {
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK);
+    ASSERT_FALSE(loop.Running());
+    // A backend exists, no apply thread runs. A forwarder must abort by name.
+    EXPECT_EXIT(Server::ServerReleaseEGLResources(), ::testing::KilledBySignal(SIGABRT), ".*");
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("Fatal{ApplyThreadNotRunning"), std::string::npos)
+        << "the abort was not the M-7 named Fatal; the log says: " << log;
+    loop.Stop(); // drop the backend in the parent
+}
+#endif
+
+// M-6: ServerLoop::Stop() with no thread ever started must still DROP the private backend, which
+// ShutdownSplitRoles relies on for the early-Start-failure path. If it does not, the server's
+// BackendObject stays alive with g_resourceOps pointing into it and every later CreateBackend in
+// the process is refused - which is exactly the leak M-6 names.
+TEST(ServerLoopTest, StopWithoutAStartedThreadStillDropsThePrivateBackend) {
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK);
+    ASSERT_NE(loop.Backend(), nullptr);
+    loop.Stop(); // the !joinable arm
+    EXPECT_EQ(loop.Backend(), nullptr) << "Stop() left the private backend alive with no thread";
+    EXPECT_FALSE(loop.Running());
+    // A second bring-up must now succeed; CreateBackend refuses if m_backend != nullptr.
+    EXPECT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK)
+        << "the leaked backend blocks the next split bring-up (CreateBackend's m_backend guard)";
+    loop.Stop();
+}
+
+// C6: the server's format-capability accessor reads the SERVER's own backend cache, not the
+// process global (which under split is the CLIENT's BackendObject_Remote). Pointer-identity: no
+// mask injection needed - ActiveBackendFormatCaps() must return the server's cache address, not
+// the global's. Red once by making ActiveBackendFormatCaps return pActiveBackendObject's.
+TEST(ServerLoopTest, TheServerFormatCapsAccessorReadsTheServersOwnBackendNotTheGlobal) {
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK);
+    MG_Backend::BackendObject* server = loop.Backend();
+    ASSERT_NE(server, nullptr);
+
+    // A DIFFERENT object in the global the seven C6 reads used to follow.
+    auto client = MakeUnique<MG_Backend::DirectGLES::BackendObject_DirectGLES>();
+    MG_Backend::BackendObject* clientRaw = client.get();
+    MG_Backend::pActiveBackendObject = std::move(client);
+
+    const MG_Backend::FormatCapabilityCache* caps = MG_Backend::DirectGLES::ActiveBackendFormatCaps();
+    EXPECT_EQ(caps, &server->GetFormatCapabilities())
+        << "ActiveBackendFormatCaps returned the process global's cache; under split that is the "
+           "CLIENT's BackendObject_Remote, not the server's private backend";
+    EXPECT_NE(caps, &clientRaw->GetFormatCapabilities());
+
+    loop.Stop();
+    MG_Backend::pActiveBackendObject.reset();
+}
+
+// C7 / ID-54: the make-current DECISION, pure. A new tuple binds; an identical repeat is a no-op; a
+// release request (the three NO_* markers) is recorded, not forwarded. The native-bind COUNT - what
+// the driver actually saw - is measured by ServerLoopEglTest's C7 control on a real context below,
+// which is the control round 2 said needed the joint lane. Red once by deleting the RepeatNoOp arm:
+// an identical repeat then classifies as NativeBind.
+TEST(ServerLoopTest, MakeCurrentClassifiesRepeatAndReleaseWithoutRebinding) {
+    const EGLDisplay dpy = reinterpret_cast<EGLDisplay>(0x1);
+    const EGLSurface draw = reinterpret_cast<EGLSurface>(0x2);
+    const EGLSurface read = reinterpret_cast<EGLSurface>(0x2);
+    const EGLContext ctx = reinterpret_cast<EGLContext>(0x3);
+
+    // Nothing current yet: a genuine bind.
+    EXPECT_EQ(Server::ClassifyEglMakeCurrent(false, EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT, dpy,
+                                             draw, read, ctx),
+              Server::EglBindAction::NativeBind);
+    // The SAME tuple already held: a no-op, no native bind, no owner write.
+    EXPECT_EQ(Server::ClassifyEglMakeCurrent(true, dpy, draw, read, ctx, dpy, draw, read, ctx),
+              Server::EglBindAction::RepeatNoOp)
+        << "an identical make-current was classified as a native rebind; the owner would be "
+           "written twice and the caches invalidated for nothing";
+    // A DIFFERENT tuple: a real rebind.
+    const EGLContext otherCtx = reinterpret_cast<EGLContext>(0x9);
+    EXPECT_EQ(Server::ClassifyEglMakeCurrent(true, dpy, draw, read, ctx, dpy, draw, read, otherCtx),
+              Server::EglBindAction::NativeBind);
+    // A release request, whatever is current: recorded, not forwarded (the context is held).
+    EXPECT_EQ(
+        Server::ClassifyEglMakeCurrent(true, dpy, draw, read, ctx, dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT),
+        Server::EglBindAction::ClientRelease);
+}
+
+// =====================================================================================
+// Round 3: the gates the v2 review found missing (N-5), each driving the PRODUCTION wiring
+// =====================================================================================
+
+// M-6 (review v2 item 7): the fix is the ServerLoop::Stop() call INSIDE ShutdownSplitRoles, so the
+// gate calls ShutdownSplitRoles - not Stop - after the shape M-6 names: InitSplitRoles step 1 built
+// the server's private backend and step 3 (ClientSession::Start) failed EARLY. The failure is a real
+// one, not a skipped step: P5's client refuses every transport but InProcess by name, before Accept
+// and before any ring exists. Red once by deleting Init.cpp's `ServerLoopInstance().Stop()` line:
+// the backend outlives the shutdown and the next CreateBackend is refused.
+TEST(ServerLoopTest, ShutdownSplitRolesAfterAnEarlyStartFailureDropsTheServersPrivateBackend) {
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK);
+    ASSERT_NE(MobileGL::MG_Remote::Client::ClientSessionInstance().Start(MG_Config::TransportMode::Spawn, ""),
+              MOBILEGL_OK)
+        << "the forced early Start failure did not fail; the case has nothing to shut down after";
+    ASSERT_NE(loop.Backend(), nullptr);
+    ASSERT_FALSE(loop.Running());
+
+    MG_Backend::ShutdownSplitRoles();
+
+    EXPECT_EQ(loop.Backend(), nullptr)
+        << "ShutdownSplitRoles left the server's private backend alive after an early "
+           "ClientSession::Start failure (M-6): every later split bring-up in this process is refused "
+           "at CreateBackend's m_backend guard";
+    EXPECT_FALSE(loop.Running());
+    EXPECT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK)
+        << "the leaked backend blocks the next split bring-up";
+    loop.Stop();
+}
+
+// codex 11 (review v2 item 6): the resolved mask must be the EFFECTIVE set the kernel took, read
+// back with sched_getaffinity, not the request. The review's point was that on an unrestricted box
+// the two never differ, so `return requested` stays green; this makes them differ without a cpuset:
+// the request names one cpu this thread may use (taken from the kernel's own answer, so the case
+// constructs nothing it observes) PLUS cpu 63, which does not exist on any box with fewer than 64
+// cpus. sched_setaffinity accepts the mask with the absent cpu dropped, so the effective set is the
+// one real cpu - and a resolver that echoes the request reports a cpu the thread can never run on.
+// Red once by making ApplyAffinity `return requested;`: the resolved mask reads 0x8000000000000001-
+// shaped instead of 0x1-shaped, and the log line names the wrong mask.
+#if defined(__linux__) || defined(__ANDROID__)
+TEST(ServerLoopTest, TheResolvedAffinityMaskIsTheKernelsEffectiveSetNotTheRequest) {
+    const unsigned hw = std::thread::hardware_concurrency();
+    if (hw == 0 || hw >= 64) {
+        GTEST_SKIP() << "needs a box with fewer than 64 cpus so that cpu 63 is absent (has " << hw << ")";
+    }
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    ASSERT_EQ(sched_getaffinity(0, sizeof(allowed), &allowed), 0);
+    int usable = -1;
+    for (int cpu = 0; cpu < 63; ++cpu) {
+        if (CPU_ISSET(cpu, &allowed)) {
+            usable = cpu;
+            break;
+        }
+    }
+    if (usable < 0 || CPU_ISSET(63, &allowed)) {
+        GTEST_SKIP() << "this thread's allowed set is not the shape the case needs";
+    }
+    const Uint64 requested = (1ull << usable) | (1ull << 63);
+    const Uint64 effective = 1ull << usable;
+    char requestedText[40];
+    std::snprintf(requestedText, sizeof(requestedText), "0x%llx", static_cast<unsigned long long>(requested));
+    char effectiveLine[64];
+    std::snprintf(effectiveLine, sizeof(effectiveLine), "RESOLVED mask 0x%llx (0 = no affinity applied)",
+                  static_cast<unsigned long long>(effective));
+
+    const String saved = MG_Config::Ipc.ServerAffinity;
+    MG_Config::Ipc.ServerAffinity = requestedText;
+
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+
+    EXPECT_EQ(Server::ServerLoopInstance().ResolvedAffinityMask(), effective)
+        << "the resolved affinity mask reports the REQUESTED set (" << requestedText
+        << ") rather than the effective one the kernel took: cpu 63 does not exist on this " << hw
+        << "-cpu box, sched_setaffinity dropped it, and codex 11's sched_getaffinity read-back is what "
+           "makes that visible";
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find(effectiveLine), std::string::npos)
+        << "the logged RESOLVED mask is not the effective one (" << effectiveLine << ")";
+
+    fixture.Stop();
+    MG_Config::Ipc.ServerAffinity = saved;
+}
+#endif
+
+namespace {
+    // A second DirectGLES object whose format cache the case can FILL, so that the server's (empty,
+    // never InitCapabilities'd) cache and the global's answer differently. Filling an INPUT is not
+    // constructing the observed state (R-16): what is observed is which object each read follows.
+    struct CapsProbeBackend final : MG_Backend::DirectGLES::BackendObject_DirectGLES {
+        MG_Backend::FormatCapabilityCache& Caps() { return MutableFormatCapabilities(); }
+    };
+} // namespace
+
+// C6 (review v2 item 9): the seven table-3 reads, asserted by their ANSWERS with two objects
+// installed - not by the accessor's address, which is what round 2 gated and what reverting one
+// call site at a time never moved. The server's cache is empty; the global's is not.
+//
+// Four of the seven are VALUE reads and the two objects' caches disagree for them: the
+// HasCachedFormatCapability pair behind the caveat decision (Utils.cpp) and the
+// ClampSamplesToBackendSupport pair (BackendObject_DirectGLES.cpp). Two are NULL-CHECK reads -
+// GenerateFormatInfo's and BackendFormatAddsAlpha's "is there a backend at all" - which two live
+// objects cannot tell apart, so for those the global is NULL and the server is present, which is
+// exactly the window between InitSplitRoles step 1 (the server backend) and step 4 (the client
+// object) that the reads used to answer "no backend" in. The seventh, UsesWidenedPacked16NormStorage's
+// gate in front of a memoised driver probe, is a null check whose two arms give the same answer on
+// the reference rasterizer (the probe says "not mirrored", the no-backend arm says false); it has
+// no answer-level control on this box and the report says so.
+//
+// Red once, one site at a time: revert the HasCachedFormatCapability pair -> the caveat decision
+// follows the global; revert ClampSamples -> the clamp answers 6; revert GenerateFormatInfo's null
+// check -> RGB8 widens to RGBA8; revert BackendFormatAddsAlpha's -> adds-alpha answers true.
+TEST(ServerLoopTest, TheSevenFormatCapabilityReadsAnswerFromTheServersBackendNotTheGlobal) {
+    namespace TextureImpl = MG_Backend::DirectGLES::TextureImpl;
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK);
+    const SizeT tex2d = MG_Backend::GetFormatCapabilityTargetIndex(TextureTarget::Texture2D);
+    const SizeT rb = MG_Backend::GetRenderbufferFormatCapabilityTargetIndex();
+    const SizeT rgb8 = static_cast<SizeT>(TextureInternalFormat::RGB8);
+    const SizeT rgba8 = static_cast<SizeT>(TextureInternalFormat::RGBA8);
+
+    // (A) the global holds a DIFFERENT object whose cache says the opposite of "empty": RGB8 is
+    // caveat-only there, and RGBA8 was "probed" at six samples - a count no driver's own maximum
+    // is, so it cannot collide with the fallback the server's empty cache falls to.
+    auto client = MakeUnique<CapsProbeBackend>();
+    for (const SizeT target : {tex2d, rb}) {
+        client->Caps().CaveatCaps[target][rgb8] |= MG_Backend::FormatCapability::Creatable;
+        client->Caps().CaveatCaps[target][rgb8] |= MG_Backend::FormatCapability::FramebufferRenderable;
+        client->Caps().SampleCounts[target][rgba8] = {6, 2};
+    }
+    MG_Backend::pActiveBackendObject = std::move(client);
+
+    EXPECT_FALSE(TextureImpl::ShouldUseCaveatTextureFormat(TextureInternalFormat::RGB8, TextureTarget::Texture2D))
+        << "the caveat decision followed the global's cache (caveat-only RGB8), not the server's "
+           "(empty): the HasCachedFormatCapability pair reads pActiveBackendObject again";
+    EXPECT_FALSE(TextureImpl::ShouldUseCaveatRenderbufferFormat(TextureInternalFormat::RGB8))
+        << "the renderbuffer caveat decision followed the global's cache, not the server's";
+    EXPECT_NE(MG_Backend::DirectGLES::ClampSamplesToBackendSupport(tex2d, TextureInternalFormat::RGBA8, GL_RGBA8, 8), 6)
+        << "the sample clamp answered from the global's probed counts (6), not the server's";
+    EXPECT_NE(MG_Backend::DirectGLES::ClampSamplesToBackendSupport(rb, TextureInternalFormat::RGBA8, GL_RGBA8, 8), 6)
+        << "the renderbuffer sample clamp answered from the global's probed counts (6), not the server's";
+
+    // (B) the null-check reads: global NULL, server present. RGB8_SNORM, not RGB8: the fallback
+    // normalization's three-channel widening is APPLICABLE to GL_RGB8_SNORM and not to GL_RGB8
+    // (TextureFormatProcessor.cpp's applicability table), so it is the format whose answer the
+    // "no backend" arm actually changes - the first cut of this case used RGB8 and both arms agreed.
+    MG_Backend::pActiveBackendObject.reset();
+    constexpr GLenum kGlRgb8Snorm = 0x8F96;
+    GLenum internalFormat = 0;
+    GLenum format = 0;
+    GLenum type = 0;
+    TextureImpl::GenerateTextureFormatInfo(TextureInternalFormat::RGB8Snorm, &internalFormat, &format, &type,
+                                           TextureTarget::Texture2D);
+    EXPECT_EQ(internalFormat, kGlRgb8Snorm)
+        << "the format info followed the global (null, so the fallback normalization widened RGB8_SNORM) "
+           "instead of the server's backend (present, so native RGB8_SNORM); got 0x"
+        << std::hex << internalFormat;
+    EXPECT_FALSE(TextureImpl::BackendTextureFormatAddsAlpha(TextureInternalFormat::RGB8Snorm, TextureTarget::Texture2D))
+        << "the adds-alpha answer followed the global (null, so the fallback adds alpha) instead of "
+           "the server's backend";
+    EXPECT_FALSE(TextureImpl::BackendRenderbufferFormatAddsAlpha(TextureInternalFormat::RGB8Snorm))
+        << "the renderbuffer adds-alpha answer followed the global (null) instead of the server's backend";
+
+    loop.Stop();
+}
+
+// =====================================================================================
+// The EGL fixture: the SERVER's real DirectGLES backend, a real headless context (EGL
+// surfaceless, llvmpipe) on the apply thread, driven only through v1's twelve forwarders
+// =====================================================================================
+//
+// Round 2 shipped its C7, M-3 and m-5 claims with the caveat "the native count is a joint-lane
+// control (needs a real EGL context)", and the review answered that nothing then gates them. This
+// fixture is the answer to that: the server role's own backend, brought up exactly the way
+// InitSplitRoles and the client's EGL virtuals bring it up - CreateBackend on the app thread, then
+// InitializeEGLDisplay / CreateEGLPbufferSurface / MakeEGLCurrent as BLOCKING control requests on
+// mgl-srv-apply - with no client object, no emit table and no scenario. What the joint lane adds is
+// c1's client; what it does not add is anything these cases observe: the driver's own eglMakeCurrent
+// count, the applier's read_pixels reply, and the backend's buffer twins.
+//
+// THE NATIVE COUNT IS READ WHERE THE DRIVER READS IT. DirectGLES dispatches every EGL call through
+// its function table (g_EGLFuncs, filled by BackendObject_DirectGLES::Initialize); the fixture puts
+// a counting trampoline in front of that table's eglMakeCurrent and forwards to the driver's entry
+// point. Nothing in the production tree is edited or told, and no production counter is trusted for
+// this number - ServerLoop::NativeBindCount() is the forwarder's view, and the whole point of the C7
+// control is that the two can disagree (they did: 2 native binds per process with the forwarder
+// counting 1, review v2 item 10).
+//
+// NO USABLE EGL IS A SKIP, UNLESS MOBILEGL_ITEST_REQUIRE_GPU SAYS OTHERWISE - the integration
+// harness's own rule (ScenarioFixture.h): a developer box without headless EGL should not fail a run it could
+// not perform, but a lane that relies on these cases sets the variable, and then an unusable EGL is
+// a FAILURE naming the step, never a green that ran nothing (review v2 N-1's lesson).
+#if !defined(_WIN32)
+namespace {
+
+    std::atomic<int> g_nativeEglBinds{0};
+    std::atomic<int> g_nativeEglReleases{0};
+    decltype(MG_Backend::DirectGLES::g_EGLFuncs.eglMakeCurrent) g_driverEglMakeCurrent = nullptr;
+
+    EGLBoolean CountingEglMakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
+        if (ctx == EGL_NO_CONTEXT) {
+            g_nativeEglReleases.fetch_add(1, std::memory_order_acq_rel);
+        } else {
+            g_nativeEglBinds.fetch_add(1, std::memory_order_acq_rel);
+        }
+        return g_driverEglMakeCurrent(dpy, draw, read, ctx);
+    }
+
+    Bool RequireGpuFromEnvironment() {
+        const char* value = std::getenv("MOBILEGL_ITEST_REQUIRE_GPU");
+        return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+    }
+
+    // The integration harness's headless pin (HeadlessGL.cpp, EnsureHeadlessPlatform), for the same
+    // reason: the EGL surfaceless platform needs no display, and glvnd has to be told which vendor to
+    // load. The vendor json is the one MG_IntegrationTest/CMakeLists.txt pins by default; an operator
+    // who set __EGL_VENDOR_LIBRARY_FILENAMES keeps theirs.
+    void PinHeadlessEglEnvironment() {
+        if (std::getenv("EGL_PLATFORM") == nullptr) setenv("EGL_PLATFORM", "surfaceless", 1);
+        unsetenv("DISPLAY");
+        unsetenv("WAYLAND_DISPLAY");
+        if (std::getenv("__EGL_VENDOR_LIBRARY_FILENAMES") == nullptr) {
+            const char* mesa = "/usr/share/glvnd/egl_vendor.d/50_mesa.json";
+            std::error_code ec;
+            if (std::filesystem::exists(mesa, ec)) setenv("__EGL_VENDOR_LIBRARY_FILENAMES", mesa, 1);
+        }
+    }
+
+    // A control request that runs an arbitrary callable on the apply thread. A std::function is
+    // fine in a test; production's probe hook is a raw pointer for the teardown path's sake.
+    MobileGLResult OnApply(const std::function<void()>& body) {
+        std::function<void()> copy = body;
+        return Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+            +[](void* user) -> MobileGLResult {
+                (*static_cast<std::function<void()>*>(user))();
+                return MOBILEGL_OK;
+            },
+            &copy);
+    }
+
+    struct EglServerFixture : ServerFixture {
+        // The client's VIRTUAL handles. EGLImpl mints small integers, and every one of them is 0x1
+        // on this host (the N-3 finding's whole point), so the cases use exactly that shape.
+        static EGLDisplay Dpy() { return reinterpret_cast<EGLDisplay>(static_cast<std::uintptr_t>(0x1)); }
+        static EGLSurface Surf() { return reinterpret_cast<EGLSurface>(static_cast<std::uintptr_t>(0x1)); }
+        static EGLContext Ctx() { return reinterpret_cast<EGLContext>(static_cast<std::uintptr_t>(0x1)); }
+
+        // The backend's draw-shaped paths (ReadPixels syncs the bound textures and the read
+        // framebuffer) walk the process's frontend GLContext, which a bare unit process does not
+        // have; installed for the case's life and put back afterwards (SplitBufferTest's shape).
+        SharedPtr<MG_State::GLState::GLContext> savedContext;
+
+        // Empty on success, else the step that failed - the harness's SkipReason shape.
+        std::string BringUp() {
+            PinHeadlessEglEnvironment();
+            savedContext = MG_State::pGLContext.Take();
+            MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+            Server::ServerLoop& loop = Server::ServerLoopInstance();
+            // InitSplitRoles step 1: the server's private backend, no GL and no EGL yet; its
+            // Initialize() loads the driver's EGL/GLES entry points into the two tables.
+            if (loop.CreateBackend(BackendType::DirectGLES) != MOBILEGL_OK) return "CreateBackend refused";
+            const MG_External::EGLFunctionsTable& egl = MG_Backend::DirectGLES::g_EGLFuncs;
+            if (egl.eglMakeCurrent == nullptr) return "libEGL did not load (no eglMakeCurrent entry point)";
+            if (egl.eglMakeCurrent != &CountingEglMakeCurrent) g_driverEglMakeCurrent = egl.eglMakeCurrent;
+            g_nativeEglBinds.store(0);
+            g_nativeEglReleases.store(0);
+            MG_External::EGLFunctionsTable counted = egl;
+            counted.eglMakeCurrent = &CountingEglMakeCurrent;
+            MG_Backend::DirectGLES::SetEGLFuncsTable(counted);
+            // InitSplitRoles step 2: the session answers its caps snapshots from this backend, so
+            // ServerMakeEGLCurrent's R-12 republish has something to publish (ID-67's control).
+            Server::ServerSessionInstance().SetBackend(loop.Backend());
+            if (!Handshake()) return "the session handshake";
+            if (!StartLoop()) return "ServerLoop::Start";
+            EGLint major = 0;
+            EGLint minor = 0;
+            if (!Server::ServerInitializeEGLDisplay(Dpy(), &major, &minor)) return "ServerInitializeEGLDisplay";
+            // THE SURFACE'S OWN CREATION is what binds natively (InitPbufferSurface -> MakeCurrent).
+            if (!Server::ServerCreateEGLPbufferSurface(Surf(), 64, 64)) {
+                return "ServerCreateEGLPbufferSurface - no usable headless EGL (EGL_PLATFORM=surfaceless, "
+                       "__EGL_VENDOR_LIBRARY_FILENAMES -> llvmpipe) on this box";
+            }
+            return {};
+        }
+
+        Bool MakeCurrent() { return Server::ServerMakeEGLCurrent(Dpy(), Surf(), Surf(), Ctx()); }
+        Bool ReleaseCurrent() {
+            return Server::ServerMakeEGLCurrent(Dpy(), EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        }
+
+        void TearDown() {
+            Server::ServerReleaseEGLResources();
+            Stop();
+            // The backend Stop() just destroyed must not be the session's answer for the next case.
+            Server::ServerSessionInstance().SetBackend(nullptr);
+            MG_State::pGLContext = Move(savedContext);
+        }
+    };
+
+// FAIL() and GTEST_SKIP() both return from the enclosing void test body.
+#define MGL_EGL_BRING_UP_OR_BAIL(fixture)                                                                              \
+    do {                                                                                                               \
+        const std::string why = (fixture).BringUp();                                                                   \
+        if (!why.empty()) {                                                                                            \
+            (fixture).Stop();                                                                                          \
+            MG_State::pGLContext = Move((fixture).savedContext);                                                       \
+            if (RequireGpuFromEnvironment()) {                                                                         \
+                FAIL() << "MOBILEGL_ITEST_REQUIRE_GPU is set, so the server's EGL bring-up failing is "                \
+                          "a failure, not a skip. It failed at: "                                                      \
+                       << why;                                                                                         \
+            }                                                                                                          \
+            GTEST_SKIP() << "no usable headless EGL for the server backend: " << why;                                  \
+        }                                                                                                              \
+    } while (0)
+
+    // The production shape of a buffer under split, step by step through the applier's own entry
+    // points and the REAL op table (Initialize registered it): resource_create mints the record,
+    // resource_respecify stores the descriptor - its bytes never cross under split (table 1 row 19),
+    // they arrive as resource_subdata right behind it - and resource_subdata stages bytes into the
+    // server shadow, minting the twin if no draw has (ID-52 item 3). `definedContent` is the
+    // descriptor's HasDefinedContent: what glBufferData(size, data) sets and glBufferData(size, NULL)
+    // clears.
+    MG_Pipe::MGPResourceDesc BufferDesc(Uint32 slot, Uint32 width, Bool definedContent) {
+        MG_Pipe::MGPResourceDesc desc{};
+        desc.Resource = MG_Pipe::MGPipeHandle{slot, 1};
+        desc.Target = MG_Pipe::kMGPipeResourceTargetBuffer;
+        desc.Width = width;
+        desc.Height = 1;
+        desc.Depth = 1;
+        desc.ArrayLayers = 1;
+        desc.Levels = 1;
+        desc.Samples = 1;
+        desc.Usage = static_cast<Uint32>(BufferUsage::StaticDraw);
+        desc.HasDefinedContent = definedContent ? 1 : 0;
+        return desc;
+    }
+
+    MG_Pipe::MGPipeHandle DeclareBuffer(const MG_Pipe::MGPResourceDesc& desc) {
+        EXPECT_TRUE(MG_Pipe::MGPipeApplyResourceCreate(desc)) << "resource_create refused slot " << desc.Resource.Slot;
+        EXPECT_TRUE(MG_Pipe::MGPipeApplyResourceRespecify(desc, nullptr)) << "resource_respecify refused";
+        return desc.Resource;
+    }
+
+    void StageBytes(MG_Pipe::MGPipeHandle res, SizeT offset, SizeT size, Uint8 fill) {
+        const MG_Pipe::MGPipeResourceOps* ops = MG_Pipe::MGPipeGetResourceOps();
+        ASSERT_NE(ops, nullptr) << "no resource op table is registered";
+        ASSERT_NE(ops->SubData, nullptr);
+        Vector<Uint8> bytes(size, fill);
+        MG_Pipe::MGPSubData rec{};
+        rec.Res = res;
+        rec.Target = MG_Pipe::MGPipePackSubDataTarget(MG_Pipe::kMGPipeResourceTargetBuffer, 0u);
+        ASSERT_TRUE(MG_Pipe::MGPipeSetSubDataBufferRange(rec, offset, size));
+        ops->SubData(res, rec, bytes.data());
+    }
+
+    MG_Backend::DirectGLES::BufferImpl::GLESBufferResource* Ensure(MG_Pipe::MGPipeHandle res) {
+        return MG_Backend::DirectGLES::BufferImpl::EnsureBufferResourceForHandle({}, res);
+    }
+
+    MG_Backend::DirectGLES::BufferImpl::GLESBufferResource* Twin(MG_Pipe::MGPipeHandle res) {
+        return MG_Backend::DirectGLES::BufferImpl::FindBufferResourceForHandle(res);
+    }
+
+} // namespace
+
+TEST(ServerLoopEglTest, SuccessfulVoidWireOperationsReplyWithSuccessAndOriginalSequence) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    // Release last: it deliberately destroys the native context used by the preceding ops.
+    const auto kinds = {
+        ::MobileGL::Wire::SurfaceOpKind::SetSwapInterval, ::MobileGL::Wire::SurfaceOpKind::SetWindowHandle,
+        ::MobileGL::Wire::SurfaceOpKind::ReleaseSurface, ::MobileGL::Wire::SurfaceOpKind::ReleaseResources};
+    Uint64 seq = 9000;
+    for (const auto kind : kinds) {
+        flatbuffers::FlatBufferBuilder builder(256);
+        const auto op = ::MobileGL::Wire::CreateSurfaceOp(builder, ++seq, kind, 0, 0,
+                                                          ::MobileGL::Wire::WindowKind::None, 0, 0, 0, 1);
+        const auto envelope =
+            ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
+        ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
+        Server::SurfaceControlFrame reply;
+        EXPECT_EQ(MG_Remote::ServerApplyWireSurfaceOp(
+                      *::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceOp(), &reply),
+                  MOBILEGL_OK)
+            << static_cast<int>(kind);
+        flatbuffers::FlatBufferBuilder replies(256);
+        MG_Remote::EncodeSurfaceReplyFrame(reply, &replies);
+        const auto* wireReply = ::MobileGL::Wire::GetCtrlEnvelope(replies.GetBufferPointer())->msg_as_SurfaceReply();
+        EXPECT_EQ(wireReply->seq(), seq) << static_cast<int>(kind);
+        EXPECT_TRUE(wireReply->ok()) << "successful void operation encoded failure: " << static_cast<int>(kind);
+    }
+    fixture.TearDown();
+}
+
+// C7 / ID-54, THE NATIVE HALF, measured where the review said it was not: at the driver. Surface
+// creation binds the context natively on the apply thread (that is bind #1 of the "2 per process"
+// the review counted); the client's first eglMakeCurrent onto that surface used to be bind #2 and is
+// now deduped by BackendObject_DirectGLES's ID-54 arm; an identical repeat is a forwarder-level
+// RepeatNoOp; a client release-current is recorded and never reaches the driver; a bind after the
+// release is a RepeatNoOp again because the driver never lost the context. ONE native bind, ZERO
+// native releases, and the apply thread is still the owner at the end. Red once, three ways: (a) make
+// ApplyMakeCurrent ignore the classification (the repeat is forwarded and the release reaches the
+// driver), (b) make the backend's native call unconditional again (2 native binds), (c) forward the
+// ClientRelease arm to the backend (1 native release).
+TEST(ServerLoopEglTest, MakeCurrentBindsNativelyOncePerContextAndNeverForwardsAClientRelease) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+
+    ASSERT_EQ(g_nativeEglBinds.load(), 1) << "the surface's own creation did not bind natively exactly once";
+    ASSERT_EQ(loop.NativeBindCount(), 0u);
+
+    ASSERT_TRUE(fixture.MakeCurrent());
+    EXPECT_EQ(g_nativeEglBinds.load(), 1)
+        << "the client's first make-current cost a second native eglMakeCurrent on a surface its own "
+           "creation had already made current on this thread (ID-54: bind once per tuple)";
+    EXPECT_EQ(loop.NativeBindCount(), 1u) << "the first make-current was not forwarded at all";
+
+    ASSERT_TRUE(fixture.MakeCurrent());
+    EXPECT_EQ(loop.NativeBindCount(), 1u)
+        << "an identical repeat make-current was forwarded as a native bind; the owner slot would be "
+           "written again and the caches invalidated for nothing";
+    EXPECT_EQ(g_nativeEglBinds.load(), 1);
+
+    ASSERT_TRUE(fixture.ReleaseCurrent());
+    EXPECT_EQ(loop.ClientReleaseCount(), 1u) << "the client release-current was not recorded";
+    EXPECT_EQ(g_nativeEglReleases.load(), 0)
+        << "a client release-current reached the driver as eglMakeCurrent(NO_CONTEXT): the apply thread "
+           "lost the context it holds for life (ID-54: never unbind on a client release)";
+
+    ASSERT_TRUE(fixture.MakeCurrent());
+    EXPECT_EQ(loop.NativeBindCount(), 1u) << "a bind after the recorded, unforwarded release was forwarded again";
+    EXPECT_EQ(g_nativeEglBinds.load(), 1);
+
+    // The owner is still the apply thread by EGL ground truth (IsBackendContextCurrentOnThisThread
+    // re-verifies against eglGetCurrentContext), and not this thread.
+    Bool ownerIsApplyThread = false;
+    ASSERT_EQ(OnApply([&] { ownerIsApplyThread = MG_Backend::DirectGLES::IsBackendContextCurrentOnThisThread(); }),
+              MOBILEGL_OK);
+    EXPECT_TRUE(ownerIsApplyThread) << "after the sequence the apply thread no longer owns the context";
+    EXPECT_FALSE(MG_Backend::DirectGLES::IsBackendContextCurrentOnThisThread()) << "the app thread owns the context";
+
+    fixture.TearDown();
+}
+
+// ID-67: an IDENTICAL tuple is a native no-op AND publishes no caps snapshot (the client's mirror
+// generation must not move, nothing accumulates); a DIFFERENT tuple - a second MobileGL context onto
+// the same surface, the same driver triple - is a real native bind AND a republish (R-12 arm (a)),
+// so the client adopts it without a pump or a Present. Both halves measured: native binds at the EGL
+// table, republishes at ServerMakeEGLCurrent's own tally. Red once, three ways: make the backend's
+// skip answer "same tuple" for any tuple (the different tuple stays at 1 native bind), republish on
+// a repeat (the repeat reads 2 republishes), republish only on the first bind (the different tuple
+// reads 1).
+TEST(ServerLoopEglTest, ADifferentTupleBindsNativelyAndRepublishesAnIdenticalRepeatDoesNeither) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    const EGLDisplay dpy = EglServerFixture::Dpy();
+    const EGLSurface surf = EglServerFixture::Surf();
+    const EGLContext ctxA = EglServerFixture::Ctx();
+    const EGLContext ctxB = reinterpret_cast<EGLContext>(static_cast<std::uintptr_t>(0x2));
+    ASSERT_EQ(g_nativeEglBinds.load(), 1) << "the surface's own creation did not bind natively exactly once";
+    ASSERT_EQ(loop.MakeCurrentRepublishCount(), 0u);
+
+    // The first tuple adopts the creation's bind, and republishes (InitCapabilities has now run).
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxA));
+    EXPECT_EQ(g_nativeEglBinds.load(), 1);
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 1u)
+        << "the first make-current did not republish the caps snapshot (R-12 arm (a))";
+
+    // Identical: 0 native binds, 0 republishes.
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxA));
+    EXPECT_EQ(g_nativeEglBinds.load(), 1) << "an identical repeat bound natively";
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 1u)
+        << "an identical repeat republished the caps snapshot: the client's mirror generation moved "
+           "for nothing and unpumped snapshots accumulate (ID-67)";
+
+    // Different (a second context onto the same surface): 1 native bind, 1 republish.
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxB));
+    EXPECT_EQ(g_nativeEglBinds.load(), 2)
+        << "a make-current with a DIFFERENT tuple (a second context onto the same surface) did not "
+           "bind natively: DirectGLES's invalidations for the new frontend context never ran (ID-67)";
+    EXPECT_EQ(loop.NativeBindCount(), 2u);
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 2u)
+        << "a make-current with a different tuple did not republish the caps snapshot; the client "
+           "would adopt nothing without a pump or a Present (R-12 arm (a), ID-67)";
+
+    // Identical again, then back to the first: 0 + 0, then 1 + 1.
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxB));
+    EXPECT_EQ(g_nativeEglBinds.load(), 2);
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 2u);
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxA));
+    EXPECT_EQ(g_nativeEglBinds.load(), 3);
+    EXPECT_EQ(loop.NativeBindCount(), 3u);
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 3u);
+
+    fixture.TearDown();
+}
+
+// N-3: a destroy-recreate with the SAME handle values must be a real bind again. Before the fix the
+// tuple survived ServerReleaseEGLResources, the recreated context's first make-current classified as
+// a RepeatNoOp, nothing ran in the base class (no InitCapabilities, no current-thread record) and no
+// caps were republished - a silent no-context-current from the forwarder's point of view, visible
+// only as the next swap failing. Red once by deleting the ForgetCurrentTuple() calls the forwarders
+// make: NativeBindCount() stays 1 and the swap after the re-create fails.
+TEST(ServerLoopEglTest, ADestroyedContextForgetsTheTupleSoTheSameHandleValuesBindAgain) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_TRUE(fixture.MakeCurrent());
+    ASSERT_EQ(loop.NativeBindCount(), 1u);
+    ASSERT_TRUE(Server::ServerSwapEGLBuffers(EglServerFixture::Dpy(), EglServerFixture::Surf()))
+        << "the swap BEFORE the destroy failed, so the case could not tell lost bookkeeping from a swap "
+           "that never worked";
+    ASSERT_EQ(g_nativeEglBinds.load(), 1);
+
+    // The context goes (DestroyEGLContext on the apply thread) and comes back under the same
+    // handle values.
+    Server::ServerReleaseEGLResources();
+    EGLint major = 0;
+    EGLint minor = 0;
+    ASSERT_TRUE(Server::ServerInitializeEGLDisplay(EglServerFixture::Dpy(), &major, &minor));
+    ASSERT_TRUE(Server::ServerCreateEGLPbufferSurface(EglServerFixture::Surf(), 64, 64));
+    ASSERT_EQ(g_nativeEglBinds.load(), 2) << "the recreated surface did not bind natively";
+
+    ASSERT_TRUE(fixture.MakeCurrent());
+    EXPECT_EQ(loop.NativeBindCount(), 2u)
+        << "the make-current after a destroy-recreate with the same handle values was classified as a "
+           "RepeatNoOp: the tuple outlived the context it named (N-3), so no base-class bookkeeping "
+           "ran and the caps snapshot was not republished";
+    EXPECT_TRUE(Server::ServerSwapEGLBuffers(EglServerFixture::Dpy(), EglServerFixture::Surf()))
+        << "the swap after the re-create failed: BackendObject::SwapEGLBuffers found no current-thread "
+           "record, because the make-current that should have made one was treated as a repeat";
+    EXPECT_EQ(g_nativeEglBinds.load(), 2) << "one native bind per context lifetime, not more";
+
+    fixture.TearDown();
+}
+
+TEST(ServerLoopEglTest, RenderShadowCannotSkipAnUnchangedVersionAfterContextEpochChanges) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+    Bool nativeRestored = false, servedRestored = false;
+    ASSERT_EQ(OnApply([&] {
+                  using namespace MG_Backend::DirectGLES;
+                  MG_Pipe::MGPipeServerStampVerbBoundary(MG_Pipe::MGPipeVerb::Clear);
+                  RenderStateImpl::SyncRenderState(true);
+                  // Simulate the successor driver's default/foreign state while retaining exactly
+                  // the same parameter bytes and version. Epoch, not a value diff, must force it.
+                  g_GLESFuncs.glEnable(GL_BLEND);
+                  ++g_backendContextGeneration;
+                  RenderStateImpl::SyncRenderState(true);
+                  nativeRestored = g_GLESFuncs.glIsEnabled(GL_BLEND) == GL_FALSE;
+                  g_GLESFuncs.glEnable(GL_BLEND);
+                  MG_Pipe::MGPipeApplierReset();
+                  MG_Pipe::MGPipeServerStampVerbBoundary(MG_Pipe::MGPipeVerb::Clear);
+                  RenderStateImpl::SyncRenderState(true);
+                  servedRestored = g_GLESFuncs.glIsEnabled(GL_BLEND) == GL_FALSE;
+                  MG_Pipe::MGPipeServerClearVerbBoundary();
+              }),
+              MOBILEGL_OK);
+    EXPECT_TRUE(nativeRestored) << "unchanged render version hid a new native context";
+    EXPECT_TRUE(servedRestored) << "unchanged render version hid a new served context";
+    fixture.TearDown();
+}
+
+TEST(ServerLoopEglTest, ServerLivenessFollowsControlFramesAcrossReleaseAndRecreation) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    const auto live = [] {
+        Bool answer = false;
+        EXPECT_EQ(OnApply([&] { answer = MG_Pipe::gPipeInputs->IsLive(); }), MOBILEGL_OK);
+        return answer;
+    };
+    EXPECT_FALSE(live()) << "surface creation alone is not a served current context";
+    ASSERT_TRUE(fixture.MakeCurrent());
+    EXPECT_TRUE(live());
+    auto client = MG_State::pGLContext.Take();
+    EXPECT_TRUE(live()) << "server liveness must not consult the client GLContext";
+    MG_State::pGLContext = Move(client);
+    ASSERT_TRUE(fixture.ReleaseCurrent());
+    EXPECT_FALSE(live());
+    ASSERT_TRUE(fixture.MakeCurrent()); // identical held native tuple, new logical binding
+    EXPECT_TRUE(live());
+    Server::ServerReleaseEGLResources();
+    EXPECT_FALSE(live());
+    EGLint major = 0, minor = 0;
+    ASSERT_TRUE(Server::ServerInitializeEGLDisplay(EglServerFixture::Dpy(), &major, &minor));
+    ASSERT_TRUE(Server::ServerCreateEGLPbufferSurface(EglServerFixture::Surf(), 64, 64));
+    EXPECT_FALSE(live());
+    ASSERT_TRUE(fixture.MakeCurrent());
+    EXPECT_TRUE(live());
+    fixture.TearDown();
+    EXPECT_FALSE(MG_Pipe::MGPipeServerContextIsLive());
+}
+
+// P5f (fc): InitializeEGLDisplay's out-pointers are the frame's reply fields now (the one place
+// the old mailbox carried pointers INTO the poster's stack). The answer is the driver's real
+// version through the frame - the BringUp already consumed one init; a second call is an
+// idempotent eglInitialize and its version answer must still cross back.
+TEST(ServerLoopEglTest, TheInitializeDisplayReplyArrivesThroughTheFrame) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+
+    EGLint major = 0;
+    EGLint minor = 0;
+    ASSERT_TRUE(Server::ServerInitializeEGLDisplay(EglServerFixture::Dpy(), &major, &minor));
+    EXPECT_GE(major, 1) << "eglInitialize's major version did not cross back through the frame's "
+                           "reply fields";
+
+    fixture.TearDown();
+}
+
+// ESPRYT'S HALF OF HANG CONTAINMENT (DirectGLES EnsureNativeContext / LatchIfDeviceLost). With the
+// driver's default strategy a context whose shader hung the GPU is never told - measured on Adreno
+// 750, the guilty context reads NO_ERROR, and after a reset that a failed preemption ended (~10 s) its
+// next frame stops the GPU again, so a client that hangs every frame freezes the device for good.
+// The server's native contexts must ask for EGL_LOSE_CONTEXT_ON_RESET. Red with EnsureNativeContext's
+// strategy attribute removed: the context answers GL_NO_RESET_NOTIFICATION (0x8261).
+TEST(ServerLoopEglTest, TheServersNativeContextAsksTheDriverToReportResets) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    // On the apply thread: the server's display and context are current there, not here.
+    Bool robustness = false;
+    GLint strategy = 0;
+    ASSERT_EQ(OnApply([&] {
+                  const auto& egl = MG_Backend::DirectGLES::g_EGLFuncs;
+                  const char* extensions = egl.eglQueryString(egl.eglGetCurrentDisplay(), EGL_EXTENSIONS);
+                  robustness =
+                      extensions != nullptr && std::strstr(extensions, "EGL_EXT_create_context_robustness") != nullptr;
+                  MG_Backend::DirectGLES::g_GLESFuncs.glGetIntegerv(0x8256 /*GL_RESET_NOTIFICATION_STRATEGY*/,
+                                                                    &strategy);
+              }),
+              MOBILEGL_OK);
+    if (!robustness) {
+        fixture.TearDown();
+        GTEST_SKIP() << "this EGL has no EGL_EXT_create_context_robustness";
+    }
+    EXPECT_EQ(strategy, 0x8252 /*GL_LOSE_CONTEXT_ON_RESET*/) << std::hex << "strategy 0x" << strategy;
+    EXPECT_TRUE(MG_Backend::DirectGLES::NativeContextsNotifyResets());
+    fixture.TearDown();
+}
+
+namespace {
+    // The driver's reset status, as the backend sees it through its function table.
+    std::atomic<GLenum> g_fakeResetStatus{GL_NO_ERROR};
+    GLenum FakeGetGraphicsResetStatus() {
+        return g_fakeResetStatus.exchange(GL_NO_ERROR);
+    }
+
+    // THE WINDOW, HELD OPEN. The server acknowledges a record before it looks for the next one, so a
+    // record published right after that acknowledgment can be popped by the SAME drain, past the
+    // apply loop's per-wake fault poll. The between-records hook makes that happen every time: it
+    // holds the drain after the healthy record until GUILTY is in the ring, and the client publishes
+    // GUILTY once the hold is entered. The hold is armed by the healthy record's seq: the wait for the
+    // record before it returns inside that record's apply callback, before its drain reaches this
+    // hook, so a bare "next record" flag let that drain take the hold.
+    constexpr Uint32 kResetStepMs = 10000; // every wait ends on its event; only a failing run waits this long
+    std::atomic<Uint64> g_holdAfterSeq{0};
+    std::atomic<const std::atomic<std::uint64_t>*> g_holdAppliedSeq{nullptr};
+    std::atomic<bool> g_holdEntered{false};
+    std::atomic<bool> g_guiltyPublished{false};
+    void HoldDrainUntilTheGuiltyRecordIsPublished() {
+        const Uint64 after = g_holdAfterSeq.load(std::memory_order_acquire);
+        const auto* appliedSeq = g_holdAppliedSeq.load(std::memory_order_acquire);
+        if (after == 0 || appliedSeq == nullptr || !Transport::Watermark::Reached(*appliedSeq, after)) return;
+        g_holdAfterSeq.store(0, std::memory_order_release); // once; only the apply thread runs this hook
+        g_holdEntered.store(true, std::memory_order_release);
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(kResetStepMs);
+        while (!g_guiltyPublished.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+    }
+
+    enum : int {
+        kResetInnocentEnded = 1,     // an INNOCENT report latched the session (the compositor would die with a client)
+        kResetGuiltyApplied = 2,     // a record published after the GUILTY report was applied
+        kResetGuiltyNotLatched = 4,  // GUILTY did not latch BackendDeviceLost through Espryt's apply-loop site
+        kResetHealthyNotApplied = 8, // a record before the GUILTY report was not applied
+    };
+
+    [[noreturn]] void ResetReportsAndExit() {
+        MG_Remote::ArmSessionLatch();
+        MG_Remote::InstallPipeSessionFailHook(); // the MG_Pipe latch seam LatchIfDeviceLost latches through
+        EglServerFixture fixture;
+        const std::string why = fixture.BringUp();
+        if (!why.empty()) {
+            std::fprintf(stderr, "[reset] SKIPPED - no headless EGL: %s\n", why.c_str());
+            ::_exit(RequireGpuFromEnvironment() ? 98 : 0);
+        }
+        MG_External::GLESFunctionsTable gles = MG_Backend::DirectGLES::g_GLESFuncs;
+        gles.glGetGraphicsResetStatus = &FakeGetGraphicsResetStatus;
+        MG_Backend::DirectGLES::SetGLESFuncsTable(gles);
+        int failed = 0;
+        const auto encode = [&] {
+            MG_Pipe::MGPMemoryBarrier barrier{};
+            barrier.Bits = 0x2000u;
+            return fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier));
+        };
+        const auto send = [&](Uint64 seq) {
+            fixture.encoder.Publish();
+            fixture.producer.PublishAndNotify(seq);
+            return seq;
+        };
+        const auto publish = [&] { return send(encode()); };
+        const auto applied = [&](Uint64 seq) {
+            return fixture.producer.WaitForApplied(seq, kResetStepMs) == Transport::SessionWait::Reached;
+        };
+        // Another context hung the GPU; this one only waited behind it.
+        g_fakeResetStatus = GL_INNOCENT_CONTEXT_RESET;
+        if (!applied(publish())) failed |= kResetHealthyNotApplied;
+        if (!applied(publish()) || MG_Remote::SessionLatched()) failed |= kResetInnocentEnded;
+        // The drain that applies this healthy record is held, after acknowledging it, until the
+        // GUILTY record below is published, so that drain pops the GUILTY record itself.
+        // Armed with the healthy record's seq BEFORE it is published, so the hold can be neither
+        // taken by the drain still finishing the previous record nor missed by this one.
+        g_holdAppliedSeq.store(&fixture.producer.Progress()->appliedSeq, std::memory_order_release);
+        Server::ServerLoopInstance().SetBetweenRecordsHookForTesting(&HoldDrainUntilTheGuiltyRecordIsPublished);
+        const Uint64 healthy = encode();
+        g_holdAfterSeq.store(healthy, std::memory_order_release);
+        send(healthy);
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(kResetStepMs);
+        while (!g_holdEntered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        if (!g_holdEntered.load(std::memory_order_acquire)) failed |= kResetHealthyNotApplied;
+        // This context's own work hung the GPU.
+        g_fakeResetStatus = GL_GUILTY_CONTEXT_RESET;
+        const Uint64 guilty = publish();
+        g_guiltyPublished.store(true, std::memory_order_release);
+        if (!applied(healthy)) failed |= kResetHealthyNotApplied;
+        // GUILTY latches the session: its apply thread leaves the loop without applying the record.
+        const auto stopped = std::chrono::steady_clock::now() + std::chrono::milliseconds(kResetStepMs);
+        while (Server::ServerLoopInstance().Running() && std::chrono::steady_clock::now() < stopped)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (!MG_Remote::SessionLatched() ||
+            MG_Remote::SessionLatchedFamily() != MG_Remote::MGFatalFamily::BackendDeviceLost ||
+            std::strstr(MG_Remote::SessionLatchedLine(), "Espryt:apply") == nullptr)
+            failed |= kResetGuiltyNotLatched;
+        std::fprintf(stderr, "[reset] latched=%d line=%s\n", MG_Remote::SessionLatched() ? 1 : 0,
+                     MG_Remote::SessionLatchedLine());
+        Server::ServerLoopInstance().Stop(); // joined: nothing can apply the GUILTY record after this
+        if (Transport::Watermark::Reached(fixture.producer.Progress()->appliedSeq, guilty))
+            failed |= kResetGuiltyApplied;
+        ::_exit(failed);
+    }
+} // namespace
+
+// A GUILTY report ends the session before its next record; an INNOCENT one does not. Red with the
+// apply loop's LatchIfGpuFaulted call deleted (the record after GUILTY is applied, nothing latches:
+// bits 2|4), and with LatchIfDeviceLost latching every non-NO_ERROR status (bit 1).
+TEST(ServerLoopEglLatchTest, AGuiltyResetEndsTheSessionBeforeItsNextRecordAndAnInnocentOneDoesNot) {
+    PinHeadlessEglEnvironment();
+    EXPECT_EXIT(ResetReportsAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = INNOCENT latched; 2 = a record after GUILTY was applied; 4 = GUILTY did not latch "
+           "BackendDeviceLost at Espryt:apply; 8 = a healthy record was not applied (98 = no headless EGL while "
+           "MOBILEGL_ITEST_REQUIRE_GPU is set)";
+}
+
+// ID-49's tight-size half, gated (review v2 N-5: "nothing, unit and joint"). The client's DstSize is
+// deliberately WRONG - 80, the size a ROW_LENGTH=8 / SKIP_* client would compute for a 4x3 RGBA8
+// read whose tight extent is 48 - and the reply must still be the tight 48 bytes: posted at 48,
+// counted at 48, read into a scratch that grew to 48 and never to the client's 80, and stamped 48 in
+// the slot header the client reads. Red once, three ways: post at info.DstSize, size the scratch from
+// info.DstSize, compute `tight` from info.DstSize.
+TEST(ServerLoopEglTest, AReadPixelsReplyIsTheTightExtentWhateverDstSizeTheClientSent) {
+    // Arm the record consumers before any backend helper can latch its subsystem choice.
+    struct PushMaskScope {
+        Uint64 saved = MG_Config::Features.PipePush;
+        PushMaskScope() { MG_Config::Features.PipePush = MG_Pipe::kMGPipeSubsystemsMigratedAtP5e; }
+        ~PushMaskScope() { MG_Config::Features.PipePush = saved; }
+    } pushMaskScope;
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+
+    // This fixture owns its encoder directly, so publish the same record-owned inputs the
+    // normal client would send. Residual frontend pointers are deliberately not a source.
+    MG_Pipe::MGPFramebufferState framebuffer{};
+    framebuffer.Fbo = MG_Pipe::kMGPipeDefaultFramebuffer;
+    framebuffer.Target = static_cast<Uint8>(MG_Pipe::MGPipeFramebufferTarget::Both);
+    framebuffer.IsDefault = 1;
+    framebuffer.Complete = 1;
+    framebuffer.Width = framebuffer.Height = 64;
+    framebuffer.Layers = framebuffer.Samples = 1;
+    framebuffer.FixedSampleLocations = 1;
+    for (auto& drawBuffer : framebuffer.DrawBuffers)
+        drawBuffer = -1;
+    framebuffer.DrawBuffers[0] = 0;
+    framebuffer.ContentHash = 1;
+    ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::SetFramebufferState, &framebuffer, sizeof(framebuffer)));
+
+    MG_Pipe::MGPPixelPackState pack{};
+    pack.Pack.Alignment = 4;
+    pack.Pack.RowLength = 8; // the application's padded layout must not size server scratch
+    ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::SetPixelPackState, &pack, sizeof(pack)));
+    // Unit zero is part of the initial touched-unit window even when unbound.
+    // Explicit empty bindings distinguish that state from records that never arrived.
+    MG_Pipe::MGPSamplerViews views{};
+    views.Count = 1;
+    MG_Pipe::MGPBoundView unboundView{};
+    ASSERT_TRUE(fixture.EmitAndWaitWithTail(MG_Pipe::MGPWireOp::SetSamplerViews, &views, sizeof(views), &unboundView,
+                                            sizeof(unboundView)));
+    MG_Pipe::MGPSamplerStates samplers{};
+    samplers.Count = 1;
+    const MG_Pipe::MGPipeHandle unboundSampler = MG_Pipe::kMGPipeNullHandle;
+    ASSERT_TRUE(fixture.EmitAndWaitWithTail(MG_Pipe::MGPWireOp::BindSamplerStates, &samplers, sizeof(samplers),
+                                            &unboundSampler, sizeof(unboundSampler)));
+    MG_Pipe::MGPContextValues context{}; // unit zero is unbound; no open XFB capture
+    ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::SetContextValues, &context, sizeof(context)));
+
+    MG_Pipe::MGPReadbackInfo info{};
+    info.Res = MG_Pipe::kMGPipeNullHandle; // read_pixels: the bound read surface answers
+    info.Box = MG_Pipe::MGPBox{0, 0, 0, 4, 3, 1};
+    info.Format = 0x1908; // GL_RGBA
+    info.Type = 0x1401;   // GL_UNSIGNED_BYTE
+    info.DstSize = 80;    // wrong on purpose; tight is 4 * 3 * 4 = 48
+    const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::ReadPixels, &info, sizeof(info));
+    ASSERT_NE(seq, Codec::kInvalidSeq);
+    fixture.encoder.Publish();
+    fixture.producer.PublishAndNotify(seq);
+    ASSERT_EQ(fixture.producer.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    const Server::ServerVerbSink& verbs = fixture.session->Applier().Verbs();
+    ASSERT_EQ(verbs.Readbacks(), 1u) << "the read_pixels record was declined or errored rather than applied";
+    EXPECT_EQ(verbs.ReadbackBytes(), 48u)
+        << "the reply was posted at the client's DstSize (80), not the tight w*h*bpp extent (48) (ID-49)";
+    EXPECT_EQ(verbs.ReadbackScratchBytes(), 48u)
+        << "the scratch was sized from the client's DstSize rather than the tight extent; a DstSize "
+           "smaller than tight would then be the heap overflow codex 1 found";
+
+    // And through the client's own view of the slot: the seq stamped back, OK, 48 bytes.
+    Transport::ReplySlotPool replies(fixture.clientSegments.ReplyBase(), fixture.clientSegments.ReplyBytes(),
+                                     fixture.clientSegments.ReplySlotCount());
+    ASSERT_TRUE(replies.Valid());
+    Vector<Uint8> pixels(128, 0);
+    Int32 status = -1;
+    Uint64 size = 0;
+    EXPECT_TRUE(replies.Read(seq, pixels.data(), pixels.size(), &status, &size));
+    EXPECT_EQ(status, static_cast<Int32>(Transport::kReplyStatusOk));
+    EXPECT_EQ(size, 48u) << "the slot header carries the client's DstSize, not the tight extent";
+
+    fixture.TearDown();
+}
+
+// M-3 / codex 4, the POOL-REUSE reader (review v2 item 4: "nothing can notice it going away"). The
+// production sequence, on the real op table and the real backend: A - glBufferData(64, data), drawn
+// (ensured), then deleted on the apply thread, so its id retires into the buffer pool; two presents
+// with a finish between them move the frame-completion watermark past the id's retire serial, which
+// is the pool's hand-out rule. B - glBufferData(64, data2), whose 64 bytes cross as resource_subdata
+// behind the respecify (table 1 row 19) - and only 16 of them arrive, the MISSING-RECORD shape. B's
+// first ensure finds A's id in the pool and would seed the driver's whole 64-byte store from a shadow
+// 48 bytes of which nothing staged. The refusal fires BEFORE the glBufferSubData, so the forked
+// child - whose only thread is a copy of this one and holds no context - reaches it with no GL call
+// that matters (a no-context call dispatches to a no-op). Red once by deleting the pool-reuse
+// MGL_SERVER_STAGED_REQUIRE: the child seeds the store and does not die. (The ORPHANED shape of the
+// same sequence, glBufferData(64, NULL) + 16 bytes, must NOT die: TheStreamingIdiom... below.)
+TEST(StagedShadowProductionTest, ASparseShadowForcedThroughAPoolReuseUploadIsFatalByName) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+
+    const MG_Pipe::MGPipeHandle a = DeclareBuffer(BufferDesc(21, 64, true));
+    StageBytes(a, 0, 64, 0x11);
+    Bool aEnsured = false;
+    ASSERT_EQ(OnApply([&] {
+                  aEnsured = Ensure(a) != nullptr;
+                  MG_Pipe::MGPipeGetResourceOps()->Destroy(a);
+                  for (int frame = 0; frame < 2; ++frame) {
+                      if (MG_Backend::DirectGLES::g_GLESFuncs.glFinish) MG_Backend::DirectGLES::g_GLESFuncs.glFinish();
+                      MG_Backend::DirectGLES::Present();
+                  }
+              }),
+              MOBILEGL_OK);
+    ASSERT_TRUE(aEnsured) << "A's ensure minted no storage, so nothing retired into the pool";
+
+    const MG_Pipe::MGPipeHandle b = DeclareBuffer(BufferDesc(22, 64, true));
+    StageBytes(b, 0, 16, 0x22);
+    ASSERT_NE(Twin(b), nullptr) << "the subdata did not mint B's twin (ID-52 item 3)";
+    ASSERT_EQ(Twin(b)->id, 0u) << "B already has a store; the pool-reuse arm cannot be reached";
+
+    EXPECT_EXIT(Ensure(b), ::testing::KilledBySignal(SIGABRT), ".*");
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("Fatal{StageSnapshotTooNarrow, \"pool_reuse_whole_store\"}"), std::string::npos)
+        << "the abort was not the pool-reuse reader's coverage refusal (M-3); the log says: " << log;
+
+    fixture.TearDown();
+}
+
+// M-3 / codex 4, the RESPECIFY reader. A - glBufferData(64, data), drawn (ensured: id, storage,
+// serial all current). Then glBufferData(64, data2) again, whose bytes do not cross (table 1 row 19):
+// the record says "defined content", the old shadow is dropped, the store is pending a respecify -
+// and only 16 of the 64 bytes then arrive, staged from the app thread the way the applier queues
+// them off the context thread. The next ensure would RespecifyStorageWith(initialData = the sparse
+// shadow) over the whole store. The refusal fires before that glBufferData. Red once by deleting the
+// respecify MGL_SERVER_STAGED_REQUIRE.
+TEST(StagedShadowProductionTest, ASparseShadowForcedThroughAStorageRespecifyIsFatalByName) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+
+    const MG_Pipe::MGPResourceDesc desc = BufferDesc(23, 64, true);
+    const MG_Pipe::MGPipeHandle res = DeclareBuffer(desc);
+    StageBytes(res, 0, 64, 0x33);
+    Bool ensured = false;
+    ASSERT_EQ(OnApply([&] { ensured = Ensure(res) != nullptr; }), MOBILEGL_OK);
+    ASSERT_TRUE(ensured);
+    ASSERT_NE(Twin(res)->id, 0u);
+
+    // Off the context thread on purpose (the apply thread is parked): the respecify takes the
+    // "cannot touch GL now" arm and leaves the store PENDING, exactly as an emitted record does.
+    ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceRespecify(desc, nullptr));
+    ASSERT_TRUE(Twin(res)->pendingRespecify) << "the respecify did not leave the store pending";
+    StageBytes(res, 0, 16, 0x44);
+
+    EXPECT_EXIT(Ensure(res), ::testing::KilledBySignal(SIGABRT), ".*");
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("Fatal{StageSnapshotTooNarrow, \"respecify_whole_store\"}"), std::string::npos)
+        << "the abort was not the respecify reader's coverage refusal (M-3); the log says: " << log;
+
+    fixture.TearDown();
+}
+
+// M-1 / codex 8, THE COVERAGE HALF (review v2 item 2: "gated nowhere"). glBufferData(64, NULL) +
+// glBufferSubData(0, 16) + a draw: the shadow covers [0, 16) and the NULL respecify seeds nothing, so
+// that is legal. Then a resource_flush_range over [16, 48) with no bytes (that is what the row
+// carries under split, item 12) queues a range NOTHING STAGED, and the next draw-time drain would
+// take it through the three-tier ladder - whose tier 1 is a range-invalidating map that declares
+// the old bytes dead. RequireStagedCoverageForPendingRanges refuses before the drain, by name. Red
+// once by neutering its loop body: the child then dies one tier later, inside UploadRangeFrom's own
+// check, with a DIFFERENT site name - which this assertion refuses - or, on the tier-1 map, not at
+// all.
+TEST(StagedShadowProductionTest, AQueuedRangeOutsideTheStagedCoverageIsFatalAtTheDrainByName) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+
+    const MG_Pipe::MGPipeHandle res = DeclareBuffer(BufferDesc(24, 64, false));
+    StageBytes(res, 0, 16, 0x55);
+    Bool ensured = false;
+    ASSERT_EQ(OnApply([&] { ensured = Ensure(res) != nullptr; }), MOBILEGL_OK);
+    ASSERT_TRUE(ensured);
+    ASSERT_NE(Twin(res)->id, 0u);
+    ASSERT_FALSE(Twin(res)->pendingRespecify);
+
+    MG_Pipe::MGPFlushRange flush{};
+    flush.Res = res;
+    flush.Offset = 16;
+    flush.Size = 32;
+    MG_Pipe::MGPipeGetResourceOps()->FlushRange(res, flush, nullptr); // off the context thread: queued
+    ASSERT_FALSE(Twin(res)->pendingRanges.empty()) << "the flush queued nothing, so no drain is owed";
+
+    EXPECT_EXIT(Ensure(res), ::testing::KilledBySignal(SIGABRT), ".*");
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("Fatal{StageSnapshotTooNarrow, \"ensure_flush_pending\"}"), std::string::npos)
+        << "the abort was not the pending-coverage clamp's (M-1, RequireStagedCoverageForPendingRanges); "
+           "the log says: "
+        << log;
+
+    fixture.TearDown();
+}
+
+// m-5 / codex 5 (review v2 item 5: "the shipped control cannot reach the freed base"). This one can:
+// glBufferData(64, data) drawn (the twin's hostBytes names the server shadow), then the context is
+// lost (ServerReleaseEGLResources -> DestroyEGLContext -> OnBackendContextDestroyed -> DropAll frees
+// every shadow; the twin table survives), then the context comes back and the twin is re-armed at
+// its next ensure. The re-armed twin's base must be NULL. Without the null it still names the freed
+// allocation and the whole-store respecify that follows reads it - the use-after-free ASan would
+// name, asserted here as the dangling pointer itself. Red once by deleting the null.
+TEST(StagedShadowProductionTest, ATwinSurvivingContextLossDropsItsFreedShadowBase) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+
+    const MG_Pipe::MGPipeHandle res = DeclareBuffer(BufferDesc(25, 64, true));
+    StageBytes(res, 0, 64, 0x66);
+    Bool ensured = false;
+    ASSERT_EQ(OnApply([&] { ensured = Ensure(res) != nullptr; }), MOBILEGL_OK);
+    ASSERT_TRUE(ensured);
+    ASSERT_NE(Twin(res)->hostBytes, nullptr) << "the drawn twin names no shadow, so there is nothing to free";
+
+    Server::ServerReleaseEGLResources();
+    ASSERT_NE(Twin(res), nullptr) << "the twin did not survive context loss; the m-5 hazard needs a survivor";
+
+    EGLint major = 0;
+    EGLint minor = 0;
+    ASSERT_TRUE(Server::ServerInitializeEGLDisplay(EglServerFixture::Dpy(), &major, &minor));
+    ASSERT_TRUE(Server::ServerCreateEGLPbufferSurface(EglServerFixture::Surf(), 64, 64));
+    ASSERT_TRUE(fixture.MakeCurrent());
+    ASSERT_EQ(OnApply([&] { ensured = Ensure(res) != nullptr; }), MOBILEGL_OK);
+    ASSERT_TRUE(ensured);
+
+    EXPECT_EQ(Twin(res)->hostBytes, nullptr)
+        << "a twin that survived context loss still names the freed server shadow (m-5): the "
+           "whole-store respecify that re-armed it read freed memory (ASan: heap-use-after-free at "
+           "RespecifyStorageWith)";
+
+    fixture.TearDown();
+}
+
+// M-2 / ID-52 item 3, SHIPPED AND EXECUTED (joint report joint-v1.md 3, "Audit and its R-16
+// limit": the corrupt-staged-bytes perturbation existed only by hand). Under an active transport
+// the server's staged copy is the draw's ONLY base; the frontend object's MappedData() - which under
+// inproc is the same process's memory and always non-null - may not be read. So: a real frontend
+// BufferObject whose shadow holds pattern A, a server shadow staged with pattern B through the real
+// op table (what resource_subdata delivers), and the production ensure path given BOTH. The driver
+// store must hold B. That is the executable form of "corrupt only the staged bytes and the draw
+// shows it": B is the corruption, the upload is the draw, the mapped read-back is the picture. Red
+// once by restoring the MappedData() fallback in liveHostBase(): the store then holds A, the
+// client's bytes, and the R-2.5 audit could never reach a draw again.
+TEST(StagedShadowProductionTest, TheEnsurePathUploadsTheServerShadowNotTheClientObjectsBytes) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+
+    // The frontend object: glBufferData(64, A). Its shadow is A and it declares defined content.
+    Vector<Uint8> clientBytes(64, Uint8{0xA5});
+    auto buffer = MakeShared<MG_State::GLState::BufferObject>(31u);
+    buffer->Respecify(clientBytes.size(), clientBytes.data());
+    ASSERT_NE(buffer->MappedData(), nullptr);
+    ASSERT_EQ(buffer->MappedData()[0], 0xA5);
+    ASSERT_TRUE(buffer->HasDefinedContent());
+
+    // Keep this object coherently mapped: Ensure's retained backend sync site must not
+    // re-enter the client producer and replace the staged 0x5B bytes with this 0xA5 map.
+    ASSERT_NE(buffer->AcquireMemoryRange({0, 64}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent |
+                                                      BufferMappingAccessBit::Coherent),
+              nullptr);
+    ASSERT_TRUE(buffer->IsMapped());
+
+    // The server shadow for the twin the draw will use: B, staged the way the wire delivers it.
+    const MG_Pipe::MGPipeHandle res = DeclareBuffer(BufferDesc(26, 64, true));
+    StageBytes(res, 0, 64, 0x5B);
+
+    // The production ensure, WITH the frontend object (the draw-time shape), on the apply thread;
+    // then the driver's store read back through a READ map on the same thread.
+    Vector<Uint8> store(64, 0);
+    Bool ensured = false;
+    Bool mapped = false;
+    ASSERT_EQ(OnApply([&] {
+                  ensured = MG_Backend::DirectGLES::BufferImpl::EnsureBufferResourceForHandle(buffer, res) != nullptr;
+                  auto* twin = Twin(res);
+                  if (!ensured || twin == nullptr || twin->id == 0) return;
+                  const auto& gl = MG_Backend::DirectGLES::g_GLESFuncs;
+                  gl.glBindBuffer(GL_ARRAY_BUFFER, twin->id);
+                  void* view = gl.glMapBufferRange(GL_ARRAY_BUFFER, 0, 64, GL_MAP_READ_BIT);
+                  if (view != nullptr) {
+                      std::memcpy(store.data(), view, 64);
+                      gl.glUnmapBuffer(GL_ARRAY_BUFFER);
+                      mapped = true;
+                  }
+              }),
+              MOBILEGL_OK);
+    ASSERT_TRUE(ensured);
+    ASSERT_TRUE(mapped) << "the driver store could not be mapped for reading, so the case cannot see the upload";
+
+    EXPECT_EQ(store[0], 0x5B)
+        << "the ensure path uploaded the CLIENT object's bytes (MappedData(), pattern A = 0xA5) rather "
+           "than the server shadow (pattern B = 0x5B): under an active transport the staged copy must "
+           "be the draw's only base (M-2 / ID-52 item 3), or a corrupt staged upload renders the "
+           "frontend's correct bytes and the R-2.5 audit cannot reach a draw";
+    EXPECT_EQ(store[63], 0x5B);
+    // And the frontend object was not written through: its shadow is still A.
+    EXPECT_EQ(buffer->MappedData()[0], 0xA5);
+
+    fixture.TearDown();
+}
+
+namespace {
+    std::string ReadLogFrom(SizeT offset) {
+        const std::string whole = ReadLog();
+        return offset < whole.size() ? whole.substr(offset) : std::string();
+    }
+
+    // THE STREAMING IDIOM, end to end, in a FORKED CHILD that brings the server up itself (the
+    // integration harness's pre-flight shape): a Fatal on the apply thread ends the child, not the
+    // case, so the case can name it. glBufferData(64, NULL) then glBufferSubData(0, 16) then a draw:
+    // the frontend object ORPHANS its store and writes 16 bytes - which flips ITS HasDefinedContent
+    // to true - while on the wire that is a resource_respecify with HasDefinedContent CLEAR and one
+    // 16-byte resource_subdata, so the server shadow covers [0, 16) of 64 and the descriptor says
+    // the rest is undefined by the application's own declaration. The draw's whole-store upload
+    // (the respecify reader, or the pool-reuse reader when a 64-byte id is waiting in the pool)
+    // must go through and leave 16 bytes of pattern and 48 of zero in the driver's store. Exit 0
+    // when it did, 7 when the wrong bytes landed, 8 when the child's bring-up failed.
+    enum class IdiomArm {
+        Respecify,
+        PoolReuse
+    };
+
+    [[noreturn]] void RunTheStreamingIdiomAndExit(IdiomArm arm) {
+        EglServerFixture fixture;
+        if (!fixture.BringUp().empty() || !fixture.MakeCurrent()) ::_exit(8);
+        Vector<Uint8> sixteen(16, Uint8{0x77});
+        auto buffer = MakeShared<MG_State::GLState::BufferObject>(arm == IdiomArm::PoolReuse ? 33u : 32u);
+        buffer->Respecify(64, nullptr);
+        buffer->UploadSubData(DataPtr{sixteen.data(), sixteen.size()}, 0);
+        Bool ok = false;
+        (void)OnApply([&] {
+            if (arm == IdiomArm::PoolReuse) {
+                const MG_Pipe::MGPipeHandle a = DeclareBuffer(BufferDesc(29, 64, true));
+                StageBytes(a, 0, 64, 0x11);
+                if (Ensure(a) == nullptr) return;
+                MG_Pipe::MGPipeGetResourceOps()->Destroy(a);
+                for (int frame = 0; frame < 2; ++frame) {
+                    if (MG_Backend::DirectGLES::g_GLESFuncs.glFinish) MG_Backend::DirectGLES::g_GLESFuncs.glFinish();
+                    MG_Backend::DirectGLES::Present();
+                }
+            }
+            const Uint32 slot = arm == IdiomArm::PoolReuse ? 30u : 28u;
+            const MG_Pipe::MGPipeHandle b = DeclareBuffer(BufferDesc(slot, 64, false));
+            StageBytes(b, 0, 16, 0x77);
+            auto* twin = MG_Backend::DirectGLES::BufferImpl::EnsureBufferResourceForHandle(buffer, b); // the draw
+            if (twin == nullptr || twin->id == 0) return;
+            const auto& gl = MG_Backend::DirectGLES::g_GLESFuncs;
+            gl.glBindBuffer(GL_ARRAY_BUFFER, twin->id);
+            const auto* view = static_cast<const Uint8*>(gl.glMapBufferRange(GL_ARRAY_BUFFER, 0, 64, GL_MAP_READ_BIT));
+            if (view == nullptr) return;
+            ok = view[0] == 0x77 && view[15] == 0x77 && view[16] == 0 && view[63] == 0;
+            gl.glUnmapBuffer(GL_ARRAY_BUFFER);
+        });
+        ::_exit(ok ? 0 : 7);
+    }
+} // namespace
+
+// M-3, ROUND 3's RULE, positive direction (the round-2 refusal aborted six LargeArenaAdoption /
+// ResourceSubsystemControl entries on the joint by this exact name): the ordinary streaming idiom
+// through the RESPECIFY reader is uploaded, not refused. Red once by making the refusal
+// unconditional again (the descriptor's HasDefinedContent ignored): the child dies of
+// Fatal{StageSnapshotTooNarrow, "respecify_whole_store"} and the appended log names it.
+TEST(StagedShadowProductionTest, TheStreamingIdiomOrphanThenPartialSubDataIsUploadedNotRefused) {
+    {
+        EglServerFixture probe;
+        MGL_EGL_BRING_UP_OR_BAIL(probe);
+        probe.TearDown();
+    }
+    const SizeT mark = ReadLog().size();
+    EXPECT_EXIT(RunTheStreamingIdiomAndExit(IdiomArm::Respecify), ::testing::ExitedWithCode(0), ".*")
+        << "the streaming idiom - glBufferData(64, NULL), glBufferSubData(0, 16), draw - did not put "
+           "its 16 bytes and 48 undefined (zero) bytes into the driver's store through the respecify "
+           "reader: exit 7 is the wrong bytes, a signal is the whole-store refusal firing on a store "
+           "the application itself orphaned";
+    const std::string appended = ReadLogFrom(mark);
+    EXPECT_EQ(appended.find("Fatal{StageSnapshotTooNarrow"), std::string::npos)
+        << "the orphan-then-partial-subdata idiom was refused by name (M-3's whole-store refusal must "
+           "key on the descriptor's HasDefinedContent, not on the frontend flag a partial subdata "
+           "flips); the log says: "
+        << appended;
+}
+
+// The same idiom through the POOL-REUSE reader: a 64-byte id retired to the pool by a previous
+// buffer's delete, handed to the orphaned store's first draw, seeded from the sparse shadow.
+TEST(StagedShadowProductionTest, TheStreamingIdiomThroughAPoolReuseIsUploadedNotRefused) {
+    {
+        EglServerFixture probe;
+        MGL_EGL_BRING_UP_OR_BAIL(probe);
+        probe.TearDown();
+    }
+    const SizeT mark = ReadLog().size();
+    EXPECT_EXIT(RunTheStreamingIdiomAndExit(IdiomArm::PoolReuse), ::testing::ExitedWithCode(0), ".*")
+        << "the streaming idiom through a recycled pool id did not put its 16 bytes and 48 undefined "
+           "(zero) bytes into the driver's store: exit 7 is the wrong bytes, a signal is the "
+           "whole-store refusal firing on a store the application itself orphaned";
+    const std::string appended = ReadLogFrom(mark);
+    EXPECT_EQ(appended.find("Fatal{StageSnapshotTooNarrow"), std::string::npos)
+        << "the orphan-then-partial-subdata idiom through a pool reuse was refused by name (M-3's "
+           "whole-store refusal must key on the descriptor's HasDefinedContent); the log says: "
+        << appended;
+}
+#endif // !_WIN32
+
+// =====================================================================================
+// P5b d1: a draw_vbo record of every d1 shape crosses to the REAL ServerVerbSink with its
+// fields intact (§2 d1). No backend object lives in this process,
+// so each record is DECLINED after the sink has witnessed it - which is exactly the point:
+// the witness is taken before the backend is consulted, so these cases pin the wire's fields
+// and not a backend call. The emitter half (GL args -> these fields) is RemoteClientTest's
+// PlanDraw* cases; the backend half is the DirectGLES.Split. IndexedDrawFamilyScenario lane.
+// =====================================================================================
+
+namespace {
+    MG_Pipe::MGPipeHandle D1Handle(Uint32 slot) {
+        MG_Pipe::MGPipeHandle h{};
+        h.Slot = slot;
+        h.Gen = 1;
+        return h;
+    }
+    MG_Pipe::MGPDrawInfo D1DrawInfo(Uint8 indexSize, Uint32 numDraws) {
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = 0x0004; // GL_TRIANGLES
+        info.IndexSize = indexSize;
+        info.InstanceCount = 1;
+        info.MinIndex = ~0u;
+        info.MaxIndex = ~0u;
+        info.NumDraws = numDraws;
+        return info;
+    }
+} // namespace
+
+// Red once by: dropping `m_lastDraw.Info = info;` from OnDrawVbo - InstanceCount reads 1 and
+// IndexBias reads 0 below.
+TEST(ServerLoopTest, AnInstancedBaseVertexDrawRecordReachesTheSinkWithItsFieldsIntact) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    MG_Pipe::MGPDrawInfo info = D1DrawInfo(/*indexSize=*/2, /*numDraws=*/1);
+    info.InstanceCount = 7; // DrawElementsInstancedBaseVertex(..., 7, 5): the Minecraft slot
+    info.IndexResource = D1Handle(31);
+    const MG_Pipe::MGPDrawRange range{/*Start=*/12, /*Count=*/36, /*IndexBias=*/5};
+    ASSERT_TRUE(fixture.EmitAndWaitWithTail(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range, sizeof(range)));
+
+    const Server::ServerVerbSink& verbs = fixture.session->Applier().Verbs();
+    EXPECT_EQ(verbs.DrawRecords(), 1u) << "the record did not reach OnDrawVbo";
+    EXPECT_EQ(verbs.Draws(), 0u) << "no backend object lives here, so the draw must be DECLINED "
+                                    "after the witness, never applied";
+    const Server::ServerVerbSink::LastDrawRecord& seen = verbs.LastDraw();
+    EXPECT_EQ(seen.Info.IndexSize, 2u);
+    EXPECT_EQ(seen.Info.InstanceCount, 7u);
+    EXPECT_EQ(seen.Info.IndexResource.Slot, 31u);
+    EXPECT_EQ(seen.FirstRange.Start, 12u);
+    EXPECT_EQ(seen.FirstRange.Count, 36u);
+    EXPECT_EQ(seen.FirstRange.IndexBias, 5);
+    EXPECT_FALSE(seen.HadUserIndices);
+    EXPECT_FALSE(seen.HadIndirect);
+    EXPECT_FALSE(MG_Pipe::gPipeInputs->ServerStampedVerb());
+
+    fixture.Stop();
+}
+
+// Red once by: setting `m_lastDraw.UserIndexBytes = 0` in OnDrawVbo's span arm - the byte
+// count below reads 0 while HadUserIndices stays true.
+TEST(ServerLoopTest, AClientIndexArrayCrossesAsAStagedSpanAndTheSinkSeesItsByteCount) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    // d1's rule for a client index array: the CLIENT stages count * IndexSize bytes and the
+    // record names the run (Ptr = nullptr, SEG_STAGE); the sink resolves it for the call only.
+    const Uint32 indices[6] = {0, 1, 2, 2, 3, 0};
+    const MG_Pipe::MGPBlobRef staged = fixture.encoder.StageBytes(indices, sizeof(indices));
+    MG_Pipe::MGHostSpan span{};
+    span.Ptr = nullptr;
+    span.Seg = staged.Seg;
+    span.Offset = staged.Offset;
+    span.Size = staged.Size;
+
+    MG_Pipe::MGPDrawInfo info = D1DrawInfo(/*indexSize=*/4, /*numDraws=*/1);
+    info.Flags = MG_Pipe::kDrawHasUserIndices;
+    const MG_Pipe::MGPDrawRange range{0, 6, 0};
+    const Codec::WireTail tails[2] = {{&range, sizeof(range)}, {&span, sizeof(span)}};
+    const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2);
+    ASSERT_NE(seq, Codec::kInvalidSeq);
+    fixture.encoder.Publish();
+    fixture.producer.PublishAndNotify(seq);
+    ASSERT_EQ(fixture.producer.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    const Server::ServerVerbSink::LastDrawRecord& seen = fixture.session->Applier().Verbs().LastDraw();
+    EXPECT_TRUE(seen.HadUserIndices) << "the span did not reach OnDrawVbo";
+    EXPECT_EQ(seen.UserIndexBytes, sizeof(indices));
+    EXPECT_EQ(seen.Info.Flags & MG_Pipe::kDrawHasUserIndices, MG_Pipe::kDrawHasUserIndices);
+    EXPECT_EQ(seen.FirstRange.Count, 6u);
+    EXPECT_EQ(fixture.session->Applier().Verbs().Draws(), 0u);
+
+    fixture.Stop();
+}
+
+// Red once by: dropping `m_lastDraw.Indirect = *indirect;` - DrawCount reads 0 below.
+TEST(ServerLoopTest, AnIndirectDrawRecordReachesTheSinkWithItsBlockIntact) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    MG_Pipe::MGPDrawInfo info = D1DrawInfo(/*indexSize=*/0, /*numDraws=*/0);
+    info.Flags = MG_Pipe::kDrawIsIndirect;
+    MG_Pipe::MGPDrawIndirect block{};
+    block.Buffer = D1Handle(40);
+    block.ParameterBuffer = D1Handle(41); // the *IndirectCount shape
+    block.Offset = 32;
+    block.ParameterOffset = 8;
+    block.Stride = 16;
+    block.DrawCount = 3;
+    const Codec::WireTail tails[2] = {{nullptr, 0}, {&block, sizeof(block)}};
+    const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2);
+    ASSERT_NE(seq, Codec::kInvalidSeq);
+    fixture.encoder.Publish();
+    fixture.producer.PublishAndNotify(seq);
+    ASSERT_EQ(fixture.producer.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    const Server::ServerVerbSink::LastDrawRecord& seen = fixture.session->Applier().Verbs().LastDraw();
+    EXPECT_TRUE(seen.HadIndirect) << "the indirect block did not reach OnDrawVbo";
+    EXPECT_FALSE(seen.HadUserIndices);
+    EXPECT_EQ(seen.Indirect.Buffer.Slot, 40u);
+    EXPECT_EQ(seen.Indirect.ParameterBuffer.Slot, 41u);
+    EXPECT_EQ(seen.Indirect.Offset, 32u);
+    EXPECT_EQ(seen.Indirect.ParameterOffset, 8u);
+    EXPECT_EQ(seen.Indirect.Stride, 16u);
+    EXPECT_EQ(seen.Indirect.DrawCount, 3u);
+    EXPECT_EQ(seen.Info.NumDraws, 0u);
+
+    fixture.Stop();
+}
+
+namespace {
+    Uint32 g_fvErrorCode = 0;
+    String g_fvErrorMessage;
+    Uint32 g_fvErrorCalls = 0;
+
+    void CaptureFvError(Uint32 code, const char* message) {
+        g_fvErrorCode = code;
+        g_fvErrorMessage = message ? message : "";
+        ++g_fvErrorCalls;
+    }
+
+    struct FvGlobals {
+        MG_Pipe::MGPipeCallbacks callbacks = MG_Pipe::gMGPipeCallbacks;
+        Bool strict = MG_Config::Ipc.StrictErrors;
+        Bool split = MG_Config::Ipc.RoleSplitState;
+        ~FvGlobals() {
+            MG_Pipe::MGPipeServerClearVerbBoundary();
+            MG_Pipe::gMGPipeCallbacks = callbacks;
+            MG_Config::Ipc.StrictErrors = strict;
+            MG_Config::Ipc.RoleSplitState = split;
+        }
+    };
+
+    struct FvSession : ServerFixture {
+        ~FvSession() { Stop(); }
+    };
+} // namespace
+
+namespace {
+    // Exercise the real hidden-resource constructors without adding a production test API.
+    // Explicit template instantiation permits naming a private member ([temp.explicit]).
+    using FvRenderer = MG_Backend::DirectVulkan::VulkanRenderer;
+    struct FvBlitInitTag {
+        using type = Bool (FvRenderer::*)();
+        friend type FvPrivateMember(FvBlitInitTag);
+    };
+    struct FvMipmapInitTag {
+        using type = Bool (FvRenderer::*)();
+        friend type FvPrivateMember(FvMipmapInitTag);
+    };
+    template <class Tag, typename Tag::type Member>
+    struct FvMemberAccess {
+        friend typename Tag::type FvPrivateMember(Tag) { return Member; }
+    };
+    template struct FvMemberAccess<FvBlitInitTag, &FvRenderer::InitializeBlitResources>;
+    template struct FvMemberAccess<FvMipmapInitTag, &FvRenderer::InitializeDepthMipmapResources>;
+} // namespace
+
+TEST(P5fReverseChannel, TransportDoesNotConstructHiddenFrontendPrograms) {
+    // No Vulkan device, program factory or client GLContext is supplied. A transport
+    // initialization must not need any of them merely to skip these monolith resources.
+    FvRenderer renderer({});
+    EXPECT_TRUE((renderer.*FvPrivateMember(FvBlitInitTag{}))());
+    EXPECT_TRUE((renderer.*FvPrivateMember(FvMipmapInitTag{}))());
+}
+
+TEST(P5fReverseChannel, GlErrorsUseTheOwnedCallbackWithoutAResidualPull) {
+    FvGlobals restore;
+    MG_Config::Ipc.StrictErrors = true;
+    MG_Config::Ipc.RoleSplitState = true;
+    MG_Pipe::gMGPipeCallbacks.OnGlError = &CaptureFvError;
+    g_fvErrorCalls = 0;
+    MG_Pipe::MGPipeResetResidualPullCountForTesting();
+    MG_Pipe::MGPipeServerStampVerbBoundary(MG_Pipe::MGPipeVerb::Clear);
+    MG_Pipe::gPipeInputs->RecordError(ErrorCode::InvalidOperation,
+                                      MakeUnique<GenericErrorInfo>("fv", "draw", "driver message"));
+    EXPECT_EQ(g_fvErrorCalls, 1u);
+    EXPECT_EQ(g_fvErrorCode, static_cast<Uint32>(ErrorCode::InvalidOperation));
+    EXPECT_EQ(g_fvErrorMessage, "[fv] [draw] driver message");
+    EXPECT_EQ(MG_Pipe::MGPipeResidualPullCount(), 0u);
+}
+
+TEST(P5fReverseChannel, AcceptCloseAndReacceptOwnTheGlErrorCallback) {
+    FvGlobals restore;
+    MG_Pipe::gMGPipeCallbacks.OnGlError = nullptr;
+    FvSession fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    const auto producer = MG_Pipe::gMGPipeCallbacks.OnGlError;
+    ASSERT_NE(producer, nullptr);
+    EXPECT_EQ(fixture.session->Accept(*fixture.serverTransport), MOBILEGL_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(MG_Pipe::gMGPipeCallbacks.OnGlError, producer);
+    fixture.Stop();
+    EXPECT_EQ(MG_Pipe::gMGPipeCallbacks.OnGlError, nullptr);
+    ASSERT_TRUE(fixture.Handshake());
+    EXPECT_EQ(MG_Pipe::gMGPipeCallbacks.OnGlError, producer);
+    fixture.Stop();
+    EXPECT_EQ(MG_Pipe::gMGPipeCallbacks.OnGlError, nullptr);
+}
+
+TEST(P5fReverseChannel, CloseDoesNotEraseAnotherGlErrorOwner) {
+    FvGlobals restore;
+    MG_Pipe::gMGPipeCallbacks.OnGlError = nullptr;
+    FvSession fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    MG_Pipe::gMGPipeCallbacks.OnGlError = &CaptureFvError;
+    fixture.Stop();
+    EXPECT_EQ(MG_Pipe::gMGPipeCallbacks.OnGlError, &CaptureFvError);
+}
+
+#if !defined(_WIN32)
+TEST(P5fReverseChannel, GlErrorCallbackRejectsDoubleInstallation) {
+    EXPECT_EXIT(
+        {
+            MG_Pipe::gMGPipeCallbacks.OnGlError = &CaptureFvError;
+            FvSession fixture;
+            (void)fixture.Handshake();
+            std::_Exit(9);
+        },
+        ::testing::KilledBySignal(SIGABRT), "");
+    EXPECT_NE(ReadLog().find("callback-double-install"), std::string::npos);
+}
+
+TEST(P5fReverseChannel, ASecondSessionCannotClaimTheSameReverseChannel) {
+    EXPECT_EXIT(
+        {
+            FvSession owner;
+            if (!owner.Handshake()) std::_Exit(7);
+            std::unique_ptr<Transport::InProcessTransport> client;
+            std::unique_ptr<Transport::InProcessTransport> server;
+            Transport::InProcessTransport::CreatePair(client, server);
+            Server::ServerSession other;
+            // The owner refusal precedes receiving a Hello or replacing the segment resolver.
+            (void)other.Accept(*server);
+            std::_Exit(9);
+        },
+        ::testing::KilledBySignal(SIGABRT), "");
+    EXPECT_NE(ReadLog().find("another ServerSession already owns"), std::string::npos);
+}
+
+TEST(P5fReverseChannel, RecordErrorWithoutCallbackIsNamedFatal) {
+    EXPECT_EXIT(
+        {
+            MG_Config::Ipc.StrictErrors = true;
+            MG_Config::Ipc.RoleSplitState = true;
+            MG_Pipe::gMGPipeCallbacks.OnGlError = nullptr;
+            MG_Pipe::gPipeInputs->RecordError(ErrorCode::InvalidOperation, nullptr);
+            std::_Exit(9);
+        },
+        ::testing::KilledBySignal(SIGABRT), "");
+    EXPECT_NE(ReadLog().find("OnGlError.callback-missing"), std::string::npos);
+}
+
+TEST(P5fReverseChannel, LegacyGpuWrittenNeverReadsAFrontendObjectInTransport) {
+    for (Bool installed : {false, true}) {
+        EXPECT_EXIT(
+            {
+                MG_Pipe::gMGPipeCallbacks.OnGpuWritten =
+                    installed ? +[](MG_Pipe::MGPipeHandle, Uint, const MG_Pipe::MGPRange*) {} : nullptr;
+                // Deliberately unreadable object: a guard after a lifetime-id probe or
+                // either MarkGpuWritten fallback would SIGSEGV instead of the named abort.
+                SharedPtr<MG_State::GLState::BufferObject> foreign(
+                    reinterpret_cast<MG_State::GLState::BufferObject*>(std::uintptr_t{1}),
+                    [](MG_State::GLState::BufferObject*) {});
+                MG_Pipe::MGPipeAnnounceBufferGpuWritten(foreign);
+                std::_Exit(9);
+            },
+            ::testing::KilledBySignal(SIGABRT), "");
+    }
+    EXPECT_NE(ReadLog().find("gpu-written-legacy-object"), std::string::npos);
+}
+#endif
+
+TEST(P5fReverseChannel, GlErrorMessagesShareFifoWithOtherReverseEvents) {
+    FvGlobals restore;
+    MG_Config::Ipc.StrictErrors = true;
+    MG_Config::Ipc.RoleSplitState = true;
+    MG_Pipe::gMGPipeCallbacks.OnGlError = nullptr;
+    FvSession fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_EQ(Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                  +[](void*) -> MobileGLResult {
+                      MG_Pipe::MGPipeServerStampVerbBoundary(MG_Pipe::MGPipeVerb::Clear);
+                      MG_Pipe::gPipeInputs->RecordError(ErrorCode::InvalidOperation,
+                                                        MakeUnique<GenericErrorInfo>("fv", "driver error"));
+                      const MG_Pipe::MGPRange whole{0, MG_Pipe::kMGPipeWholeBuffer};
+                      MG_Pipe::gMGPipeCallbacks.OnGpuWritten({17, 3}, 1, &whole);
+                      Uint8 bytes[] = {11, 22, 33, 44};
+                      MG_Pipe::gMGPipeCallbacks.OnBufferWriteback({17, 3}, 24,
+                                                                  MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(bytes),
+                                                                                      sizeof(bytes),
+                                                                                      MG_Pipe::kMGHostSpanSegNone, 0});
+                      std::memset(bytes, 0xDD, sizeof(bytes));
+                      String longMessage(Transport::kEventGlErrorMaxMessageBytes * 2, 'Q');
+                      MG_Pipe::gMGPipeCallbacks.OnGlError(static_cast<Uint32>(ErrorCode::InvalidValue),
+                                                          longMessage.c_str());
+                      std::fill(longMessage.begin(), longMessage.end(), '?');
+                      MG_Pipe::gMGPipeCallbacks.OnGlError(static_cast<Uint32>(ErrorCode::InvalidEnum), nullptr);
+                      MG_Pipe::MGPipeServerClearVerbBoundary();
+                      return MOBILEGL_OK;
+                  },
+                  nullptr),
+              MOBILEGL_OK);
+
+    Transport::EventRingConsumer events(fixture.clientSegments.EventControl(), fixture.clientSegments.CmdControl(),
+                                        fixture.clientSegments.EventRingBase(),
+                                        fixture.clientSegments.EventRingCapacity(),
+                                        fixture.clientSegments.EventSegmentBase());
+    ASSERT_TRUE(events.Valid());
+    const Uint16 kinds[] = {Transport::kEventGlError, Transport::kEventGpuWritten, Transport::kEventBufferWriteback,
+                            Transport::kEventGlError, Transport::kEventGlError};
+    for (SizeT i = 0; i < 5; ++i) {
+        Transport::RingRecordView event;
+        ASSERT_TRUE(events.Pop(event)) << i;
+        EXPECT_EQ(event.kind, kinds[i]) << i;
+        if (event.kind == Transport::kEventGlError) {
+            const auto* head = static_cast<const Transport::EventGlErrorHead*>(event.payload);
+            ASSERT_GE(event.payloadSize, sizeof(*head) + head->MessageBytes);
+            ASSERT_GT(head->MessageBytes, 0u);
+            const auto* text = reinterpret_cast<const char*>(head + 1);
+            EXPECT_EQ(text[head->MessageBytes - 1], '\0');
+            const String message(text, head->MessageBytes - 1);
+            if (i == 0) {
+                EXPECT_EQ(head->Code, static_cast<Uint32>(ErrorCode::InvalidOperation));
+                EXPECT_EQ(message, "[fv] driver error");
+            } else if (i == 3) {
+                EXPECT_EQ(head->Code, static_cast<Uint32>(ErrorCode::InvalidValue));
+                EXPECT_EQ(head->MessageBytes, Transport::kEventGlErrorMaxMessageBytes);
+                EXPECT_EQ(message, String(Transport::kEventGlErrorMaxMessageBytes - 1, 'Q'));
+            } else {
+                EXPECT_EQ(head->Code, static_cast<Uint32>(ErrorCode::InvalidEnum));
+                EXPECT_EQ(head->MessageBytes, 1u);
+                EXPECT_TRUE(message.empty());
+            }
+        } else if (event.kind == Transport::kEventGpuWritten) {
+            const auto* head = static_cast<const Transport::EventGpuWrittenHead*>(event.payload);
+            EXPECT_EQ(head->Resource.Slot, 17u);
+            EXPECT_EQ(head->Resource.Gen, 3u);
+            EXPECT_EQ(head->RangeCount, 1u);
+            const auto* range = reinterpret_cast<const Transport::EventRange*>(head + 1);
+            EXPECT_EQ(range->Size, MG_Pipe::kMGPipeWholeBuffer);
+        } else {
+            const auto* head = static_cast<const Transport::EventBufferWritebackHead*>(event.payload);
+            EXPECT_EQ(head->Offset, 24u);
+            EXPECT_EQ(head->Size, 4u);
+            const Uint8 expected[] = {11, 22, 33, 44};
+            EXPECT_EQ(std::memcmp(head + 1, expected, sizeof(expected)), 0);
+        }
+    }
+    Transport::RingRecordView extra;
+    EXPECT_FALSE(events.Pop(extra));
+    events.Drained();
+}
+
+TEST(P5fReverseChannel, ANonSingletonSessionOwnsAllFourReverseCallbacks) {
+    FvGlobals restore;
+    ASSERT_EQ(Server::ServerSession::Active(), nullptr);
+    ASSERT_FALSE(Server::ServerSessionInstance().Accepted());
+    Server::ServerSession owner;
+    FvSession fixture;
+    ASSERT_TRUE(fixture.Handshake(&owner));
+    ASSERT_EQ(Server::ServerSession::Active(), &owner);
+    ASSERT_NE(fixture.session, &Server::ServerSessionInstance());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_EQ(Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                  +[](void*) -> MobileGLResult {
+                      MG_Pipe::gMGPipeCallbacks.OnGlError(static_cast<Uint32>(ErrorCode::InvalidOperation),
+                                                          "non-singleton owner");
+                      const MG_Pipe::MGPRange whole{0, MG_Pipe::kMGPipeWholeBuffer};
+                      MG_Pipe::gMGPipeCallbacks.OnGpuWritten({41, 7}, 1, &whole);
+                      const Uint8 bytes[] = {17, 34, 51, 68};
+                      MG_Pipe::gMGPipeCallbacks.OnBufferWriteback({41, 7}, 20,
+                                                                  MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(bytes),
+                                                                                      sizeof(bytes),
+                                                                                      MG_Pipe::kMGHostSpanSegNone, 0});
+                      MG_Pipe::MGPSurfaceInfo surface{};
+                      surface.Width = 321;
+                      surface.Height = 123;
+                      surface.InternalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8);
+                      surface.Samples = 4;
+                      surface.Layers = 2;
+                      surface.IsDefault = 1;
+                      MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged(&surface);
+                      return MOBILEGL_OK;
+                  },
+                  nullptr),
+              MOBILEGL_OK);
+
+    Transport::EventRingConsumer events(fixture.clientSegments.EventControl(), fixture.clientSegments.CmdControl(),
+                                        fixture.clientSegments.EventRingBase(),
+                                        fixture.clientSegments.EventRingCapacity(),
+                                        fixture.clientSegments.EventSegmentBase());
+    ASSERT_TRUE(events.Valid());
+    Transport::RingRecordView event;
+    ASSERT_TRUE(events.Pop(event));
+    ASSERT_EQ(event.kind, Transport::kEventGlError);
+    const auto* error = static_cast<const Transport::EventGlErrorHead*>(event.payload);
+    EXPECT_EQ(error->Code, static_cast<Uint32>(ErrorCode::InvalidOperation));
+    EXPECT_STREQ(reinterpret_cast<const char*>(error + 1), "non-singleton owner");
+
+    ASSERT_TRUE(events.Pop(event));
+    ASSERT_EQ(event.kind, Transport::kEventGpuWritten);
+    const auto* written = static_cast<const Transport::EventGpuWrittenHead*>(event.payload);
+    EXPECT_EQ(written->Resource.Slot, 41u);
+    EXPECT_EQ(written->Resource.Gen, 7u);
+    ASSERT_EQ(written->RangeCount, 1u);
+    const auto* range = reinterpret_cast<const Transport::EventRange*>(written + 1);
+    EXPECT_EQ(range->Offset, 0u);
+    EXPECT_EQ(range->Size, MG_Pipe::kMGPipeWholeBuffer);
+
+    ASSERT_TRUE(events.Pop(event));
+    ASSERT_EQ(event.kind, Transport::kEventBufferWriteback);
+    const auto* writeback = static_cast<const Transport::EventBufferWritebackHead*>(event.payload);
+    EXPECT_EQ(writeback->Resource.Slot, 41u);
+    EXPECT_EQ(writeback->Resource.Gen, 7u);
+    EXPECT_EQ(writeback->Offset, 20u);
+    ASSERT_EQ(writeback->Size, 4u);
+    const Uint8 expected[] = {17, 34, 51, 68};
+    EXPECT_EQ(std::memcmp(writeback + 1, expected, sizeof(expected)), 0);
+
+    ASSERT_TRUE(events.Pop(event));
+    ASSERT_EQ(event.kind, Transport::kEventSurfaceChanged);
+    const auto* surface = static_cast<const Transport::EventSurfaceChangedHead*>(event.payload);
+    EXPECT_EQ(surface->Width, 321u);
+    EXPECT_EQ(surface->Height, 123u);
+    EXPECT_EQ(surface->InternalFormat, static_cast<Uint32>(TextureInternalFormat::RGBA8));
+    EXPECT_EQ(surface->Samples, 4u);
+    EXPECT_EQ(surface->Layers, 2u);
+    EXPECT_EQ(surface->IsDefault, 1u);
+    EXPECT_FALSE(events.Pop(event));
+    events.Drained();
+    EXPECT_FALSE(Server::ServerSessionInstance().Accepted());
+}
+
+#if !defined(_WIN32)
+TEST(P5fReverseChannel, CachedReverseCallbacksRejectAMissingSessionOwner) {
+    FvGlobals restore;
+    Server::ServerSession owner;
+    FvSession fixture;
+    ASSERT_TRUE(fixture.Handshake(&owner));
+    const auto callbacks = MG_Pipe::gMGPipeCallbacks;
+    fixture.Stop();
+    ASSERT_EQ(Server::ServerSession::Active(), nullptr);
+    const char* names[] = {"OnGlError", "OnGpuWritten", "OnBufferWriteback", "OnSurfaceChanged"};
+    for (Uint32 callback = 0; callback < 4; ++callback) {
+        const auto logSize = ReadLog().size();
+        EXPECT_EXIT(
+            {
+                switch (callback) {
+                case 0:
+                    callbacks.OnGlError(0, "retired");
+                    break;
+                case 1:
+                    callbacks.OnGpuWritten(MG_Pipe::kMGPipeNullHandle, 0, nullptr);
+                    break;
+                case 2:
+                    callbacks.OnBufferWriteback(MG_Pipe::kMGPipeNullHandle, 0, MG_Pipe::MGPBlobRef{});
+                    break;
+                case 3:
+                    callbacks.OnSurfaceChanged(nullptr);
+                    break;
+                }
+                std::_Exit(9);
+            },
+            ::testing::KilledBySignal(SIGABRT), "");
+        const auto marker = String(names[callback]) + ".session-missing";
+        EXPECT_NE(ReadLog().substr(logSize).find(marker), String::npos) << marker;
+    }
+}
+#endif
+
+// =====================================================================================
+// PH-1 (3), ID-P7-1: THE LATCH'S DECLINE HALF, IN PROCESS
+// =====================================================================================
+//
+// The latch is ARMED only in a spawn / TCP session child (ServerMain::RunSession), and arming is
+// one-way and process-wide, so every case here arms it in a FORKED CHILD (EXPECT_EXIT) and reports
+// through the child's exit status: 0 is "the claim held", anything else is a bitmask naming each
+// part that did not (the failure message decodes it). This process's own latch is never armed, so
+// every other case in the binary keeps its deaths. PeerLatchTest holds the same checks across a
+// real process boundary; scripts/ci/ph_latch_sites.py's MECHANICS list maps each check to both.
+#if !defined(_WIN32)
+namespace {
+    namespace Remote = MobileGL::MG_Remote;
+
+    bool PollUntil(const std::function<bool()>& predicate, int timeoutMs) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (predicate()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return predicate();
+    }
+
+    // THREE RECORDS UNDER ONE PUBLISH, THE FIRST OF WHICH LATCHES: ObjectDeath with Kind 999, then
+    // ObjectDeath with a null handle (a latching fault of its own), then a legal MemoryBarrier.
+    enum : int {
+        kBatchThreadStayed = 1, // the apply thread was still running 3 s after the latch, no Stop()
+        kBatchDrainedMore = 2,  // a record behind the latched one reached the applier
+        kBatchLatchedMore = 4,  // a second named fault was latched (the null-handle record ran)
+        kBatchWrongFirst = 8,   // the latched line is not the Kind fault's
+        kBatchWatermark = 16,   // appliedSeq moved past the latched record
+    };
+
+    [[noreturn]] void RunALatchedBatchAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        MG_Pipe::MGPHandleOnly kind{};
+        kind.Handle = MG_Pipe::MGPipeHandle{5u, 1u};
+        kind.Kind = 999;
+        const MG_Pipe::MGPHandleOnly nullHandle{};
+        MG_Pipe::MGPMemoryBarrier barrier{};
+        barrier.Bits = 0x2000u;
+        (void)fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::ObjectDeath, &kind, sizeof(kind));
+        (void)fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::ObjectDeath, &nullHandle, sizeof(nullHandle));
+        const Uint64 last = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier));
+        if (last == Codec::kInvalidSeq) ::_exit(66);
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(last);
+
+        int failed = 0;
+        if (!PollUntil([&] { return !loop.Running(); }, 3000)) failed |= kBatchThreadStayed;
+        if (loop.DrainedRecords() != 1) failed |= kBatchDrainedMore;
+        if (Remote::SessionLatchCount() != 1) failed |= kBatchLatchedMore;
+        if (std::strstr(Remote::SessionLatchedLine(), "\"ObjectDeath.Kind\"") == nullptr) failed |= kBatchWrongFirst;
+        if (fixture.session->Consumer().AppliedSeq() != 1) failed |= kBatchWatermark;
+        fixture.Stop();
+        ::_exit(failed);
+    }
+
+    // A CONTROL FRAME POSTED AFTER THE LATCH, before the apply thread has looked at it.
+    enum : int {
+        kPostRan = 1,        // the probe ran on the apply thread
+        kPostAnswered = 2,   // the poster was not answered PROTOCOL_MISMATCH
+        kPostDispatched = 4, // ControlFramesDispatched moved
+    };
+
+    [[noreturn]] void PostAfterALatchAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        const Uint64 dispatchedBefore = loop.ControlFramesDispatched();
+        // Latched OFF the apply thread - where RunSession's SurfaceOp arm latches for real - so
+        // the parked thread has not seen it: the latch is not in its park predicate, and the
+        // frame below is what wakes it.
+        (void)Remote::SessionLatch(Remote::MGFatalFamily::ProtocolCorruption,
+                                   "MGPipe: Fatal{ProtocolCorruption, \"unit.control\"} - latched off the "
+                                   "apply thread before the frame was taken");
+        std::atomic<int> ran{0};
+        const MobileGLResult rc = loop.RunProbeOnApplyThreadForTesting(
+            +[](void* user) -> MobileGLResult {
+                static_cast<std::atomic<int>*>(user)->fetch_add(1);
+                return MOBILEGL_OK;
+            },
+            &ran);
+        int failed = 0;
+        if (ran.load() != 0) failed |= kPostRan;
+        if (rc != MOBILEGL_ERR_PROTOCOL_MISMATCH) failed |= kPostAnswered;
+        if (loop.ControlFramesDispatched() != dispatchedBefore) failed |= kPostDispatched;
+        fixture.Stop();
+        ::_exit(failed);
+    }
+
+    // TWO FAULTS, ONE LATCH: the funnel's own bookkeeping.
+    enum : int {
+        kSemReturned = 1,   // an armed SessionLatch returned true (or did not return)
+        kSemNotLatched = 2, // SessionLatched() is false after a fault
+        kSemNotFirst = 4,   // the latched family / line is not the FIRST fault's
+        kSemCount = 8,      // SessionLatchCount / SessionFaultCount did not count both
+        kSemFrames = 16,    // not exactly one SessionFault frame, naming the first fault
+    };
+
+    [[noreturn]] void LatchTwiceAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake()) ::_exit(64);
+        std::vector<Uint8> buffer(64 * 1024);
+        const auto pump = [&](int* fatalFrames, bool* namesFirst) {
+            for (;;) {
+                std::uint64_t size = 0;
+                const MobileGLResult rc =
+                    fixture.clientTransport->ReceiveFrame({buffer.data(), buffer.size()}, &size, 100);
+                if (rc == MOBILEGL_ERR_BUFFER_TOO_SMALL) {
+                    buffer.resize(static_cast<SizeT>(size));
+                    continue;
+                }
+                if (rc != MOBILEGL_OK) return;
+                if (fatalFrames == nullptr) continue;
+                const auto* envelope = ::MobileGL::Wire::GetCtrlEnvelope(buffer.data());
+                if (envelope == nullptr || envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::Fatal) continue;
+                ++*fatalFrames;
+                const auto* fatal = envelope->msg_as_Fatal();
+                if (fatal != nullptr && fatal->message() != nullptr &&
+                    std::strstr(fatal->message()->c_str(), "unit.first") != nullptr) {
+                    *namesFirst = true;
+                }
+            }
+        };
+        pump(nullptr, nullptr); // what the handshake left for the client (Welcome, caps)
+        const Uint64 faultsBefore = Remote::SessionFaultCount();
+        const bool first = Remote::SessionLatch(Remote::MGFatalFamily::ProtocolCorruption,
+                                                "MGPipe: Fatal{ProtocolCorruption, \"unit.first\"} - the first "
+                                                "named fault (%d)",
+                                                1);
+        const bool second =
+            Remote::SessionLatch(Remote::MGFatalFamily::UnmigratedVerb,
+                                 "MGPipe: Fatal{UnmigratedVerb, \"unit.second\"} - a later one (%d)", 2);
+        int failed = 0;
+        if (first || second) failed |= kSemReturned;
+        if (!Remote::SessionLatched()) failed |= kSemNotLatched;
+        const char* line = Remote::SessionLatchedLine();
+        if (Remote::SessionLatchedFamily() != Remote::MGFatalFamily::ProtocolCorruption ||
+            std::strstr(line, "unit.first") == nullptr || std::strstr(line, "unit.second") != nullptr) {
+            failed |= kSemNotFirst;
+        }
+        if (Remote::SessionLatchCount() != 2 || Remote::SessionFaultCount() - faultsBefore != 2) failed |= kSemCount;
+        int fatalFrames = 0;
+        bool namesFirst = false;
+        pump(&fatalFrames, &namesFirst);
+        if (fatalFrames != 1 || !namesFirst) failed |= kSemFrames;
+        fixture.Stop();
+        ::_exit(failed);
+    }
+
+    // A RECORD SHORTER THAN ITS OWN TYPE, refused before the applier stamps or reads it.
+    enum : int {
+        kShortStamped = 1,    // the Clear verb was stamped from a record the pre-gate refuses
+        kShortWrongFault = 2, // the latched line is not record.Minimum
+        kShortDrained = 4,    // not exactly the setup draw and the short record reached the applier
+    };
+
+    [[noreturn]] void AShortRecordIsLatchedBeforeItIsStampedAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        // A legal draw first: it stamps DrawArrays, so the verb read below is this child's own
+        // doing whatever the parent had stamped before the fork.
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = 0x0004; // GL_TRIANGLES
+        info.InstanceCount = 1;
+        info.MinIndex = ~0u;
+        info.MaxIndex = ~0u;
+        info.NumDraws = 1;
+        const MG_Pipe::MGPDrawRange range{0, 3, 0};
+        if (!fixture.EmitAndWaitWithTail(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range, sizeof(range)))
+            ::_exit(65);
+        if (MG_Pipe::gPipeInputs->CurrentVerb() == MG_Pipe::MGPipeVerb::Clear) ::_exit(66);
+        // A Clear encoded legally and then SHORTENED in the ring before it is published - the
+        // raw-record peer driver's move, in process: its header says 8 bytes, a header and no
+        // MGPClear at all.
+        const MG_Pipe::MGPClear clear = WholeFramebufferClear();
+        const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::Clear, &clear, sizeof(clear));
+        if (seq == Codec::kInvalidSeq) ::_exit(67);
+        const Uint64 total = (sizeof(MG_Pipe::MGPWireRecHeader) + sizeof(clear) + 7u) & ~Uint64{7u};
+        auto* ring = static_cast<Uint8*>(fixture.clientSegments.CmdRingBase());
+        const Uint64 mask = fixture.clientSegments.CmdRingCapacity() - 1;
+        auto* header =
+            reinterpret_cast<Transport::RingRecordHeader*>(ring + ((fixture.cmd.LocalHead() - total) & mask));
+        if (header->size != total || header->kind != static_cast<std::uint16_t>(MG_Pipe::MGPWireOp::Clear)) ::_exit(68);
+        header->size = 8;
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(seq);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        (void)PollUntil([&] { return !loop.Running(); }, 3000);
+        int failed = 0;
+        if (MG_Pipe::gPipeInputs->CurrentVerb() == MG_Pipe::MGPipeVerb::Clear) failed |= kShortStamped;
+        if (!Remote::SessionLatched() || std::strstr(Remote::SessionLatchedLine(), "\"record.Minimum\"") == nullptr)
+            failed |= kShortWrongFault;
+        if (loop.DrainedRecords() != 2) failed |= kShortDrained;
+        fixture.Stop();
+        ::_exit(failed);
+    }
+
+    // A LATCH FROM ANOTHER THREAD, BETWEEN TWO RECORDS OF ONE BATCH (codex closeout finding 6).
+    // RunSession's control thread latches a malformed SurfaceOp while the apply thread is mid-batch;
+    // the interleaving the finding names is "just after the apply thread's per-record check". The
+    // loop's between-records hook is that point, made deterministic: on its FIRST call - after the
+    // first record's own checks, before the second pop's latch check - it starts a thread that
+    // latches, and joins it, so the latch is stored by another thread and complete before the apply
+    // thread moves on. This pins the NARROWED window only: DrainRing's check-before-pop sees a latch
+    // stored here, but one stored between that check and the pop still lets that record through
+    // (the window is check-to-pop, not closed), and the session then ends at the next check.
+    enum : int {
+        kBetweenThreadStayed = 1, // the apply thread was still running 3 s after the latch, no Stop()
+        kBetweenDrainedMore = 2,  // a record behind the latch point reached the applier
+        kBetweenWrongFault = 4,   // not exactly one fault latched, or it is not the control thread's
+        kBetweenWatermark = 8,    // appliedSeq moved past the first record
+        kBetweenHookCalls = 16,   // the hook did not run exactly once (the case did not interleave)
+    };
+
+    std::atomic<int> g_betweenRecordsCalls{0};
+
+    void LatchFromAControlThreadOnTheFirstCall() {
+        if (g_betweenRecordsCalls.fetch_add(1, std::memory_order_acq_rel) != 0) return;
+        std::thread control([] {
+            (void)MobileGL::MG_Remote::SessionLatch(
+                MobileGL::MG_Remote::MGFatalFamily::ProtocolCorruption,
+                "MGPipe: Fatal{ProtocolCorruption, \"unit.between-records\"} - latched by a control "
+                "thread after the apply thread's checks on the first record");
+        });
+        control.join();
+    }
+
+    [[noreturn]] void LatchFromAnotherThreadBetweenTwoRecordsAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        loop.SetBetweenRecordsHookForTesting(&LatchFromAControlThreadOnTheFirstCall);
+        // Three LEGAL draws under ONE publish (the draw ARecordShorterThanItsType... proves applies
+        // in an armed child without latching), so nothing but the control thread's latch can stop
+        // the batch.
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = 0x0004; // GL_TRIANGLES
+        info.InstanceCount = 1;
+        info.MinIndex = ~0u;
+        info.MaxIndex = ~0u;
+        info.NumDraws = 1;
+        const MG_Pipe::MGPDrawRange range{0, 3, 0};
+        Uint64 last = Codec::kInvalidSeq;
+        for (int i = 0; i < 3; ++i) {
+            last =
+                fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range, sizeof(range));
+            if (last == Codec::kInvalidSeq) ::_exit(66);
+        }
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(last);
+
+        int failed = 0;
+        if (!PollUntil([&] { return !loop.Running(); }, 3000)) failed |= kBetweenThreadStayed;
+        if (loop.DrainedRecords() != 1) failed |= kBetweenDrainedMore;
+        if (Remote::SessionLatchCount() != 1 ||
+            std::strstr(Remote::SessionLatchedLine(), "\"unit.between-records\"") == nullptr) {
+            failed |= kBetweenWrongFault;
+        }
+        if (fixture.session->Consumer().AppliedSeq() != 1) failed |= kBetweenWatermark;
+        if (g_betweenRecordsCalls.load(std::memory_order_acquire) != 1) failed |= kBetweenHookCalls;
+        loop.SetBetweenRecordsHookForTesting(nullptr);
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// DrainRing's pre-pop latch check and the apply thread's own exit, in process. Red with the check
+// deleted (the drain applies both records behind the latched one: bits 2|4|16 - the exit-path drain
+// would too), and with ApplyThreadMain's latched break deleted (bit 1: the thread spins on a ring it
+// will not drain).
+TEST(ServerLoopLatchTest, ALatchedRecordEndsItsBatchAndTheApplyThreadLeavesWithoutAStop) {
+    EXPECT_EXIT(RunALatchedBatchAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the apply thread was still running 3 s after the latch; 2 = a record behind the "
+           "latched one reached the applier; 4 = a second fault was latched; 8 = the latched line is "
+           "not ObjectDeath.Kind; 16 = appliedSeq moved past the latched record (64+ = setup)";
+}
+
+// ServerLoop::PumpControlRequest's latched arm. A frame taken after the latch - posted before it
+// was seen, or pumped by the exit path - is answered PROTOCOL_MISMATCH and never dispatched. Red
+// with the arm deleted: the probe runs (bits 1|2|4).
+TEST(ServerLoopLatchTest, AControlFrameTakenAfterTheLatchIsAnsweredWithoutRunning) {
+    EXPECT_EXIT(PostAfterALatchAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the probe ran; 2 = the poster was not answered PROTOCOL_MISMATCH; 4 = the dispatch "
+           "counter moved (64+ = setup)";
+}
+
+// FatalFunnel's SessionLatch: armed, every fault returns false and is counted, the FIRST one is the
+// latched cause, and exactly one SessionFault frame - the first fault's - reaches the peer.
+TEST(ServerLoopLatchTest, AnArmedSessionLatchKeepsTheFirstFaultCountsEveryOneAndPublishesOnce) {
+    EXPECT_EXIT(LatchTwiceAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = an armed SessionLatch did not return false; 2 = not latched; 4 = the latched "
+           "family/line is not the first fault's; 8 = not both faults counted; 16 = not exactly one "
+           "SessionFault frame naming the first fault (64+ = setup)";
+}
+
+// And unarmed - inproc, the client, every unit case - it IS SessionFail: the same line, and a death.
+TEST(ServerLoopLatchTest, AnUnarmedSessionLatchDiesWithItsLineLikeSessionFail) {
+    EXPECT_EXIT((void)MobileGL::MG_Remote::SessionLatch(MobileGL::MG_Remote::MGFatalFamily::ProtocolCorruption,
+                                                        "MGPipe: Fatal{ProtocolCorruption, \"unit.unarmed\"} - "
+                                                        "no session child armed this process"),
+                ::testing::KilledBySignal(SIGABRT), "unit\\.unarmed");
+}
+
+// PipeApplier::ApplyOne admits the record BEFORE it stamps the verb boundary or computes
+// MGPipeBarriered (which reads payload fields). Red with the admission moved back behind the stamp:
+// the short Clear stamps the Clear verb before DecodeAndApply's pre-gate refuses it (bit 1).
+TEST(ServerLoopLatchTest, ARecordShorterThanItsTypeIsLatchedBeforeTheApplierStampsIt) {
+    EXPECT_EXIT(AShortRecordIsLatchedBeforeItIsStampedAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the Clear verb was stamped from a record shorter than MGPClear; 2 = the latched "
+           "line is not record.Minimum; 4 = not exactly two records reached the applier (64+ = setup)";
+}
+
+// Codex closeout finding 6: a latch ANOTHER thread stores between two records of one batch, before the
+// next pop's check, stops that pop (the check-to-pop span itself stays open - narrowed, not closed). Red with
+// DrainRing's pre-pop check put back to the F2 shape (a check at the function's top and one under `++applied;`, the
+// hook where it is now): the latch lands after the first record's checks, the drain pops and applies the second draw,
+// and only then looks again (bits 2|8).
+TEST(ServerLoopLatchTest, ALatchFromAnotherThreadBetweenTwoRecordsStopsTheNextPop) {
+    EXPECT_EXIT(LatchFromAnotherThreadBetweenTwoRecordsAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the apply thread was still running 3 s after the latch; 2 = a record behind the "
+           "latch point reached the applier; 4 = not exactly the control thread's fault latched; 8 = "
+           "appliedSeq moved past the first record; 16 = the between-records hook did not run exactly "
+           "once (64+ = setup)";
+}
+
+// =====================================================================================
+// P12 (on-screen server window): the surface mode (D4), the display-less refusal (D3) and the lost
+// window (D6), on a real apply thread with no GL context
+// =====================================================================================
+
+namespace {
+    // The apply-thread side of AcquireServerWindow, through the probe seam.
+    struct ServerWindowProbe {
+        Uint32 width = 0;
+        Uint32 height = 0;
+        Uint32 timeoutMs = 1000;
+        Server::ServerWindowLease lease;
+        Server::SurfaceRefusalCode refusal = Server::SurfaceRefusalCode::None;
+        MobileGLResult rc = MOBILEGL_ERR_INVALID_ARGUMENT;
+        Bool onApplyThread = false;
+    };
+
+    MobileGLResult AcquireServerWindowOnTheApplyThread(void* user) {
+        auto& probe = *static_cast<ServerWindowProbe*>(user);
+        probe.onApplyThread = Server::ServerLoop::OnApplyThread();
+        probe.rc = Server::ServerLoopInstance().AcquireServerWindow(probe.width, probe.height, probe.timeoutMs,
+                                                                    &probe.lease, &probe.refusal);
+        return MOBILEGL_OK;
+    }
+
+    struct CountingWindowHooks {
+        static inline std::atomic<int> acquires{0};
+        static inline std::atomic<int> releases{0};
+        static void Acquire(void*, void*) { ++acquires; }
+        static void Release(void*, void*) { ++releases; }
+        static Server::ServerDisplayHooks Hooks() {
+            Server::ServerDisplayHooks hooks;
+            hooks.acquire = &Acquire;
+            hooks.release = &Release;
+            return hooks;
+        }
+    };
+
+    int g_fakeServerWindow = 0;
+
+    // D6 ON THE REAL APPLY THREAD. The session holds the display's window (a lease taken on the apply
+    // thread, as the ServerOwned arm takes it); the UI thread's surfaceDestroyed (Detach) must get the
+    // apply thread to release it, see the session latch ServerWindowLost, and only then release the
+    // window's reference - all while the apply thread was PARKED when the request came. This session
+    // has NO backend, so nothing can suspend it: the latch is the path of a backend that cannot (the
+    // suspend contract's own cases are below, with a backend double).
+    enum : int {
+        kLostNotLeased = 1,     // the probe could not take the lease
+        kLostDetach = 2,        // Detach did not answer ReleasedBySession
+        kLostReleases = 4,      // the window's reference was not released exactly once
+        kLostNotLatched = 8,    // the session did not latch ServerWindowLost
+        kLostCounter = 16,      // ServerWindowsLost() != 1
+        kLostThreadStayed = 32, // the apply thread was still running 3 s after the latch
+    };
+
+    [[noreturn]] void LoseTheServerWindowAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        Server::ServerDisplay& display = Server::ServerDisplayInstance();
+        display.Install(CountingWindowHooks::Hooks());
+        display.Attach(&g_fakeServerWindow, 64, 48);
+        ServerWindowProbe probe;
+        probe.width = 64;
+        probe.height = 48;
+        if (loop.RunProbeOnApplyThreadForTesting(&AcquireServerWindowOnTheApplyThread, &probe) != MOBILEGL_OK)
+            ::_exit(66);
+        int failed = 0;
+        if (probe.rc != MOBILEGL_OK || probe.lease.window != &g_fakeServerWindow || !probe.onApplyThread)
+            failed |= kLostNotLeased;
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(67);
+        const Server::ServerWindowDetach detached = display.Detach(3000);
+        if (detached != Server::ServerWindowDetach::ReleasedBySession) failed |= kLostDetach;
+        if (CountingWindowHooks::releases.load() != 1) failed |= kLostReleases;
+        if (!Remote::SessionLatched() || Remote::SessionLatchedFamily() != Remote::MGFatalFamily::ServerWindowLost)
+            failed |= kLostNotLatched;
+        if (loop.ServerWindowsLost() != 1) failed |= kLostCounter;
+        if (!PollUntil([&] { return !loop.Running(); }, 3000)) failed |= kLostThreadStayed;
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// D6. Red with PumpControlRequest's lost-window arm deleted: nobody answers the request, Detach waits
+// out its bound and says TimedOut, the reference is kept and no latch is raised (bits 2|4|8|16|32);
+// red with the park predicate's lost-window wake deleted: the apply thread sleeps through it the same
+// way.
+TEST(ServerLoopLatchTest, ALostServerWindowIsReleasedOnTheApplyThreadBeforeDetachReturnsAndLatchesByName) {
+    EXPECT_EXIT(LoseTheServerWindowAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the lease was not taken on the apply thread; 2 = Detach did not answer "
+           "ReleasedBySession; 4 = the reference was not released exactly once; 8 = no ServerWindowLost "
+           "latch; 16 = ServerWindowsLost() != 1; 32 = the apply thread stayed (64+ = setup)";
+}
+
+namespace {
+    // A SESSION THAT LATCHES WHILE IT HOLDS THE SERVER WINDOW (a compositor's device loss). Its client
+    // hears of the loss at once and re-creates its window surface on a fresh session, which asks the
+    // display for the window while the lost session still holds it - its apply thread has the
+    // backend to tear down first. The latch itself marks the lease ending (before the peer is told),
+    // so the fresh session's request waits for the lease and gets the window when the session ends.
+    enum : int {
+        kEndingNotLeased = 1,     // the probe could not take the lease
+        kEndingNotMarked = 2,     // the latch did not mark the lease ending
+        kEndingRefused = 4,       // the fresh holder was refused instead of waiting
+        kEndingNotHandedOver = 8, // the fresh holder did not get the window once the session ended
+        kEndingReleased = 16,     // the window's reference was released in the hand-over
+    };
+
+    int g_freshServerWindowHolder = 0;
+
+    [[noreturn]] void LatchWhileHoldingTheServerWindowAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        Server::ServerDisplay& display = Server::ServerDisplayInstance();
+        display.Install(CountingWindowHooks::Hooks());
+        display.Attach(&g_fakeServerWindow, 64, 48);
+        ServerWindowProbe probe;
+        probe.width = 64;
+        probe.height = 48;
+        if (loop.RunProbeOnApplyThreadForTesting(&AcquireServerWindowOnTheApplyThread, &probe) != MOBILEGL_OK)
+            ::_exit(66);
+        int failed = 0;
+        if (probe.rc != MOBILEGL_OK || probe.lease.window != &g_fakeServerWindow) failed |= kEndingNotLeased;
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(67);
+
+        // The loss, latched by a thread of the session while its apply thread is parked.
+        (void)Remote::SessionLatch(Remote::MGFatalFamily::BackendDeviceLost,
+                                   "MGPipe: Fatal{BackendDeviceLost, \"test\"} - the session's device is lost while it "
+                                   "holds the server window");
+        if (!display.LeaseEnding()) failed |= kEndingNotMarked;
+
+        std::atomic<int> fresh{-1};
+        std::thread freshSession([&] {
+            Server::ServerWindowLease lease;
+            fresh.store(static_cast<int>(
+                display.AcquireFor(0, 0, 5000, &g_freshServerWindowHolder, nullptr, nullptr, nullptr, &lease)));
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        if (fresh.load() == static_cast<int>(Server::ServerWindowAcquire::LeasedElsewhere)) failed |= kEndingRefused;
+        // The session ends: its backend goes, then its lease.
+        fixture.Stop();
+        freshSession.join();
+        if (fresh.load() != static_cast<int>(Server::ServerWindowAcquire::Acquired)) failed |= kEndingNotHandedOver;
+        if (CountingWindowHooks::releases.load() != 0) failed |= kEndingReleased;
+        display.EndLease(&g_freshServerWindowHolder);
+        ::_exit(failed);
+    }
+} // namespace
+
+// Red with the latch observer not installed (bits 2|4: the fresh session is refused at once, and a
+// compositor whose session was lost could never draw again).
+TEST(ServerLoopLatchTest, ALatchedSessionsWindowLeaseIsWaitedForAndHandedToAFreshSession) {
+    EXPECT_EXIT(LatchWhileHoldingTheServerWindowAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the lease was not taken; 2 = the latch did not mark it ending; 4 = the fresh session was "
+           "refused; 8 = it did not get the window after the session ended; 16 = the window was released "
+           "(64+ = setup)";
+}
+
+namespace {
+    // P12 review fix (major): THE LOST WINDOW IS ANSWERED IN THE MIDDLE OF A BATCH. A client streaming
+    // frames keeps the command ring from emptying, and the first version answered a window-lost request
+    // only between batches (PumpControlRequest). The between-records hook is that stream here: after
+    // the first record it runs the UI thread's surfaceDestroyed (Detach, on a thread of its own) and
+    // waits until the lost hook has been called; after every record it takes kStreamRecordMs, so the
+    // 200-record batch is a 4 s stream - longer than Detach's 3 s bound.
+    constexpr int kStreamRecords = 200;
+    constexpr int kStreamRecordMs = 20;
+    enum : int {
+        kStreamNotLeased = 1,     // the probe could not take the lease
+        kStreamDetach = 2,        // Detach did not answer ReleasedBySession
+        kStreamDetachSlow = 4,    // Detach took 1 s or more (the batch ran on under it)
+        kStreamDrainedOn = 8,     // more than two records were applied (the stream was not cut)
+        kStreamNotLatched = 16,   // the session did not latch ServerWindowLost
+        kStreamThreadStayed = 32, // the apply thread was still running 3 s after the latch
+    };
+
+    std::atomic<int> g_streamRecords{0};
+    std::thread g_streamDetachThread;
+    std::atomic<int> g_streamDetachResult{-1};
+    std::atomic<long long> g_streamDetachMs{-1};
+
+    void StreamOneRecordAndLoseTheWindowAfterTheFirst() {
+        if (g_streamRecords.fetch_add(1, std::memory_order_acq_rel) == 0) {
+            g_streamDetachThread = std::thread([] {
+                const auto started = std::chrono::steady_clock::now();
+                const Server::ServerWindowDetach detached = Server::ServerDisplayInstance().Detach(3000);
+                g_streamDetachMs.store(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started)
+                        .count(),
+                    std::memory_order_release);
+                g_streamDetachResult.store(static_cast<int>(detached), std::memory_order_release);
+            });
+            // Detach clears the window and calls the lost hook under one lock hold, so once the window
+            // reads detached the request is published.
+            (void)PollUntil([] { return !Server::ServerDisplayInstance().Attached(); }, 1000);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kStreamRecordMs));
+    }
+
+    [[noreturn]] void LoseTheServerWindowMidStreamAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        Server::ServerDisplay& display = Server::ServerDisplayInstance();
+        display.Install(CountingWindowHooks::Hooks());
+        display.Attach(&g_fakeServerWindow, 64, 48);
+        ServerWindowProbe probe;
+        probe.width = 64;
+        probe.height = 48;
+        if (loop.RunProbeOnApplyThreadForTesting(&AcquireServerWindowOnTheApplyThread, &probe) != MOBILEGL_OK)
+            ::_exit(66);
+        int failed = 0;
+        if (probe.rc != MOBILEGL_OK || probe.lease.window != &g_fakeServerWindow) failed |= kStreamNotLeased;
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(67);
+        loop.SetBetweenRecordsHookForTesting(&StreamOneRecordAndLoseTheWindowAfterTheFirst);
+        // LEGAL draws under ONE publish (ALatchFromAnotherThread...'s records), so only the lost window
+        // can cut the batch short.
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = 0x0004; // GL_TRIANGLES
+        info.InstanceCount = 1;
+        info.MinIndex = ~0u;
+        info.MaxIndex = ~0u;
+        info.NumDraws = 1;
+        const MG_Pipe::MGPDrawRange range{0, 3, 0};
+        Uint64 last = Codec::kInvalidSeq;
+        for (int i = 0; i < kStreamRecords; ++i) {
+            last =
+                fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range, sizeof(range));
+            if (last == Codec::kInvalidSeq) ::_exit(68);
+        }
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(last);
+
+        if (!PollUntil([] { return g_streamDetachResult.load(std::memory_order_acquire) >= 0; }, 8000)) ::_exit(69);
+        if (g_streamDetachThread.joinable()) g_streamDetachThread.join();
+        if (g_streamDetachResult.load() != static_cast<int>(Server::ServerWindowDetach::ReleasedBySession))
+            failed |= kStreamDetach;
+        if (g_streamDetachMs.load() >= 1000) failed |= kStreamDetachSlow;
+        if (!PollUntil([&] { return !loop.Running(); }, 3000)) failed |= kStreamThreadStayed;
+        if (loop.DrainedRecords() > 2) failed |= kStreamDrainedOn;
+        if (!Remote::SessionLatched() || Remote::SessionLatchedFamily() != Remote::MGFatalFamily::ServerWindowLost)
+            failed |= kStreamNotLatched;
+        std::fprintf(
+            stderr, "[stream] Detach answered %s in %lld ms after %llu of %d streamed records\n",
+            Server::ServerWindowDetachName(static_cast<Server::ServerWindowDetach>(g_streamDetachResult.load())),
+            g_streamDetachMs.load(), static_cast<unsigned long long>(loop.DrainedRecords()), kStreamRecords);
+        loop.SetBetweenRecordsHookForTesting(nullptr);
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// P12 review fix (major). Red with DrainRing's pre-pop lost-window check deleted: the whole 4 s batch
+// runs under the UI thread's Detach, which gives up at its 3 s bound and answers TimedOut (bits 2|4|8).
+TEST(ServerLoopLatchTest, ALostServerWindowIsReleasedMidBatchWhileTheClientStreams) {
+    EXPECT_EXIT(LoseTheServerWindowMidStreamAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the lease was not taken; 2 = Detach did not answer ReleasedBySession; 4 = Detach took "
+           "1 s or more; 8 = more than two records applied after the window went; 16 = no ServerWindowLost "
+           "latch; 32 = the apply thread stayed (64+ = setup)";
+}
+
+// =====================================================================================
+// A SESSION WHOSE OWN GPU WORK HUNG THE GPU APPLIES NOTHING MORE (ServerHooks::LatchIfGpuFaulted)
+// =====================================================================================
+
+namespace {
+    // The backend's verdict arrives from elsewhere - the driver's GUILTY report (Espryt) or the hang
+    // watch's thread (Magma) - while the session's next frame is already queued. The double counts
+    // the frames that reach it and, once `faulted` is set, latches its session from the apply thread
+    // as both real backends do.
+    class GpuFaultBackendDouble final : public MG_Backend::BackendObject, public MG_Backend::ServerHooks {
+    public:
+        GpuFaultBackendDouble() { m_functions.Present = &Present; }
+        ServerHooks* AsServer() override { return this; }
+        Bool LatchIfGpuFaulted() override {
+            asked.fetch_add(1, std::memory_order_acq_rel);
+            if (!faulted.load(std::memory_order_acquire)) return false;
+            (void)MG_Pipe::MGPipeSessionLatch(MG_Pipe::MGPipeFatalFamily::DeviceLost,
+                                              "MGPipe: Fatal{BackendDeviceLost, \"unit:gpu-hang\"} - the double's "
+                                              "own GPU work hung the GPU");
+            return true;
+        }
+        void Initialize() override {}
+        Bool InitCapabilities() override { return true; }
+        Bool InitWindowSurface() override { return true; }
+        const RendererInfo& GetRendererInfo() const override { return m_info; }
+        String GetBackendAPIVersionString() const override { return "gpu fault double"; }
+        const MG_Backend::GlobalBackendFunctionsTable& GetBackendFunctions() const override { return m_functions; }
+        const MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override { return m_params; }
+        BackendType GetBackendType() const override { return BackendType::Unknown; }
+
+        static void Present() { presents.fetch_add(1, std::memory_order_acq_rel); }
+
+        static inline std::atomic<int> presents{0};
+        static inline std::atomic<int> asked{0};
+        static inline std::atomic<Bool> faulted{false};
+
+    private:
+        MG_Backend::GlobalBackendFunctionsTable m_functions{};
+        MG_Backend::DynamicBackendParameters m_params{};
+        RendererInfo m_info{.RendererName = "Test",
+                            .BackendName = "GpuFaultBackendDouble",
+                            .ExtraVendor = Nullopt,
+                            .RendererGLInfo = {.TargetGLVersion = {3, 3, 0},
+                                               .TargetGLSLVersion = {4, 6, 0},
+                                               .Extensions = {},
+                                               .IsCompatibilityProfile = false},
+                            .StaticBackendCapability = {.AllowVSOnlyPrograms = false}};
+    };
+
+    enum : int {
+        kFaultFirstFrame = 1,   // the healthy frame before the fault was not applied
+        kFaultFrameApplied = 2, // a frame published after the verdict reached the backend
+        kFaultNotLatched = 4,   // the session did not latch DeviceLost with the backend's line
+        kFaultThreadStayed = 8, // the apply thread was still running 3 s after the verdict
+        kFaultNotAsked = 16,    // the loop never asked the backend
+    };
+
+    [[noreturn]] void ApplyNothingAfterAGpuFaultAndExit() {
+        Remote::ArmSessionLatch();
+        Remote::InstallPipeSessionFailHook(); // the MG_Pipe latch seam the backends latch through
+                                              // (InitServerRoleCommon)
+        ServerFixture fixture;
+        if (!fixture.Handshake()) ::_exit(64);
+        if (Server::ServerLoopInstance().InstallBackendForTesting(MakeUnique<GpuFaultBackendDouble>()) != MOBILEGL_OK)
+            ::_exit(65);
+        if (!fixture.StartLoop() || !fixture.WaitUntilTrulyParked()) ::_exit(66);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        int failed = 0;
+
+        // One healthy frame.
+        MG_Pipe::MGPPresent present{};
+        present.FrameSerial = 1;
+        Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::Present, &present, sizeof(present));
+        if (seq == Codec::kInvalidSeq) ::_exit(67);
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(seq);
+        if (fixture.producer.WaitForApplied(seq, 3000) != Transport::SessionWait::Reached ||
+            GpuFaultBackendDouble::presents.load() != 1)
+            failed |= kFaultFirstFrame;
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(68);
+
+        // The verdict lands while the session is parked; then its next frames arrive.
+        GpuFaultBackendDouble::faulted.store(true, std::memory_order_release);
+        for (Uint64 serial = 2; serial <= 4; ++serial) {
+            present.FrameSerial = serial;
+            seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::Present, &present, sizeof(present));
+            if (seq == Codec::kInvalidSeq) ::_exit(69);
+        }
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(seq);
+
+        if (!PollUntil([&] { return !loop.Running(); }, 3000)) failed |= kFaultThreadStayed;
+        if (GpuFaultBackendDouble::presents.load() != 1) failed |= kFaultFrameApplied;
+        if (!Remote::SessionLatched() || Remote::SessionLatchedFamily() != Remote::MGFatalFamily::BackendDeviceLost ||
+            std::strstr(Remote::SessionLatchedLine(), "\"unit:gpu-hang\"") == nullptr)
+            failed |= kFaultNotLatched;
+        if (GpuFaultBackendDouble::asked.load() == 0) failed |= kFaultNotAsked;
+        std::fprintf(stderr, "[gpu-fault] presents %d, asked %d, drained %llu\n",
+                     GpuFaultBackendDouble::presents.load(), GpuFaultBackendDouble::asked.load(),
+                     static_cast<unsigned long long>(loop.DrainedRecords()));
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// Red with ServerLoop's per-wakeup LatchIfGpuFaulted call deleted: the three frames behind the
+// verdict are applied - on a device each would stop the GPU again - and nothing latches (bits
+// 2|4|8|16).
+TEST(ServerLoopLatchTest, ASessionWhoseGpuWorkHungAppliesNoFrameAfterTheVerdict) {
+    EXPECT_EXIT(ApplyNothingAfterAGpuFaultAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the healthy frame was not applied; 2 = a frame behind the verdict was applied; 4 = no "
+           "DeviceLost latch with the backend's line; 8 = the apply thread stayed; 16 = the loop never asked "
+           "(64+ = setup)";
+}
+
+// =====================================================================================
+// SUSPEND, NOT END: the server window going away (screen off, lock) and coming back
+// =====================================================================================
+
+namespace {
+    // A backend double for the window cases. It takes the server's window the way a real backend
+    // does (CreateEGLWindowSurface on the substituted handle) and, when it CAN suspend, answers
+    // SuspendServerWindow / ResumeServerWindow the way Espryt and Magma do: by letting go of the
+    // window - presents from then on reach no window - and by taking the new one. Its Present counts
+    // the frames and the ones that came while no window was held. Statics, because the loop owns
+    // (and destroys) the object and each case runs in its own death-test child.
+    class WindowBackendDouble final : public MG_Backend::BackendObject, public MG_Backend::ServerHooks {
+    public:
+        explicit WindowBackendDouble(Bool canSuspend) : m_canSuspend(canSuspend) { m_functions.Present = &Present; }
+        ServerHooks* AsServer() override { return this; }
+        void Initialize() override {}
+        Bool InitCapabilities() override { return true; }
+        Bool InitWindowSurface() override { return true; }
+        Bool CreateEGLWindowSurface(EGLSurface, const MG_Backend::WindowHandle& handle) override {
+            window.store(handle.Handle, std::memory_order_release);
+            NoteExtentAt(createExtent);
+            creates.fetch_add(1, std::memory_order_acq_rel);
+            return true;
+        }
+        Bool SuspendServerWindow(void* lost) override {
+            if (!m_canSuspend) return false;
+            suspendedOn.store(lost, std::memory_order_release);
+            suspendOnApplyThread.store(Server::ServerLoop::OnApplyThread(), std::memory_order_release);
+            window.store(nullptr, std::memory_order_release);
+            suspends.fetch_add(1, std::memory_order_acq_rel);
+            return true;
+        }
+        Bool ResumeServerWindow(void* fresh, Uint32 width, Uint32 height) override {
+            resumeOnApplyThread.store(Server::ServerLoop::OnApplyThread(), std::memory_order_release);
+            resumeWidth.store(width, std::memory_order_release);
+            resumeHeight.store(height, std::memory_order_release);
+            NoteExtentAt(resumeExtent);
+            window.store(fresh, std::memory_order_release);
+            resumes.fetch_add(1, std::memory_order_acq_rel);
+            return true;
+        }
+        Bool ServerWindowResized(void* resizedWindow, Uint32 width, Uint32 height) override {
+            if (resizedWindow != window.load(std::memory_order_acquire)) return false;
+            resizedOnApplyThread.store(Server::ServerLoop::OnApplyThread(), std::memory_order_release);
+            resizedTo.store(Pack(width, height), std::memory_order_release);
+            NoteExtentAt(resizeExtent);
+            resizes.fetch_add(1, std::memory_order_acq_rel);
+            return true;
+        }
+        void ReleaseEGLResources() override {
+            releases.fetch_add(1, std::memory_order_acq_rel);
+            BackendObject::ReleaseEGLResources();
+        }
+        const RendererInfo& GetRendererInfo() const override { return m_info; }
+        String GetBackendAPIVersionString() const override { return "window double"; }
+        const MG_Backend::GlobalBackendFunctionsTable& GetBackendFunctions() const override { return m_functions; }
+        const MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override { return m_params; }
+        BackendType GetBackendType() const override { return BackendType::Unknown; }
+
+        static void Present() {
+            presents.fetch_add(1, std::memory_order_acq_rel);
+            if (window.load(std::memory_order_acquire) == nullptr)
+                presentsWithoutWindow.fetch_add(1, std::memory_order_acq_rel);
+        }
+
+        static inline std::atomic<void*> window{nullptr};
+        static inline std::atomic<void*> suspendedOn{nullptr};
+        static inline std::atomic<int> creates{0};
+        static inline std::atomic<int> suspends{0};
+        static inline std::atomic<int> resumes{0};
+        static inline std::atomic<int> releases{0};
+        static inline std::atomic<int> presents{0};
+        static inline std::atomic<int> presentsWithoutWindow{0};
+        static inline std::atomic<Bool> suspendOnApplyThread{false};
+        static inline std::atomic<Bool> resumeOnApplyThread{false};
+        static inline std::atomic<Uint32> resumeWidth{0};
+        static inline std::atomic<Uint32> resumeHeight{0};
+        // The extent the server window had in MGPipe - the one a real backend publishes - when each
+        // call ran (width << 32 | height; 0 = none).
+        static inline std::atomic<Uint64> createExtent{0};
+        static inline std::atomic<Uint64> resumeExtent{0};
+        static inline std::atomic<Uint64> resizeExtent{0};
+        static inline std::atomic<Uint64> resizedTo{0};
+        static inline std::atomic<int> resizes{0};
+        static inline std::atomic<Bool> resizedOnApplyThread{false};
+        static constexpr Uint64 Pack(Uint32 width, Uint32 height) { return (Uint64{width} << 32) | height; }
+        static void NoteExtentAt(std::atomic<Uint64>& slot) {
+            Uint32 width = 0;
+            Uint32 height = 0;
+            slot.store(MG_Pipe::MGPipeServerOwnedWindowExtent(&width, &height) ? Pack(width, height) : 0,
+                       std::memory_order_release);
+        }
+
+    private:
+        Bool m_canSuspend = false;
+        MG_Backend::GlobalBackendFunctionsTable m_functions{};
+        MG_Backend::DynamicBackendParameters m_params{};
+        RendererInfo m_info{.RendererName = "Test",
+                            .BackendName = "WindowBackendDouble",
+                            .ExtraVendor = Nullopt,
+                            .RendererGLInfo = {.TargetGLVersion = {3, 3, 0},
+                                               .TargetGLSLVersion = {4, 6, 0},
+                                               .Extensions = {},
+                                               .IsCompatibilityProfile = false},
+                            .StaticBackendCapability = {.AllowVSOnlyPrograms = false}};
+    };
+
+    int g_secondFakeServerWindow = 0;
+    const EGLSurface kServerOwnedSurface = reinterpret_cast<EGLSurface>(static_cast<std::uintptr_t>(0x51));
+
+    // Handshake, the double installed, the loop started and parked, a display with a window, and the
+    // session's first surface created on that window through the ServerOwned arm (as a headless
+    // client's eglCreateWindowSurface reaches it). False on any setup failure.
+    bool BringUpAnOnScreenSession(ServerFixture& fixture, Bool canSuspend) {
+        if (!fixture.Handshake()) return false;
+        if (Server::ServerLoopInstance().InstallBackendForTesting(MakeUnique<WindowBackendDouble>(canSuspend)) !=
+            MOBILEGL_OK)
+            return false;
+        if (!fixture.StartLoop() || !fixture.WaitUntilTrulyParked()) return false;
+        Server::ServerDisplay& display = Server::ServerDisplayInstance();
+        display.Install(CountingWindowHooks::Hooks());
+        display.Attach(&g_fakeServerWindow, 64, 48);
+        const Server::ServerOwnedWindowReply reply =
+            Server::ServerCreateServerOwnedWindowSurface(kServerOwnedSurface, 64, 48);
+        return reply.ok && reply.width == 64 && reply.height == 48 &&
+               WindowBackendDouble::window.load() == &g_fakeServerWindow && display.Leased() &&
+               fixture.WaitUntilTrulyParked();
+    }
+
+    // `count` presents under ONE publish, serials from `firstSerial`; true once all are applied.
+    bool PresentAndWait(ServerFixture& fixture, Uint64 firstSerial, int count, Uint32 timeoutMs = 5000) {
+        Uint64 last = Codec::kInvalidSeq;
+        for (int i = 0; i < count; ++i) {
+            MG_Pipe::MGPPresent present{};
+            present.FrameSerial = firstSerial + static_cast<Uint64>(i);
+            last = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::Present, &present, sizeof(present));
+            if (last == Codec::kInvalidSeq) return false;
+        }
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(last);
+        return fixture.producer.WaitForApplied(last, timeoutMs) == Transport::SessionWait::Reached;
+    }
+
+    enum : int {
+        kSuspendDetach = 1,  // Detach did not answer ReleasedBySession
+        kSuspendLatched = 2, // the session latched, or the apply thread left
+        kSuspendBackend =
+            4, // the backend was not asked to suspend exactly once, on the apply thread, for the lost window
+        kSuspendState = 8,         // the loop's counters / the display's lease and wait are not the suspended state
+        kSuspendRecords = 16,      // presents after the loss were not applied (all of them, none reaching a window)
+        kSuspendResume = 32,       // a new window did not resume the session on it, on the apply thread
+        kSuspendAgain = 64,        // the resumed session did not suspend again on the next loss
+        kSuspendNotCanceled = 128, // the session's end left it waiting for a window
+    };
+
+    [[noreturn]] void SuspendResumeAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!BringUpAnOnScreenSession(fixture, /*canSuspend=*/true)) ::_exit(250);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        Server::ServerDisplay& display = Server::ServerDisplayInstance();
+        int failed = 0;
+
+        // The screen goes off: surfaceDestroyed.
+        if (display.Detach(3000) != Server::ServerWindowDetach::ReleasedBySession) failed |= kSuspendDetach;
+        if (CountingWindowHooks::releases.load() != 1) failed |= kSuspendDetach;
+        if (Remote::SessionLatched() || !loop.Running()) failed |= kSuspendLatched;
+        if (WindowBackendDouble::suspends.load() != 1 ||
+            WindowBackendDouble::suspendedOn.load() != &g_fakeServerWindow ||
+            !WindowBackendDouble::suspendOnApplyThread.load() || WindowBackendDouble::releases.load() != 0)
+            failed |= kSuspendBackend;
+        if (loop.ServerWindowsSuspended() != 1 || loop.ServerWindowsLost() != 0 || !loop.ServerWindowSuspended() ||
+            display.Leased() || display.SuspendedHolders() != 1)
+            failed |= kSuspendState;
+
+        // The client keeps drawing: its frames are applied - and their credit returned - with no window.
+        if (!PresentAndWait(fixture, 1, 3) || WindowBackendDouble::presents.load() != 3 ||
+            WindowBackendDouble::presentsWithoutWindow.load() != 3)
+            failed |= kSuspendRecords;
+        if (Remote::SessionLatched() || !loop.Running()) failed |= kSuspendLatched;
+
+        // The screen comes back: a NEW window.
+        display.Attach(&g_secondFakeServerWindow, 64, 48);
+        if (!PollUntil([&] { return loop.ServerWindowsResumed() == 1; }, 3000) ||
+            WindowBackendDouble::resumes.load() != 1 ||
+            WindowBackendDouble::window.load() != &g_secondFakeServerWindow ||
+            WindowBackendDouble::resumeWidth.load() != 64 || WindowBackendDouble::resumeHeight.load() != 48 ||
+            !WindowBackendDouble::resumeOnApplyThread.load() || loop.ServerWindowSuspended() || !display.Leased() ||
+            display.SuspendedHolders() != 0)
+            failed |= kSuspendResume;
+        if (!PresentAndWait(fixture, 4, 1) || WindowBackendDouble::presentsWithoutWindow.load() != 3)
+            failed |= kSuspendRecords;
+
+        // And again: the cycle holds.
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(251);
+        if (display.Detach(3000) != Server::ServerWindowDetach::ReleasedBySession ||
+            WindowBackendDouble::suspends.load() != 2 ||
+            WindowBackendDouble::suspendedOn.load() != &g_secondFakeServerWindow ||
+            loop.ServerWindowsSuspended() != 2 || Remote::SessionLatched())
+            failed |= kSuspendAgain;
+
+        fixture.Stop();
+        if (display.SuspendedHolders() != 0) failed |= kSuspendNotCanceled;
+        std::fprintf(stderr, "[suspend] suspends=%d resumes=%d presents=%d (%d without a window) lost=%llu\n",
+                     WindowBackendDouble::suspends.load(), WindowBackendDouble::resumes.load(),
+                     WindowBackendDouble::presents.load(), WindowBackendDouble::presentsWithoutWindow.load(),
+                     static_cast<unsigned long long>(loop.ServerWindowsLost()));
+        ::_exit(failed);
+    }
+
+    // THE NEGATIVE CONTROL: the same session over a backend that cannot suspend (the BackendObject
+    // default) still ends the old way - its EGL resources released, ServerWindowLost latched by name.
+    enum : int {
+        kNoSuspendDetach = 1,     // Detach did not answer ReleasedBySession
+        kNoSuspendNotLatched = 2, // no ServerWindowLost latch
+        kNoSuspendRelease = 4,    // the backend's EGL resources were not released exactly once
+        kNoSuspendCounters = 8,   // ServerWindowsLost() != 1 or a suspend was counted
+        kNoSuspendStayed = 16,    // the apply thread was still running 3 s after the latch
+    };
+
+    [[noreturn]] void ABackendThatCannotSuspendLatchesAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!BringUpAnOnScreenSession(fixture, /*canSuspend=*/false)) ::_exit(250);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        int failed = 0;
+        if (Server::ServerDisplayInstance().Detach(3000) != Server::ServerWindowDetach::ReleasedBySession)
+            failed |= kNoSuspendDetach;
+        if (!Remote::SessionLatched() || Remote::SessionLatchedFamily() != Remote::MGFatalFamily::ServerWindowLost)
+            failed |= kNoSuspendNotLatched;
+        if (WindowBackendDouble::releases.load() != 1) failed |= kNoSuspendRelease;
+        if (loop.ServerWindowsLost() != 1 || loop.ServerWindowsSuspended() != 0 || loop.ServerWindowSuspended())
+            failed |= kNoSuspendCounters;
+        if (!PollUntil([&] { return !loop.Running(); }, 3000)) failed |= kNoSuspendStayed;
+        fixture.Stop();
+        ::_exit(failed);
+    }
+
+    // The mid-stream case's suspend twin: the loss lands in the middle of a 4 s stream of presents,
+    // Detach is answered within the stream, and the stream is then applied to its end - not cut.
+    std::atomic<int> g_suspendStreamRecords{0};
+    std::thread g_suspendStreamDetachThread;
+    std::atomic<int> g_suspendStreamDetachResult{-1};
+    std::atomic<long long> g_suspendStreamDetachMs{-1};
+
+    void StreamOnePresentAndLoseTheWindowAfterTheFirst() {
+        if (g_suspendStreamRecords.fetch_add(1, std::memory_order_acq_rel) == 0) {
+            g_suspendStreamDetachThread = std::thread([] {
+                const auto started = std::chrono::steady_clock::now();
+                const Server::ServerWindowDetach detached = Server::ServerDisplayInstance().Detach(3000);
+                g_suspendStreamDetachMs.store(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started)
+                        .count(),
+                    std::memory_order_release);
+                g_suspendStreamDetachResult.store(static_cast<int>(detached), std::memory_order_release);
+            });
+            (void)PollUntil([] { return !Server::ServerDisplayInstance().Attached(); }, 1000);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kStreamRecordMs));
+    }
+
+    enum : int {
+        kSuspendStreamDetach = 1,        // Detach did not answer ReleasedBySession
+        kSuspendStreamSlow = 2,          // Detach took 1 s or more
+        kSuspendStreamCut = 4,           // the stream was not applied to its end
+        kSuspendStreamLatched = 8,       // the session latched or the apply thread left
+        kSuspendStreamNotSuspended = 16, // the session is not suspended exactly once
+    };
+
+    [[noreturn]] void SuspendMidStreamAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!BringUpAnOnScreenSession(fixture, /*canSuspend=*/true)) ::_exit(250);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        loop.SetBetweenRecordsHookForTesting(&StreamOnePresentAndLoseTheWindowAfterTheFirst);
+        const Uint64 drainedBefore = loop.DrainedRecords();
+        int failed = 0;
+        if (!PresentAndWait(fixture, 1, kStreamRecords, 15000)) failed |= kSuspendStreamCut;
+        if (!PollUntil([] { return g_suspendStreamDetachResult.load(std::memory_order_acquire) >= 0; }, 8000))
+            ::_exit(251);
+        if (g_suspendStreamDetachThread.joinable()) g_suspendStreamDetachThread.join();
+        if (g_suspendStreamDetachResult.load() != static_cast<int>(Server::ServerWindowDetach::ReleasedBySession))
+            failed |= kSuspendStreamDetach;
+        if (g_suspendStreamDetachMs.load() >= 1000) failed |= kSuspendStreamSlow;
+        if (loop.DrainedRecords() - drainedBefore != static_cast<Uint64>(kStreamRecords) ||
+            WindowBackendDouble::presents.load() != kStreamRecords)
+            failed |= kSuspendStreamCut;
+        if (Remote::SessionLatched() || !loop.Running()) failed |= kSuspendStreamLatched;
+        if (loop.ServerWindowsSuspended() != 1 || !loop.ServerWindowSuspended()) failed |= kSuspendStreamNotSuspended;
+        std::fprintf(
+            stderr, "[suspend-stream] Detach answered %s in %lld ms; %llu of %d presents applied\n",
+            Server::ServerWindowDetachName(static_cast<Server::ServerWindowDetach>(g_suspendStreamDetachResult.load())),
+            g_suspendStreamDetachMs.load(), static_cast<unsigned long long>(loop.DrainedRecords() - drainedBefore),
+            kStreamRecords);
+        loop.SetBetweenRecordsHookForTesting(nullptr);
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// THE CONTRACT. Red with ReleaseLostServerWindow's suspend arm deleted (the old latch for every
+// backend): the session latches and its loop is gone before the second loss (exit 251); red with
+// Attach no longer calling the attached hooks AND ForgetServerWindow's CancelResume deleted: nothing
+// resumes and the ended session is still registered (bits 16|32|64|128).
+TEST(ServerLoopSuspendTest, ALostServerWindowSuspendsTheSessionAndTheNextWindowResumesIt) {
+    EXPECT_EXIT(SuspendResumeAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = Detach did not answer ReleasedBySession; 2 = the session latched or left; 4 = the "
+           "backend was not suspended once, on the apply thread, for the lost window; 8 = the suspended state "
+           "(counters, lease, wait) is wrong; 16 = presents after the loss were not applied; 32 = the new window "
+           "did not resume the session; 64 = the resumed session did not suspend again; 128 = the ended session "
+           "still waits for a window (250+ = setup)";
+}
+
+// The negative control: a backend that cannot suspend keeps today's ending. Red with the suspend arm
+// taken whatever the backend answers: no latch (bits 2|4|8|16).
+TEST(ServerLoopSuspendTest, ABackendThatCannotSuspendStillLatchesServerWindowLost) {
+    EXPECT_EXIT(ABackendThatCannotSuspendLatchesAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = Detach did not answer ReleasedBySession; 2 = no ServerWindowLost latch; 4 = the EGL "
+           "resources were not released once; 8 = the counters are wrong; 16 = the apply thread stayed (250+ = "
+           "setup)";
+}
+
+// Mid-stream: answered within the stream (DrainRing's per-pop check) and the stream goes on. Red with
+// the suspend arm deleted: the stream is cut at the latch (bits 4|8|16).
+namespace {
+    enum : int {
+        kResizeNotPublished =
+            1, // a resize with no present was not handed to the backend at the new size, on the apply thread
+        kResizeExtent = 2,       // the extent a backend publishes (MGPipe's) did not follow the display
+        kResizeRepeated = 4,     // an unchanged report was published again
+        kResizePresented = 8,    // a present ran (the case is about publishing without one)
+        kResizeAfterResume = 16, // the resume did not take the new window's extent, or a later resize was lost
+    };
+
+    [[noreturn]] void ResizeWithoutAPresentAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!BringUpAnOnScreenSession(fixture, /*canSuspend=*/true)) ::_exit(250);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        Server::ServerDisplay& display = Server::ServerDisplayInstance();
+        using Double = WindowBackendDouble;
+        int failed = 0;
+        if (Double::createExtent.load() != Double::Pack(64, 48)) failed |= kResizeExtent;
+
+        // The app's bar is hidden: the SAME window, taller - and the client draws nothing at all.
+        display.Attach(&g_fakeServerWindow, 64, 60);
+        if (!PollUntil([&] { return loop.ServerWindowResizesPublished() == 1; }, 3000) || Double::resizes.load() != 1 ||
+            Double::resizedTo.load() != Double::Pack(64, 60) || !Double::resizedOnApplyThread.load())
+            failed |= kResizeNotPublished;
+        if (Double::resizeExtent.load() != Double::Pack(64, 60)) failed |= kResizeExtent;
+        display.Attach(&g_fakeServerWindow, 64, 60);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (Double::resizes.load() != 1) failed |= kResizeRepeated;
+        if (Double::presents.load() != 0) failed |= kResizePresented;
+
+        // Screen off; the new window comes back at the session's own size, then the bar moves again.
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(251);
+        if (display.Detach(3000) != Server::ServerWindowDetach::ReleasedBySession) failed |= kResizeAfterResume;
+        if (MG_Pipe::MGPipeServerOwnedWindowExtent(nullptr, nullptr)) failed |= kResizeExtent; // no window, no extent
+        display.Attach(&g_secondFakeServerWindow, 64, 48);
+        if (!PollUntil([&] { return loop.ServerWindowsResumed() == 1; }, 3000) ||
+            Double::resumeExtent.load() != Double::Pack(64, 48))
+            failed |= kResizeAfterResume;
+        display.Attach(&g_secondFakeServerWindow, 64, 60);
+        if (!PollUntil([&] { return Double::resizes.load() == 2; }, 3000) ||
+            Double::resizedTo.load() != Double::Pack(64, 60) || Double::resizeExtent.load() != Double::Pack(64, 60))
+            failed |= kResizeAfterResume;
+        std::fprintf(stderr, "[resize] published=%llu resizes=%d presents=%d\n",
+                     static_cast<unsigned long long>(loop.ServerWindowResizesPublished()), Double::resizes.load(),
+                     Double::presents.load());
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// THE RESIZE NOBODY PRESENTED FOR (device: the bar toggled while the compositor was idle, or just
+// before the lock, never reached it). The display's surfaceChanged of the leased window reaches the
+// session's apply thread at once, and the backend publishes the DISPLAY's extent - MGPipe's, which
+// every publish of the server window reads - with no present in between; after a suspend and resume
+// the resume publishes the new window's extent and a later resize is published again. Red with
+// ServerDisplay::Attach not telling the holder (exit 23: nothing published), and with the resize path
+// handing the backend the size without setting MGPipe's extent (exit 18: bits 2|16).
+TEST(ServerLoopSuspendTest, AResizeOfTheServerWindowIsPublishedWithoutWaitingForAPresent) {
+    EXPECT_EXIT(ResizeWithoutAPresentAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the resize was not published without a present; 2 = the published extent is not the "
+           "display's; 4 = an unchanged report was published again; 8 = a present ran; 16 = the resume or a "
+           "resize after it went wrong (250+ = setup)";
+}
+
+// MAGMA'S PLACEHOLDER ON A RENDERER CREATED FOR A WINDOW (the device crash: SIGSEGV at pc 0 in
+// VulkanRenderer::CreateSurface on screen-off). The on-screen session's renderer was built for the
+// server's window, so its instance enabled the Android surface extension and nothing headless; the
+// suspend's offscreen placeholder must take the AImageReader route - the way a windowless renderer's
+// pbuffers are built on drivers without the headless extension - and never call a headless entry point
+// the instance does not have. With no route at all the target is refused (and the suspend fails, so the
+// session latches as the cannot-suspend case below shows) instead of called through a null pointer.
+// Red with the route keyed on what the LOADER offers rather than what the instance enabled (the first
+// two expectations answer Headless).
+TEST(ServerLoopSuspendTest, AnOffscreenTargetNeverCallsAHeadlessEntryPointTheInstanceDoesNotHave) {
+    using MG_Backend::DirectVulkan::ChooseOffscreenSurfaceRoute;
+    using MG_Backend::DirectVulkan::OffscreenSurfaceRoute;
+    // A renderer created for a window: Android surfaces enabled, the headless extension never enabled -
+    // whether or not the loader would answer its entry point.
+    EXPECT_EQ(ChooseOffscreenSurfaceRoute(false, false, true), OffscreenSurfaceRoute::AndroidImageReader);
+    EXPECT_EQ(ChooseOffscreenSurfaceRoute(false, true, true), OffscreenSurfaceRoute::AndroidImageReader);
+    // Enabled, but the entry point is absent: still never called.
+    EXPECT_EQ(ChooseOffscreenSurfaceRoute(true, false, true), OffscreenSurfaceRoute::AndroidImageReader);
+    EXPECT_EQ(ChooseOffscreenSurfaceRoute(true, false, false), OffscreenSurfaceRoute::Unavailable);
+    EXPECT_EQ(ChooseOffscreenSurfaceRoute(false, false, false), OffscreenSurfaceRoute::Unavailable);
+    // A windowless renderer on a driver that has the extension.
+    EXPECT_EQ(ChooseOffscreenSurfaceRoute(true, true, false), OffscreenSurfaceRoute::Headless);
+}
+
+TEST(ServerLoopSuspendTest, ALostServerWindowMidStreamSuspendsPromptlyAndTheStreamCarriesOn) {
+    EXPECT_EXIT(SuspendMidStreamAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = Detach did not answer ReleasedBySession; 2 = Detach took 1 s or more; 4 = the stream was "
+           "cut; 8 = the session latched or left; 16 = not suspended exactly once (250+ = setup)";
+}
+
+namespace {
+    // P12 review fix: A STOPPING SERVER UNDER A STREAMING CLIENT. 200 records at 40 ms each is an 8 s
+    // stream, longer than Stop()'s 5 s bounded join. The display server's stop marks the queue
+    // abandoned first; the join must then come back within a record or two.
+    std::atomic<int> g_stopStreamRecords{0};
+    void StreamSlowly() {
+        g_stopStreamRecords.fetch_add(1, std::memory_order_acq_rel);
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    }
+
+    enum : int {
+        kStopSlow = 1,      // Stop() took 1 s or more
+        kStopDrainedOn = 2, // more than three records were applied
+    };
+
+    [[noreturn]] void StopTheServerMidStreamAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        loop.SetBetweenRecordsHookForTesting(&StreamSlowly);
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = 0x0004; // GL_TRIANGLES
+        info.InstanceCount = 1;
+        info.MinIndex = ~0u;
+        info.MaxIndex = ~0u;
+        info.NumDraws = 1;
+        const MG_Pipe::MGPDrawRange range{0, 3, 0};
+        Uint64 last = Codec::kInvalidSeq;
+        for (int i = 0; i < 200; ++i) {
+            last =
+                fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range, sizeof(range));
+            if (last == Codec::kInvalidSeq) ::_exit(66);
+        }
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(last);
+        if (!PollUntil([] { return g_stopStreamRecords.load(std::memory_order_acquire) >= 1; }, 3000)) ::_exit(67);
+        // RunSession's order when mobilegl_server_stop_inprocess raised the stop.
+        const auto started = std::chrono::steady_clock::now();
+        loop.AbandonQueuedRecords();
+        loop.Stop();
+        const auto stopMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+        int failed = 0;
+        if (stopMs >= 1000) failed |= kStopSlow;
+        if (loop.DrainedRecords() > 3) failed |= kStopDrainedOn;
+        std::fprintf(stderr, "[stop] Stop() returned in %lld ms after %llu of 200 streamed records\n",
+                     static_cast<long long>(stopMs), static_cast<unsigned long long>(loop.DrainedRecords()));
+        loop.SetBetweenRecordsHookForTesting(nullptr);
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+namespace {
+    // A STOP WHILE THE APPLY THREAD IS BUSY IN THE BACKEND. One record whose apply takes 8 s - a
+    // GPU the driver needs ~10 s to reset blocks a fence wait just like this - is in hand when
+    // Stop() arrives, longer than the 5 s lost-wakeup bound. The thread is not parked, so the join
+    // waits for it instead of aborting the process (which, in the display server, is every other
+    // client's session too). Red with the busy arm removed: Fatal{ApplyThreadJoinTimeout} at 5 s.
+    std::atomic<int> g_busyRecords{0};
+    void StallOnce() {
+        if (g_busyRecords.fetch_add(1, std::memory_order_acq_rel) == 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(8000));
+    }
+
+    [[noreturn]] void StopWhileTheApplyThreadIsBusyAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        loop.SetBetweenRecordsHookForTesting(&StallOnce);
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = 0x0004; // GL_TRIANGLES
+        info.InstanceCount = 1;
+        info.MinIndex = ~0u;
+        info.MaxIndex = ~0u;
+        info.NumDraws = 1;
+        const MG_Pipe::MGPDrawRange range{0, 3, 0};
+        const Uint64 last =
+            fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range, sizeof(range));
+        if (last == Codec::kInvalidSeq) ::_exit(66);
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(last);
+        if (!PollUntil([] { return g_busyRecords.load(std::memory_order_acquire) >= 1; }, 3000)) ::_exit(67);
+        const auto started = std::chrono::steady_clock::now();
+        loop.Stop();
+        const auto stopMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+        std::fprintf(stderr, "[busy-stop] Stop() returned in %lld ms\n", static_cast<long long>(stopMs));
+        loop.SetBetweenRecordsHookForTesting(nullptr);
+        fixture.Stop();
+        ::_exit(stopMs < 6000 ? 1 : 0); // it must have waited for the stall, not cut it short
+    }
+} // namespace
+
+TEST(ServerLoopTest, AStopWhileTheApplyThreadIsBusyInTheBackendWaitsForItInsteadOfAborting) {
+    EXPECT_EXIT(StopWhileTheApplyThreadIsBusyAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "1 = Stop() returned before the stall ended; 64+ = setup; SIGABRT = Fatal{ApplyThreadJoinTimeout}";
+}
+
+// P12 review fix. Red with AbandonQueuedRecords a no-op: the batch and the exit-path drain apply the
+// whole stream, Stop()'s join gives up at 5 s and Fatal{ApplyThreadJoinTimeout} aborts the process.
+TEST(ServerLoopTest, StoppingTheServerUnderAStreamingClientLeavesTheQueueAndJoinsPromptly) {
+    EXPECT_EXIT(StopTheServerMidStreamAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = Stop() took 1 s or more; 2 = more than three records applied after the stop "
+           "(64+ = setup; SIGABRT = Fatal{ApplyThreadJoinTimeout})";
+}
+
+// D3. A server that owns no display - the host, the exec'd supervisor's children - refuses a request
+// for its window BY NAME and does NOT latch: it is the client's configuration, not corrupt bytes. Red
+// with the refusal turned into a latch: this unarmed process aborts.
+TEST(ServerLoopTest, AServerWindowRequestOnAServerWithNoDisplayIsRefusedByNameWithoutALatch) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_FALSE(Server::ServerDisplayInstance().HasDisplay());
+    ServerWindowProbe probe;
+    probe.width = 640;
+    probe.height = 480;
+    ASSERT_EQ(
+        Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(&AcquireServerWindowOnTheApplyThread, &probe),
+        MOBILEGL_OK);
+    EXPECT_EQ(probe.rc, MOBILEGL_ERR_UNSUPPORTED);
+    EXPECT_EQ(probe.refusal, Server::SurfaceRefusalCode::NoServerDisplay);
+    EXPECT_FALSE(MobileGL::MG_Remote::SessionLatched());
+    EXPECT_TRUE(Server::ServerLoopInstance().Running()) << "a refusal must not stop the session";
+    fixture.Stop();
+    EXPECT_NE(ReadLog().find("Refuse ServerOwned: this server owns no display"), std::string::npos) << ReadLog();
+}
+
+// D4. The decision the dispatch asks, pure: the first surface decides, and the OTHER kind is refused
+// afterwards. Red with SessionSurfaceModeAdmits answering true for everything (the check deleted).
+TEST(ServerLoopTest, SessionSurfaceModeAdmitsOnlyTheModeTheFirstSurfaceChose) {
+    using Server::SessionSurfaceMode;
+    EXPECT_TRUE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::None, /*serverOwnedWindow=*/true));
+    EXPECT_TRUE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::None, false));
+    EXPECT_TRUE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::OnScreen, true))
+        << "an on-screen session may re-create its window surface (a resize)";
+    EXPECT_FALSE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::OnScreen, false))
+        << "a pbuffer in an on-screen session is SurfaceModeMismatch";
+    EXPECT_TRUE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::Offscreen, false));
+    EXPECT_FALSE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::Offscreen, true))
+        << "a ServerOwned window in an offscreen session is SurfaceModeMismatch";
+}
+#endif
+
+// =====================================================================================
+// P14 S4 (docs/Disaggregated/design/11-state-ownership.md): THE NATIVE TUPLE IS PER CONTEXT
+// =====================================================================================
+//
+// WHAT THESE CASES OWN. Before S4 the backend held ONE native EGLContext, one config and one
+// surface as file-level statics, and `InitDisplayAndContext` began with an unconditional
+// `DestroyEGLContext()` - so creating a second surface (or a second context) destroyed the first
+// one's native context and every GL object that lived in it. The three cases below pin the three
+// halves of the replacement, each at the driver:
+//
+//   * A SECOND CONTEXT DOES NOT TAKE THE FIRST ONE'S NATIVE CONTEXT WITH IT. Three client context
+//     tokens are created in one session and all three native contexts are alive AT THE SAME TIME,
+//     holding three different EGLContext handles. Red once by restoring the unconditional teardown:
+//     the third CreateContext leaves one live native context, not three.
+//
+//   * A SURFACE SWITCH KEEPS THE CONTEXT. Creating a second pbuffer surface leaves the tuple's
+//     native EGLContext the SAME object it was - which is what "pbuffer -> window -> pbuffer does
+//     not lose resources" means at this layer, since the objects live in the native context.
+//     Red once by restoring `DestroyEGLContext()` in CreateEGLPbufferSurface: the handle changes.
+//
+//   * (A THIRD CASE - "a share group is a sharing pair, proven at the driver" - was drafted and is
+//     NOT LANDED. See the S4 section of docs/Disaggregated/design/11-state-ownership.md: the
+//     sharing argument is wired (CreateNativeContextFor hands the group leader's EGLContext to
+//     eglCreateContext), but the headless probe that would prove object visibility across the pair
+//     did not produce a usable control on this box and is left to its own change rather than
+//     shipped as a green that ran nothing.)
+//
+// THE KEY OVERRIDE IS HOW A CASE NAMES A TUPLE. This fixture has no SessionRuntime, so the backend's
+// resolver answers {0,0} for every thread; ForceNativeContextKeyForTesting is the pure-key override
+// that lets a case drive exactly the tuple it means. It is a test-only seam and reaches no
+// production path (DirectGLES.h).
+//
+// NO USABLE EGL IS A SKIP (MGL_EGL_BRING_UP_OR_BAIL), the same rule as every case in this section.
+#if !defined(_WIN32)
+namespace {
+    namespace DirectGLES = MobileGL::MG_Backend::DirectGLES;
+
+    // A client context token that never collides with the fixture's token-0 tuple.
+    constexpr Uint64 kTokenA = 101;
+    constexpr Uint64 kTokenB = 102;
+    constexpr Uint64 kGroupA = 5001;
+    constexpr Uint64 kGroupB = 5002;
+
+} // namespace
+
+// The three-native-contexts control: creating contexts must ADD native contexts, never replace one.
+TEST(ServerLoopEglTest, CreatingASecondContextLeavesTheFirstNativeContextAlive) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+
+    const EGLContext default0 = DirectGLES::NativeContextHandleFor(0, 0);
+    ASSERT_NE(default0, EGL_NO_CONTEXT)
+        << "the surface's own creation did not build a native context for the session's default tuple";
+
+    ASSERT_TRUE(Server::ServerCreateEGLContext(kTokenA, kGroupA, 0));
+    ASSERT_TRUE(Server::ServerCreateEGLContext(kTokenB, kGroupB, 0));
+
+    const EGLContext contextA = DirectGLES::NativeContextHandleFor(0, kTokenA);
+    const EGLContext contextB = DirectGLES::NativeContextHandleFor(0, kTokenB);
+    EXPECT_NE(contextA, EGL_NO_CONTEXT) << "CreateContext built no native context for token A";
+    EXPECT_NE(contextB, EGL_NO_CONTEXT) << "CreateContext built no native context for token B";
+    EXPECT_NE(contextA, contextB) << "two client contexts ended up sharing one EGLContext object";
+    EXPECT_NE(contextA, default0) << "token A reused the default tuple's native context";
+    EXPECT_NE(contextB, default0) << "token B reused the default tuple's native context";
+    EXPECT_EQ(DirectGLES::NativeContextHandleFor(0, 0), default0)
+        << "creating a context destroyed and rebuilt the default tuple's native context";
+    EXPECT_EQ(DirectGLES::NativeContextCountForSession(0), 3u)
+        << "not all three contexts are live at once - the pre-S4 shape kept exactly one";
+
+    fixture.TearDown();
+}
+
+// pbuffer -> a second pbuffer -> the same context. The native EGLContext is the tuple's, not the
+// surface's, so a surface switch must leave it alone.
+TEST(ServerLoopEglTest, CreatingAnotherSurfaceKeepsTheSameNativeContext) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+
+    const EGLContext before = DirectGLES::NativeContextHandleFor(0, 0);
+    ASSERT_NE(before, EGL_NO_CONTEXT);
+
+    // A SECOND, DIFFERENT surface handle, exactly as a client's second eglCreatePbufferSurface would
+    // name it (EGLService-style small integers).
+    const EGLSurface second = reinterpret_cast<EGLSurface>(static_cast<std::uintptr_t>(0x2));
+    ASSERT_TRUE(Server::ServerCreateEGLPbufferSurface(second, 32, 32));
+
+    EXPECT_EQ(DirectGLES::NativeContextHandleFor(0, 0), before)
+        << "creating a second pbuffer surface replaced the native context: every buffer, texture and "
+           "program the application had built in it went with the old one (the pre-S4 teardown)";
+    EXPECT_EQ(DirectGLES::NativeContextCountForSession(0), 1u)
+        << "a surface switch left a second native context behind";
+
+    fixture.TearDown();
+}
+
+#endif
+
+int main(int argc, char** argv) {
+    // Before anything logs: MG_Util::Debug::InitFile() reads the variable once, on the first
+    // write, and caches the FILE*. The name carries this process's pid, because
+    // gtest_discover_tests runs every case as its own process, in parallel under ctest -j.
+    namespace fs = std::filesystem;
+    const fs::path path =
+        fs::temp_directory_path() / ("mobilegl-serverloop-test-" + std::to_string(ProcessId()) + ".log");
+    std::error_code ec;
+    fs::remove(path, ec);
+    g_logPath = path.string();
+#if defined(_WIN32)
+    _putenv_s("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str());
+#else
+    setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
+#endif
+    // THIS PROCESS IS A SPLIT ONE. Everything under test reads MG_Config::Transport - the
+    // staged-shadow arm, the applier's stamp path, ConfigLoader's own knobs - and a suite that
+    // left it at Monolith would be a server test running the monolith answers, which is the
+    // failure this phase is built to make impossible.
+    MG_Config::Transport = MG_Config::TransportMode::InProcess;
+    // AND IT SETS THE MODE BY HAND, WITHOUT MG_ConfigLoader::Init (P7 F1). That is not an
+    // accident of this suite and it is load-bearing for the caps gate: the client-side rule
+    // "a record family's liveness may never be decided from a placeholder caps mirror" is
+    // armed by ConfigLoader resolving a split transport for a process that will therefore go
+    // on to build a CLIENT. This binary builds server sessions and - in
+    // EglServerFixture::BringUp - the server's own frontend GLContext, and never a client
+    // session at all, so the gate stays disarmed here and the placeholder keeps answering
+    // exactly what it answered before.
+    ::testing::InitGoogleTest(&argc, argv);
+    const int rc = RUN_ALL_TESTS();
+    fs::remove(path, ec);
+    return rc;
+}

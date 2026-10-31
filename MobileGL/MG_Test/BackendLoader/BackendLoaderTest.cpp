@@ -37,10 +37,17 @@ namespace {
         std::size_t ioBlockDraws = 0;
         // Behavior knobs, configured per test before running the probe.
         GLint maxVertexSsboBlocks = 4;
+        // GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE per axis, answered through glGetIntegeri_v.
+        // Above the GL minimums and distinct per axis, so a loader that left an initializer in
+        // place or copied one axis into another is caught.
+        GLint maxComputeWorkGroupCount[3] = {70001, 70002, 70003};
+        GLint maxComputeWorkGroupSize[3] = {1500, 1501, 100};
         GLint glesMajorVersion = 3;
         GLint glesMinorVersion = 1;
         GLint maxVertexImageUniforms = 2;
         GLint maxGeometryImageUniforms = 3;
+        GLint maxTessControlImageUniforms = 6;
+        GLint maxTessEvaluationImageUniforms = 7;
         GLint maxFragmentImageUniforms = 4;
         GLint maxComputeImageUniforms = 5;
         bool maxGeometryImageUniformsQueried = false;
@@ -140,7 +147,9 @@ namespace {
 
     FakeDriverState g_fake;
 
-    void ResetFakeDriver() { g_fake = FakeDriverState{}; }
+    void ResetFakeDriver() {
+        g_fake = FakeDriverState{};
+    }
 
     std::vector<unsigned char>* StoreOfBufferBoundTo(GLenum target) {
         const auto boundIt = g_fake.boundBuffers.find(target);
@@ -188,6 +197,14 @@ namespace {
             case GL_MAX_GEOMETRY_IMAGE_UNIFORMS:
                 g_fake.maxGeometryImageUniformsQueried = true;
                 *data = g_fake.maxGeometryImageUniforms;
+                break;
+            case GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS:
+                g_fake.maxGeometryImageUniformsQueried = true;
+                *data = g_fake.maxTessControlImageUniforms;
+                break;
+            case GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS:
+                g_fake.maxGeometryImageUniformsQueried = true;
+                *data = g_fake.maxTessEvaluationImageUniforms;
                 break;
             case GL_MAX_FRAGMENT_IMAGE_UNIFORMS:
                 *data = g_fake.maxFragmentImageUniforms;
@@ -446,7 +463,7 @@ namespace {
         // ---- what the located-interface-block probe draws with -------------------------
         // Enough of a rasterizer for ProbeLocatedIoBlocksLosePayload to reach a verdict: it
         // builds three programs, draws each to a 1x1 target and reads the pixel back, and the
-        // fake decides what each read returns. Default behaviour is a CONFORMING driver, so
+        // fake decides what each read returns. Default behavior is a CONFORMING driver, so
         // every test that predates this one sees the probe reach "not affected" and no
         // capability it asserts on moves.
         funcs.glCheckFramebufferStatus = [](GLenum) -> GLenum { return GL_FRAMEBUFFER_COMPLETE; };
@@ -458,10 +475,23 @@ namespace {
         funcs.glIsEnabled = [](GLenum) -> GLboolean { return GL_FALSE; };
         funcs.glGetBooleanv = [](GLenum, GLboolean* data) {
             if (data == nullptr) return;
-            for (int i = 0; i < 4; ++i) data[i] = GL_TRUE;
+            for (int i = 0; i < 4; ++i)
+                data[i] = GL_TRUE;
         };
-        funcs.glGetIntegeri_v = [](GLenum, GLuint, GLint* data) {
-            if (data != nullptr) *data = 0;
+        funcs.glGetIntegeri_v = [](GLenum pname, GLuint index, GLint* data) {
+            if (data == nullptr) return;
+            *data = 0;
+            if (index >= 3) return;
+            switch (pname) {
+            case GL_MAX_COMPUTE_WORK_GROUP_COUNT:
+                *data = g_fake.maxComputeWorkGroupCount[index];
+                break;
+            case GL_MAX_COMPUTE_WORK_GROUP_SIZE:
+                *data = g_fake.maxComputeWorkGroupSize[index];
+                break;
+            default:
+                break;
+            }
         };
         funcs.glGetProgramInfoLog = [](GLuint, GLsizei bufSize, GLsizei* length, GLchar* infoLog) {
             if (infoLog != nullptr && bufSize > 0) infoLog[0] = '\0';
@@ -479,9 +509,8 @@ namespace {
             auto* out = static_cast<unsigned char*>(pixels);
             if (out == nullptr) return;
             const std::size_t index = g_fake.ioBlockReads++;
-            const bool arrives = index < g_fake.ioBlockPayloadArrives.size()
-                                     ? g_fake.ioBlockPayloadArrives[index]
-                                     : true;
+            const bool arrives =
+                index < g_fake.ioBlockPayloadArrives.size() ? g_fake.ioBlockPayloadArrives[index] : true;
             // 0.25 and 0.5 as the probe's vertex stage wrote them; zeroes are what a stage that
             // received nothing reads.
             out[0] = arrives ? 0x40 : 0x00;
@@ -512,18 +541,18 @@ namespace {
 
         // Buffer-texture entry points, each present only when its knob says so. A real loader
         // resolves the suffixed names only on a driver whose support is that extension.
-        funcs.glTexBuffer = g_fake.hasCoreTexBufferEntryPoint
-                                ? static_cast<MobileGL::MG_External::GLES::glTexBuffer_PTR>(
-                                      [](GLenum, GLenum, GLuint) {})
-                                : nullptr;
-        funcs.glTexBufferEXT = g_fake.hasExtTexBufferEntryPoint
-                                   ? static_cast<MobileGL::MG_External::GLES::glTexBufferEXT_PTR>(
-                                         [](GLenum, GLenum, GLuint) {})
-                                   : nullptr;
-        funcs.glTexBufferOES = g_fake.hasOesTexBufferEntryPoint
-                                   ? static_cast<MobileGL::MG_External::GLES::glTexBufferOES_PTR>(
-                                         [](GLenum, GLenum, GLuint) {})
-                                   : nullptr;
+        funcs.glTexBuffer =
+            g_fake.hasCoreTexBufferEntryPoint
+                ? static_cast<MobileGL::MG_External::GLES::glTexBuffer_PTR>([](GLenum, GLenum, GLuint) {})
+                : nullptr;
+        funcs.glTexBufferEXT =
+            g_fake.hasExtTexBufferEntryPoint
+                ? static_cast<MobileGL::MG_External::GLES::glTexBufferEXT_PTR>([](GLenum, GLenum, GLuint) {})
+                : nullptr;
+        funcs.glTexBufferOES =
+            g_fake.hasOesTexBufferEntryPoint
+                ? static_cast<MobileGL::MG_External::GLES::glTexBufferOES_PTR>([](GLenum, GLenum, GLuint) {})
+                : nullptr;
 
         // The probe's vertex shader writes the gl_InstanceID it observed into the
         // result SSBO at binding 0. A conforming driver observes 0; a leaking one
@@ -672,6 +701,8 @@ TEST(ImageUniformCapabilities, QueriesRealPerStageLimitsAndConservativelyGatesGe
     ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es31Caps, funcs));
     EXPECT_EQ(es31Caps.MaxVertexImageUniforms, g_fake.maxVertexImageUniforms);
     EXPECT_EQ(es31Caps.MaxGeometryImageUniforms, 0);
+    EXPECT_EQ(es31Caps.MaxTessControlImageUniforms, 0);
+    EXPECT_EQ(es31Caps.MaxTessEvaluationImageUniforms, 0);
     EXPECT_EQ(es31Caps.MaxFragmentImageUniforms, g_fake.maxFragmentImageUniforms);
     EXPECT_EQ(es31Caps.MaxComputeImageUniforms, g_fake.maxComputeImageUniforms);
     EXPECT_FALSE(g_fake.maxGeometryImageUniformsQueried);
@@ -683,6 +714,8 @@ TEST(ImageUniformCapabilities, QueriesRealPerStageLimitsAndConservativelyGatesGe
     ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es32Caps, funcs));
     EXPECT_EQ(es32Caps.MaxVertexImageUniforms, g_fake.maxVertexImageUniforms);
     EXPECT_EQ(es32Caps.MaxGeometryImageUniforms, g_fake.maxGeometryImageUniforms);
+    EXPECT_EQ(es32Caps.MaxTessControlImageUniforms, g_fake.maxTessControlImageUniforms);
+    EXPECT_EQ(es32Caps.MaxTessEvaluationImageUniforms, g_fake.maxTessEvaluationImageUniforms);
     EXPECT_EQ(es32Caps.MaxFragmentImageUniforms, g_fake.maxFragmentImageUniforms);
     EXPECT_EQ(es32Caps.MaxComputeImageUniforms, g_fake.maxComputeImageUniforms);
     EXPECT_TRUE(g_fake.maxGeometryImageUniformsQueried);
@@ -1138,21 +1171,23 @@ TEST(FragmentInterpolationCapabilities, QueryErrorIsDrainedAndFallsBackToCoreMin
 // The extension string is what apps gate on (LWJGL builds GLCapabilities from it), so advertising
 // it on a driver that cannot filter anisotropically would leave them silently on trilinear.
 TEST(TextureAnisotropyCapabilities, ExtensionIsAdvertisedOnlyWhenTheHostDriverSupportsIt) {
-    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions,
-                             MobileGL::GLExtension wanted) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions, MobileGL::GLExtension wanted) {
         return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
     };
 
-    const auto without = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false);
+    const auto without =
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false);
     EXPECT_FALSE(contains(without, MobileGL::E_GL_EXT_texture_filter_anisotropic));
     EXPECT_FALSE(contains(without, MobileGL::E_GL_ARB_texture_filter_anisotropic));
 
-    const auto with = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, true, false, false, false, false);
+    const auto with =
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, true, false, false, false, false);
     EXPECT_TRUE(contains(with, MobileGL::E_GL_EXT_texture_filter_anisotropic));
     EXPECT_TRUE(contains(with, MobileGL::E_GL_ARB_texture_filter_anisotropic));
 
     // Same rule on the Vulkan backend, where the gate is the samplerAnisotropy device feature.
-    const auto vkWithout = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false);
+    const auto vkWithout =
+        MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false);
     EXPECT_FALSE(contains(vkWithout, MobileGL::E_GL_EXT_texture_filter_anisotropic));
     const auto vkWith = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, true, false, false);
     EXPECT_TRUE(contains(vkWith, MobileGL::E_GL_EXT_texture_filter_anisotropic));
@@ -1165,8 +1200,7 @@ TEST(TextureAnisotropyCapabilities, ExtensionIsAdvertisedOnlyWhenTheHostDriverSu
 // and it has to BE there when the capability is, because KHR-GL4*.texture_gather.*-cube-array
 // gates on the string with no core-version fallback.
 TEST(CubeMapArrayAdvertisement, FollowsTheHostCapabilityOnBothBackends) {
-    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions,
-                             MobileGL::GLExtension wanted) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions, MobileGL::GLExtension wanted) {
         return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
     };
 
@@ -1177,8 +1211,8 @@ TEST(CubeMapArrayAdvertisement, FollowsTheHostCapabilityOnBothBackends) {
         MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, true);
     EXPECT_TRUE(contains(esWith, MobileGL::E_GL_ARB_texture_cube_map_array));
 
-    const auto vkWithout = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false,
-                                                                                         false);
+    const auto vkWithout =
+        MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false);
     EXPECT_FALSE(contains(vkWithout, MobileGL::E_GL_ARB_texture_cube_map_array));
     const auto vkWith = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, true);
     EXPECT_TRUE(contains(vkWith, MobileGL::E_GL_ARB_texture_cube_map_array));
@@ -1190,22 +1224,26 @@ TEST(CubeMapArrayAdvertisement, FollowsTheHostCapabilityOnBothBackends) {
 // together so a future edit cannot quietly drop one, and pinned on BOTH backends so the two
 // cannot disagree about what MobileGL is.
 TEST(CorePlumbingAdvertisement, IsUnconditionalAndIdenticalOnBothBackends) {
-    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions,
-                             MobileGL::GLExtension wanted) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions, MobileGL::GLExtension wanted) {
         return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
     };
-    const MobileGL::GLExtension expected[] = {
-        MobileGL::E_GL_ARB_sync,          MobileGL::E_GL_ARB_shader_atomic_counters,
-        MobileGL::E_GL_ARB_vertex_array_object, MobileGL::E_GL_ARB_sampler_objects,
-        MobileGL::E_GL_ARB_map_buffer_range,    MobileGL::E_GL_ARB_copy_buffer,
-        MobileGL::E_GL_ARB_copy_image,          MobileGL::E_GL_ARB_texture_swizzle,
-        MobileGL::E_GL_ARB_vertex_type_2_10_10_10_rev, MobileGL::E_GL_ARB_texture_rg,
-        MobileGL::E_GL_ARB_depth_buffer_float,  MobileGL::E_GL_ARB_texture_float,
-        MobileGL::E_GL_ARB_viewport_array};
+    const MobileGL::GLExtension expected[] = {MobileGL::E_GL_ARB_sync,
+                                              MobileGL::E_GL_ARB_shader_atomic_counters,
+                                              MobileGL::E_GL_ARB_vertex_array_object,
+                                              MobileGL::E_GL_ARB_sampler_objects,
+                                              MobileGL::E_GL_ARB_map_buffer_range,
+                                              MobileGL::E_GL_ARB_copy_buffer,
+                                              MobileGL::E_GL_ARB_copy_image,
+                                              MobileGL::E_GL_ARB_texture_swizzle,
+                                              MobileGL::E_GL_ARB_vertex_type_2_10_10_10_rev,
+                                              MobileGL::E_GL_ARB_texture_rg,
+                                              MobileGL::E_GL_ARB_depth_buffer_float,
+                                              MobileGL::E_GL_ARB_texture_float,
+                                              MobileGL::E_GL_ARB_viewport_array};
 
     // Every gate off: none of these may depend on one.
-    const auto es = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false,
-                                                                                false);
+    const auto es =
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false);
     const auto vk = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false);
     for (const auto extension : expected) {
         EXPECT_TRUE(contains(es, extension)) << "DirectGLES stopped advertising extension " << extension;
@@ -1213,12 +1251,147 @@ TEST(CorePlumbingAdvertisement, IsUnconditionalAndIdenticalOnBothBackends) {
     }
 }
 
+// Strings for functionality that is core in the 4.x versions MobileGL claims, named so contexts of
+// an older requested version (the conformance suite's GL 3.x runs gate on the string alone) reach
+// the same surface. Unconditional on both backends; only the tessellation string follows a probed
+// device capability.
+TEST(CoreSurfaceAdvertisement, BatchIsUnconditionalAndTessellationFollowsTheDevice) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions, MobileGL::GLExtension wanted) {
+        return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
+    };
+    const MobileGL::GLExtension expected[] = {
+        MobileGL::E_GL_ARB_transform_feedback2, MobileGL::E_GL_ARB_transform_feedback3,
+        MobileGL::E_GL_ARB_texture_rgb10_a2ui,  MobileGL::E_GL_EXT_texture_shared_exponent,
+        MobileGL::E_GL_EXT_texture_integer,     MobileGL::E_GL_ARB_pipeline_statistics_query,
+        MobileGL::E_GL_EXT_shader_integer_mix};
+
+    const auto es =
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false);
+    const auto vk = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false);
+    for (const auto extension : expected) {
+        EXPECT_TRUE(contains(es, extension)) << "DirectGLES does not advertise extension " << extension;
+        EXPECT_TRUE(contains(vk, extension)) << "DirectVulkan does not advertise extension " << extension;
+    }
+    // Withheld until shaders can actually use the gl_FragCoord layout qualifiers it adds.
+    EXPECT_FALSE(contains(es, MobileGL::E_GL_ARB_fragment_coord_conventions));
+    EXPECT_FALSE(contains(vk, MobileGL::E_GL_ARB_fragment_coord_conventions));
+
+    EXPECT_FALSE(contains(es, MobileGL::E_GL_ARB_tessellation_shader));
+    EXPECT_FALSE(contains(vk, MobileGL::E_GL_ARB_tessellation_shader));
+    const MobileGL::MG_Backend::AdvertisedFeatureSupport tessellation{.TessellationShader = true};
+    EXPECT_TRUE(contains(MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false,
+                                                                                     false, tessellation),
+                         MobileGL::E_GL_ARB_tessellation_shader));
+    EXPECT_TRUE(contains(
+        MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false, tessellation),
+        MobileGL::E_GL_ARB_tessellation_shader));
+}
+
+// ARB_cull_distance follows the backend's cull-distance capability, never the context version.
+TEST(CoreSurfaceAdvertisement, CullDistanceFollowsTheDevice) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions, MobileGL::GLExtension wanted) {
+        return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
+    };
+    EXPECT_FALSE(
+        contains(MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false),
+                 MobileGL::E_GL_ARB_cull_distance));
+    EXPECT_FALSE(
+        contains(MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false),
+                 MobileGL::E_GL_ARB_cull_distance));
+    const MobileGL::MG_Backend::AdvertisedFeatureSupport cull{.CullDistance = true};
+    EXPECT_TRUE(contains(
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false, cull),
+        MobileGL::E_GL_ARB_cull_distance));
+    EXPECT_TRUE(
+        contains(MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false, cull),
+                 MobileGL::E_GL_ARB_cull_distance));
+}
+
+// ES 3.2 has tessellation in core; ES 3.1 only through GL_EXT_tessellation_shader. Either way the
+// patch-size entry point has to have resolved.
+TEST(TessellationCapabilities, FollowTheVersionOrTheExtension) {
+    const auto funcs = MakeFakeGLESFunctions();
+    auto withPatch = funcs;
+    withPatch.glPatchParameteri = [](GLenum, GLint) {};
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    MobileGL::MG_External::GLESCapabilities es31;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es31, withPatch));
+    EXPECT_FALSE(es31.SupportsTessellationShader);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_tessellation_shader");
+    MobileGL::MG_External::GLESCapabilities es31Ext;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es31Ext, withPatch));
+    EXPECT_TRUE(es31Ext.SupportsTessellationShader);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.glesMinorVersion = 2;
+    MobileGL::MG_External::GLESCapabilities es32NoEntryPoint;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es32NoEntryPoint, funcs));
+    EXPECT_FALSE(es32NoEntryPoint.SupportsTessellationShader);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.glesMinorVersion = 2;
+    MobileGL::MG_External::GLESCapabilities es32;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es32, withPatch));
+    EXPECT_TRUE(es32.SupportsTessellationShader);
+}
+
+// glClipControl is forwarded only to a driver that both advertises GL_EXT_clip_control and
+// resolves its entry point.
+TEST(ClipControlCapabilities, NeedTheExtensionAndTheEntryPoint) {
+    auto withEntryPoint = MakeFakeGLESFunctions();
+    withEntryPoint.glClipControlEXT = [](GLenum, GLenum) {};
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    MobileGL::MG_External::GLESCapabilities noExtension;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(noExtension, withEntryPoint));
+    EXPECT_FALSE(noExtension.SupportsClipControl);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_clip_control");
+    MobileGL::MG_External::GLESCapabilities noEntryPoint;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(noEntryPoint, MakeFakeGLESFunctions()));
+    EXPECT_FALSE(noEntryPoint.SupportsClipControl);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_clip_control");
+    MobileGL::MG_External::GLESCapabilities both;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(both, withEntryPoint));
+    EXPECT_TRUE(both.SupportsClipControl);
+}
+
+// DirectGLES advertises ARB_clip_control on the driver's extension; DirectVulkan always, since it
+// applies clip control in its own position fixup.
+TEST(CoreSurfaceAdvertisement, ClipControlFollowsTheBackendsRoute) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions, MobileGL::GLExtension wanted) {
+        return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
+    };
+    EXPECT_FALSE(
+        contains(MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false),
+                 MobileGL::E_GL_ARB_clip_control));
+    const MobileGL::MG_Backend::AdvertisedFeatureSupport clipControl{.ClipControl = true};
+    EXPECT_TRUE(contains(MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false,
+                                                                                     false, clipControl),
+                         MobileGL::E_GL_ARB_clip_control));
+    EXPECT_TRUE(
+        contains(MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false),
+                 MobileGL::E_GL_ARB_clip_control));
+}
+
 // Minecraft 26.3 checks ARB_draw_indirect before it considers the already-advertised
 // ARB_multi_draw_indirect, then separately requires ARB_base_instance before enabling its terrain
 // indirect path. Pin both strings and, just as importantly, the non-zero firstInstance gate.
 TEST(IndirectDrawAdvertisement, MatchesEachBackendsUsableCommandSemantics) {
-    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions,
-                             MobileGL::GLExtension wanted) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions, MobileGL::GLExtension wanted) {
         return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
     };
 
@@ -1297,8 +1470,8 @@ TEST(MultiDrawCapabilities, PointerAloneNeverCountsAsSupport) {
     // Simulate the stub hazard: every pointer resolved, no extension advertised.
     funcs.glMultiDrawArraysIndirectEXT = [](GLenum, const void*, GLsizei, GLsizei) {};
     funcs.glMultiDrawElementsIndirectEXT = [](GLenum, GLenum, const void*, GLsizei, GLsizei) {};
-    funcs.glMultiDrawElementsBaseVertexEXT = [](GLenum, const GLsizei*, GLenum, const void* const*,
-                                                GLsizei, const GLint*) {};
+    funcs.glMultiDrawElementsBaseVertexEXT = [](GLenum, const GLsizei*, GLenum, const void* const*, GLsizei,
+                                                const GLint*) {};
 
     MobileGL::MG_External::GLESCapabilities stubCaps;
     ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(stubCaps, funcs));
@@ -1367,8 +1540,7 @@ TEST(DrawIndirectCapabilities, RequiresEs31AndBothCoreEntryPoints) {
     g_fake.maxVertexSsboBlocks = 0;
     const auto missingElements = MakeFakeGLESFunctions();
     MobileGL::MG_External::GLESCapabilities missingEntryPointCaps;
-    ASSERT_TRUE(
-        MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(missingEntryPointCaps, missingElements));
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(missingEntryPointCaps, missingElements));
     EXPECT_FALSE(missingEntryPointCaps.SupportsDrawIndirect);
 }
 
@@ -1377,10 +1549,9 @@ TEST(BaseInstanceCapabilities, RequiresTheExtensionAndAllThreeEntryPoints) {
     g_fake.maxVertexSsboBlocks = 0;
     auto funcs = MakeFakeGLESFunctions();
     funcs.glDrawArraysInstancedBaseInstanceEXT = [](GLenum, GLint, GLsizei, GLsizei, GLuint) {};
-    funcs.glDrawElementsInstancedBaseInstanceEXT =
-        [](GLenum, GLsizei, GLenum, const void*, GLsizei, GLuint) {};
-    funcs.glDrawElementsInstancedBaseVertexBaseInstanceEXT =
-        [](GLenum, GLsizei, GLenum, const void*, GLsizei, GLint, GLuint) {};
+    funcs.glDrawElementsInstancedBaseInstanceEXT = [](GLenum, GLsizei, GLenum, const void*, GLsizei, GLuint) {};
+    funcs.glDrawElementsInstancedBaseVertexBaseInstanceEXT = [](GLenum, GLsizei, GLenum, const void*, GLsizei, GLint,
+                                                                GLuint) {};
 
     // Resolved stubs alone must never make the capability true.
     MobileGL::MG_External::GLESCapabilities pointersOnlyCaps;
@@ -1399,8 +1570,7 @@ TEST(BaseInstanceCapabilities, RequiresTheExtensionAndAllThreeEntryPoints) {
     g_fake.extensions.emplace_back("GL_EXT_base_instance");
     funcs.glDrawElementsInstancedBaseInstanceEXT = nullptr;
     MobileGL::MG_External::GLESCapabilities missingEntryPointCaps;
-    ASSERT_TRUE(
-        MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(missingEntryPointCaps, funcs));
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(missingEntryPointCaps, funcs));
     EXPECT_FALSE(missingEntryPointCaps.SupportsBaseInstance);
 }
 
@@ -1550,4 +1720,112 @@ TEST(LocatedIoBlockProbe, ReportsTheDefectOnlyWhenTheUnlocatedControlCarriesTheP
     crippled.glReadPixels = nullptr;
     EXPECT_FALSE(ProbeLocatedIoBlocksLosePayload(crippled).detected);
     EXPECT_EQ(g_fake.ioBlockDraws, 0u) << "an entry-point-gated probe must not draw at all";
+}
+
+// The six per-axis compute limits are the backend-owned answers that cross the MGPipe boundary
+// inside MGPCaps (DynamicBackendParameters::MaxComputeWorkGroupCount/Size), so the loader has
+// to take EACH axis from glGetIntegeri_v rather than leave an initializer - or one axis's
+// answer - in the other slots. The integration side (AdvertisedLimitsScenario) pins the copy
+// against the live getter on both backends; this pins the driver-to-caps step on its own.
+TEST(ComputeWorkGroupCapabilities, TakesEveryAxisFromTheIndexedQuery) {
+    const auto funcs = MakeFakeGLESFunctions();
+    ResetFakeDriver();
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+    for (int axis = 0; axis < 3; ++axis) {
+        EXPECT_EQ(caps.MaxComputeWorkGroupCount[axis], g_fake.maxComputeWorkGroupCount[axis]) << "axis " << axis;
+        EXPECT_EQ(caps.MaxComputeWorkGroupSize[axis], g_fake.maxComputeWorkGroupSize[axis]) << "axis " << axis;
+    }
+    // The initializers are the GL 4.3 minimums and every fake answer is above them, so a
+    // value equal to its initializer here would mean the query never ran.
+    EXPECT_GT(caps.MaxComputeWorkGroupCount[0], 65535);
+    EXPECT_GT(caps.MaxComputeWorkGroupSize[2], 64);
+}
+
+namespace {
+    const char* g_damageExtensions = nullptr;
+    EGLDisplay g_damageDisplay = EGL_NO_DISPLAY;
+    bool g_damageExtAvailable = false;
+    bool g_damageKhrAvailable = false;
+    std::vector<std::string> g_damageQueries;
+
+    EGLDisplay FakeDamageDisplay() {
+        return g_damageDisplay;
+    }
+    const char* FakeDamageQueryString(EGLDisplay display, EGLint name) {
+        EXPECT_EQ(display, g_damageDisplay);
+        EXPECT_EQ(name, EGL_EXTENSIONS);
+        return g_damageExtensions;
+    }
+
+    EGLBoolean FakeSwapBuffersWithDamage(EGLDisplay dpy, EGLSurface surface, const EGLint* rects, EGLint nRects) {
+        (void)dpy;
+        (void)surface;
+        (void)rects;
+        (void)nRects;
+        return EGL_TRUE;
+    }
+
+    __eglMustCastToProperFunctionPointerType FakeDamageGetProcAddress(const char* name) {
+        g_damageQueries.emplace_back(name);
+        const bool available =
+            std::string(name) == "eglSwapBuffersWithDamageEXT" ? g_damageExtAvailable : g_damageKhrAvailable;
+        return available ? reinterpret_cast<__eglMustCastToProperFunctionPointerType>(&FakeSwapBuffersWithDamage)
+                         : nullptr;
+    }
+} // namespace
+
+// EXT -> KHR -> nothing, the whole policy behind the loader's single damage-present slot.
+//
+// EGL_EXT_swap_buffers_with_damage and EGL_KHR_swap_buffers_with_damage define the same entry
+// point with the same signature, and a driver may expose either, both or neither - Adreno
+// exposes only the KHR spelling, which is why resolving the EXT name alone reported the entry
+// point missing on a driver that has one. A null answer is not a failure either: the caller
+// (DirectGLES::Present) reads it as "present with plain eglSwapBuffers", and a zero-rectangle
+// call to either spelling is defined to be equivalent to that anyway.
+TEST(SwapBuffersWithDamageResolution, PrefersExtThenKhrThenAnswersNothing) {
+    using namespace MobileGL;
+    MG_External::EGLFunctionsTable funcs{};
+    funcs.eglGetCurrentDisplay = &FakeDamageDisplay;
+    funcs.eglQueryString = &FakeDamageQueryString;
+    funcs.eglGetProcAddress = &FakeDamageGetProcAddress;
+    g_damageDisplay = reinterpret_cast<EGLDisplay>(1);
+    g_damageExtensions = "EGL_EXT_swap_buffers_with_damage EGL_KHR_swap_buffers_with_damage";
+    g_damageExtAvailable = g_damageKhrAvailable = true;
+    g_damageQueries.clear();
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), &FakeSwapBuffersWithDamage);
+    EXPECT_EQ(g_damageQueries, (std::vector<std::string>{"eglSwapBuffersWithDamageEXT"}));
+
+    g_damageExtAvailable = false;
+    g_damageQueries.clear();
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), &FakeSwapBuffersWithDamage);
+    EXPECT_EQ(g_damageQueries,
+              (std::vector<std::string>{"eglSwapBuffersWithDamageEXT", "eglSwapBuffersWithDamageKHR"}));
+
+    g_damageExtensions = "EGL_KHR_swap_buffers_with_damage";
+    g_damageQueries.clear();
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), &FakeSwapBuffersWithDamage);
+    EXPECT_EQ(g_damageQueries, (std::vector<std::string>{"eglSwapBuffersWithDamageKHR"}));
+
+    g_damageKhrAvailable = false;
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), nullptr);
+
+    g_damageExtensions = "EGL_EXT_swap_buffers_with_damage";
+    g_damageQueries.clear();
+    g_damageKhrAvailable = true;
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), nullptr);
+    EXPECT_EQ(g_damageQueries, (std::vector<std::string>{"eglSwapBuffersWithDamageEXT"}));
+
+    g_damageExtAvailable = true;
+    for (const char* extensions : {"", "EGL_EXT_swap_buffers_with_damage_extra", static_cast<const char*>(nullptr)}) {
+        g_damageExtensions = extensions;
+        g_damageQueries.clear();
+        EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), nullptr);
+        EXPECT_TRUE(g_damageQueries.empty());
+    }
+    g_damageExtensions = "EGL_EXT_swap_buffers_with_damage EGL_KHR_swap_buffers_with_damage";
+    g_damageDisplay = EGL_NO_DISPLAY;
+    g_damageQueries.clear();
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), nullptr);
+    EXPECT_TRUE(g_damageQueries.empty());
 }

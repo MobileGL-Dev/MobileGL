@@ -59,10 +59,13 @@ struct Request {
     bool avoidAngleLlvmpipeSamplerMipmapMinFilter = false;
     bool avoidAngleLlvmpipeExplicitLodBias = false;
     bool coherentAsFlush = false;
-    bool fixIterationRPSubgroupScratch = false;
-    bool deriveNumSubgroups = false;
-    bool iterationRPFixBarrier = false;
+    bool iterationRPFix = false;
     int holdMs = 0;
+    // Generic environment passthrough, each entry `KEY=VALUE` (an entry with no '='
+    // unsets KEY). Applied last, right before libMobileGL.so is loaded, so a knob that
+    // has no dedicated field above can still be forwarded from the CI script without
+    // touching this struct again.
+    std::vector<std::string> envOverrides;
 };
 
 struct Result {
@@ -85,6 +88,17 @@ struct Result {
     double benchmarkMedianMs = -1.0;
     double benchmarkP95Ms = -1.0;
     double benchmarkFps = -1.0;
+    // The same three statistics over the retrace thread's CPU time instead of wall time, and the
+    // reason the CPU series is collected at all: the disaggregation GO/NO-GO is a per-thread CPU
+    // question, not a frame-rate one. Left at -1 when the platform has no per-thread CPU clock,
+    // which is distinguishable from a real 0.0.
+    //
+    // Only mean/median/p95 stop here. p99 - which is half of what the paired A/B publishes - is
+    // computed HOST-SIDE from the full frameCpuTimesMs[] array in benchmark.json, so asking for a
+    // different percentile later needs no device change and no reflash.
+    double benchmarkMeanCpuMs = -1.0;
+    double benchmarkMedianCpuMs = -1.0;
+    double benchmarkP95CpuMs = -1.0;
 };
 
 Result RunTraceReplay(const Request& request);

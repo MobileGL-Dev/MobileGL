@@ -148,9 +148,8 @@ TEST_F(FlattenXfbInterfaceBlocksTest, TheEmittedDeclarationIsAPlainArrayNotABloc
 
     const String after = Transpile(output);
     EXPECT_NE(after.find("StageData_attrib[16]"), String::npos) << after;
-    EXPECT_EQ(after.find("out StageData"), String::npos)
-        << "the block must not still be declared as an output block:\n"
-        << after;
+    EXPECT_EQ(after.find("out StageData"), String::npos) << "the block must not still be declared as an output block:\n"
+                                                         << after;
 }
 
 // GL 4.6 core 11.1.2.1: consecutive members take consecutive locations, and a member takes as
@@ -182,8 +181,7 @@ TEST_F(FlattenXfbInterfaceBlocksTest, LeavesABlockNoCaptureNamesAlone) {
 
     std::set<String> flattened;
     Vector<Uint32> output;
-    ASSERT_TRUE(
-        ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(input, {"SomeOtherBlock"}, flattened, output, true));
+    ASSERT_TRUE(ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(input, {"SomeOtherBlock"}, flattened, output, true));
     EXPECT_TRUE(flattened.empty());
 
     const String after = Transpile(output);
@@ -209,16 +207,14 @@ TEST_F(FlattenXfbInterfaceBlocksTest, DeclinesAnEmptyRequestWithoutRewriting) {
 // does a name with no block prefix at all (gl_Position, a plain varying).
 TEST_F(FlattenXfbInterfaceBlocksTest, RewritesOnlyTheCaptureNamesOfFlattenedBlocks) {
     String rewritten;
-    EXPECT_TRUE(ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock("StageData.attrib[0]", {"StageData"},
-                                                                       rewritten));
+    EXPECT_TRUE(
+        ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock("StageData.attrib[0]", {"StageData"}, rewritten));
     EXPECT_EQ(rewritten, "StageData_attrib[0]");
 
-    EXPECT_TRUE(
-        ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock("StageData.attrib", {"StageData"}, rewritten));
+    EXPECT_TRUE(ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock("StageData.attrib", {"StageData"}, rewritten));
     EXPECT_EQ(rewritten, "StageData_attrib");
 
-    EXPECT_FALSE(
-        ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock("Other.member", {"StageData"}, rewritten));
+    EXPECT_FALSE(ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock("Other.member", {"StageData"}, rewritten));
     EXPECT_FALSE(ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock("gl_Position", {"StageData"}, rewritten));
     EXPECT_FALSE(ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock("vColor", {"StageData"}, rewritten));
     EXPECT_FALSE(ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock(".leading", {"StageData"}, rewritten));

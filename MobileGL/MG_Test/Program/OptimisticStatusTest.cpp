@@ -286,8 +286,8 @@ void main() { fragColor = thisIdentifierWasNeverDeclared; }
     // then the GL_ACTIVE_UNIFORMS enumeration ProgramUniforms$Builder.buildUniforms does.
     struct ProgramReflection {
         GLint linkStatus = GL_FALSE;
-        Vector<std::pair<String, GLint>> locations;                       // queried name -> location
-        Vector<std::tuple<String, GLenum, GLint, GLint>> activeUniforms;  // name, type, size, location
+        Vector<std::pair<String, GLint>> locations;                      // queried name -> location
+        Vector<std::tuple<String, GLenum, GLint, GLint>> activeUniforms; // name, type, size, location
     };
 
     ProgramReflection RunIrisPhaseTwo(const GLuint program, const Vector<String>& names) {
@@ -327,7 +327,7 @@ void main() { fragColor = thisIdentifierWasNeverDeclared; }
 // With the quirk unset (Auto = the shipped default), GL_COMPILE_STATUS on a pending compile
 // must join it: after the query, the node is terminal. This is the case that guards the
 // default against ever silently flipping. No blocker here - a blocked pool would turn the
-// (correct) joining behaviour into a deadlock; a plain backlog only makes the pre-join
+// (correct) joining behavior into a deadlock; a plain backlog only makes the pre-join
 // state likely, and the assertion is valid either way.
 TEST_F(OptimisticStatusTest, OffByDefaultTheStatusStillJoins) {
     const AsyncModeScope async(true);
@@ -341,10 +341,10 @@ TEST_F(OptimisticStatusTest, OffByDefaultTheStatusStillJoins) {
     const GLuint probe = probes[0];
 
     EXPECT_EQ(QueryCompileStatus(probe), GL_TRUE);
-    EXPECT_EQ(QueryShaderCompletion(probe), GL_TRUE)
-        << "GL_COMPILE_STATUS with the quirk off must have joined the job";
+    EXPECT_EQ(QueryShaderCompletion(probe), GL_TRUE) << "GL_COMPILE_STATUS with the quirk off must have joined the job";
 
-    for (const GLuint shader : saturation) DeleteShader(shader);
+    for (const GLuint shader : saturation)
+        DeleteShader(shader);
     DeleteShader(probe);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
@@ -371,8 +371,7 @@ TEST_F(OptimisticStatusTest, PendingCompileReportsTrueAndEmptyLogWithoutJoining)
     EXPECT_EQ(QueryCompileStatus(probe), GL_TRUE) << "an in-flight compile must answer GL_TRUE";
     EXPECT_EQ(QueryInfoLogLength(probe), 0) << "an in-flight compile must answer an empty log length";
     EXPECT_TRUE(QueryShaderInfoLog(probe).empty()) << "an in-flight compile must answer an empty log";
-    EXPECT_EQ(QueryShaderCompletion(probe), GL_FALSE)
-        << "the three reads above must not have joined the blocked job";
+    EXPECT_EQ(QueryShaderCompletion(probe), GL_FALSE) << "the three reads above must not have joined the blocked job";
 
     DeleteShader(probe);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
@@ -511,9 +510,8 @@ TEST_F(OptimisticStatusTest, AFailingCompileStillFailsItsLink) {
     brokenSource += "    fragColor = vec4(acc);\n}\n";
     ASSERT_GT(brokenSource.size(), 32768u);
 
-    const GLuint vs = MakeShader(GL_VERTEX_SHADER,
-                                 "#version 460\nlayout(location = 0) in vec3 aPos;\n"
-                                 "void main() { gl_Position = vec4(aPos, 1.0); }\n");
+    const GLuint vs = MakeShader(GL_VERTEX_SHADER, "#version 460\nlayout(location = 0) in vec3 aPos;\n"
+                                                   "void main() { gl_Position = vec4(aPos, 1.0); }\n");
     const char* brokenText = brokenSource.c_str();
     const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
     ShaderSource(fs, 1, &brokenText, nullptr);
@@ -592,11 +590,12 @@ TEST_F(OptimisticStatusTest, IrisTwoPhaseReplayProducesIdenticalReflection) {
 
         Vector<ProgramReflection>& out = quirkOn ? optimistic : reference;
         for (int i = 0; i < kPrograms; ++i) {
-            const Vector<String> names = {"uModel" + std::to_string(i), "uTint",
-                                          "uSeed" + std::to_string(i), "uOffset", "uDoesNotExist"};
+            const Vector<String> names = {"uModel" + std::to_string(i), "uTint", "uSeed" + std::to_string(i), "uOffset",
+                                          "uDoesNotExist"};
             out.push_back(RunIrisPhaseTwo(programs[(SizeT)i], names));
         }
-        for (const GLuint program : programs) DeleteProgram(program);
+        for (const GLuint program : programs)
+            DeleteProgram(program);
         ASSERT_EQ(GetError(), GL_NO_ERROR);
     }
 
@@ -645,7 +644,8 @@ TEST_F(OptimisticStatusTest, PhaseOneIssuesNoCompileJoin) {
             EXPECT_EQ(QueryShaderCompletion(shader), GL_FALSE)
                 << "a phase-1 read joined a compile the blocked pool could not have run";
         }
-        for (const GLuint shader : shaders) DeleteShader(shader);
+        for (const GLuint shader : shaders)
+            DeleteShader(shader);
     }
 
     // Quirk off: every status read joins its shader.
@@ -668,7 +668,8 @@ TEST_F(OptimisticStatusTest, PhaseOneIssuesNoCompileJoin) {
             EXPECT_EQ(QueryShaderCompletion(shader), GL_TRUE)
                 << "with the quirk off every per-shader status read must have joined";
         }
-        for (const GLuint shader : shaders) DeleteShader(shader);
+        for (const GLuint shader : shaders)
+            DeleteShader(shader);
     }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }

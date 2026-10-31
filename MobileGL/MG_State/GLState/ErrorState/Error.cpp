@@ -24,8 +24,8 @@ namespace MobileGL::MG_State::GLState {
             // error flags, each is set only while currently unset — repeated errors of the same
             // code are discarded until glGetError reads the flag. Unbounded accumulation leaked
             // stale errors into later, unrelated glGetError checks (GL CTS deinit noise).
-            const Bool alreadyPending = std::any_of(m_errors.begin(), m_errors.end(),
-                                                    [code](const auto& e) { return e->code == code; });
+            const Bool alreadyPending =
+                std::any_of(m_errors.begin(), m_errors.end(), [code](const auto& e) { return e->code == code; });
             if (!alreadyPending) {
                 m_errors.push_back(MakeUnique<Error>(code, Move(info)));
             }

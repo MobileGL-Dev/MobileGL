@@ -50,7 +50,7 @@ namespace MobileGL {
             // them: on the VARIABLE when the cross-stage IO resolver assigned it (or the
             // application wrote `layout(location=) out Blk {...}`), and on the MEMBERS when the
             // application located those instead - in which case glslang puts nothing on the
-            // variable at all and SPIRV-Cross suppresses the block-level qualifier in favour of
+            // variable at all and SPIRV-Cross suppresses the block-level qualifier in favor of
             // the member ones. A variable-only strip would silently pass that second shape by.
             // A struct reached by an interface variable whose direction is NOT armed keeps its
             // member decorations: they belong to the type, and taking them off would strip the
@@ -69,17 +69,17 @@ namespace MobileGL {
                 // `stripInputBlocks` covers the blocks this stage CONSUMES and
                 // `stripOutputBlocks` the ones it PRODUCES. `strippedAny`, when non-null,
                 // receives whether this stage actually had one, so the caller can decline the
-                // re-serialised module when there was nothing to strip.
-                StripIoBlockLocationsPass(Bool stripInputBlocks, Bool stripOutputBlocks,
-                                          Bool* strippedAny = nullptr)
+                // re-serialized module when there was nothing to strip.
+                StripIoBlockLocationsPass(Bool stripInputBlocks, Bool stripOutputBlocks, Bool* strippedAny = nullptr)
                     : m_stripInputBlocks(stripInputBlocks), m_stripOutputBlocks(stripOutputBlocks),
                       m_strippedAny(strippedAny) {}
 
                 const char* name() const override { return "mobilegl-strip-io-block-locations"; }
                 Status Process() override;
 
-                static spvtools::Optimizer::PassToken CreateStripIoBlockLocationsPass(
-                    Bool stripInputBlocks, Bool stripOutputBlocks, Bool* strippedAny);
+                static spvtools::Optimizer::PassToken CreateStripIoBlockLocationsPass(Bool stripInputBlocks,
+                                                                                      Bool stripOutputBlocks,
+                                                                                      Bool* strippedAny);
 
             private:
                 Bool m_stripInputBlocks = false;

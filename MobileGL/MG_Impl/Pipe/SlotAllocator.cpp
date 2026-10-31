@@ -1,0 +1,366 @@
+// MobileGL - MobileGL/MG_Impl/Pipe/SlotAllocator.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// SlotAllocator.h. Compiled only under MOBILEGL_PIPE_PUSH.
+#include <MG_Impl/Pipe/SlotAllocator.h>
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <Config.h>
+#include <MG_Backend/MGPipe/PipeInputs.h> // D1c: MGPipeServerArm()
+#include <MG_Pipe/PipeApply.h>
+#include <MG_Remote/Server/ServerLoop.h>
+#include <MG_Util/Debug/Log.h>
+
+#include <cstdlib>
+#endif
+
+namespace MobileGL::MG_Pipe {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    void MGPipeRefuseAllocatorFromApplyThread(const char* entry) {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        // D10: OR'd with the PROCESS-ROLE fact, not replaced by it. OnApplyThread() answers
+        // about the INPROC applier thread and is the only fact a ServerLoop fixture with no
+        // client session has; MGPipeServerArm() adds the spawn case, where EVERY thread is a
+        // server thread. Replacing the first with the second disarmed the refusal in every unit
+        // test that drives the apply thread directly - measured, 14 RemoteGuards cases went
+        // green-by-omission before this was put back as a disjunction.
+        if (!MG_Remote::Server::ServerLoop::OnApplyThread() && !MG_Pipe::MGPipeServerArm()) return;
+        // P5f (fr): all named allocator exemptions are retired. A barrier can
+        // stabilize a client allocator but cannot make it server-owned memory.
+        MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - the apply thread called "
+                "MGPipeSlots().%s. With an active transport the client slot allocator is "
+                "client-only memory (CONTRACT-P5C §3.1, rule E; CONTRACT-P5E §4.4): a handle "
+                "arrives already minted in a record, and a server that resolves or mints one "
+                "off a frontend object's lifetime id is reading memory that will not exist on "
+                "its side of a real split. No scope or backend exempts a barriered record "
+                "(barriered=%d)",
+                entry, MGPipeApplierCurrentRecordIsBarriered() ? 1 : 0);
+        std::abort();
+    }
+
+#endif
+
+    namespace {
+        // The ShaderCso band the ordinary allocator must never enter: the top 1/16 of the
+        // ShaderCso slot space is reserved for PROGRAM PIPELINE COMPOSITES, which are minted
+        // client-side out of the stage programs bound to a pipeline object. Reserving a band
+        // rather than a flag keeps the composite resolver's lifetime bookkeeping out of here
+        // (MGPipeHandles.h, ARCHITECTURE.md 5.6.3).
+        Bool SlotIsAllocatable(MGPipeKind kind, Uint32 slot) {
+            if (slot < kMGPipeFirstAllocatableSlot) return false;
+            if (kind != MGPipeKind::ShaderCso) return true;
+            return slot < kMGPipeShaderCsoCompositeSlotBase;
+        }
+    } // namespace
+
+    MGPipeSlotAllocator::KindState& MGPipeSlotAllocator::StateOf(MGPipeKind kind) {
+        const SizeT index = static_cast<SizeT>(kind);
+        MOBILEGL_ASSERT(index < kKindCount, "MGPipeKind %zu out of range", index);
+        return m_kinds[index < kKindCount ? index : 0];
+    }
+
+    const MGPipeSlotAllocator::KindState& MGPipeSlotAllocator::StateOf(MGPipeKind kind) const {
+        const SizeT index = static_cast<SizeT>(kind);
+        MOBILEGL_ASSERT(index < kKindCount, "MGPipeKind %zu out of range", index);
+        return m_kinds[index < kKindCount ? index : 0];
+    }
+
+    MGPipeSlotAllocator::SlotState* MGPipeSlotAllocator::EntryOf(KindState& state, MGPipeKind kind, Uint32 slot) {
+        if (kind == MGPipeKind::ShaderCso && MGPipeIsCompositeShaderSlot(slot)) {
+            const SizeT index = slot - kMGPipeShaderCsoCompositeSlotBase;
+            if (index >= state.BandSlots.size()) return nullptr;
+            return &state.BandSlots[index];
+        }
+        if (slot >= state.Slots.size()) return nullptr;
+        return &state.Slots[slot];
+    }
+
+    const MGPipeSlotAllocator::SlotState* MGPipeSlotAllocator::EntryOf(const KindState& state, MGPipeKind kind,
+                                                                       Uint32 slot) {
+        return EntryOf(const_cast<KindState&>(state), kind, slot);
+    }
+
+    MGPipeHandle MGPipeSlotAllocator::Allocate(MGPipeKind kind) {
+        KindState& state = StateOf(kind);
+        if (state.Slots.empty()) {
+            // Slot 0 exists so the vector is slot-indexed, and is never handed out.
+            state.Slots.resize(kMGPipeFirstAllocatableSlot);
+        }
+
+        Uint32 slot = 0;
+        Bool reused = false;
+        while (!state.FreeList.empty()) {
+            const Uint32 candidate = state.FreeList.back();
+            state.FreeList.pop_back();
+            if (!SlotIsAllocatable(kind, candidate)) continue;
+            slot = candidate;
+            reused = true;
+            break;
+        }
+
+        if (!reused) {
+            slot = static_cast<Uint32>(state.Slots.size());
+            MOBILEGL_ASSERT(SlotIsAllocatable(kind, slot), "MGPipe slot space of kind %u is exhausted at slot %u",
+                            static_cast<Uint32>(kind), slot);
+            if (!SlotIsAllocatable(kind, slot)) return kMGPipeNullHandle;
+            state.Slots.emplace_back();
+        }
+
+        SlotState& entry = state.Slots[slot];
+        if (entry.EverHandedOut) {
+            // The one place Gen may move. 2^32 recycles of ONE slot is ~50 days of continuous
+            // churn at one recycle per frame at 1000 fps, which is why the bound is asserted
+            // in a debug allocator rather than defended in release.
+            MOBILEGL_ASSERT(entry.Gen != ~Uint32{0},
+                            "MGPipe handle generation wrapped on kind %u slot %u; {slot, gen} is "
+                            "no longer unique",
+                            static_cast<Uint32>(kind), slot);
+            ++entry.Gen;
+        }
+        entry.EverHandedOut = true;
+        entry.Live = true;
+        entry.LifetimeId = 0;
+        ++state.LiveCount;
+        return MGPipeHandle{slot, entry.Gen};
+    }
+
+    MGPipeHandle MGPipeSlotAllocator::AllocateFor(MGPipeKind kind, Uint64 lifetimeId) {
+        const MGPipeHandle handle = Allocate(kind);
+        if (MGPipeHandleIsNull(handle)) return handle;
+        KindState& state = StateOf(kind);
+        state.Slots[handle.Slot].LifetimeId = lifetimeId;
+        if (lifetimeId != 0) {
+            MOBILEGL_ASSERT(state.ByLifetimeId.find(lifetimeId) == state.ByLifetimeId.end(),
+                            "lifetime id %llu already owns a slot of kind %u",
+                            static_cast<unsigned long long>(lifetimeId), static_cast<Uint32>(kind));
+            state.ByLifetimeId[lifetimeId] = handle.Slot;
+        }
+        return handle;
+    }
+
+    MGPipeHandle MGPipeSlotAllocator::AllocateComposite(Uint64 lifetimeId) {
+        // P4a, D-H7. The mirror image of Allocate() above, restricted to the band that one
+        // refuses, and kept in a table of its own so both spaces stay DENSE: the band's base
+        // is 983040, and minting one composite into the slot-indexed vector would allocate
+        // ~23 MB of SlotState for a single program pipeline.
+        KindState& state = StateOf(MGPipeKind::ShaderCso);
+
+        Uint32 slot = 0;
+        Bool reused = false;
+        if (!state.BandFreeList.empty()) {
+            slot = state.BandFreeList.back();
+            state.BandFreeList.pop_back();
+            reused = true;
+        }
+
+        if (!reused) {
+            const SizeT next = kMGPipeShaderCsoCompositeSlotBase + state.BandSlots.size();
+            slot = static_cast<Uint32>(next);
+            // The band's own exhaustion assert, mirroring Allocate()'s: a composite that
+            // cannot be minted is a NAMED failure, not a silent fall-through into the ordinary
+            // program slots, which is exactly what reserving a band rather than setting a flag
+            // buys.
+            MOBILEGL_ASSERT(next < kMGPipeShaderCsoSlotLimit,
+                            "the MGPipe ShaderCso COMPOSITE band is exhausted at slot %zu; a "
+                            "program-pipeline composite cannot be minted and must not take an "
+                            "ordinary program's slot",
+                            next);
+            if (next >= kMGPipeShaderCsoSlotLimit) return kMGPipeNullHandle;
+            state.BandSlots.emplace_back();
+        }
+
+        SlotState* entry = EntryOf(state, MGPipeKind::ShaderCso, slot);
+        if (entry == nullptr) return kMGPipeNullHandle;
+        if (entry->EverHandedOut) {
+            MOBILEGL_ASSERT(entry->Gen != ~Uint32{0},
+                            "MGPipe handle generation wrapped on the ShaderCso composite band, "
+                            "slot %u; {slot, gen} is no longer unique",
+                            slot);
+            ++entry->Gen;
+        }
+        entry->EverHandedOut = true;
+        entry->Live = true;
+        entry->LifetimeId = lifetimeId;
+        ++state.LiveCount;
+        // The band's share of LiveCount, so CompositeLiveCount() can answer without a walk.
+        ++state.BandLiveCount;
+        if (lifetimeId != 0) {
+            MOBILEGL_ASSERT(state.ByLifetimeId.find(lifetimeId) == state.ByLifetimeId.end(),
+                            "lifetime id %llu already owns a ShaderCso slot",
+                            static_cast<unsigned long long>(lifetimeId));
+            state.ByLifetimeId[lifetimeId] = slot;
+        }
+        return MGPipeHandle{slot, entry->Gen};
+    }
+
+    MGPipeHandle MGPipeSlotAllocator::FindByLifetimeId(MGPipeKind kind, Uint64 lifetimeId) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeId");
+#endif
+        if (lifetimeId == 0) return kMGPipeNullHandle;
+        const KindState& state = StateOf(kind);
+        // The direct-mapped front (SlotAllocator.h): a hit is only believed when the slot it
+        // names is live AND still owned by this very lifetime id.
+        auto& recent = state.Recent[lifetimeId % KindState::kRecentEntries];
+        if (recent.LifetimeId == lifetimeId) {
+            const SlotState* entry = EntryOf(state, kind, recent.Slot);
+            if (entry != nullptr && entry->Live && entry->LifetimeId == lifetimeId)
+                return MGPipeHandle{recent.Slot, entry->Gen};
+        }
+        const auto it = state.ByLifetimeId.find(lifetimeId);
+        if (it == state.ByLifetimeId.end()) return kMGPipeNullHandle;
+        const SlotState* entry = EntryOf(state, kind, it->second);
+        if (entry == nullptr || !entry->Live) return kMGPipeNullHandle;
+        recent.LifetimeId = lifetimeId;
+        recent.Slot = it->second;
+        return MGPipeHandle{it->second, entry->Gen};
+    }
+
+    MGPipeHandle MGPipeSlotAllocator::FindByLifetimeIdHinted(MGPipeKind kind, Uint64 lifetimeId, Uint64& hint) const {
+        if (hint != 0 && lifetimeId != 0) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeIdHinted");
+#endif
+            const Uint32 slot = static_cast<Uint32>(hint);
+            const Uint32 gen = static_cast<Uint32>(hint >> 32);
+            const SlotState* entry = EntryOf(StateOf(kind), kind, slot);
+            if (entry != nullptr && entry->Live && entry->Gen == gen && entry->LifetimeId == lifetimeId)
+                return MGPipeHandle{slot, gen};
+        }
+        const MGPipeHandle found = FindByLifetimeId(kind, lifetimeId);
+        hint = MGPipeHandleIsNull(found) ? 0 : MGPipePackHandleHint(found);
+        return found;
+    }
+
+    MGPipeHandle MGPipeSlotAllocator::AcquireHinted(MGPipeKind kind, Uint64 lifetimeId, Uint64& hint) {
+        const MGPipeHandle existing = FindByLifetimeIdHinted(kind, lifetimeId, hint);
+        if (!MGPipeHandleIsNull(existing)) return existing;
+        const MGPipeHandle minted = Acquire(kind, lifetimeId);
+        hint = MGPipeHandleIsNull(minted) ? 0 : MGPipePackHandleHint(minted);
+        return minted;
+    }
+
+    MGPipeHandle MGPipeSlotAllocator::Acquire(MGPipeKind kind, Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeRefuseAllocatorFromApplyThread("Acquire");
+#endif
+        const MGPipeHandle existing = FindByLifetimeId(kind, lifetimeId);
+        if (!MGPipeHandleIsNull(existing)) return existing;
+        return AllocateFor(kind, lifetimeId);
+    }
+
+    void MGPipeSlotAllocator::Free(MGPipeKind kind, MGPipeHandle handle) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeRefuseAllocatorFromApplyThread("Free");
+#endif
+        KindState& state = StateOf(kind);
+        SlotState* entry = EntryOf(state, kind, handle.Slot);
+        if (entry == nullptr) return;
+        // A stale handle must not free the slot its successor now owns - that is the whole
+        // reason the generation is in the key. It is also what makes the SECOND of a
+        // composite's two independent release paths a proven no-op.
+        if (!entry->Live || entry->Gen != handle.Gen) return;
+        if (entry->LifetimeId != 0) {
+            const auto it = state.ByLifetimeId.find(entry->LifetimeId);
+            if (it != state.ByLifetimeId.end() && it->second == handle.Slot) {
+                state.ByLifetimeId.erase(it);
+            }
+        }
+        entry->Live = false;
+        entry->LifetimeId = 0;
+        --state.LiveCount;
+        if (kind == MGPipeKind::ShaderCso && MGPipeIsCompositeShaderSlot(handle.Slot)) {
+            --state.BandLiveCount;
+            state.BandFreeList.push_back(handle.Slot);
+        } else {
+            state.FreeList.push_back(handle.Slot);
+        }
+    }
+
+    Bool MGPipeSlotAllocator::IsLive(MGPipeKind kind, MGPipeHandle handle) const {
+        const SlotState* entry = EntryOf(StateOf(kind), kind, handle.Slot);
+        return entry != nullptr && entry->Live && entry->Gen == handle.Gen;
+    }
+
+    Uint32 MGPipeSlotAllocator::GenOfSlot(MGPipeKind kind, Uint32 slot) const {
+        const SlotState* entry = EntryOf(StateOf(kind), kind, slot);
+        return entry != nullptr ? entry->Gen : 0;
+    }
+
+    Uint64 MGPipeSlotAllocator::LifetimeIdOfSlot(MGPipeKind kind, Uint32 slot) const {
+        const SlotState* entry = EntryOf(StateOf(kind), kind, slot);
+        return entry != nullptr ? entry->LifetimeId : 0;
+    }
+
+    Uint32 MGPipeSlotAllocator::HighWater(MGPipeKind kind) const {
+        // THE ORDINARY SPACE ONLY, and the band is reported by CompositeHighWater() below.
+        // Folding the two would pin this at ~983k from the first composite mint onward and
+        // take the ordinary space's "the high-water mark did not move" assertion away for the
+        // rest of the process - the assertion that catches a dense table that never shrinks,
+        // which is the leak shape this allocator exists to make visible. Two spaces, two
+        // numbers, two real assertions. See SlotAllocator.h.
+        return static_cast<Uint32>(StateOf(kind).Slots.size());
+    }
+
+    Uint32 MGPipeSlotAllocator::CompositeHighWater() const {
+        const KindState& state = StateOf(MGPipeKind::ShaderCso);
+        // One past the highest composite slot ever handed out; exactly the base when none ever
+        // was, so the number is monotone from the first mint and a LEAKED COMPOSITE MOVES IT.
+        return static_cast<Uint32>(kMGPipeShaderCsoCompositeSlotBase + state.BandSlots.size());
+    }
+
+    Uint32 MGPipeSlotAllocator::LiveCount(MGPipeKind kind) const {
+        return StateOf(kind).LiveCount;
+    }
+
+    Uint32 MGPipeSlotAllocator::CompositeLiveCount() const {
+        return StateOf(MGPipeKind::ShaderCso).BandLiveCount;
+    }
+
+    Uint32 MGPipeSlotAllocator::FreeCount(MGPipeKind kind) const {
+        const KindState& state = StateOf(kind);
+        return static_cast<Uint32>(state.FreeList.size() + state.BandFreeList.size());
+    }
+
+    Uint32 MGPipeSlotAllocator::CompositeFreeCount() const {
+        return static_cast<Uint32>(StateOf(MGPipeKind::ShaderCso).BandFreeList.size());
+    }
+
+    void MGPipeSlotAllocator::Reset() {
+        ++m_resetEpoch;
+        for (KindState& state : m_kinds) {
+            state.Slots.clear();
+            state.FreeList.clear();
+            state.BandSlots.clear();
+            state.BandFreeList.clear();
+            state.ByLifetimeId.clear();
+            state.Recent.fill({});
+            state.LiveCount = 0;
+            state.BandLiveCount = 0;
+        }
+    }
+
+    MGPipeSlotAllocator& MGPipeSlots() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Guard the client singleton itself too: Allocate/IsLive/HighWater and the
+        // bookkeeping accessors must not bypass the original three method guards.
+        // Backend-private allocator instances do not use this accessor.
+        MGPipeRefuseAllocatorFromApplyThread("client-singleton");
+#endif
+        // NEVER DESTROYED, deliberately (one allocation for the life of the process). A
+        // frontend object's destructor reaches this allocator - ~BufferObject through
+        // MGPipeEmitResourceDestroyAndFree, ~VertexArrayObject through the death notice - and
+        // MG_Backend/MGPipe/PipeInputs.h's gPipeInputs holds SharedPtrs to those objects at
+        // namespace scope, so they are destroyed by __run_exit_handlers AFTER this
+        // function-local static would have been. A destroyed allocator then answers
+        // FindByLifetimeId out of a freed hash table and Free() writes into freed vectors -
+        // an exit-time heap corruption whose fatality depends only on the allocator's layout.
+        static MGPipeSlotAllocator* allocator = new MGPipeSlotAllocator();
+        return *allocator;
+    }
+} // namespace MobileGL::MG_Pipe

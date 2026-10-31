@@ -34,6 +34,11 @@
 #ifdef _WIN32
 #define MOBILEGL_EXPORT extern "C" __declspec(dllexport)
 #else
+// Default visibility, which is what the platform's own GL and EGL headers declare their entry
+// points with.  The one place where that is not enough - a vendor library handing glvnd its own
+// entry points, where a reference resolving against the process instead of this library would be a
+// call back into the dispatcher - is answered at link time with -Bsymbolic-functions rather than
+// here, because a second visibility on the same declaration does not compile.
 #define MOBILEGL_EXPORT extern "C" __attribute__((visibility("default")))
 #endif
 
@@ -102,14 +107,14 @@
 // 2026-08-13 renumbering unchanged; the contract is and stays
 // "INFO builds: asserts OFF; DEBUG builds: asserts ON".
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
-    #define MOBILEGL_ASSERT(condition, ...)                                                                                \
-        do {                                                                                                               \
-            if (!(condition)) {                                                                                            \
-                MGLOG_F("Assertion failed" __VA_OPT__(": ") __VA_ARGS__);                                                  \
-                MGLOG_F("  at %s:%d (%s)", __FILE__, __LINE__, __func__);                                                  \
-                TRAP;                                                                                                      \
-            }                                                                                                              \
-        } while (0)
+#define MOBILEGL_ASSERT(condition, ...)                                                                                \
+    do {                                                                                                               \
+        if (!(condition)) {                                                                                            \
+            MGLOG_F("Assertion failed" __VA_OPT__(": ") __VA_ARGS__);                                                  \
+            MGLOG_F("  at %s:%d (%s)", __FILE__, __LINE__, __func__);                                                  \
+            TRAP;                                                                                                      \
+        }                                                                                                              \
+    } while (0)
 #else
-    #define MOBILEGL_ASSERT(condition, ...)
+#define MOBILEGL_ASSERT(condition, ...)
 #endif

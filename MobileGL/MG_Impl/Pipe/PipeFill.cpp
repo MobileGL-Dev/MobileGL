@@ -1,0 +1,3432 @@
+// MobileGL - MobileGL/MG_Impl/Pipe/PipeFill.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// The client side of the PipeInputs block (ARCHITECTURE.md 9.2 phase A): the only place in
+// the push arm that reads MG_State::pGLContext. Holds the per-verb filler, the F-class
+// forwarders, IsLive and - in a verify build - the second arm (SnapshotFromGLContext), the
+// entry compare, the compare-at-read hook, the MOBILEGL_PIPE_VERIFY_CORRUPT knob, which only
+// this build reads, and the poison omission (MGPipeSetPoisonOmission).
+#include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/BufferState/BufferState.h>
+// C-1: the vertex-elements CSO's death path raises the backend notice from here, between the
+// applier's delete and the slot free, so that the whole order lives in one place.
+#include <MG_State/GLState/StateObjectDeathNotice.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Impl/Pipe/CsoCache.h>
+// P4a's five client emitters. This translation unit is the ONLY one that includes them in the
+// library, exactly as it is for Tracker.h, CsoCache.h, ResourceTracker.h and VertexInputEmit.h
+// - all of them header-only for the same ownership reason. Each carries its family's
+// kMGPipeWired*Subsystem constant, so the bit that switches a family on is added by the commit
+// that gives that family's emitters their bodies, and no two packages ever edit one file.
+#include <MG_Impl/Pipe/FramebufferEmit.h>
+#include <MG_Impl/Pipe/ImageEmit.h>
+#include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Impl/Pipe/ProgramEmit.h>
+#include <MG_Impl/Pipe/ResourceTracker.h>
+#include <MG_Impl/Pipe/SamplerEmit.h>
+#include <MG_Impl/Pipe/SetHashSuppressor.h>
+#include <MG_Impl/Pipe/ShaderBufferEmit.h>
+#include <MG_Impl/Pipe/TextureEmit.h>
+#include <MG_Impl/Pipe/Tracker.h>
+#include <MG_Impl/Pipe/VertexInputEmit.h>
+#include <MG_Pipe/MGPipeRenderStateSpans.h>
+#include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeRoute.h>
+#include <MG_Pipe/PipeMutation.h>
+#include <MG_Pipe/VerbRecordOps.h>
+#include <Config.h>
+#if MOBILEGL_PIPE_VERIFY
+#include <MG_Impl/Pipe/Verb/VerbPort.h>
+#include <MG_Impl/Pipe/Verb/GpuWriteSet.h>
+// MG_ConfigLoader::LookupSetting: ArmVerify reads MOBILEGL_PIPE_VERIFY_CORRUPT itself.
+#include <Init.h>
+#endif
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+// R-8 (c1): the client's liveness gates read the caps mirror, never MGPipeGetResourceOps().
+// Behind the build option for G1's reason - nothing under MG_Remote may be reachable from a
+// pull build - and every use below is additionally gated on the resolved TRANSPORT, because
+// build-split runs MOBILEGL_TRANSPORT=monolith in every unit and integration-gpu lane and those
+// lanes must keep answering exactly what they answered before.
+#include <MG_Remote/Client/CapsMirror.h>
+// MGPipeStageChunkBytes: the resource emitters' content cap (see MGPipeContentChunkCap below).
+#include <MG_Remote/Client/GpuWritePending.h>
+#include <MG_Remote/Client/WireTables.h>
+// P5c gt (CONTRACT-P5C §6 layer 2, audit A1): the client-side gPipeInputs check consults
+// InBarrierWait() and ApplyThreadIsInsideApplier() - both live here.
+#include <MG_Remote/Client/ClientSession.h>
+// P5f fv: backend errors use the same owned reverse callback table as other events.
+// The producer, rather than this client-side translation unit, knows the server session.
+#include <MG_Pipe/MGPipeCallbacks.h>
+#endif
+
+#include <atomic>
+#include <mutex>
+#include <cstdlib>
+#include <cstring>
+
+namespace MobileGL::MG_Pipe {
+    using GLContext = MG_State::GLState::GLContext;
+
+    // The one door into PipeInputs' storage on the client side. A struct rather than a
+    // list of friend functions so the header names exactly one friend.
+    struct MGPipeFillAccess {
+        static void CopyServerPackReference(PipeInputs& dst, const PipeInputs& actual,
+                                            const PixelStoreParameters& pack) {
+            dst.m_pixelStore[0] = pack;
+            dst.m_pixelStore[1] = actual.m_pixelStore[1];
+        }
+        // Copies ONE field's storage out of the live context by calling the GLContext
+        // accessor of the same name (P1 brief D4: no derivation logic is re-implemented
+        // here, which is what keeps the copy semantically identical by construction).
+        // A forwarded field has no storage and copies nothing.
+        // The two doors the P2 emission step needs into PipeInputs' storage. They exist
+        // only for ApplierDerivesRenderStateFields' one-shot probe below; nothing on the hot
+        // path writes through them.
+        static RenderStateParameters& RenderStateOf(PipeInputs& inputs) { return inputs.m_renderState; }
+        static Uint32& ClearStencilOf(PipeInputs& inputs) { return inputs.m_clearStencil; }
+        // Read-only, and it exists for one thing: after set_vertex_attrib_defaults goes out,
+        // the emitter compares what the applier left here against what the frontend holds
+        // (EmitVertexAttribDefaults). Reading it through this door rather than through the
+        // accessor is deliberate - the accessor is poison-checked and this is a fill-time
+        // read, not a backend read.
+        static const PipeInputs::CurrentVertexAttributeValue* VertexAttribDefaultsOf(const PipeInputs& inputs) {
+            return inputs.m_currentVertexAttribute;
+        }
+
+        // P5e (ra, CONTRACT-P5E §2.3). THE FOUR O-CLASS ROWS, AND ONLY THEY: these are the only
+        // members of this block that own a frontend object rather than point into one, so they
+        // are the only ones through which the apply thread can become a last owner. The raw
+        // pointer rows (the binding-slot bases) are borrowed from a live GLContext and own
+        // nothing, so releasing them would buy no lifetime and lose the monolith's arms.
+        static void ReleaseObjectPins(PipeInputs& inputs) {
+            inputs.m_boundVertexArray.reset();
+            inputs.m_programForDispatch.reset();
+            inputs.m_programForDraw.reset();
+            inputs.m_transformFeedbackProgram.reset();
+        }
+
+        static void CopyField(PipeInputs& dst, GLContext& ctx, MGPipeInputField field) {
+            using F = MGPipeInputField;
+            using MG_State::GLState::BufferBindPointTargets;
+            using MG_State::GLState::GlobalBufferTargets;
+            switch (field) {
+            case F::GetActiveTextureUnit:
+                dst.m_activeTextureUnit = ctx.GetActiveTextureUnit();
+                break;
+            case F::GetBlendColor:
+                dst.m_blendColor = ctx.GetBlendColor();
+                break;
+            case F::GetBlendEquationIndexed:
+                for (Uint i = 0; i < kMGMaxDrawBuffers; ++i) {
+                    ctx.GetBlendEquationIndexed(i, dst.m_blendEquation[i][0], dst.m_blendEquation[i][1]);
+                }
+                break;
+            case F::GetBlendFuncIndexed:
+                for (Uint i = 0; i < kMGMaxDrawBuffers; ++i) {
+                    ctx.GetBlendFuncIndexed(i, dst.m_blendFunc[i][0], dst.m_blendFunc[i][1], dst.m_blendFunc[i][2],
+                                            dst.m_blendFunc[i][3]);
+                }
+                break;
+            case F::GetBoundTransformFeedbackName:
+                dst.m_boundTransformFeedbackName = ctx.GetBoundTransformFeedbackName();
+                break;
+            // The four object pins: assigned only when the object moved, so the residual fill of
+            // every draw does not pay a reference-count increment and decrement for a pointer it
+            // already holds (P14: one of these moves per Minecraft draw, the other three rarely).
+            case F::GetBoundVertexArray:
+                if (dst.m_boundVertexArray != ctx.GetBoundVertexArray())
+                    dst.m_boundVertexArray = ctx.GetBoundVertexArray();
+                break;
+            case F::GetBufferBindingSlot:
+                // Every global target has a slot; Index stays null - GLContext resolves it
+                // through the bound VAO's element-buffer slot (Core.cpp), a derivation no
+                // FillPoints.def row can copy - and a read of it is the poison Fatal in the
+                // accessor. No backend reads it today (every slot read is DrawIndirect,
+                // DispatchIndirect, Parameter or PixelPack).
+                for (const auto target : GlobalBufferTargets) {
+                    dst.m_bufferBindingSlot[static_cast<SizeT>(target)] = &ctx.GetBufferBindingSlot(target);
+                }
+                break;
+            case F::GetBufferBindingPoint:
+                // The live storage is Array<Array<BindingSlotRange1D, BufferBindingPointCount>, N>
+                // (BufferState.h), so the address of point 0 is the base of that target's row.
+                for (const auto target : BufferBindPointTargets) {
+                    dst.m_bufferBindingPointBase[static_cast<SizeT>(target)] = &ctx.GetBufferBindingPoint(target, 0);
+                }
+                break;
+            case F::GetTouchedBufferBindingPointCount:
+                for (const auto target : BufferBindPointTargets) {
+                    dst.m_touchedBindingPointCount[static_cast<SizeT>(target)] =
+                        ctx.GetTouchedBufferBindingPointCount(target);
+                }
+                break;
+            case F::GetClampReadColor:
+                dst.m_clampReadColor = ctx.GetClampReadColor();
+                break;
+            case F::GetClearColor:
+                dst.m_clearColor = ctx.GetClearColor();
+                break;
+            case F::GetClearDepth:
+                dst.m_clearDepth = ctx.GetClearDepth();
+                break;
+            case F::GetClearStencil:
+                dst.m_clearStencil = ctx.GetClearStencil();
+                break;
+            case F::GetColorMaskIndexed:
+                for (Uint i = 0; i < kMGMaxDrawBuffers; ++i) {
+                    dst.m_colorMask[i] = ctx.GetColorMaskIndexed(i);
+                }
+                break;
+            case F::GetCullFaceMode:
+                dst.m_cullFaceMode = ctx.GetCullFaceMode();
+                break;
+            case F::GetCurrentVertexAttribute:
+                for (Uint i = 0; i < PipeInputs::kMaxVertexAttribs; ++i) {
+                    dst.m_currentVertexAttribute[i] = ctx.GetCurrentVertexAttribute(i);
+                }
+                break;
+            case F::GetDepthFunc:
+                dst.m_depthFunc = ctx.GetDepthFunc();
+                break;
+            case F::GetDepthMask:
+                dst.m_depthMask = ctx.GetDepthMask();
+                break;
+            case F::GetDepthRangeIndexed:
+                for (Uint i = 0; i < PipeInputs::kMaxViewports; ++i) {
+                    dst.m_depthRange[i] = ctx.GetDepthRangeIndexed(i);
+                }
+                break;
+            case F::GetFramebufferBindingSlot:
+                for (SizeT i = 0; i < PipeInputs::kFramebufferTargetCount; ++i) {
+                    dst.m_framebufferBindingSlot[i] =
+                        &ctx.GetFramebufferBindingSlot(static_cast<PipeInputs::FramebufferTarget>(i));
+                }
+                break;
+            case F::GetImageTextureBinding:
+                // Array<ImageTextureBinding, MAX_TEXTURE_IMAGE_UNITS> (TextureState.h): unit 0's
+                // address is the base.
+                dst.m_imageTextureBindingBase = &ctx.GetImageTextureBinding(0);
+                break;
+            case F::GetLineWidth:
+                dst.m_lineWidth = ctx.GetLineWidth();
+                break;
+            case F::GetLogicOp:
+                dst.m_logicOp = ctx.GetLogicOp();
+                break;
+            case F::GetMaxTouchedTextureUnit:
+                dst.m_maxTouchedTextureUnit = ctx.GetMaxTouchedTextureUnit();
+                break;
+            case F::GetMinSampleShadingValue:
+                dst.m_minSampleShadingValue = ctx.GetMinSampleShadingValue();
+                break;
+            case F::GetPatchDefaultInnerLevel:
+                dst.m_patchDefaultInnerLevel = ctx.GetPatchDefaultInnerLevel();
+                break;
+            case F::GetPatchDefaultOuterLevel:
+                dst.m_patchDefaultOuterLevel = ctx.GetPatchDefaultOuterLevel();
+                break;
+            case F::GetPatchVertices:
+                dst.m_patchVertices = ctx.GetPatchVertices();
+                break;
+            case F::GetPipelineStateVersion:
+                dst.m_pipelineStateVersion = ctx.GetPipelineStateVersion();
+                break;
+            case F::GetPixelStoreParameters:
+                dst.m_pixelStore[0] = ctx.GetPixelStoreParameters(false);
+                dst.m_pixelStore[1] = ctx.GetPixelStoreParameters(true);
+                break;
+            case F::GetPolygonModeFront:
+                dst.m_polygonModeFront = ctx.GetPolygonModeFront();
+                break;
+            case F::GetPolygonOffsetFactor:
+                dst.m_polygonOffsetFactor = ctx.GetPolygonOffsetFactor();
+                break;
+            case F::GetPolygonOffsetUnits:
+                dst.m_polygonOffsetUnits = ctx.GetPolygonOffsetUnits();
+                break;
+            case F::GetPrimitiveRestartIndex:
+                dst.m_primitiveRestartIndex = ctx.GetPrimitiveRestartIndex();
+                break;
+            case F::GetProgramForDispatch:
+                if (dst.m_programForDispatch != ctx.GetProgramForDispatch())
+                    dst.m_programForDispatch = ctx.GetProgramForDispatch();
+                break;
+            case F::GetProgramForDraw:
+                if (dst.m_programForDraw != ctx.GetProgramForDraw()) dst.m_programForDraw = ctx.GetProgramForDraw();
+                break;
+            case F::GetProvokingVertexMode:
+                dst.m_provokingVertexMode = ctx.GetProvokingVertexMode();
+                break;
+            case F::GetRenderStateParameters:
+                dst.m_renderState = ctx.GetRenderStateParameters();
+                break;
+            case F::GetRenderStateParametersVersion:
+                dst.m_renderStateParametersVersion = ctx.GetRenderStateParametersVersion();
+                break;
+            case F::GetSamplingResolutionGeneration:
+                dst.m_samplingResolutionGeneration = ctx.GetSamplingResolutionGeneration();
+                break;
+            case F::GetScissorBox:
+                dst.m_scissorBox = ctx.GetScissorBox();
+                break;
+            case F::GetStencilState:
+                dst.m_stencil[0] = ctx.GetStencilState(StencilFace::Front);
+                dst.m_stencil[1] = ctx.GetStencilState(StencilFace::Back);
+                break;
+            case F::GetTextureBindGeneration:
+                dst.m_textureBindGeneration = ctx.GetTextureBindGeneration();
+                break;
+            case F::GetTextureContextId:
+                dst.m_textureContextId = ctx.GetTextureContextId();
+                break;
+            case F::GetTextureUnitObject:
+                // Array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> (TextureState.h): unit 0 is the base.
+                dst.m_textureUnitBase = &ctx.GetTextureUnitObject(0);
+                break;
+            case F::GetTransformFeedbackCapturedVertices:
+                dst.m_transformFeedbackCapturedVertices = ctx.GetTransformFeedbackCapturedVertices();
+                break;
+            case F::GetTransformFeedbackGeneration:
+                dst.m_transformFeedbackGeneration = ctx.GetTransformFeedbackGeneration();
+                break;
+            case F::GetTransformFeedbackPausedPrimitiveCounter:
+                dst.m_transformFeedbackPausedPrimitiveCounter = ctx.GetTransformFeedbackPausedPrimitiveCounter();
+                break;
+            case F::GetTransformFeedbackProgram:
+                if (dst.m_transformFeedbackProgram != ctx.GetTransformFeedbackProgram())
+                    dst.m_transformFeedbackProgram = ctx.GetTransformFeedbackProgram();
+                break;
+            case F::GetViewport:
+                dst.m_viewport = ctx.GetViewport();
+                break;
+            case F::GetViewportIndexed:
+                for (Uint i = 0; i < PipeInputs::kMaxViewports; ++i) {
+                    dst.m_viewportIndexed[i] = ctx.GetViewportIndexed(i);
+                }
+                break;
+            case F::IsCapabilityEnabled:
+                // Every capability, FramebufferSrgb included: it copies today's constant false
+                // (MEASUREMENTS.md), so no value changes.
+                for (SizeT i = 0; i < PipeInputs::kCapabilityCount; ++i) {
+                    dst.m_capability[i] = ctx.IsCapabilityEnabled(static_cast<CapabilityInput>(i));
+                }
+                break;
+            case F::IsCapabilityEnabledIndexed:
+                // The only two indexed capabilities GLContext keeps (RenderState).
+                for (Uint i = 0; i < kMGMaxDrawBuffers; ++i) {
+                    dst.m_capabilityIndexed.Blend[i] = ctx.IsCapabilityEnabledIndexed(CapabilityInput::Blend, i);
+                }
+                for (Uint i = 0; i < PipeInputs::kMaxViewports; ++i) {
+                    dst.m_capabilityIndexed.ScissorTest[i] =
+                        ctx.IsCapabilityEnabledIndexed(CapabilityInput::ScissorTest, i);
+                }
+                break;
+            case F::IsTransformFeedbackActive:
+                dst.m_transformFeedbackActive = ctx.IsTransformFeedbackActive();
+                break;
+            case F::IsTransformFeedbackPaused:
+                dst.m_transformFeedbackPaused = ctx.IsTransformFeedbackPaused();
+                break;
+            case F::GetBoundTransformFeedbackLifetimeId:
+                dst.m_boundTransformFeedbackLifetimeId = ctx.GetBoundTransformFeedbackLifetimeId();
+                break;
+            // The seven forwarded fields: nothing to copy.
+            case F::GetBufferBindingPointCount:
+            case F::GetProgramObject:
+            case F::GetTextureObject:
+            case F::HasOpenTransformFeedbackSpan:
+            case F::InvalidateCompileEnv:
+            case F::ValidateProgramName:
+            case F::RecordError:
+            case F::kFieldCount:
+                break;
+            }
+        }
+
+        static void SetIdentity(PipeInputs& inputs, GLContext* ctx) {
+            inputs.m_live = ctx != nullptr;
+            inputs.m_contextIdentity = ctx;
+        }
+        static void SetVerb(PipeInputs& inputs, MGPipeVerb verb) { inputs.m_currentVerb = verb; }
+#if MOBILEGL_PIPE_POISON
+        static MGPipeFilledState& Filled(PipeInputs& inputs) { return inputs.m_filled; }
+#endif
+    };
+
+    namespace {
+        GLContext* LiveContext() {
+            return MG_State::pGLContext.get();
+        }
+
+#if !MOBILEGL_BUILD_DISAGGREGATED
+        // P13 W5: no transport, no run-ahead client.
+        Bool ClientRunsAhead() {
+            return false;
+        }
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ---- P5e (ra): the fill decision (CONTRACT-P5E §3.1) -----------------------------
+        //
+        // Is this process a run-ahead CLIENT right now? Three questions, cheapest first, and
+        // the last one is the latch ClientSession took at its first caps adoption - so this is
+        // one pointer test and one bool load on the verb path once the first two are constant.
+        Bool ClientRunsAhead() {
+            if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
+            if (MG_Remote::Client::RunsAsTheServerRole()) return false;
+            const MG_Remote::Client::ClientSession* session = MG_Remote::Client::ClientSession::Active();
+            return session != nullptr && session->RunAheadArmed();
+        }
+
+        // ClientVerbIsBarriered (below) evaluates the clauses of MGPipeBarriered at the validate
+        // point, before the record exists, from the verb and the live context; the two sides must
+        // agree (ARCHITECTURE.md §11.6.1). The clauses: the WaitClass of the op that
+        // MGP_VERB_RECORD_OP_LIST maps the verb to, and a kCtxVerb inside an open transform
+        // feedback span, which the server reads from the set_context_values record applied ahead
+        // of the verb. The client-arrays clause is not needed: EmitDrawRecord moves client arrays
+        // into owned buffers before it publishes. A null `ctx` means no open span.
+        // MGPipeValidateForVerbBarriered sets g_forceBarrieredFill so the next call answers true.
+        Bool g_forceBarrieredFill = false;
+
+        // P15: A PACK-BUFFER READBACK IS FIRE-AND-FORGET, decided per call. With a pack buffer
+        // bound the readback emitters publish read_pixels_to_buffer / get_texture_image_to_buffer
+        // (kWaitNone) instead of the reply form, and nothing is owed to the client at the call;
+        // the predicate mirrors PackBufferReadbackTarget's conditions. The one condition it
+        // cannot see (the byte range past 2 GiB) sends the emitter to the reply form, which then
+        // re-validates barriered (MGPipeValidateForVerbBarriered) before it publishes.
+        Bool PackReadbackGoesToBuffer(GLContext* ctx) {
+            if (ctx == nullptr) return false;
+            const auto& pbo = ctx->GetBufferBindingSlot(::MobileGL::BufferTarget::PixelPack).GetBoundObject();
+            if (!pbo) return false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Ipc.PboReadbackSync != 0) return false;
+#endif
+            if (pbo->IsMapped() || !MG_Record::BufferWritebackIsReachable(*pbo)) return false;
+            return !MGPipeHandleIsNull(MGPipeSlots().FindByLifetimeId(MGPipeKind::Buffer, pbo->GetLifetimeId()));
+        }
+
+        Bool ClientVerbIsBarriered(MGPipeVerb verb, GLContext* ctx) {
+            if (g_forceBarrieredFill) return true;
+            MGPWireOp op = MGPipeRecordOpForVerb(verb);
+            if (op == MGPWireOp::ReadPixels && PackReadbackGoesToBuffer(ctx)) op = MGPWireOp::ReadPixelsToBuffer;
+            if (op == MGPWireOp::GetTextureImage && PackReadbackGoesToBuffer(ctx))
+                op = MGPWireOp::GetTextureImageToBuffer;
+            // No record (answered from the caps mirror): no apply can read a fill for it.
+            if (op == kMGPipeNoRecord) return false;
+            if (MGPipeWaitClassFor(op) != kWaitNone) return true;
+            if (MGPipeCallClassFor(op) == kCtxVerb && ctx != nullptr && ctx->IsTransformFeedbackActive()) {
+                return true;
+            }
+            return false;
+        }
+
+        // Under run-ahead a barriered fill still overlaps the apply thread, which is draining the
+        // unbarriered records published earlier (the order is fill, emit, park), so every GL-thread
+        // write into the block first waits for the applier to reach the last published record.
+        // Call it before each write, not once per verb: the validate point writes the block before
+        // the emitters run and again after them, and the records they publish read the block.
+        // WaitForApplyToCatchUp returns at once unless run-ahead is armed; under lockstep the
+        // applier has already caught up. See ARCHITECTURE.md §9.2.2.
+        void QuiesceApplierBeforeFill(const char* surface) {
+            // P15: WITH TWO BLOCKS THE FILL IS THE CLIENT'S OWN. The applier reads the server
+            // block, so a GL-thread write to the client block races nothing and needs no wait -
+            // which is what makes one barriered verb cost one wait (its record's) instead of a
+            // quiesce before the fill, another before the residual half and one per frontend
+            // mutation after it (FCL BSL: 22 of them per frame).
+            if (MGPipeBlocksAreDistinct()) return;
+            MG_Remote::Client::ClientSession* session = MG_Remote::Client::ClientSession::Active();
+            if (session == nullptr) return; // no session: this process has no applier to outrun
+            session->WaitForApplyToCatchUp(surface);
+        }
+
+        // Whether the LAST fill actually happened, i.e. whether the rows in the block describe
+        // the verb in flight. Read by MGPipeNoteFrontendMutation, which refreshes one field of
+        // that fill: with no fill behind it there is nothing to refresh and the write would be
+        // the role violation §3.5 names.
+        Bool g_lastFillWasBarriered = true;
+#endif
+
+        template <class T>
+        const SharedPtr<T>& NullShared() {
+            static const SharedPtr<T> null;
+            return null;
+        }
+
+#if MOBILEGL_PIPE_VERIFY
+        [[noreturn]] void BadKnob(const char* knob, const char* value, const char* why) {
+            MGLOG_F("MGPipe: Fatal{PipeVerifyBadKnob, \"%s=%s\": %s}", knob, value, why);
+            std::abort();
+        }
+
+        // ---- negative control B (P1 brief D6), armed by MGPipeSetPoisonOmission ----
+        // The filler skips the STAMP (never the value) of one (verb, field) pair: an omission
+        // indistinguishable from a forgotten FillPoints.def row, so that verb's read of the
+        // field is Fatal{UnmigratedPipeInput, "Field@Verb"} and no other verb is affected. The
+        // GL thread arms it and the GL thread's fill reads it; the server's stamp has its own.
+        struct PoisonOmission {
+            Bool Armed = false;
+            MGPipeVerb Verb = MGPipeVerb::kVerbCount;
+            MGPipeInputField Field = MGPipeInputField::kFieldCount;
+        };
+        PoisonOmission g_omission;
+
+        // The stamp the fill's walk is about to overwrite for the omitted pair, put back after the
+        // branch-free stamp of the whole walk: the value is copied either way, only the stamp is
+        // withheld. Index kMGPipeInputFieldCount is "nothing withheld at this verb".
+        struct WithheldStamp {
+            SizeT Index = kMGPipeInputFieldCount;
+            Uint64 Gen = 0;
+            void PutBack(MGPipeFilledState& filled) const {
+                if (Index < kMGPipeInputFieldCount) filled.FilledGen[Index] = Gen;
+            }
+        };
+        WithheldStamp StampToWithhold(const MGPipeFilledState& filled, MGPipeVerb verb) {
+            if (!g_omission.Armed || g_omission.Verb != verb) return {};
+            const auto index = static_cast<SizeT>(g_omission.Field);
+            return {index, filled.FilledGen[index]};
+        }
+
+        // ---- the MOBILEGL_PIPE_VERIFY comparator (P1 brief D8) ----
+        // Two mechanisms, both active only when Features.PipeVerify is set: the ENTRY compare
+        // once per verb (the pushed block against a second snapshot of the live context,
+        // taken at the same instant - tautological until P2 gives the first arm a real
+        // filler, and kept falsifiable by MOBILEGL_PIPE_VERIFY_CORRUPT), and the
+        // COMPARE-AT-READ in every accessor (the stored value against a fresh read of the
+        // live context at the moment the backend reads it - the arm that is real in P1: it
+        // catches a value that changed between the verb boundary and the read).
+        // LEAK-AT-EXIT STORAGE, for gPipeInputs' reason (MG_Backend/MGPipe/PipeInputs.h): a
+        // PipeInputs holds SharedPtrs to frontend objects in its O class, and these two are
+        // filled from the live context, so either can hold the LAST reference to a
+        // VertexArrayObject or a ProgramObject. Destroying them from __run_exit_handlers
+        // would run ~VertexArrayObject / ~BufferObject at exit, into a pipe and a backend
+        // that are already being torn down. References so the ~50 uses below need no edit.
+        PipeInputs& g_snapshot = *new PipeInputs();    // the second arm
+        PipeInputs& g_readScratch = *new PipeInputs(); // where the compare-at-read re-read lands
+
+        // The read hook arms at the first fill (ArmVerify below), so it cannot see a read
+        // made before that. That window is covered by the poison instead: MGP_INPUT_CHECK
+        // precedes MGP_INPUT_VERIFY_READ in every accessor and a stamp of 0 is never fresh,
+        // so such a read is Fatal{UnmigratedPipeInput, "<Field>@<none>"} before the hook
+        // could matter - which holds only while a verify build always carries the poison.
+        static_assert(MOBILEGL_PIPE_POISON,
+                      "the compare-at-read hook relies on the poison for reads before the first fill");
+
+        struct VerifyState {
+            Bool Parsed = false;
+            Bool Enabled = false;
+            Bool Fatal = true;
+            Bool InHook = false; // a re-read that re-enters an accessor is not re-verified
+            Optional<MGPipeInputField> Corrupt;
+            std::atomic<Uint64> Divergences{0};
+            Uint64 Summarized = 0; // how many of them the summary line has reported so far
+            // THE SUMMARY IS WRITTEN FROM MobileGL::Destroy, NOT FROM HERE (V1 fix round 2). This
+            // is a namespace-scope static, so this destructor runs from __run_exit_handlers, AFTER
+            // DestroyImpl has called MG_Util::Debug::Close(). Close nulls the role's sink; Log.cpp's
+            // WriteToFile then re-runs InitFile() for the next line, and InitFile opens the role's
+            // file with "w". So the one line this destructor wrote was the only line the client half
+            // of every FATAL=0 run kept - 121 bytes, the summary itself, with the entry compare's
+            // own reports, the arming line and the config dump gone (and the monolith arm's
+            // VerifyCorrupted. log wiped the same way). MGPipeVerifyFlushSummary runs before Close,
+            // so by the time this destructor runs there is nothing new to say and it says nothing;
+            // the arm is kept for a process that never called Destroy, where no Close ran and the
+            // line lands in the still-open file as it always did.
+            ~VerifyState() { FlushSummary(); }
+            void FlushSummary() {
+                const Uint64 count = Divergences.load(std::memory_order_relaxed);
+                if (count == 0 || count == Summarized) return;
+                Summarized = count;
+                MGLOG_E("MGPipe: verify summary - %llu divergence(s) survived MOBILEGL_PIPE_VERIFY_FATAL=0",
+                        static_cast<unsigned long long>(count));
+            }
+        };
+        VerifyState g_verify;
+
+        // Armed on the first fill and re-armed when PipeVerify or PipeVerifyFatal differs from
+        // what the last arm latched: one arm per lane process, a fresh arm for a forked test
+        // child that turns a knob after its parent filled. Each arm that enables the comparator
+        // reads MOBILEGL_PIPE_VERIFY_CORRUPT the way the loader resolves every knob (the
+        // environment, then the system configuration), so the knob exists in this build only.
+        // Cost: two Bool compares per fill, verify builds only.
+        void ArmVerify() {
+            const auto& features = MG_Config::Features;
+            if (g_verify.Parsed && g_verify.Enabled == features.PipeVerify &&
+                g_verify.Fatal == features.PipeVerifyFatal) {
+                return;
+            }
+            g_verify.Parsed = true;
+            g_verify.Enabled = features.PipeVerify;
+            g_verify.Fatal = features.PipeVerifyFatal;
+            g_verify.Corrupt = Optional<MGPipeInputField>{};
+            if (!g_verify.Enabled) return;
+            String corrupt;
+            (void)MG_ConfigLoader::LookupSetting("MOBILEGL_PIPE_VERIFY_CORRUPT", corrupt);
+            if (!corrupt.empty()) {
+                const auto field = MGPipeFindInputField(corrupt.c_str());
+                if (!field) {
+                    BadKnob("MOBILEGL_PIPE_VERIFY_CORRUPT", corrupt.c_str(), "no such field in kMGPipeInputFieldNames");
+                }
+                g_verify.Corrupt = field;
+            }
+            // The lanes grep for this line: a verify run whose log lacks it never armed.
+            MGLOG_I("MGPipe: verify armed - %u fields, %u verbs, fatal=%d",
+                    static_cast<unsigned>(kMGPipeInputFieldCount), static_cast<unsigned>(kMGPipeVerbCount),
+                    g_verify.Fatal ? 1 : 0);
+            if (g_verify.Corrupt) {
+                MGLOG_I("MGPipe: verify corruption armed - %s",
+                        kMGPipeInputFieldNames[static_cast<SizeT>(*g_verify.Corrupt)]);
+            }
+        }
+
+        void ReportDivergence(MGPipeInputField field, const char* where) {
+            const Uint64 serial = MGPipeFillAccess::Filled(MGPipeClientInputs()).CurrentVerbSerial;
+            MGLOG_F("MGPipe: Fatal{PipeVerifyDiffer, \"%s@%s\", verb=%llu, where=%s}",
+                    kMGPipeInputFieldNames[static_cast<SizeT>(field)],
+                    MGPipeVerbName(MGPipeClientInputs().CurrentVerb()), static_cast<unsigned long long>(serial), where);
+            if (g_verify.Fatal) std::abort();
+            g_verify.Divergences.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        void EntryCompare(PipeInputs& inputs, const MGPipeFieldMask& mask) {
+            if (!g_verify.Enabled) return;
+            SnapshotFromGLContext(g_snapshot, mask);
+            // Negative control A: perturb the SNAPSHOT arm, so a green run goes red naming the
+            // field. A field outside this verb's mask is not compared and stays untouched.
+            if (g_verify.Corrupt && MGPipeFieldMaskHas(mask, *g_verify.Corrupt)) {
+                MGPipeApplyVerifyCorruption(g_snapshot, *g_verify.Corrupt);
+            }
+            MGPipeInputField differing = MGPipeInputField::kFieldCount;
+            if (!MGPipeVerifyInputs(inputs, g_snapshot, mask, &differing)) ReportDivergence(differing, "entry");
+        }
+
+#endif // MOBILEGL_PIPE_VERIFY
+    } // namespace
+
+#if MOBILEGL_PIPE_VERIFY
+    void SnapshotFromGLContext(PipeInputs& snapshot, const MGPipeFieldMask& mask) {
+        auto* ctx = LiveContext();
+        MGPipeFillAccess::SetIdentity(snapshot, ctx);
+        MGPipeFillAccess::SetVerb(snapshot, MGPipeClientInputs().CurrentVerb());
+        if (ctx == nullptr) return;
+        for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+            const auto field = static_cast<MGPipeInputField>(i);
+            if (!MGPipeFieldMaskHas(mask, field) || kMGPipeInputFieldSticky[i]) continue;
+            MGPipeFillAccess::CopyField(snapshot, *ctx, field);
+        }
+    }
+
+    void MGPipeVerifyReadHook(const PipeInputs& self, MGPipeInputField field, Uint index0, Uint index1) {
+        if (&self != &*gPipeInputs || !g_verify.Enabled) return;
+        const auto index = static_cast<SizeT>(field);
+        if (kMGPipeInputFieldSticky[index]) return;
+        // P13 W5: the monolith verb port applies records without a server stamp, and its readback
+        // forces the neutral pack around the backend's read exactly as the server's does.
+        if ((self.ServerStampedVerb() || MG_Record::MonolithPortApplyingForVerify()) &&
+            field == MGPipeInputField::GetPixelStoreParameters) {
+            // Compare the backend's pack field against the last payload applied to this
+            // context, including the neutral-pack override during readback. Never obtain
+            // the reference by reading the field being checked, or consult the client's
+            // GLContext from the server thread. Unpack has no server-side reader.
+            static thread_local PipeInputs reference;
+            MGPipeFillAccess::CopyServerPackReference(reference, self, MGPipeApplier().VerifyPixelPack);
+            if (g_verify.Corrupt && *g_verify.Corrupt == field) {
+                MGPipeApplyVerifyCorruption(reference, field);
+            }
+            if (!MGPipeInputsFieldEqual(field, self, reference)) {
+                MGLOG_E("MGPipe: verify read of pixel pack differs from the applied pack payload");
+                ReportDivergence(field, "read");
+            }
+            return;
+        }
+        if (g_verify.InHook) return;
+        auto* ctx = LiveContext();
+        if (ctx == nullptr) return;
+        // The whole field is re-read and compared - a superset of "the same indices", so a
+        // divergence in an index the backend did not ask for is still a divergence between
+        // the boundary value and the live value. The indices only decorate the report. The
+        // cost is per backend read (GetRenderStateParameters re-copies and compares the whole
+        // struct; GetProgramForDraw re-joins the pending link), inside the verify budget and
+        // to be kept in mind when reading the verify lane's wall time.
+        // InHook: the re-read calls the same GLContext accessor the filler calls, and
+        // GetProgramForDraw's join can re-enter a backend and with it another gPipeInputs
+        // accessor; that inner read is a plain load rather than a second hook, so the hook
+        // never recurses (and never reports the inner read against a half-copied scratch).
+        g_verify.InHook = true;
+        MGPipeFillAccess::CopyField(g_readScratch, *ctx, field);
+        // Corrupt the reference, not the backend field, to test the comparison itself.
+        if (g_verify.Corrupt && *g_verify.Corrupt == field) {
+            MGPipeApplyVerifyCorruption(g_readScratch, field);
+        }
+        const Bool equal = MGPipeInputsFieldEqual(field, self, g_readScratch);
+        g_verify.InHook = false;
+        if (equal) return;
+        MGLOG_E("MGPipe: verify read of %s (index %u, %u) differs from the live context", kMGPipeInputFieldNames[index],
+                index0, index1);
+        ReportDivergence(field, "read");
+    }
+
+    // PipeInputs.h. The FATAL=0 summary, written while the role's log is still open:
+    // MobileGL::Destroy calls this right before MG_Util::Debug::Close() - see VerifyState for why
+    // the static destructor cannot be the writer.
+    void MGPipeVerifyFlushSummary() {
+        g_verify.FlushSummary();
+    }
+#endif // MOBILEGL_PIPE_VERIFY
+
+    // ---- push on mutation (P1 lane finding F2) ----
+    // A backend that writes a frontend object inside its own verb moves a value the verb
+    // boundary already copied: Magma's ResolveSamplerDescriptor synthesises a fallback
+    // texture for an unbound sampler and its AllocateStorage/SetInternalFormat bump the
+    // context's sampling-resolution generation, so every read of that field after the
+    // fallback differs from the live context (the two SampledSetStaleness / six
+    // UnboundImageDescriptor entries the verify lane aborted on). The frontend mutator
+    // spells MGP_NOTE_MUTATION(Field) at the point of the move and lands here.
+    //
+    // Only the value is refreshed. The stamp is deliberately left alone: a field whose stamp
+    // this verb withheld (negative control B) must stay stale, and a field the verb never
+    // filled must stay Fatal{UnmigratedPipeInput} on the next read rather than be healed by
+    // an unrelated frontend write.
+    void MGPipeNoteFrontendMutation(MGPipeInputField field) {
+        PipeInputs& inputs = MGPipeClientInputs();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5e (ra, CONTRACT-P5E §3.1): THIS REFRESHES ONE FIELD OF THE LAST FILL, so with no
+        // fill behind it there is nothing to refresh. Under run-ahead the last verb may have
+        // been unbarriered, in which case the block describes an older verb the server is no
+        // longer being asked about and a write here would be a GL-thread touch of server-role
+        // memory. It returns instead - the same answer, one line earlier, as the class-mask
+        // test below gives for a field the verb never pushed.
+        if (!g_lastFillWasBarriered) return;
+        // P5c (gt, layer 2): the single-field refresh is a client write into gPipeInputs too -
+        // same gate as the fill, and it makes the same claim the fill made: the rows it is
+        // touching belong to a record this thread is parked behind (or will park behind).
+        //
+        // P5e (ra2): SO IT TAKES THE SAME WAIT. This one runs at a frontend mutation point, not
+        // at a verb, so "will park behind" is even weaker here than it is at the fill - the
+        // mutation can land anywhere between two verbs, with the whole run-ahead backlog in
+        // flight. The wait is a no-op unless run-ahead is armed, and at a mutation point after a
+        // barriered verb the applier is usually already caught up, so this is a watermark test
+        // rather than a park in the common case.
+        QuiesceApplierBeforeFill("MGPipeNoteFrontendMutation");
+        MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("MGPipeNoteFrontendMutation",
+                                                                                  /*isBarrieredFill=*/true);
+#endif
+        auto* ctx = LiveContext();
+        if (ctx == nullptr) return;
+        const auto verb = inputs.CurrentVerb();
+        if (verb == MGPipeVerb::kVerbCount) return; // nothing has filled the block yet
+        const auto index = static_cast<SizeT>(field);
+        if (kMGPipeInputFieldSticky[index]) return; // forwarded: no storage to refresh
+        const MGPipeFieldMask& mask =
+            kMGPipeClassFieldMask[static_cast<SizeT>(kMGPipeVerbClass[static_cast<SizeT>(verb)])];
+        if (!MGPipeFieldMaskHas(mask, field)) return; // this verb never pushed it
+        MGPipeFillAccess::CopyField(inputs, *ctx, field);
+    }
+
+    // ---- the aggregate generations (P2 brief D4) ----
+    // MGP_NOTE_AGGREGATE lands here. The bump points are on OBJECTS, which have no
+    // back-pointer to the state container that owns them, so the note finds the live
+    // context - the same shape, and for the same reason, as MGPipeNoteFrontendMutation
+    // above. No verb has to be in flight and no field is stamped: an aggregate generation
+    // is not a PipeInputs field, it is what the tracker's shutter compares against.
+    void MGPipeNoteAggregate(MGPipeAggregate aggregate) {
+        auto* ctx = LiveContext();
+        if (ctx == nullptr) return;
+        switch (aggregate) {
+        case MGPipeAggregate::VaoAttribute:
+            ctx->NoteVaoAttributeChanged();
+            break;
+        case MGPipeAggregate::FramebufferAttachment:
+            ctx->NoteFramebufferAttachmentChanged();
+            break;
+        case MGPipeAggregate::TextureContent:
+            ctx->NoteTextureContentChanged();
+            break;
+        case MGPipeAggregate::TextureParams:
+            ctx->NoteTextureParamsChanged();
+            break;
+        case MGPipeAggregate::BufferChange:
+            ctx->NoteBufferChanged();
+            break;
+        case MGPipeAggregate::VertexAttribDefault:
+            ctx->NoteVertexAttribDefaultChanged();
+            break;
+        case MGPipeAggregate::Count:
+            break;
+        }
+    }
+
+    // ================================================================================
+    // P3a: the resource family's emission (brief D-A, D-B, D-C, D-D)
+    // ================================================================================
+    //
+    // Declared in MG_Pipe/PipeMutation.h and defined here for the layering reason that
+    // header states: the emission sites are BufferObject's dispatchers, which are MG_State's,
+    // and MG_State may see a declaration but never MG_Impl/Pipe/ResourceTracker.h.
+    //
+    // Every one of these is called from a site that has ALREADY asked
+    // MGPipeResourceSubsystemEnabled(), except the mint and the destroy - the handle is
+    // client state and its lifetime is the frontend object's, not the subsystem's.
+    namespace {
+        using MG_State::GLState::BufferObject;
+
+        MGPHandleOnly BufferHandleOnly(MGPipeHandle handle) {
+            MGPHandleOnly only{};
+            only.Handle = handle;
+            only.Kind = static_cast<Uint32>(MGPipeKind::Buffer);
+            return only;
+        }
+
+        // THE CONTENT PATHS LOOK THE HANDLE UP, THEY DO NOT MINT IT. Acquire mutates the
+        // process-global slot allocator (a map insert on a miss, a free-list pop) and then
+        // resizes the tracker's inverse vector; D-A2 preserves the off-thread/stale-queue arm
+        // of Ops_SubData, so BufferObject::NotifySubData is reachable off the render thread,
+        // and two threads inside Acquire - or one there while ~BufferObject is in Free - is a
+        // torn free list and a dangling span. The mint happens ONCE, on the GL thread, in the
+        // BufferObject constructor (MGPipeMintResourceHandle), so on every content path the
+        // handle already exists and a pure lookup is not merely safe but strictly correct.
+        //
+        // A null answer therefore means a buffer whose constructor did not mint - which
+        // cannot happen in a push build - or a lifetime id already freed. Either way the call
+        // is dropped, so it is said out loud rather than passing kMGPipeNullHandle to the
+        // applier, which would count it as a refusal with no way back to the cause.
+        MGPipeHandle ContentHandleFor(const BufferObject& buffer, const char* call) {
+            const MGPipeHandle handle = MGPipeResourceTrackerInstance().Find(buffer);
+            if (MGPipeHandleIsNull(handle)) {
+                MGLOG_E_ONCE("MGPipe: %s on buffer %u has no resource handle - the call is dropped; a "
+                             "push build mints one in the BufferObject constructor, so this is a lifetime "
+                             "id that was already freed",
+                             call, buffer.GetExternalIndex());
+            }
+            return handle;
+        }
+    } // namespace
+
+    // R-8 (c1). THE SECOND CONJUNCT MOVES UNDER SPLIT, AND ONLY UNDER SPLIT.
+    //
+    // `MGPipeGetResourceOps() != nullptr` asks "has a backend registered the consumer". That
+    // table is the SERVER's registration and it is a PROCESS-WIDE global (g_resourceOps in PipeApply.cpp):
+    // under inproc a client reading it answers correctly BY ACCIDENT, and under spawn the
+    // client process has no backend at all, so the read answers null and five record families
+    // stop emitting - silently, while the emitters go on clearing their per-level dirty flags
+    // on the acceptance they never asked for. That is ID-39's 66 lost DirectVulkan uploads with
+    // a wire in between. The client asks the caps mirror instead, which carries the answer the
+    // SERVER gave at the handshake (CallMask bits 32..47).
+    //
+    // s1 made the server end Fatal when nobody sets the mask; this is the client end.
+    Bool MGPipeResourceSubsystemEnabled() {
+        if ((MG_Config::Features.PipePush & kMGPipeSubsystemResources) == 0) return false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            return MG_Remote::Client::CapsMirrorInstance().ServerConsumes(kMGPipeSubsystemResources);
+        }
+#endif
+        return MGPipeGetResourceOps() != nullptr;
+    }
+
+    Bool MGPipeResourceOpsHaveSubDataResident() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            // CONTRACT-P5.md §7's THIRD NAMED CAPABILITY PROBE. `ops->SubDataResident != nullptr`
+            // is not a safety check - it decides whether the resident-upload path EXISTS - and
+            // under split there is no op table here to probe. kCapResidentSubData is the bit the
+            // server publishes for exactly this question.
+            return MG_Remote::Client::CapsMirrorInstance().HasCap(kCapResidentSubData);
+        }
+#endif
+        const MGPipeResourceOps* ops = MGPipeGetResourceOps();
+        return ops != nullptr && ops->SubDataResident != nullptr;
+    }
+
+    void MGPipeMintResourceHandle(BufferObject& buffer) {
+        // UNCONDITIONAL in a push build, deliberately: set_vertex_buffers names a buffer by
+        // handle whether or not the resource family is switched on, so gating the mint on
+        // the resource subsystem bit would make the vertex-input subsystem emit null handles
+        // in exactly the A/B arm that exists to isolate the two. It costs one free-list pop
+        // and one map insert per buffer object and emits nothing.
+        //
+        // The client resource callbacks are MONOLITH-ONLY (CONTRACT-P5C §4.1): with an
+        // active transport the server session installs its producer callbacks at Accept and
+        // the client's consumers are invoked by name from DrainEventRing, so installing
+        // them here would be the double installation the check now aborts on.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) {
+            MGPipeInstallClientResourceCallbacks();
+        }
+#else
+        MGPipeInstallClientResourceCallbacks();
+#endif
+        MGPipeResourceTrackerInstance().Acquire(buffer);
+    }
+
+    void MGPipeEmitResourceCreate(BufferObject& buffer) {
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+        const MGPipeHandle handle = tracker.Acquire(buffer);
+        Uint16 bindMask = tracker.BindMask(handle);
+        if (auto* ctx = LiveContext()) bindMask = tracker.RefreshBindMask(*ctx, buffer, handle);
+        // storageDefined = false: the constructor has no store yet, storage is defined lazily
+        // by the first respecify, and the backend's ensure path already tolerates a resource
+        // that has none.
+        const MGPResourceDesc desc = MGPipeBuildResourceDesc(buffer, handle, bindMask, false);
+        tracker.NoteDesc(desc, true);
+        // LATCHED, so the destroy is gated on whether this create actually went out rather
+        // than on whether a table is still registered when the object dies (D-L, m12).
+        tracker.NotePublished(handle);
+        MGPipeRouteResourceCreate(desc);
+    }
+
+    void MGPipeEmitResourceRespecify(BufferObject& buffer) {
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+        const MGPipeHandle handle = tracker.Acquire(buffer);
+        Uint16 bindMask = tracker.BindMask(handle);
+        if (auto* ctx = LiveContext()) bindMask = tracker.RefreshBindMask(*ctx, buffer, handle);
+        // A handle that never published a create gets one first, so the create/destroy latch heals
+        // in both directions. The constructor's create needs MGPipeResourceSubsystemEnabled()
+        // (bit 7 and a consumer) while the applier's gate is bit 7 alone: a buffer born between
+        // UnregisterBufferBackendOps at context teardown and the re-register at the next
+        // MakeCurrent has no applier record, every later respecify would be refused, and the
+        // backend would draw from a twin with no store. A create rather than a respecify: the
+        // applier starts a record over on a create, so nothing from a recycled slot survives.
+        if (!tracker.WasPublished(handle)) {
+            const MGPResourceDesc createDesc =
+                MGPipeBuildResourceDesc(buffer, handle, bindMask, /*storageDefined=*/false);
+            tracker.NoteDesc(createDesc, true);
+            tracker.NotePublished(handle);
+            MGPipeRouteResourceCreate(createDesc);
+        }
+        const MGPResourceDesc desc = MGPipeBuildResourceDesc(buffer, handle, bindMask, true);
+        tracker.NoteDesc(desc, false);
+        // initialBytes is the client's shadow base (zero copy); null means no bytes, which an
+        // orphaning respecify (NULL data) needs so the backend uploads nothing stale. The
+        // GetSize() > 0 test is needed: a zero-byte store has defined content and MappedData() is
+        // still non-null (the shadow reserves one byte), so without it the split branch below would
+        // expect follow-up bytes the subdata walk never emits and abort as UncarriedInitialBytes.
+        // On monolith's record arm the base also rides an orphaning respecify, because that arm's
+        // twin aliases this shadow; the backend uploads only when HasDefinedContent is set.
+        const Bool carryBase = desc.HasDefinedContent != 0 || MG_Config::RecordArmAliasesFrontend();
+        const void* initialBytes = (carryBase && buffer.GetSize() > 0) ? buffer.MappedData() : nullptr;
+        // kNeedsAck rides on the CALL and MGPipeResourceRespecifyNeedsAck(desc) decides per
+        // record: only an immutable store (a glBufferStorage*) is a real synchronous
+        // allocation and only it is allowed one. In monolith the acknowledgment is
+        // ((void)0), because the applier is one function call away and has already run by
+        // the time this returns; the transport wires the doorbell to that same predicate.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Under a transport the respecify carries no bytes: it defines the storage, and the initial
+        // content follows as resource_subdata records from MGPipeEmitResourceSubData, the chunked
+        // emitter glBufferSubData uses, so HasLiveHostWrites and acceptance are decided in one
+        // place. Monolith keeps initialBytes on the record; its applier reads them directly. The
+        // apply thread (RunsAsTheServerRole()) also takes the plain route: it emits no client wire
+        // records, so the follow-up's self-check would abort the server.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && !MG_Remote::Client::RunsAsTheServerRole() &&
+            initialBytes != nullptr) {
+            MGPipeRouteResourceRespecify(desc, nullptr);
+            // COUNTED, NOT ASSUMED, and this is the only thing that can gate the follow-up at
+            // all. Dropping the walk below leaves a respecify that went out with nullptr and
+            // bytes that nothing carried - and no P5 scenario's PICTURE changes, because every
+            // one of them re-uploads its vertices through the ordinary dirty path afterwards.
+            // So the statement "the content followed" is made HERE, against the client's own
+            // record ordinal, rather than left to a lane that cannot see it. Remove the call
+            // below and this aborts by name on the first glBufferData that carries data.
+            const Uint64 before = MG_Remote::Client::ClientWireRecordsEmitted();
+            MGPipeEmitResourceSubData(buffer, 0, static_cast<SizeT>(buffer.GetSize()));
+            // EXCEPT ON A SESSION THAT HAS STOPPED CARRYING RECORDS (P12). Once the device-lost
+            // latch is set every verb is DECLINED by design (CONTRACT-P6 5.3, ClientSession.cpp
+            // :1837) - the resource_subdata above included - so "it emitted nothing" is the latch
+            // working, not bytes this client forgot to carry: there is no server left for them to
+            // exist on, and P12's own exit gate (a) is that killing the server gives a CLEAN
+            // device-lost latch rather than a corpse. Aborting here turned every clean loss into a
+            // client SIGABRT at its next glBufferData that carries data.
+            //
+            // THE SELF-CHECK KEEPS ITS FULL FORCE ON A LIVE SESSION, which is the case it was
+            // written for: there, a follow-up that emits nothing is still the R-13.3 gap it names
+            // - and DeviceLost() is false.
+            if (MG_Remote::Client::ClientWireRecordsEmitted() == before &&
+                !MG_Remote::Client::ClientSession::DeviceLost()) {
+                // UncarriedInitialBytes, not a second word for the same family: Wire_Escape_ResourceRespecify
+                // (WireTables.cpp) already dies of exactly this - a respecify that crossed with no initial bytes -
+                // under that name, and two words for one family is the vocabulary drift a6
+                // censused and 5.2's .def exists to bound (P7 wave 0).
+                MGLOG_F("MGPipe: Fatal{UncarriedInitialBytes, \"resource_respecify\"} - the "
+                        "respecify crossed with initialBytes = nullptr (R-13.3) and the "
+                        "resource_subdata records that were supposed to follow it emitted "
+                        "NOTHING, so %llu bytes of initial content exist on no side of the wire",
+                        static_cast<unsigned long long>(buffer.GetSize()));
+                std::abort();
+            }
+            return;
+        }
+#endif
+        MGPipeRouteResourceRespecify(desc, initialBytes);
+    }
+
+    // THE CAP THE TWO CONTENT WALKS BELOW CUT A RANGE AT. The record's own bound (2^32-1) is not
+    // the one a real upload meets first: one piece's bytes are staged WHOLE in SEG_STAGE, a
+    // linear arena, and a blob larger than that arena is Fatal{RingOverrun, "SEG_STAGE"} at the
+    // encoder rather than a split (PipeWireEncoder::StageAllocate). Measured on the CI traces: a
+    // 128 MiB arena's whole-buffer follow-up against a 32 MiB segment aborted there, which is
+    // the RingOverrun this walk exists to prevent.
+    //
+    // 0 from the helper means "nothing to fit" - monolith, the server role's own uploads (which
+    // run the monolith adapter), or a process with no session - and the record's own bound is
+    // then the answer, exactly as it was before the cap existed.
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Uint64 MGPipeContentChunkCap() {
+        const SizeT stageChunk = MG_Remote::Client::MGPipeStageChunkBytes();
+        return stageChunk == 0 ? kMGPipeSubDataMaxRecordSize : static_cast<Uint64>(stageChunk);
+    }
+#else
+    constexpr Uint64 MGPipeContentChunkCap() {
+        return kMGPipeSubDataMaxRecordSize;
+    }
+#endif
+
+    void MGPipeEmitResourceSubData(BufferObject& buffer, SizeT offset, SizeT size) {
+        const MGPipeHandle handle = ContentHandleFor(buffer, "resource_subdata");
+        if (MGPipeHandleIsNull(handle)) return;
+        const Uint8* base = buffer.MappedData();
+        const Bool encodable = MGPipeForEachSubDataRecordRange(
+            offset, size,
+            [&](Uint64 at, Uint64 length) {
+                MGPSubData record{};
+                // The pre-pass inside the walk proved every piece encodable before the first
+                // one was emitted, so this cannot be false - but a zeroed record (null
+                // handle, size 0) is not the answer if that pre-pass is ever relaxed.
+                if (!MGPipeBuildSubDataRecord(handle, at, length, record, /*verbatimShadow=*/true)) return;
+                // P5 (b1): the live-host-writes bit rides the content record, because
+                // "someone may be writing these bytes without telling you" is a fact about the
+                // CONTENT and not about the storage. It is set from the object's PUBLISHED
+                // value rather than from a live IsMapped() read so that the record and the
+                // edge that announced it can never disagree. MGPipeBuildSubDataRecord does not
+                // take the object, which is why it is set here and not in the builder.
+                record.HasLiveHostWrites = buffer.HasLiveHostWritesForWire() ? 1 : 0;
+                // `length` is this chunk's byte count, which the record also declares
+                // (MGPipeBuildSubDataRecord writes it into the destination range) - passed
+                // rather than re-read so the staged run and the record's own claim come from
+                // one number.
+                MGPipeRouteResourceSubData(record, base + at, length);
+            },
+            MGPipeContentChunkCap());
+        if (!encodable) {
+            MGLOG_E_ONCE("MGPipe: resource_subdata range [%llu, +%llu) on buffer %u cannot be encoded - "
+                         "one record's destination box caps the offset at 2^31-1",
+                         static_cast<unsigned long long>(offset), static_cast<unsigned long long>(size),
+                         buffer.GetExternalIndex());
+        }
+    }
+
+    void MGPipeEmitBufferSubDataResident(BufferObject& buffer, SizeT offset, const void* bytes, SizeT size) {
+        const MGPipeHandle handle = ContentHandleFor(buffer, "buffer_subdata_resident");
+        if (MGPipeHandleIsNull(handle)) return;
+        const auto* base = static_cast<const Uint8*>(bytes);
+        const Bool encodable = MGPipeForEachSubDataRecordRange(
+            offset, size,
+            [&](Uint64 at, Uint64 length) {
+                MGPSubData record{};
+                // NOT a verbatim level shadow: these bytes are the application's staging
+                // store, or the pattern FillSubData expanded locally, and neither is this
+                // client's untransformed shadow of the level.
+                if (!MGPipeBuildSubDataRecord(handle, at, length, record, /*verbatimShadow=*/false)) return;
+                // P5 (b1): THE SECOND CONTENT EMITTER, and it has to speak for the same reason
+                // the first does. ApplyBufferWrite ASSIGNS the bit - a content record emitted
+                // while nothing maps the buffer is how the state goes back to false - so a
+                // resident sub-data that stayed silent would write false over a live write
+                // map. `glBufferSubData` against a persistently mapped arena is legal and is
+                // the ordinary Flywheel/Create shape, so that is not a corner.
+                record.HasLiveHostWrites = buffer.HasLiveHostWritesForWire() ? 1 : 0;
+                // The application's STAGING store, valid for the duration of the call only.
+                MGPipeRouteBufferSubDataResident(record, base + (at - offset), length);
+                // P7 wave 2 package C, OQ-10: `rsd=`, counted HERE rather than at the call
+                // above so that one glBufferSubData cut into N chunk records counts N. See
+                // PipeStats.h's CallClass::ResidentSubDataEmissions for why the count is the
+                // only thing that can tell this arm from the in-place memcpy beside it.
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ResidentSubDataEmissions, 1);
+                }
+            },
+            MGPipeContentChunkCap());
+        if (!encodable) {
+            MGLOG_E_ONCE("MGPipe: buffer_subdata_resident range [%llu, +%llu) on buffer %u cannot be encoded",
+                         static_cast<unsigned long long>(offset), static_cast<unsigned long long>(size),
+                         buffer.GetExternalIndex());
+        }
+    }
+
+    void MGPipeEmitResourceFlushRange(BufferObject& buffer, SizeT offset, SizeT size, Uint32 accessFlags) {
+        const MGPipeHandle handle = ContentHandleFor(buffer, "resource_flush_range");
+        if (MGPipeHandleIsNull(handle)) return;
+        MGPFlushRange record{};
+        record.Res = handle;
+        record.Offset = offset;
+        record.Size = size;
+        // The application's REAL flags, not a normalized subset: the backend's kill-switch
+        // arm reads INVALIDATE_RANGE / INVALIDATE_BUFFER / UNSYNCHRONIZED per call to choose
+        // between a map+memcpy+unmap and an upload, so merging them here would change which.
+        record.AccessFlags = accessFlags;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Under a transport resource_flush_range carries no bytes: it is a {range, AccessFlags}
+        // control record, and the bytes of [offset, offset + size) must reach the server first as
+        // resource_subdata records, or its staged shadow has nothing for the flush and refuses it.
+        // Only that range: staging bytes outside it would write stale shadow bytes over server
+        // data the flush does not cover, such as GPU writes. The apply thread takes the plain
+        // route, as in MGPipeEmitResourceRespecify.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && !MG_Remote::Client::RunsAsTheServerRole() &&
+            size != 0) {
+            MGPipeEmitResourceSubData(buffer, offset, size);
+        }
+#endif
+        MGPipeRouteResourceFlushRange(record, buffer.MappedData() + offset);
+    }
+
+    void MGPipeEmitResourceReadback(BufferObject& buffer) {
+        // Whole-buffer by contract (BufferObject.h: the op pulls the backend's current
+        // contents for the WHOLE buffer into the shadow). The split arm's slicing lives in
+        // the CALLER (BufferObject::SyncGpuWrites): what "whole" costs is decided by the
+        // event ring's capacity, which this layer does not read.
+        MGPipeEmitResourceReadbackRange(buffer, 0, buffer.GetSize());
+    }
+
+    void MGPipeEmitResourceReadbackRange(BufferObject& buffer, SizeT offset, SizeT size) {
+        const MGPipeHandle handle = ContentHandleFor(buffer, "resource_readback");
+        if (MGPipeHandleIsNull(handle)) return;
+        MGPReadback record{};
+        record.Res = handle;
+        record.Offset = offset;
+        record.Size = size;
+        if (MG_Util::PipeStats::Enabled()) {
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ResourceReadbacks, 1);
+        }
+        // The answer travels back through MGPipeClientOnBufferWriteback, and the server's
+        // epoch bump happens AFTER that writeback, never before.
+        MGPipeRouteResourceReadback(record);
+    }
+
+    // NO UnmapPersistent PRODUCER IN P3a, AND THAT IS DELIBERATE. The catalog has the call
+    // and wire implemented it, but D-J forbids new behavior and there is nothing to convert:
+    // BufferBackendOps has seven hooks and none of them is an unmap, and
+    // PipeResource::ReleasePersistentMap() (BufferObject.cpp, from RedefineStorage) tells the
+    // backend nothing today - it learns from the Respecify that follows. Emitting
+    // unmap_persistent here would therefore be a new call to a backend that has never been
+    // told about a release, so the client emits none and the applier's refusal counter stays
+    // at 0 for it. The producer lands with the phase that gives the backend an unmap hook.
+    void* MGPipeEmitMapPersistent(BufferObject& buffer) {
+        const MGPipeHandle handle = ContentHandleFor(buffer, "map_persistent");
+        if (MGPipeHandleIsNull(handle)) return nullptr;
+        MGPipeResourceTrackerInstance().NoteMapPersistent();
+        // THE map-persistent-roundtrips SITE, and it counts every EMISSION - mint OR
+        // DECLINE - because every one of them needs an answer from the resource owner. A
+        // counter defined as "round trips actually taken" is 0 by construction in monolith
+        // and could never go red for the reason it exists; this one is the same number in
+        // both modes and is "one per storage definition" exactly as the design requires.
+        if (MG_Util::PipeStats::Enabled()) {
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::MapPersistentRoundtrips, 1);
+        }
+        return MGPipeRouteMapPersistent(BufferHandleOnly(handle), buffer.GetSize(), buffer.MappedData());
+    }
+
+    Bool MGPipeEmitResourceDestroyAndFree(BufferObject& buffer) {
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+        const MGPipeHandle handle = tracker.Find(buffer);
+        if (MGPipeHandleIsNull(handle)) return false;
+        // THE LATCHED ANSWER, not the live one (m12): create and destroy are gated at two
+        // different moments, and a buffer constructed while a backend's table was registered
+        // and destroyed after UnregisterBufferBackendOps() would otherwise free its slot with
+        // the applier's record still Live and the backend's twin still attached to it - on a
+        // slot the allocator is about to hand out again.
+        const Bool published = tracker.WasPublished(handle);
+        if (published) {
+            tracker.NoteDestroy();
+            MGPipeRouteResourceDestroy(BufferHandleOnly(handle));
+        }
+        // THE ORDER IS FIXED (D-L): the applier clears the record and the backend drops its
+        // twin while the handle still resolves, and only then does the slot go back. Free
+        // erases the lifetimeId -> slot mapping, so a notice resolved twice finds nothing the
+        // second time - and the Gen bump happens on the NEXT handout of the slot, not here,
+        // so a double free cannot skip a generation.
+        tracker.Retire(handle);
+        MGPipeSlots().Free(MGPipeKind::Buffer, handle);
+        return published;
+    }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    namespace {
+        struct MGPipeDeferredDestroy {
+            MGPipeKind kind;
+            Uint64 lifetimeId;
+        };
+        // A plain mutex, not a lock-free queue: producers are destructors that lost the
+        // last-reference race (rare), the consumer is the GL thread's verb hook, and neither
+        // holds the lock past a vector push/swap. The count is the fast no-work check for
+        // the per-verb drain.
+        std::mutex g_deferredDestroyMutex;
+        Vector<MGPipeDeferredDestroy> g_deferredDestroys;
+        std::atomic<Uint32> g_deferredDestroyCount{0};
+    } // namespace
+
+    Bool MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind kind, Uint64 lifetimeId) {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
+        if (!MG_Remote::Client::RunsAsTheServerRole()) return false;
+        // P5e (ra), CONTRACT-P5E §2.7 / ruling 13. The queue stays - a BARRIERED record's apply
+        // may still pin a frontend object (its fill's O-class rows, XFB's targets), so the
+        // apply thread can still be a last owner and this is still the belt that keeps that
+        // death off the client's allocator. But an enqueue from an UNBARRIERED record is a
+        // FINDING, not a service: rule F says such an apply names no client memory at all, so
+        // a SharedPtr it could be the last owner of means some site is still pinning a
+        // frontend object across a record and the migration this phase believes it finished is
+        // not finished. Named once with the kind so the site is findable, and Fatal under
+        // strict so the lane owns the red rather than a log nobody reads.
+        if (!MG_Pipe::MGPipeApplierCurrentRecordIsBarriered()) {
+            if (MG_Config::Ipc.StrictErrors) {
+                MGLOG_F("MGPipe: Fatal{RoleViolation, \"deferred-destroy\"} - an UNBARRIERED "
+                        "apply was the last owner of a frontend object of kind %u (lifetime "
+                        "%llu). CONTRACT-P5E rule F says an unbarriered apply reads no client "
+                        "memory, so nothing it touched should have been a SharedPtr at all",
+                        static_cast<unsigned>(kind), static_cast<unsigned long long>(lifetimeId));
+                std::abort();
+            }
+            MGLOG_E_ONCE("MGPipe: an UNBARRIERED apply deferred the destruction of a frontend "
+                         "object of kind %u - CONTRACT-P5E §2.7's finding: some apply-thread "
+                         "site still holds a frontend SharedPtr across a record",
+                         static_cast<unsigned>(kind));
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_deferredDestroyMutex);
+            g_deferredDestroys.push_back(MGPipeDeferredDestroy{kind, lifetimeId});
+        }
+        g_deferredDestroyCount.fetch_add(1, std::memory_order_release);
+        return true;
+    }
+
+    // P5e (ra), CONTRACT-P5E §2.3. Declared in PipeMutation.h, where its WHY is argued.
+    //
+    // NO GUARD ON THE CALLER'S BEHALF: ClientSession calls this only after a barriered apply
+    // has returned on a run-ahead session, and adding a second "is run-ahead armed" test here
+    // would be a copy of a decision that belongs on the other side. What this side owns is
+    // WHICH rows go, and that answer is ReleaseObjectPins' four.
+    //
+    // THE STAMPS ARE LEFT ALONE, deliberately. A released row reads back as null, and a
+    // BARRIERED verb's fill re-copies it before that verb's apply can pull it (§3.1 skips the
+    // fill only for UNBARRIERED records); an unbarriered apply may not read it at all, and
+    // §3.3's detector is what says so by name. Clearing the stamps as well would trade that
+    // named abort for the poison Fatal, which names the field but not the rule it broke.
+    void MGPipeReleaseResidualFillPins() {
+        MGPipeFillAccess::ReleaseObjectPins(MGPipeClientInputs());
+    }
+
+    // P5e (ra), CONTRACT-P5E §2.5. Declared in PipeMutation.h; see there for why it is not a
+    // ClientSession call at the GL entry point.
+    void MGPipeClientFlush() {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        if (MG_Remote::Client::RunsAsTheServerRole()) return;
+        if (MG_Remote::Client::ClientSession* session = MG_Remote::Client::ClientSession::Active()) {
+            session->Flush();
+        }
+    }
+
+    void MGPipeClientFinish() {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        if (MG_Remote::Client::RunsAsTheServerRole()) return;
+        if (MG_Remote::Client::ClientSession* session = MG_Remote::Client::ClientSession::Active()) {
+            session->Finish();
+        }
+    }
+
+    void MGPipeDrainDeferredDestroys() {
+        if (g_deferredDestroyCount.load(std::memory_order_acquire) == 0) return;
+        Vector<MGPipeDeferredDestroy> drained;
+        {
+            std::lock_guard<std::mutex> lock(g_deferredDestroyMutex);
+            drained.swap(g_deferredDestroys);
+            g_deferredDestroyCount.store(0, std::memory_order_release);
+        }
+        for (const MGPipeDeferredDestroy& one : drained) {
+            // Each replay lands back in the helper itself, on the GL thread this time, so
+            // the deferral branch passes and the helper's own order runs unchanged.
+            switch (one.kind) {
+            case MGPipeKind::VertexElementsCso:
+                MGPipeEmitVertexElementsDestroyAndFree(one.lifetimeId);
+                break;
+            case MGPipeKind::SamplerViewCso:
+                MGPipeEmitSamplerViewCsoDestroyAndFree(one.lifetimeId);
+                break;
+            case MGPipeKind::Texture:
+                MGPipeEmitTextureDestroyAndFree(one.lifetimeId);
+                break;
+            case MGPipeKind::Renderbuffer:
+                MGPipeEmitRenderbufferDestroyAndFree(one.lifetimeId);
+                break;
+            case MGPipeKind::Framebuffer:
+                MGPipeEmitFramebufferDestroyAndFree(one.lifetimeId);
+                break;
+            case MGPipeKind::SamplerCso:
+                MGPipeEmitSamplerCsoDestroyAndFree(one.lifetimeId);
+                break;
+            case MGPipeKind::ShaderCso:
+                MGPipeEmitShaderCsoDestroyAndFree(one.lifetimeId);
+                break;
+            default:
+                break;
+            }
+        }
+    }
+#endif
+
+    Bool MGPipeEmitVertexElementsDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::VertexElementsCso, lifetimeId)) {
+            return false;
+        }
+#endif
+        // C-1. THE SAME SHAPE AS MGPipeEmitResourceDestroyAndFree ABOVE, and for the same
+        // reason: whatever mints a handle owns the death of that handle, and the mint for this
+        // kind is MGPipeVertexInputEmitter::EmitVertexElements - i.e. the client, on every
+        // backend. Espryt's StateObjectDeathOps notice used to be the only free, so under a
+        // backend that installs none the slot and the applier's record leaked per VAO, for
+        // ever. It is now the SECOND, redundant path (Managers.cpp's
+        // OnFrontendStateObjectDestroyed) and it must stay idempotent, which it is: the
+        // notice resolves through the same lifetimeId -> slot map this function frees, and
+        // MGPipeSlotAllocator::Free refuses a slot that is not live at that generation.
+        // May be the null handle: no slot is minted for a VAO that no draw ever validated with
+        // and no backend twin table ever looked up. That case still raises the notice below -
+        // see there.
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::VertexElementsCso, lifetimeId);
+
+        // ASKED, NOT ASSUMED. A slot is not evidence of a record: DirectGLES mints one from
+        // BackendSlotTable::GetOrCreate at every VAO sync, whether or not bit 8 asked this
+        // client to emit a create - the shipping 0x7f A/B control arm is exactly that
+        // configuration. delete_vertex_elements on a handle the applier has no record for is a
+        // refusal, and the refusal asserts (PipeApply.cpp's ResolveVertexElements), i.e. it
+        // stops a verify build.
+        MGPipeVertexInputEmitter& emitter = MGPipeVertexInputEmitterInstance();
+        emitter.ForgetVao(lifetimeId);
+        const Bool published = emitter.RecordIsPublished(handle);
+        if (published) {
+            MGPHandleOnly only{};
+            only.Handle = handle;
+            only.Kind = static_cast<Uint32>(MGPipeKind::VertexElementsCso);
+            MGPipeRouteDeleteVertexElements(only);
+            emitter.NoteRecordDestroyed(handle);
+        }
+
+        // THE ORDER IS D-L's, WITH THE BACKEND NOTICE IN THE MIDDLE, and each of the three
+        // positions is load-bearing:
+        //   * the applier's record is dropped FIRST, while nothing else can have re-handed the
+        //     slot out, so a recycled slot cannot inherit a field;
+        //   * the death notice is raised SECOND, because it resolves the handle through the
+        //     allocator and a backend told after the Free below could no longer find its twin
+        //     - which would move the leak from the client to the driver VAO. It is raised
+        //     UNCONDITIONALLY, exactly as ~VertexArrayObject raised it before C-1: whether a
+        //     slot exists is this client's business, and a consumer that records notices (the
+        //     P2 e2 gate does) must not stop seeing this class announce itself;
+        //   * the slot goes back LAST. Espryt's notice frees it too; that Free and this one
+        //     are the same call on the same handle and the second is a no-op, because Free
+        //     bumps no generation (the bump rides the next handout) and refuses a slot that is
+        //     no longer live at this generation.
+        MG_State::GLState::NotifyStateObjectDestroyed(MGPipeKind::VertexElementsCso, lifetimeId, handle);
+        if (!MGPipeHandleIsNull(handle)) MGPipeSlots().Free(MGPipeKind::VertexElementsCso, handle);
+        return published;
+    }
+
+    // ================================================================================
+    // P4a: the BIRTH half - the gate, the four mints, the publication latch and the seam
+    // ================================================================================
+    //
+    // Declared in MG_Pipe/PipeMutation.h, which is the one door MG_State has into the client
+    // (the closure gate's mutation-header probe keeps it a declaration), and defined here for
+    // the reason every other client-side emission point is: this file is package A's for the
+    // whole phase, so the gate is written ONCE and the packages that own the emitters never
+    // edit it.
+    namespace {
+        using MG_State::GLState::FramebufferObject;
+        using MG_State::GLState::ITextureObject;
+        using MG_State::GLState::ProgramObject;
+        using MG_State::GLState::RenderbufferObject;
+        using MG_State::GLState::SamplerObject;
+
+        // THE FOUR FAMILIES P4a MIGRATES, as one mask, so the consumer rule below is stated
+        // once instead of four times. It is deliberately NOT kMGPipeSubsystemsMigratedAtP4a
+        // (which is 0x1fff, every bit through P4a): the rule belongs to the families this
+        // phase adds and to no earlier one.
+        inline constexpr Uint64 kMGPipeP4aFamilySubsystems = kMGPipeSubsystemFramebuffer |
+                                                             kMGPipeSubsystemTextureResources |
+                                                             kMGPipeSubsystemSamplers | kMGPipeSubsystemPrograms;
+
+        // A handle family (framebuffer, texture resources, samplers, programs) emits only when
+        // something consumes its records; otherwise it emits nothing and the legacy path runs. An
+        // unconsumed emission is not harmless: the applier accepts it, the emitters clear their
+        // dirty flags on that acceptance, and the backend then finds nothing left to upload. Under
+        // monolith the four families share one signal, a registered MGPipeResourceOps table:
+        // textures and renderbuffers are resource rows, and the other three name texture handles.
+        // Under a transport each family asks the server's consumer bit. An object born while the
+        // table is unregistered is published by its family's self-healing create on next respecify.
+        Bool P4aFamilyHasItsConsumer(Uint64 subsystem) {
+            if ((subsystem & kMGPipeP4aFamilySubsystems) == 0) return true;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // R-8 (c1), the same move as MGPipeResourceSubsystemEnabled's and for the same
+            // reason. ALL FOUR FAMILIES RIDE THE ONE SIGNAL, exactly as they do in monolith:
+            // the paragraph above explains why the resource consumer IS the texture family's
+            // consumer, and the split spelling of "a backend registered the resource op table"
+            // is "the server published the resource subsystem's consumer bit". Asking per
+            // family here would be a NEW rule, and a client that withheld more than the server
+            // refuses leaves the server's handle arm live with no records to read.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                // P5f fm: texture/framebuffer records have their own server consumers;
+                // Magma consumes them without claiming the still-unmigrated buffer family.
+                return MG_Remote::Client::CapsMirrorInstance().ServerConsumes(subsystem & kMGPipeP4aFamilySubsystems);
+            }
+#endif
+            return MGPipeGetResourceOps() != nullptr;
+        }
+
+        // Client half of the dependency rows in MG_Pipe/SubsystemDeps.def: a family whose required
+        // bits are not all in the push mask emits nothing. Espryt's Resolve<Family>SubsystemArm
+        // refuses that family and runs its legacy arm, and records the applier had accepted would
+        // already have cleared dirty flags the legacy arm needs (ARCHITECTURE.md §9.6). Both sides
+        // must read the same rows; a client that withheld more would leave the server's handle arm
+        // without records. Only the four handle-family rows are read here: the client does not
+        // withhold vertex input on its row (TextureEmitTest pins that), and P5eFamilyIsLive reads
+        // the buffer-binding row itself.
+        constexpr Uint64 P4aFamilyDependencyBits(Uint64 subsystem) {
+            return MGPipeSubsystemRequires(subsystem & kMGPipeP4aFamilySubsystems);
+        }
+
+        constexpr Uint64 P4aFamilyDependencyTableCoverage() {
+            Uint64 covered = 0;
+            for (const MGPipeSubsystemDependencyRow& row : kMGPipeSubsystemDependencies)
+                covered |= row.Family;
+            return covered;
+        }
+        static_assert((P4aFamilyDependencyTableCoverage() & kMGPipeP4aFamilySubsystems) == kMGPipeP4aFamilySubsystems,
+                      "every P4a family needs a D-K2 dependency row in MG_Pipe/SubsystemDeps.def, "
+                      "even an empty one");
+        static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemFramebuffer) == kMGPipeSubsystemTextureResources,
+                      "bit 9 requires bit 10");
+        static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemTextureResources) ==
+                          (kMGPipeSubsystemResources | kMGPipeSubsystemSamplers),
+                      "bit 10 requires bit 7 and bit 11");
+        static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemSamplers) == kMGPipeSubsystemTextureResources,
+                      "bit 11 requires bit 10");
+        static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemPrograms) == 0, "bit 12 depends on nothing");
+        // No family may depend on itself: a row that did would be unfalsifiable (its own bit is
+        // set by the time the conjunct is evaluated) and would read as a dependency nobody has.
+        static_assert((P4aFamilyDependencyBits(kMGPipeSubsystemFramebuffer) & kMGPipeSubsystemFramebuffer) == 0 &&
+                          (P4aFamilyDependencyBits(kMGPipeSubsystemTextureResources) &
+                           kMGPipeSubsystemTextureResources) == 0 &&
+                          (P4aFamilyDependencyBits(kMGPipeSubsystemSamplers) & kMGPipeSubsystemSamplers) == 0,
+                      "a D-K2 row must not name its own family");
+        // The default mask carries every dependency, so the shipped arm is unchanged by all of
+        // this - the table only ever narrows a HAND-PICKED A/B mask.
+        static_assert((kMGPipeSubsystemsMigratedAtP4a & P4aFamilyDependencyBits(kMGPipeP4aFamilySubsystems)) ==
+                          P4aFamilyDependencyBits(kMGPipeP4aFamilySubsystems),
+                      "the P4a phase mask must satisfy every dependency it declares");
+
+        // IT IS THE RUNTIME BIT THAT IS TESTED, NOT THE OTHER FAMILY'S LIVENESS, and that is
+        // deliberate: Espryt's resolvers classify their arms from MOBILEGL_PIPE_PUSH alone, so
+        // testing anything else here would make the two sides disagree at some mask - which is
+        // the failure this whole commit is about, one level up. The mask is passed in rather than
+        // read, so the walk's single read of MG_Config::Features.PipePush stays the one read a
+        // whole validate point resolves against.
+        Bool P4aFamilyDependenciesAreSet(Uint64 subsystem, Uint64 pushMask) {
+            const Uint64 required = P4aFamilyDependencyBits(subsystem);
+            return (pushMask & required) == required;
+        }
+
+        // Birth hooks (FamilyIsLive) and the validate walk (ComputeLiveDirtyBits) gate on the same
+        // conjuncts: the subsystem bit in MOBILEGL_PIPE_PUSH, the family's kMGPipeWired*Subsystem
+        // constant, and for a handle family a consumer and its dependency bits. This predicate adds
+        // the buffer-binding family's own two: its SubsystemDeps.def row (every MGPBufferRange::Res
+        // names a Buffer handle, which needs bit 7) and its own consumer, because a server that
+        // does not consume bit 13 still reads binding points from the frontend and would store
+        // records it never reads. Withholding the whole family is the safe direction.
+        Bool P5eFamilyIsLive(Uint64 subsystem, Uint64 pushMask) {
+            if ((subsystem & kMGPipeSubsystemBufferBindings) == 0) return true;
+            if (!MGPipeSubsystemDependenciesAreSet(kMGPipeSubsystemBufferBindings, pushMask)) return false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                return MG_Remote::Client::CapsMirrorInstance().ServerConsumes(kMGPipeSubsystemBufferBindings);
+            }
+#endif
+            // Under monolith the "consumer" is the backend that registered the resource op
+            // table, exactly as it is for P4a's four: there is no caps snapshot to ask and the
+            // binding-point walks live in the same DirectGLES that registers it.
+            return MGPipeGetResourceOps() != nullptr;
+        }
+
+        Bool FamilyIsLive(Uint64 subsystem, Uint64 wired) {
+            const Uint64 pushMask = MG_Config::Features.PipePush;
+            return (pushMask & subsystem) != 0 && (wired & subsystem) != 0 && P4aFamilyHasItsConsumer(subsystem) &&
+                   P4aFamilyDependenciesAreSet(subsystem, pushMask) && P5eFamilyIsLive(subsystem, pushMask);
+        }
+
+        // ---- The family seam: a birth hook forwards to its family's emitter ----
+        // ForwardWhenWired calls `call(emitter)` only when kWired is non-zero. The condition is a
+        // template argument, so for a constant of 0 the call is discarded and never instantiated,
+        // and the emitter entry point it names need not exist; once the constant is set, a missing
+        // or misspelled entry point is a compile error. `call` must be a generic lambda
+        // (`[&](auto& emitter) { ... }`) so its body is checked at instantiation, not definition.
+        template <Uint64 kWired, class Emitter, class Fn>
+        constexpr void ForwardWhenWired(Emitter& emitter, Fn&& call) {
+            if constexpr (kWired != 0) {
+                call(emitter);
+            } else {
+                (void)emitter;
+                (void)call;
+            }
+        }
+
+        // THE SEAM'S POSITIVE CONTROL, and it is not decoration: every use of it in this tree
+        // passes a constant that is 0, so the TAKEN arm is never instantiated here and a seam
+        // that failed to compile or failed to call would be discovered by package B or C
+        // rather than by the commit that wrote it. This drives both arms against a probe
+        // emitter shaped like the ones the emit headers will carry, and asserts that exactly
+        // one call happened - so "discarded when 0, called when set" is a checked property of
+        // this build rather than a claim in the paragraph above.
+        struct SeamProbeEmitter {
+            Uint32 Calls = 0;
+            constexpr void Probe() { ++Calls; }
+        };
+
+        constexpr Bool SeamForwardsExactlyWhenWired() {
+            SeamProbeEmitter probe{};
+            ForwardWhenWired<1ull>(probe, [](auto& emitter) { emitter.Probe(); });
+            ForwardWhenWired<0ull>(probe, [](auto& emitter) { emitter.Probe(); });
+            return probe.Calls == 1;
+        }
+
+        static_assert(SeamForwardsExactlyWhenWired(),
+                      "the family seam must forward exactly when its wired constant is non-zero");
+
+        // Whether a create for exactly this handle went out; the death helpers below ask it before
+        // emitting a delete. A slot is not evidence of a record: the client mints slots through
+        // MGPipeSlots().Acquire at object birth and whenever an emitter names an object, whether
+        // or not a create was emitted, and the applier refuses (verify builds assert on) a delete
+        // for a handle it never saw. Keyed by {kind, slot, gen}, so a recycled slot does not
+        // inherit its predecessor's answer. Composite ShaderCso slots (base 983040) get their own
+        // table, or a slot-indexed vector would grow that large; code that indexes a ShaderCso
+        // slot must test MGPipeIsCompositeShaderSlot first.
+        class MGPipePublicationLatch {
+        public:
+            void NotePublished(MGPipeKind kind, MGPipeHandle handle) {
+                Entry* entry = Grow(kind, handle.Slot);
+                if (entry == nullptr) return;
+                entry->Gen = handle.Gen;
+                entry->Published = true;
+            }
+
+            Bool IsPublished(MGPipeKind kind, MGPipeHandle handle) const {
+                const Entry* entry = Find(kind, handle.Slot);
+                return entry != nullptr && entry->Published && entry->Gen == handle.Gen;
+            }
+
+            void NoteUnpublished(MGPipeKind kind, MGPipeHandle handle) {
+                Entry* entry = const_cast<Entry*>(Find(kind, handle.Slot));
+                if (entry == nullptr || entry->Gen != handle.Gen) return;
+                *entry = Entry{};
+            }
+
+            // A fresh server holds no record at all (MGPipeForgetEndedSession).
+            void ForgetAll() {
+                for (Vector<Entry>& table : m_kinds)
+                    table.clear();
+                m_band.clear();
+            }
+
+        private:
+            struct Entry {
+                Uint32 Gen = 0;
+                Bool Published = false;
+            };
+
+            static constexpr SizeT kKindCount = static_cast<SizeT>(MGPipeKind::KindCount);
+
+            Bool IsBand(MGPipeKind kind, Uint32 slot) const {
+                return kind == MGPipeKind::ShaderCso && MGPipeIsCompositeShaderSlot(slot);
+            }
+
+            Entry* Grow(MGPipeKind kind, Uint32 slot) {
+                const SizeT index = static_cast<SizeT>(kind);
+                if (index >= kKindCount) return nullptr;
+                if (IsBand(kind, slot)) {
+                    const SizeT banded = slot - kMGPipeShaderCsoCompositeSlotBase;
+                    if (banded >= m_band.size()) m_band.resize(banded + 1);
+                    return &m_band[banded];
+                }
+                Vector<Entry>& table = m_kinds[index];
+                if (slot >= table.size()) table.resize(static_cast<SizeT>(slot) + 1);
+                return &table[slot];
+            }
+
+            const Entry* Find(MGPipeKind kind, Uint32 slot) const {
+                const SizeT index = static_cast<SizeT>(kind);
+                if (index >= kKindCount) return nullptr;
+                if (IsBand(kind, slot)) {
+                    const SizeT banded = slot - kMGPipeShaderCsoCompositeSlotBase;
+                    return banded < m_band.size() ? &m_band[banded] : nullptr;
+                }
+                const Vector<Entry>& table = m_kinds[index];
+                return slot < table.size() ? &table[slot] : nullptr;
+            }
+
+            Array<Vector<Entry>, kKindCount> m_kinds{};
+            Vector<Entry> m_band{};
+        };
+
+        MGPipePublicationLatch& PublicationLatch() {
+            // NEVER DESTROYED, for MGPipeSlots()' reason: the six death helpers reach this
+            // from frontend destructors that __run_exit_handlers drives AFTER a function-local
+            // static would have gone, and a destroyed latch answers out of freed vectors.
+            static MGPipePublicationLatch* latch = new MGPipePublicationLatch();
+            return *latch;
+        }
+    } // namespace
+
+    void MGPipeNoteHandlePublished(MGPipeKind kind, MGPipeHandle handle) {
+        if (MGPipeHandleIsNull(handle)) return;
+        PublicationLatch().NotePublished(kind, handle);
+    }
+
+    Bool MGPipeHandleIsPublished(MGPipeKind kind, MGPipeHandle handle) {
+        if (MGPipeHandleIsNull(handle)) return false;
+        return PublicationLatch().IsPublished(kind, handle);
+    }
+
+    void MGPipeNoteHandleUnpublished(MGPipeKind kind, MGPipeHandle handle) {
+        if (MGPipeHandleIsNull(handle)) return;
+        PublicationLatch().NoteUnpublished(kind, handle);
+    }
+
+    // THE GATE ITSELF, AS AN OBSERVABLE (ID-39, widened by S-3 / ID-41). Every P4a birth hook
+    // below and every `wants()` row in the walk resolve through FamilyIsLive /
+    // P4aFamilyHasItsConsumer / P4aFamilyDependenciesAreSet, and none of the three is reachable
+    // from a test - so this is the one door a unit case has onto the answer, and it is the SAME
+    // expression rather than a second copy of it. A subsystem outside kMGPipeP4aFamilySubsystems
+    // answers the pair the P2/P3a families have always answered (its consumer conjunct is
+    // vacuous and its dependency set is empty), which is what makes "nothing that emits today
+    // changes" checkable instead of asserted.
+    Bool MGPipeP4aFamilyEmits(Uint64 subsystem, Uint64 wired) {
+        return FamilyIsLive(subsystem, wired);
+    }
+
+    void MGPipeMintTextureHandle(ITextureObject& texture) {
+        MGPipeSlots().Acquire(MGPipeKind::Texture, texture.GetLifetimeId());
+    }
+
+    void MGPipeMintRenderbufferHandle(RenderbufferObject& renderbuffer) {
+        MGPipeSlots().Acquire(MGPipeKind::Renderbuffer, renderbuffer.GetLifetimeId());
+    }
+
+    void MGPipeMintFramebufferHandle(FramebufferObject& framebuffer) {
+        MGPipeSlots().Acquire(MGPipeKind::Framebuffer, framebuffer.GetLifetimeId());
+    }
+
+    void MGPipeMintShaderCsoHandle(ProgramObject& program) {
+        MGPipeSlots().Acquire(MGPipeKind::ShaderCso, program.GetLifetimeId());
+    }
+
+    void MGPipeEmitTextureResourceCreate(ITextureObject& texture) {
+        if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.EmitResourceCreate(texture); });
+    }
+
+    void MGPipeEmitTextureResourceRespecify(ITextureObject& texture, MGPipeTextureRespecifyScope scope,
+                                            Uint32 uploadTarget, Uint32 level) {
+        if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(), [&](auto& emitter) {
+            emitter.EmitResourceRespecify(texture, scope, uploadTarget, level);
+        });
+    }
+
+    void MGPipeEmitTextureParams(ITextureObject& texture) {
+        if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.EmitTextureParams(texture); });
+    }
+
+    void MGPipeNoteTextureLevelDirty(ITextureObject& storageOwner, Uint32 uploadTarget, Uint32 level) {
+        if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // AN UPLOAD ON A LOST CONTEXT IS OWED TO NOBODY. The drain list is process-wide and the
+        // next verb of ANY context drains it; queued from a thread still on a lost context (or
+        // while the session is lost), it would be carried to a fresh session that never created
+        // the texture. The level stays dirty on the object, which no live context can reach.
+        if (MG_Remote::Client::ClientSession::DeviceLost()) return;
+#endif
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(), [&](auto& emitter) {
+            emitter.NoteLevelDirty(storageOwner, uploadTarget, level);
+        });
+    }
+
+    void MGPipeEmitRenderbufferResourceCreate(RenderbufferObject& renderbuffer) {
+        if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
+            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.EmitRenderbufferCreate(renderbuffer); });
+    }
+
+    void MGPipeEmitRenderbufferResourceRespecify(RenderbufferObject& renderbuffer) {
+        if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
+            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.EmitRenderbufferRespecify(renderbuffer); });
+    }
+
+    void MGPipeNoteTextureBoundAs(MGPipeHandle texture, Uint32 bindBit) {
+        // Not gated on FamilyIsLive: the mask is client state (see the declaration), and the
+        // emitter gates the emission it causes.
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(), [&](auto& emitter) {
+            emitter.NoteTextureBoundAs(texture, static_cast<Uint16>(bindBit));
+        });
+    }
+
+    void MGPipeNoteTextureImageBound(ITextureObject& texture) {
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(), [&](auto& emitter) {
+            emitter.NoteTextureBoundAs(emitter.AcquireTexture(texture.GetLifetimeId(), &texture),
+                                       static_cast<Uint16>(kMGPipeBindShaderImage));
+        });
+    }
+
+    void MGPipeEmitSamplerCsoCreate(SamplerObject& sampler) {
+        if (!FamilyIsLive(kMGPipeSubsystemSamplers, kMGPipeWiredSamplerSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(MGPipeSamplerEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.EmitSamplerCso(sampler); });
+    }
+
+    void MGPipeEmitSamplerViewCreate(ITextureObject& texture) {
+        if (!FamilyIsLive(kMGPipeSubsystemSamplers, kMGPipeWiredSamplerSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(MGPipeSamplerEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.EmitSamplerView(texture); });
+    }
+
+    void MGPipeEmitShaderCsoCreate(ProgramObject& program) {
+        if (!FamilyIsLive(kMGPipeSubsystemPrograms, kMGPipeWiredProgramSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredProgramSubsystem>(MGPipeProgramEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.EmitShaderCso(program); });
+    }
+
+    // ---- Client-side death helpers, one per handle kind minted above ----
+    //
+    // No backend death table frees these kinds' slots; the client does, here (or, for a cached
+    // CSO, in the cache that minted it). The order is fixed (PipeMutation.h): wire delete, death
+    // notice, slot free. A delete goes out only when the publication latch says the create did,
+    // and the helper returns that answer; re-asking a live gate at death could pair a create and
+    // a destroy decided under different conditions, and either mismatch leaks. One latch serves
+    // all six kinds, which share four emitters.
+    namespace {
+        // Steps 2 and 3, shared: raise the notice while the handle still resolves, then return
+        // the slot. Raised UNCONDITIONALLY, exactly as the five destructors raised it before
+        // P4a: whether a slot exists is this client's business, and a consumer that records
+        // notices must not stop seeing a class announce itself.
+        void NotifyAndFree(MGPipeKind kind, Uint64 lifetimeId, MGPipeHandle handle) {
+            MG_State::GLState::NotifyStateObjectDestroyed(kind, lifetimeId, handle);
+            if (!MGPipeHandleIsNull(handle)) MGPipeSlots().Free(kind, handle);
+        }
+
+        MGPHandleOnly HandleOnly(MGPipeKind kind, MGPipeHandle handle) {
+            MGPHandleOnly only{};
+            only.Handle = handle;
+            only.Kind = static_cast<Uint32>(kind);
+            return only;
+        }
+
+        // Step 1, shared: the wire delete goes out FIRST and only for a PUBLISHED handle, and
+        // the latch is cleared with it so a second death path - a composite's two, a backend's
+        // redundant notice - cannot emit a second delete for a record that is already gone.
+        //
+        // `route` IS A MGPipeRoute<Name> AND NEVER A MGPipeApply<Name> (B1). R-17 converted the
+        // 40 direct applier CALLS to route calls by renaming `MGPipeApply<Name>(` -> but these
+        // five sites take the entry point BY ADDRESS, `&MGPipeApply<Name>`, so the call-expression
+        // rename missed them and four routed rows (DeleteSamplerView, DeleteShaderState,
+        // DeleteSamplerState, ResourceDestroy for textures/renderbuffers) still ran the applier
+        // synchronously on the GL thread under split - two writers on g_applier with the barrier
+        // not consulted, and under spawn a silent no-op that leaks every one of those objects.
+        // The parameter type is the route's, which is byte-identical to the applier's
+        // (const MGPHandleOnly&, void return), so the fix is `&MGPipeRoute<Name>` at the five call
+        // sites; PipeCatalog.FrontendNeverTakesAnApplierAddress checks MG_Impl in every unit lane.
+        Bool EmitDeleteIfPublished(MGPipeKind kind, MGPipeHandle handle, void (*route)(const MGPHandleOnly&)) {
+            if (!MGPipeHandleIsPublished(kind, handle)) return false;
+            route(HandleOnly(kind, handle));
+            MGPipeNoteHandleUnpublished(kind, handle);
+            return true;
+        }
+    } // namespace
+
+    // THE EMITTER IS TOLD BETWEEN THE WIRE DELETE AND THE FREE (P4a final review C-2), for
+    // every kind that keeps client state under a handle: a texture's drain entries, pointer,
+    // cache reference and latches; a renderbuffer's entry; a framebuffer's Named latch; a
+    // sampler view's and a shader CSO's record memo. Before this the six helpers freed the slot
+    // and told nobody, so the texture emitter kept the freed ITextureObject* and the level on
+    // the drain list, and `glTexImage2D; glDeleteTextures; <verb>` called a virtual on freed
+    // memory from the next validate point. The forward is the P3a shape
+    // (MGPipeEmitVertexElementsDestroyAndFree's emitter.NoteRecordDestroyed) applied to the
+    // five P4a kinds that have an entry to retire; the content-addressed sampler CSO keeps
+    // none per object (its death is the cache's LRU, ID-17). Unconditional in a push build,
+    // like the mints: the entries exist whether or not the family bit is set.
+    Bool MGPipeEmitSamplerViewCsoDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::SamplerViewCso, lifetimeId)) {
+            return false;
+        }
+#endif
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerViewCso, lifetimeId);
+        const Bool published = EmitDeleteIfPublished(MGPipeKind::SamplerViewCso, handle, &MGPipeRouteDeleteSamplerView);
+        ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(MGPipeSamplerEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.NoteRecordDestroyed(handle); });
+        // THE NOTICE IS RAISED FOR THIS KIND TOO, and the reason it once was not is wrong:
+        // NotifyStateObjectDestroyed takes a KIND and a lifetime id, not an object
+        // (StateObjectDeathNotice.h - one entry point for every kind rather than one ops table
+        // per kind), MGPipeKind has SamplerViewCso, and the view IS keyed in that kind's
+        // ByLifetimeId map under the texture's id - which is exactly what the FindByLifetimeId
+        // above just resolved. "It has no frontend object of its own" is why it takes the
+        // lifetime id; it is not a reason to drop step 2. A backend that holds a twin per
+        // SamplerViewCso slot - which is the shape both backends' slot tables take - would
+        // otherwise never be told to drop it, and under a backend with no other per-kind free
+        // path never drop it at all: the C-1 leak, one kind later, and invisible to
+        // PipeSlotPeek because the SLOT was returned correctly.
+        NotifyAndFree(MGPipeKind::SamplerViewCso, lifetimeId, handle);
+        return published;
+    }
+
+    Bool MGPipeEmitTextureDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::Texture, lifetimeId)) {
+            return false;
+        }
+#endif
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, lifetimeId);
+        const Bool published = EmitDeleteIfPublished(MGPipeKind::Texture, handle, &MGPipeRouteResourceDestroy);
+        // The emitter retires its entry while the handle still resolves (C-2): the drain list
+        // drops the dead texture's levels, the raw pointer goes, the built-in sampler's cache
+        // reference is given back, the latches and the sticky mask are cleared.
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.NoteTextureDied(handle); });
+        NotifyAndFree(MGPipeKind::Texture, lifetimeId, handle);
+        // The texture's SamplerViewCso shares its lifetime id and is released here, after the
+        // texture's own record, so a server reading the view while the texture is dropped still
+        // can. The built-in SamplerObject has its own lifetime id and is released by
+        // ~SamplerObject through MGPipeEmitSamplerCsoDestroyAndFree; that destructor is not ordered
+        // against this body (m_sampler is a SharedPtr others may hold), and the two releases are
+        // independent. The view's answer is OR-ed in: a delete for either half means the object
+        // already spoke on the wire.
+        const Bool viewPublished = MGPipeEmitSamplerViewCsoDestroyAndFree(lifetimeId);
+        return published || viewPublished;
+    }
+
+    Bool MGPipeEmitRenderbufferDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::Renderbuffer, lifetimeId)) {
+            return false;
+        }
+#endif
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, lifetimeId);
+        const Bool published = EmitDeleteIfPublished(MGPipeKind::Renderbuffer, handle, &MGPipeRouteResourceDestroy);
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.NoteRenderbufferDied(handle); });
+        NotifyAndFree(MGPipeKind::Renderbuffer, lifetimeId, handle);
+        return published;
+    }
+
+    Bool MGPipeEmitFramebufferDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::Framebuffer, lifetimeId)) {
+            return false;
+        }
+#endif
+        // PipeCalls.def has no framebuffer delete: a framebuffer is state, named only by
+        // set_framebuffer_state, not a resource or a CSO. The handle is minted and freed
+        // client-side, so this helper skips the wire delete: it tells the emitter, raises the
+        // death notice and frees the slot. A deleted framebuffer is unreachable because
+        // MarkFramebufferObjectForDeletion rebinds slots holding it to framebuffer 0, and a
+        // recycled handle cannot match its predecessor's record because Gen is in its ContentHash.
+        // Nothing latches a framebuffer publication, so the answer is always false.
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Framebuffer, lifetimeId);
+        ForwardWhenWired<kMGPipeWiredFramebufferSubsystem>(MGPipeFramebufferEmitterInstance(),
+                                                           [&](auto& emitter) { emitter.NoteFramebufferDied(handle); });
+        NotifyAndFree(MGPipeKind::Framebuffer, lifetimeId, handle);
+        return false;
+    }
+
+    Bool MGPipeEmitSamplerCsoDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::SamplerCso, lifetimeId)) {
+            return false;
+        }
+#endif
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerCso, lifetimeId);
+        const Bool published = EmitDeleteIfPublished(MGPipeKind::SamplerCso, handle, &MGPipeRouteDeleteSamplerState);
+        // NOTHING TO RETIRE IN AN EMITTER FOR THIS KIND, stated rather than implied: a sampler
+        // CSO is content-addressed and belongs to a value, so no emitter keeps an entry under
+        // a SamplerObject's handle - the cache's entries are keyed by value and reference
+        // count, and the death of a bound sampler object releases its unit's reference at the
+        // next bind_sampler_states pass (SamplerEmit.h's reconciliation).
+        NotifyAndFree(MGPipeKind::SamplerCso, lifetimeId, handle);
+        return published;
+    }
+
+    Bool MGPipeEmitShaderCsoDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::ShaderCso, lifetimeId)) {
+            return false;
+        }
+#endif
+        // ORDINARY PROGRAMS AND PIPELINE COMPOSITES TAKE THE SAME PATH, deliberately: the
+        // server never learns a composite is a composite, and the only difference on this side
+        // is which band the slot came out of. A composite's slot has TWO independent release
+        // paths - the pipeline cache's LRU eviction and the composite ProgramObject's own
+        // destructor - and the second is a proven no-op, because MGPipeSlotAllocator::Free
+        // refuses a slot that is not live at that generation and bumps no generation of its
+        // own (the bump rides the next handout).
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::ShaderCso, lifetimeId);
+        const Bool published = EmitDeleteIfPublished(MGPipeKind::ShaderCso, handle, &MGPipeRouteDeleteShaderState);
+        ForwardWhenWired<kMGPipeWiredProgramSubsystem>(MGPipeProgramEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.NoteRecordDestroyed(handle); });
+        NotifyAndFree(MGPipeKind::ShaderCso, lifetimeId, handle);
+        return published;
+    }
+
+#if MOBILEGL_PIPE_VERIFY
+    Bool MGPipeSetPoisonOmission(const char* verb, const char* field) {
+        const auto v = MGPipeFindVerb(verb);
+        const auto f = MGPipeFindInputField(field);
+        if (!v || !f) return false;
+        g_omission = PoisonOmission{true, *v, *f};
+        MGPipeServerSetPoisonOmission(*v, *f);
+        MGLOG_I("MGPipe: poison omission armed - %s@%s", field, verb);
+        return true;
+    }
+#endif
+
+    // ---- liveness ----
+    Bool PipeInputs::IsLive() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return MGPipeServerContextIsLive();
+#endif
+        return LiveContext() != nullptr;
+    }
+
+    // ---- the seven F-class forwarders ----
+    //
+    // P5 (R-7.3, CONTRACT-P5.md table 2's "the seven sticky forwards"): each of them now opens
+    // with MGP_STICKY_FORWARD_PULL. They are THE SEVEN THAT HAND THE SERVER A RAW FRONTEND
+    // OBJECT OR WRITE INTO THE FRONTEND, and they are also the only fields the poison cannot
+    // see - they carry no MGP_INPUT_CHECK at all, by the declared exception argued at
+    // PipeInputs.h's F-class block, so freshness never reaches them and the exit gate was
+    // structurally blind on exactly the seven most dangerous rows. The hook is a no-op outside
+    // a server-stamped verb, so InvalidateCompileEnv keeps being reachable from backend
+    // initialization - the case the exemption was written for - and every monolith lane, split
+    // build included, behaves as it does today.
+#if MOBILEGL_BUILD_DISAGGREGATED
+#define MGP_STICKY_FORWARD_PULL(Field) MGPipeStickyForwardPull(MGPipeInputField::Field)
+#else
+#define MGP_STICKY_FORWARD_PULL(Field) ((void)0)
+#endif
+
+    SizeT PipeInputs::GetBufferBindingPointCount(BufferTarget target) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            switch (target) {
+            case BufferTarget::Uniform:
+            case BufferTarget::ShaderStorage:
+            case BufferTarget::AtomicCounter:
+            case BufferTarget::TransformFeedback:
+                return kMGPipeMaxBufferBindingPoints;
+            default:
+                return 0;
+            }
+        }
+#endif
+        MGP_STICKY_FORWARD_PULL(GetBufferBindingPointCount);
+        const auto* ctx = LiveContext();
+        return ctx != nullptr ? ctx->GetBufferBindingPointCount(target) : 0;
+    }
+
+    const SharedPtr<PipeInputs::ProgramObject>& PipeInputs::GetProgramObject(Uint index) {
+        MGP_STICKY_FORWARD_PULL(GetProgramObject);
+        auto* ctx = LiveContext();
+        return ctx != nullptr ? ctx->GetProgramObject(index) : NullShared<ProgramObject>();
+    }
+
+    const SharedPtr<PipeInputs::ITextureObject>& PipeInputs::GetTextureObject(Uint index) {
+        MGP_STICKY_FORWARD_PULL(GetTextureObject);
+        auto* ctx = LiveContext();
+        return ctx != nullptr ? ctx->GetTextureObject(index) : NullShared<ITextureObject>();
+    }
+
+    Bool PipeInputs::HasOpenTransformFeedbackSpan(Uint64 lifetimeId) const {
+        return lifetimeId != 0 && MGPipeApplier().StreamOutputSpans.count(lifetimeId) != 0;
+    }
+
+    namespace {
+        // The frontend half of MGPipeNotifyCompileEnvChanged (PipeApply.h): registered once, at
+        // static initialization, by the translation unit that owns the forward.
+        const Bool kCompileEnvHookRegistered = [] {
+            MGPipeSetCompileEnvChangedHook([] {
+                if (gPipeInputs->IsLive()) gPipeInputs->InvalidateCompileEnv();
+            });
+            return true;
+        }();
+    } // namespace
+
+    void PipeInputs::InvalidateCompileEnv() {
+        MGP_STICKY_FORWARD_PULL(InvalidateCompileEnv);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            // DELETED with an active transport (CONTRACT-P5C §4.2): R-12's caps
+            // re-publication already invalidates the CLIENT's compile environment when the
+            // second snapshot arrives (CapsMirror::Adopt), and this forward is a write
+            // into the frontend with no wire shape. A caller that still needs it under a
+            // transport is a defect to fix, not a pull to serve.
+            return;
+        }
+#endif
+        if (auto* ctx = LiveContext()) ctx->InvalidateCompileEnv();
+    }
+
+    Bool PipeInputs::ValidateProgramName(Uint index) const {
+        MGP_STICKY_FORWARD_PULL(ValidateProgramName);
+        const auto* ctx = LiveContext();
+        return ctx != nullptr && ctx->ValidateProgramName(index);
+    }
+
+    void PipeInputs::RecordError(ErrorCode code, UniquePtr<ErrorInfo> info) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            // The error queue is CLIENT state and the apply thread may not write it (R4).
+            // kEventGlError carries the code and the message; the client records it into its
+            // own queue at the next drain point. ORDERING IS P9's (CONTRACT-P5C §4.2): the
+            // event is observed at the next EmitAndWait drain, which preserves per-thread
+            // program order of error-then-read but not cross-verb interleaving - the
+            // accepted P5c shape, stated in the contract rather than discovered in P6.
+            const String message = info != nullptr ? info->toString() : String{};
+            if (gMGPipeCallbacks.OnGlError == nullptr) {
+                MGLOG_F("MGPipe: Fatal{RoleViolation, \"OnGlError.callback-missing\"} - "
+                        "a transport backend error has no reverse-channel owner");
+                std::abort();
+            }
+            gMGPipeCallbacks.OnGlError(static_cast<Uint32>(code), message.c_str());
+            return;
+        }
+#endif
+        MGP_STICKY_FORWARD_PULL(RecordError);
+        auto* ctx = LiveContext();
+        if (ctx == nullptr) {
+            MGLOG_E_ONCE("PipeInputs::RecordError: no live context, dropping error %d", static_cast<int>(code));
+            return;
+        }
+        ctx->RecordError(code, Move(info));
+    }
+#undef MGP_STICKY_FORWARD_PULL
+
+    // P3a D-H2.1. The draw's RAW vertex-fetch base instance, set immediately before the fill
+    // at the three *BaseInstance draw entry points. It replaces the ambient process global
+    // the backend used to read, which is a shape that cannot cross a pushed boundary; the
+    // value travels as an explicit field of set_vertex_buffers and the SERVER decides
+    // whether to emulate the fetch shift or let GL_EXT_base_instance do it.
+    //
+    // Indirect draws pass nothing: none of the three sites is in an indirect loop, per-command
+    // base instances are resolved server-side out of the indirect commands, and the client
+    // emits 0 for every indirect path.
+    void MGPipeSetPendingBaseInstance(Uint32 baseInstance) {
+        MGPipeTrackerInstance().SetPendingBaseInstance(baseInstance);
+    }
+
+    Uint32 MGPipePendingBaseInstance() {
+        return MGPipeTrackerInstance().PendingBaseInstance();
+    }
+
+    void MGPipeLeaveVerb() {
+        PipeInputs& inputs = MGPipeClientInputs();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5e (ra, §3.1): a verb whose fill was skipped has no stamps of this thread's to
+        // retire, and the bump below would move a serial the SERVER's stamp owns. Leave
+        // returns, and the tracker's base-instance clear - which is frontend state, not block
+        // state - still runs at the bottom.
+        if (g_lastFillWasBarriered) {
+            // Same layer-2 gate as the fill: the serial bump and the verb reset below are
+            // writes into gPipeInputs (gt).
+            MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("MGPipeLeaveVerb",
+                                                                                      /*isBarrieredFill=*/true);
+        }
+        if (!g_lastFillWasBarriered) {
+            MGPipeTrackerInstance().ClearPendingBaseInstance();
+            return;
+        }
+#endif
+#if MOBILEGL_PIPE_POISON
+        // Same bump the next fill would make, without a verb to fill from: no field is
+        // stamped, so every stamp this verb made falls behind the serial.
+        ++MGPipeFillAccess::Filled(inputs).CurrentVerbSerial;
+#endif
+        MGPipeClientClearVerbBoundary();
+        MGPipeFillAccess::SetVerb(inputs, MGPipeVerb::kVerbCount);
+        // The pending base instance belongs to the verb that was about to run, so leaving
+        // one drops it.
+        //
+        // THIS IS NOT THE CLEAR PRODUCTION RELIES ON, and saying so is better than implying
+        // two independent guarantees where there is one: no GL entry point calls
+        // MGPipeLeaveVerb - grep finds MG_Test/ScopedPipeVerb.h and MG_Test/Pipe/TrackerTest
+        // .cpp and nothing else - so what this line guarantees is that a unit case which
+        // opens a ScopedPipeVerb cannot leak a base instance into the next case. The
+        // production property ("consumed by exactly the verb whose entry point set it, and 0
+        // at every other Update") is held by MGPipeValidateForVerb, on both of its exits.
+        MGPipeTrackerInstance().ClearPendingBaseInstance();
+    }
+
+    // ================================================================================
+    // The emission step (P2 brief D1 step 3, D5, D6, D7)
+    // ================================================================================
+    namespace {
+        // Which runtime MOBILEGL_PIPE_PUSH subsystem owns a field, through the call that now
+        // supplies it. Zero means "still pulled".
+        constexpr Uint64 SubsystemForEmitter(MGPipeFieldEmitter emitter) {
+            switch (emitter) {
+            case MGPipeFieldEmitter::BindRenderState:
+            case MGPipeFieldEmitter::CreateRenderState:
+            case MGPipeFieldEmitter::SetDynamicState:
+                return kMGPipeSubsystemRenderState;
+            case MGPipeFieldEmitter::SetPatchState:
+                return kMGPipeSubsystemPatchState;
+            case MGPipeFieldEmitter::SetVertexAttribDefaults:
+                return kMGPipeSubsystemVertexAttribDefaults;
+            // P3a. bind_vertex_elements is the vertex-input family's only emitter row today
+            // (Coverage.def says why the other two candidates are not there); the resource
+            // family has none at all, because its calls are dispatched at the GL call that
+            // causes them rather than filled into a PipeInputs field.
+            case MGPipeFieldEmitter::BindVertexElements:
+                return kMGPipeSubsystemVertexInput;
+            // P4a's six emitted rows, across three of its four subsystems. The fourth,
+            // kMGPipeSubsystemTextureResources, names NO emitted field and cannot: the texture
+            // and renderbuffer resource_* calls and set_texture_params are dispatched at the
+            // GL call that causes them rather than filled into a PipeInputs field, exactly as
+            // P3a's buffer family is, so there is no Coverage.def emitted row for them and
+            // there must not be one.
+            case MGPipeFieldEmitter::SetFramebufferState:
+                return kMGPipeSubsystemFramebuffer;
+            case MGPipeFieldEmitter::SetSamplerViews:
+            case MGPipeFieldEmitter::SetShaderImages:
+                return kMGPipeSubsystemSamplers;
+            case MGPipeFieldEmitter::SetDrawProgram:
+            case MGPipeFieldEmitter::SetDispatchProgram:
+                return kMGPipeSubsystemPrograms;
+            // P5c rv (CONTRACT-P5C.md §5.3): the residual-value record rides the residual
+            // subsystem - the one family with no dirty bit of its own, which is why its
+            // emission gate is the subsystem bit plus the whole-record hash and nothing else.
+            case MGPipeFieldEmitter::SetContextValues:
+                return kMGPipeSubsystemResidualValues;
+                // P5e's one emitted row (§5.6): the indexed buffer
+                // binding points. Written HERE at the contract commit, with the Coverage.def row
+                // and EmittedCallSuppliesTheWholeField's arm beside it, for the reason
+                // kMGPipeWiredSubsystems' block states one paragraph down - this file belongs to
+                // the contract package for the whole phase, and an emitter enumerator whose
+                // dispatch arm lived in the family's own worktree is the merge trap that block
+                // exists to close. It is inert until that family's wired constant leaves 0.
+            case MGPipeFieldEmitter::SetShaderBuffers:
+                return kMGPipeSubsystemBufferBindings;
+            case MGPipeFieldEmitter::kNone:
+                break;
+            }
+            return 0;
+        }
+
+        // The two maps answer different questions - this one takes a field's EMITTER, the
+        // tracker's MGPipeSubsystemForDirty takes a dirty BIT - and they must agree, because
+        // the emission is gated on one and the residual-fill skip on the other. A divergence
+        // would push a call whose field is still pulled, or (worse) skip a field whose call
+        // was never emitted. Cheap to state, impossible to drift:
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::BindRenderState) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewPipelineState),
+                      "bind_render_state and NEW_PIPELINE_STATE must name one subsystem");
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetDynamicState) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewRenderState),
+                      "set_dynamic_state and NEW_RENDER_STATE must name one subsystem");
+        // set_pixel_pack_state has no emitter row on purpose (Coverage.def, above
+        // MGP_COVERAGE_EMITTED_LIST): it carries the PACK half of PipeInputs::m_pixelStore[2]
+        // only, so the field keeps going through the residual fill loop and no field may be
+        // skipped on its account. The NEW_PIXEL_PACK bit still names the subsystem the call
+        // belongs to, which is what the emission gate consults.
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewPixelPack) == kMGPipeSubsystemPixelPack,
+                      "NEW_PIXEL_PACK must name the pixel-pack subsystem");
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetPatchState) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewPatchState),
+                      "set_patch_state and NEW_PATCH_STATE must name one subsystem");
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetVertexAttribDefaults) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewVertexAttribDefaults),
+                      "set_vertex_attrib_defaults and NEW_VERTEX_ATTRIB_DEFAULTS must name one subsystem");
+
+        // The vertex-input pairings, in the same equality form and with no `== 0 ||` escape, so
+        // unmapping one of these dirty bits fails here. They compare against SubsystemForEmitter
+        // rather than kMGPipeSubsystemVertexInput to pin the two maps to each other: an emitter
+        // row moved to another subsystem must fail too. bind_vertex_elements is the family's only
+        // Coverage.def emitter row, so it is the emitter side of all three.
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements) == kMGPipeSubsystemVertexInput,
+                      "bind_vertex_elements must name the vertex-input subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexElements) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements),
+                      "bind_vertex_elements and NEW_VERTEX_ELEMENTS must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexBuffers) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements),
+                      "set_vertex_buffers and NEW_VERTEX_BUFFERS must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewIndexBuffer) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements),
+                      "set_index_buffer and NEW_INDEX_BUFFER must name one subsystem");
+        // The two vertex views' capacity is one number on both sides of the boundary. This is
+        // the one translation unit that sees the frontend constant and the MG_Pipe one, so it
+        // is where they are pinned together; MGPipeTypes.h says so in place.
+        static_assert(kMGPipeMaxVertexAttribs == MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS,
+                      "the MGPipe vertex-attribute capacity and the frontend's have drifted");
+
+        // P5e (§1, ruling 10), pinned here for the same reason and in
+        // the same place: this translation unit sees the frontend constant and the MG_Pipe one,
+        // and nothing else does. 84 is what the emitter may describe and what the wire carries;
+        // the BACKEND clamps to the device's real GL_MAX_UNIFORM_BUFFER_BINDINGS, as it does
+        // today, because a client-side clamp would read a device capability from the wrong side.
+        static_assert(kMGPipeMaxBufferBindingPoints == MG_State::GLState::BufferBindingPointCount,
+                      "the MGPipe buffer-binding-point capacity and the frontend's have drifted");
+
+        // ---- P4a's SEVEN pairings, and EVERY ONE OF THEM COMPARES AGAINST
+        // SubsystemForEmitter RATHER THAN AGAINST A CONSTANT. That is the lesson written out
+        // twenty lines above and it is not a style preference: naming the subsystem constant
+        // directly pins the dirty half to a constant instead of pinning the two MAPS to each
+        // other, so an emitter row moved onto another subsystem would still satisfy the
+        // assertion while the emission gate and the residual-fill skip had begun to disagree.
+        //
+        // One emitter row stands for each family: set_framebuffer_state for the framebuffer,
+        // set_sampler_views for the sampler family (set_shader_images is the same subsystem
+        // and is pinned to it below), and set_draw_program for the program family.
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewFramebuffer) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetFramebufferState),
+                      "set_framebuffer_state and NEW_FRAMEBUFFER must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewSamplerViews) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetSamplerViews),
+                      "set_sampler_views and NEW_SAMPLER_VIEWS must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewSamplers) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetSamplerViews),
+                      "bind_sampler_states and NEW_SAMPLERS must name the sampler subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderImages) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetShaderImages),
+                      "set_shader_images and NEW_SHADER_IMAGES must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewShader) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetDrawProgram),
+                      "create/bind_shader_state and NEW_SHADER must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBindings) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetDrawProgram),
+                      "the program family and NEW_SHADER_BINDINGS must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewGlobalConstants) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetDispatchProgram),
+                      "set_global_constants and NEW_GLOBAL_CONSTANTS must name one subsystem");
+        // And the two program emitters really are one subsystem, which is what makes the two
+        // assertions above a statement about the family rather than about one call.
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetDrawProgram) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetDispatchProgram),
+                      "set_draw_program and set_dispatch_program are one family and one A/B");
+
+        // P5e's pairing, in the same shape and for the same reason as P4a's seven: the two maps
+        // answer different questions - one takes a field's EMITTER, the other a dirty BIT - and
+        // the emission is gated on one while the residual-fill skip is gated on the other, so a
+        // divergence would push a call whose field is still pulled, or skip a field whose call
+        // was never emitted. Compared against SubsystemForEmitter rather than against the
+        // constant, because pinning the two MAPS to each other is the statement that cannot
+        // drift.
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBuffers) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetShaderBuffers),
+                      "set_shader_buffers and NEW_SHADER_BUFFERS must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewConstBuffers) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBuffers),
+                      "the three binding-point bits are one family and one A/B");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewSoTargets) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBuffers),
+                      "the three binding-point bits are one family and one A/B");
+
+        // THE TEXTURE-RESOURCE SUBSYSTEM HAS NO DIRTY BIT, and that has to be asserted rather
+        // than left as an absence: its calls are dispatched from the GL entry points that
+        // cause them, so a bit that started naming it would gate the emission twice - once at
+        // the dispatch site and once in the walk - and the two would disagree the first time
+        // one of them was edited. Exactly the shape NoDirtyBitOwnsTheResidualSubsystem uses.
+        constexpr Bool NoDirtyBitOwnsTheTextureResourceSubsystem() {
+            for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
+                if (MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(i)) == kMGPipeSubsystemTextureResources) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        static_assert(NoDirtyBitOwnsTheTextureResourceSubsystem(),
+                      "a MGPipeDirty bit now owns kMGPipeSubsystemTextureResources: the texture "
+                      "and renderbuffer resource_* calls are dispatched at the GL call that "
+                      "causes them, so a dirty bit would gate them a second time");
+
+        // The two texture-unit capacities are one number on both sides of the boundary, and
+        // this is the one translation unit that sees the frontend constant and the MG_Pipe
+        // one - the same pinning kMGPipeMaxVertexAttribs gets, for the same reason.
+        static_assert(kMGPipeMaxTextureUnits ==
+                          static_cast<Uint32>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS),
+                      "the MGPipe texture-unit capacity and the frontend's have drifted");
+        static_assert(kMGPipeMaxImageUnits ==
+                          static_cast<Uint32>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS),
+                      "the MGPipe image-unit capacity and the frontend's have drifted");
+
+        // The subsystems this build emits for. A field whose emitter's subsystem is missing here
+        // keeps being pulled, so a Coverage.def row cannot drop a field before its call exists.
+        // kMGPipeSubsystemResources names no emitted field (its calls are dispatched at the GL
+        // call), and the one vertex-input field, GetBoundVertexArray, stays pulled
+        // (EmittedCallSuppliesTheWholeField). Each handle family contributes the constant from its
+        // own emit header; the sampler one covers SamplerEmit.h and ImageEmit.h. The residual
+        // subsystem is here for set_context_values, which has no dirty bit, so the residual-fill
+        // skip reads this mask for its eight fields.
+        constexpr Uint64 kMGPipeWiredSubsystems =
+            kMGPipeSubsystemRenderState | kMGPipeSubsystemPixelPack | kMGPipeSubsystemPatchState |
+            kMGPipeSubsystemVertexAttribDefaults | kMGPipeSubsystemResidualValues | kMGPipeSubsystemResources |
+            kMGPipeSubsystemVertexInput | kMGPipeWiredFramebufferSubsystem | kMGPipeWiredTextureSubsystem |
+            kMGPipeWiredSamplerSubsystem | kMGPipeWiredProgramSubsystem |
+            // P5e (sb): the indexed buffer binding
+            // points, by the same rule and from the same
+            // kind of header. ID-106 pins the other half
+            // of the switch: MG_Backend/Init.cpp's
+            // consumer mask gains bit 13 in the same
+            // commit, or R-8 withholds the whole family.
+            kMGPipeWiredBufferBindingSubsystem;
+
+        // P15: the dirty bits whose family this build, push mask and consumer emit - every
+        // condition of the per-bit gate in MGPipeValidateForVerb except the dirty bit itself.
+        Uint32 ComputeLiveDirtyBits(Uint64 pushMask) {
+            Uint32 live = 0;
+            for (Uint32 b = 0; b < kMGPipeDirtyCount; ++b) {
+                const Uint64 subsystem = MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(b));
+                if (subsystem != 0 && (pushMask & subsystem) != 0 && (kMGPipeWiredSubsystems & subsystem) != 0 &&
+                    P4aFamilyHasItsConsumer(subsystem) && P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
+                    P5eFamilyIsLive(subsystem, pushMask)) {
+                    live |= MGPipeDirtyBit(static_cast<MGPipeDirty>(b));
+                }
+            }
+            return live;
+        }
+
+        // Per verb, these conditions used to be re-asked for every bit (~15 consumer-registration
+        // and dependency-table walks per draw). In monolith their only inputs are the push mask and
+        // the registered consumer, so the answer is kept until either moves. Under a transport the
+        // caps mirror answers and can move with a new session, so it is recomputed every verb.
+        Uint32 LiveDirtyBits(Uint64 pushMask) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return ComputeLiveDirtyBits(pushMask);
+#endif
+            static Bool valid = false;
+            static Uint64 cachedPushMask = 0;
+            static const MGPipeResourceOps* cachedConsumer = nullptr;
+            static Uint32 cachedLive = 0;
+            const MGPipeResourceOps* consumer = MGPipeGetResourceOps();
+            if (!valid || cachedPushMask != pushMask || cachedConsumer != consumer) {
+                cachedLive = ComputeLiveDirtyBits(pushMask);
+                cachedPushMask = pushMask;
+                cachedConsumer = consumer;
+                valid = true;
+            }
+            return cachedLive;
+        }
+
+        // Each family constant is either 0 or its own subsystem bit and nothing else. Without
+        // this a header that set the wrong constant - the sampler bit in the program header,
+        // say - would switch the wrong family on and every gate would still pass.
+        static_assert(kMGPipeWiredFramebufferSubsystem == 0 ||
+                          kMGPipeWiredFramebufferSubsystem == kMGPipeSubsystemFramebuffer,
+                      "FramebufferEmit.h's wired constant must be 0 or the framebuffer bit");
+        static_assert(kMGPipeWiredTextureSubsystem == 0 ||
+                          kMGPipeWiredTextureSubsystem == kMGPipeSubsystemTextureResources,
+                      "TextureEmit.h's wired constant must be 0 or the texture-resource bit");
+        static_assert(kMGPipeWiredSamplerSubsystem == 0 || kMGPipeWiredSamplerSubsystem == kMGPipeSubsystemSamplers,
+                      "SamplerEmit.h's wired constant must be 0 or the sampler bit");
+        static_assert(kMGPipeWiredProgramSubsystem == 0 || kMGPipeWiredProgramSubsystem == kMGPipeSubsystemPrograms,
+                      "ProgramEmit.h's wired constant must be 0 or the program bit");
+        static_assert(kMGPipeWiredBufferBindingSubsystem == 0 ||
+                          kMGPipeWiredBufferBindingSubsystem == kMGPipeSubsystemBufferBindings,
+                      "ShaderBufferEmit.h's wired constant must be 0 or the binding-point bit");
+
+        // Does the record supply this exact getter's representation? P5f consumers now
+        // read handle/range records directly, while the old pointer getters are FATAL on
+        // the server. A handle is still not a SharedPtr/client table base, so these false
+        // arms remain: otherwise the ownership generator would misclassify the retired
+        // getters as RECORD_SUPPLIED. Monolith still fills its original pointer mirrors.
+        // PixelStoreParameters has two halves and only PACK is supplied.
+        constexpr Bool EmittedCallSuppliesTheWholeField(MGPipeInputField field) {
+            switch (field) {
+            case MGPipeInputField::GetPixelStoreParameters:
+            case MGPipeInputField::GetBoundVertexArray:
+            case MGPipeInputField::GetFramebufferBindingSlot:
+            case MGPipeInputField::GetImageTextureBinding:
+            case MGPipeInputField::GetTextureUnitObject:
+            case MGPipeInputField::GetProgramForDraw:
+            case MGPipeInputField::GetProgramForDispatch:
+            // Indexed binding points also have a different representation: ranges on
+            // the server, raw client table bases in the legacy getter.
+            case MGPipeInputField::GetBufferBindingPoint:
+                return false;
+            default:
+                return true;
+            }
+        }
+
+        // The fields the applier writes DIRECTLY, out of the chunk bytes it scattered. Every
+        // other emitted field reaches PipeInputs only through
+        // MGPipeDeriveRenderStateFields, which is why the probe below exists.
+        constexpr Bool AppliedWithoutDerivation(MGPipeInputField field) {
+            switch (field) {
+            case MGPipeInputField::GetRenderStateParameters:
+            case MGPipeInputField::GetRenderStateParametersVersion:
+            case MGPipeInputField::GetPipelineStateVersion:
+            case MGPipeInputField::GetPixelStoreParameters:
+            case MGPipeInputField::GetPatchVertices:
+            case MGPipeInputField::GetPatchDefaultOuterLevel:
+            case MGPipeInputField::GetPatchDefaultInnerLevel:
+            case MGPipeInputField::GetCurrentVertexAttribute:
+            // P5c rv's eight: MGPipeApplySetContextValues writes them out of the record,
+            // field for field, through MGPipeApplyAccess::SetContextValues.
+            case MGPipeInputField::GetActiveTextureUnit:
+            case MGPipeInputField::GetMaxTouchedTextureUnit:
+            case MGPipeInputField::GetTouchedBufferBindingPointCount:
+            case MGPipeInputField::IsTransformFeedbackActive:
+            case MGPipeInputField::IsTransformFeedbackPaused:
+            case MGPipeInputField::GetTransformFeedbackGeneration:
+            case MGPipeInputField::GetBoundTransformFeedbackLifetimeId:
+            case MGPipeInputField::GetTransformFeedbackCapturedVertices:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        // Probes once whether MGPipeDeriveRenderStateFields derives: it seeds a sentinel in a
+        // scratch block's RenderStateParameters, clears the derived mirror, derives and compares.
+        // Fields that reach PipeInputs only through the derivation are skipped by the residual fill
+        // only when this answers true; otherwise they are pulled, the safe direction. It samples
+        // one field (ClearStencil), so it shows the derivation exists, not that it is complete or
+        // correct; the verify lane and RenderStateSpansTest check that.
+        Bool ApplierDerivesRenderStateFields() {
+            static const Bool answer = [] {
+                // Leak-at-exit, for gPipeInputs' reason: a PipeInputs is never destroyed by
+                // an exit handler. This one only ever carries render state, but the rule is
+                // stated over the TYPE rather than over each instance's current contents -
+                // an instance that grows an O-class write later must not become the next
+                // exit-time chain starter.
+                static PipeInputs& probe = *new PipeInputs();
+                constexpr Uint32 kSentinel = 0x5a5a5a5au;
+                MGPipeFillAccess::RenderStateOf(probe).ClearStencil = kSentinel;
+                MGPipeFillAccess::ClearStencilOf(probe) = 0u;
+                MGPipeDeriveRenderStateFields(probe);
+                const Bool derives = MGPipeFillAccess::ClearStencilOf(probe) == kSentinel;
+                if (!derives) {
+                    MGLOG_W_ONCE("MGPipe: MGPipeDeriveRenderStateFields does not derive on this "
+                                 "build - the render-state mirrors stay on the pull path");
+                }
+                return derives;
+            }();
+            return answer;
+        }
+
+        // ---- the residual fill's supplied set, cached per environment ----
+        // Step 4 of the validate point asks, for every field at every verb, whether an emitted call
+        // supplied it. SuppliedFieldMask spells that once; its inputs besides the field move rarely
+        // and never within a verb, so the mask is rebuilt only when one moves. The key is all of
+        // them: the push mask, ApplierDerivesRenderStateFields(), contextValuesWireLive (passed in
+        // so the fill and the emission share one answer), P4aFamilyHasItsConsumer and, under a
+        // transport, the caps mirror generation. Like the other fill state it is file-scope with
+        // one writer under the verb barrier, and the mask is returned by value.
+
+        // The consumer signal is in the memo key because the expression reads it, but it cannot
+        // change the mask today: every field emitted by a handle family (framebuffer, texture,
+        // sampler, program) is one EmittedCallSuppliesTheWholeField answers false for, so it is
+        // pulled whatever the consumer says. If this fires, that stopped being true: give the
+        // consumer input a move-and-read-back step in FieldOwnershipTest's
+        // TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMovesAnAnswer, replacing step 4,
+        // which pins the current domination.
+        constexpr Bool NoP4aFamilyFieldIsWhollySupplied() {
+            for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+                const auto field = static_cast<MGPipeInputField>(i);
+                const Uint64 subsystem = SubsystemForEmitter(kMGPipeFieldEmittedBy[i]);
+                if ((subsystem & kMGPipeP4aFamilySubsystems) != 0 && EmittedCallSuppliesTheWholeField(field)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        static_assert(NoP4aFamilyFieldIsWhollySupplied(),
+                      "a P4a-family field became whole-supplied: the residual fill's supplied-set "
+                      "memo can now answer differently for the consumer signal, so that key input "
+                      "needs the unit case the paragraph above names");
+
+        // ---- the same check for all seven pointer-backed rows ----
+        // The assertion above sees only the handle-family rows; this one also covers
+        // GetBoundVertexArray and GetBufferBindingPoint. Each row stores a frontend heap reference
+        // no payload can carry, so the residual fill is the only writer of that mirror, and
+        // DirectGLES still dereferences some of them in-process. Without this check, marking one
+        // wholly supplied would build and then crash at the first read. A row leaves this list
+        // only once no backend reads that frontend object.
+        constexpr MGPipeInputField kMGPipePointerBackedResidualRows[] = {
+            MGPipeInputField::GetBoundVertexArray,       MGPipeInputField::GetBufferBindingPoint,
+            MGPipeInputField::GetFramebufferBindingSlot, MGPipeInputField::GetImageTextureBinding,
+            MGPipeInputField::GetTextureUnitObject,      MGPipeInputField::GetProgramForDraw,
+            MGPipeInputField::GetProgramForDispatch,
+        };
+        static_assert(sizeof(kMGPipePointerBackedResidualRows) / sizeof(MGPipeInputField) == 7,
+                      "ID-112 names SEVEN pointer-backed residual rows; this list is the whole of "
+                      "them and a row removed from it is a row with no trip wire");
+        constexpr Bool NoPointerBackedRowIsWhollySupplied() {
+            for (const MGPipeInputField field : kMGPipePointerBackedResidualRows) {
+                if (EmittedCallSuppliesTheWholeField(field)) return false;
+            }
+            return true;
+        }
+        static_assert(NoPointerBackedRowIsWhollySupplied(),
+                      "a pointer-backed residual row stopped being pulled (ID-112). This fill is "
+                      "Magma's ONLY source for GetBoundVertexArray, GetBufferBindingPoint and the "
+                      "five P4a-family mirrors, and Magma dereferences them on its first draw - so "
+                      "this is a build break standing in for a device SIGSEGV. Retire the row in "
+                      "the phase that stops the backend reading a frontend object (P7/P8)");
+
+        struct ResidualFillPlan {
+            Bool Valid = false;
+            Uint64 PushMask = 0;
+            Bool ApplierDerives = false;
+            Bool ContextValuesWireLive = false;
+            Bool P4aConsumer = false;
+            Uint64 CapsGeneration = 0;
+            // One bit per FIELD - not per verb class. The class mask is applied at the walk
+            // exactly as it always was, so "does this verb read this field" stays the walk's
+            // business and this stays a statement about EMISSION alone.
+            MGPipeFieldMask Supplied{};
+            // P14: the walk itself, per verb class, built with Supplied: the non-sticky fields the
+            // class reads (bit 7 set = copy it, clear = the emitted call supplies it), and the
+            // sticky ones. The walk then visits only the ~47 fields a draw reads instead of testing
+            // all 63 against three masks per verb.
+            static constexpr Uint8 kCopy = 0x80;
+            static_assert(kMGPipeInputFieldCount < kCopy, "field indices must leave the copy bit free");
+            static constexpr SizeT kClasses = static_cast<SizeT>(MGPipeVerbClass::kClassCount);
+            Array<Array<Uint8, kMGPipeInputFieldCount>, kClasses> Walk{};
+            Array<Uint8, kClasses> WalkCount{};
+            Array<Array<Uint8, kMGPipeInputFieldCount>, kClasses> Sticky{};
+            Array<Uint8, kClasses> StickyCount{};
+            // The walk's copy entries alone, in walk order (~11 of a draw's ~47): the copy loop
+            // visits only these, and the stamp loop runs apart over the whole walk.
+            Array<Array<Uint8, kMGPipeInputFieldCount>, kClasses> Copy{};
+            Array<Uint8, kClasses> CopyCount{};
+        };
+        ResidualFillPlan g_fillPlan;
+
+        MGPipeFieldMask SuppliedFieldMask(Uint64 pushMask, Bool applierDerives, Bool contextValuesWireLive) {
+            // THE CONSUMER SIGNAL IS READ ONLY WHERE THE WALK BELOW COULD REACH IT, and that
+            // guard is not a micro-optimization - it is what keeps R-8's DIAGNOSTIC COUNTERS
+            // where they were (P5d r3 package C review, minor 2). In the conjunction below
+            // P4aFamilyHasItsConsumer sits AFTER `(pushMask & subsystem) != 0`, and it answers a
+            // constant `true` for every subsystem outside the P4a families - so at a mask that
+            // carries no P4a bit NO field reaches the caps mirror at all. Asking it here anyway
+            // would have moved CapsMirror::ServerConsumes' refusal count and its one-shot
+            // MGLOG_W at exactly the hand-picked A/B lanes (and the bring-up window, CallMask 0)
+            // where the baseline never touched the mirror, which is the opposite direction from
+            // the one this change is supposed to move them in. The key stays COMPLETE because
+            // pushMask is itself in the key: a mask that gains a P4a bit re-keys on the mask.
+            const Bool p4aConsumer =
+                (pushMask & kMGPipeP4aFamilySubsystems) != 0 && P4aFamilyHasItsConsumer(kMGPipeP4aFamilySubsystems);
+            if (g_fillPlan.Valid && g_fillPlan.PushMask == pushMask && g_fillPlan.ApplierDerives == applierDerives &&
+                g_fillPlan.ContextValuesWireLive == contextValuesWireLive && g_fillPlan.P4aConsumer == p4aConsumer
+#if MOBILEGL_BUILD_DISAGGREGATED
+                && g_fillPlan.CapsGeneration == (MG_Config::Transport != MG_Config::TransportMode::Monolith
+                                                     ? MG_Remote::Client::CapsMirrorInstance().Generation()
+                                                     : 0)
+#endif
+            ) {
+                return g_fillPlan.Supplied;
+            }
+            MGPipeFieldMask built{};
+            for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+                const auto field = static_cast<MGPipeInputField>(i);
+                // A field a P2 call now supplies is not pulled again - that second pull is exactly
+                // the cost P2 exists to remove. THE STAMP IS UNCHANGED either way: a stamp says
+                // "this verb published this field", which is as true of an emitted field as of a
+                // copied one, and withholding it would abort every backend read of the very fields
+                // the migration just took over. The stamp is still written at the walk; only the
+                // QUESTION moved up here.
+                const MGPipeFieldEmitter emitter = kMGPipeFieldEmittedBy[i];
+                const Uint64 subsystem = SubsystemForEmitter(emitter);
+                // P4aFamilyHasItsConsumer and P4aFamilyDependenciesAreSet are in this conjunction
+                // for the reason they are in `wants()`: "supplied" means A CALL WENT OUT CARRYING
+                // THIS FIELD, and on a backend with no consumer - or at a mask that leaves one of
+                // the family's D-K2 dependency bits clear - no P4a call went out at all, so
+                // withholding the pull here would leave the field unfilled at the very verb that
+                // reads it.
+                //
+                // AND THE LAST CONJUNCT IS P5c rv's (CONTRACT-P5C.md 5.3): set_context_values has
+                // NO PRODUCER without a live wire (its emission is transport-gated at the validate
+                // point), so its eight fields keep being pulled under monolith - G1's byte-for-byte
+                // rule - and are skipped only when the record really crosses.
+                const Bool supplied =
+                    subsystem != 0 && (subsystem & kMGPipeWiredSubsystems) != 0 && (pushMask & subsystem) != 0 &&
+                    P4aFamilyHasItsConsumer(subsystem) && P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
+                    EmittedCallSuppliesTheWholeField(field) && (applierDerives || AppliedWithoutDerivation(field)) &&
+                    (emitter != MGPipeFieldEmitter::SetContextValues || contextValuesWireLive);
+                if (supplied) built.Words[i / 64] |= (Uint64{1} << (i % 64));
+            }
+            // PUBLISHED IN ONE ASSIGNMENT, after the walk - see the paragraph above the struct.
+            g_fillPlan.Valid = true;
+            g_fillPlan.PushMask = pushMask;
+            g_fillPlan.ApplierDerives = applierDerives;
+            g_fillPlan.ContextValuesWireLive = contextValuesWireLive;
+            g_fillPlan.P4aConsumer = p4aConsumer;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            g_fillPlan.CapsGeneration = MG_Config::Transport != MG_Config::TransportMode::Monolith
+                                            ? MG_Remote::Client::CapsMirrorInstance().Generation()
+                                            : 0;
+#endif
+            g_fillPlan.Supplied = built;
+            for (SizeT c = 0; c < ResidualFillPlan::kClasses; ++c) {
+                const MGPipeFieldMask& classMask = kMGPipeClassFieldMask[c];
+                Uint8 walk = 0;
+                Uint8 sticky = 0;
+                Uint8 copy = 0;
+                for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+                    const auto field = static_cast<MGPipeInputField>(i);
+                    if (!MGPipeFieldMaskHas(classMask, field)) continue;
+                    if (kMGPipeInputFieldSticky[i]) {
+                        g_fillPlan.Sticky[c][sticky++] = static_cast<Uint8>(i);
+                        continue;
+                    }
+                    const Bool copied = !MGPipeFieldMaskHas(built, field);
+                    g_fillPlan.Walk[c][walk++] = static_cast<Uint8>(i | (copied ? ResidualFillPlan::kCopy : 0));
+                    if (copied) g_fillPlan.Copy[c][copy++] = static_cast<Uint8>(i);
+                }
+                g_fillPlan.WalkCount[c] = walk;
+                g_fillPlan.CopyCount[c] = copy;
+                g_fillPlan.StickyCount[c] = sticky;
+            }
+            return built;
+        }
+
+        // set_pixel_pack_state. PACK only, deliberately: nothing on the far side of the
+        // boundary reads unpack state, and the staged-repack upload path does not even issue
+        // glPixelStorei (ARCHITECTURE.md 4.6 D5).
+        Uint64 EmitPixelPackState(GLContext& ctx) {
+            MGPPixelPackState pack{};
+            pack.Pack = ctx.GetPixelStoreParameters(false);
+            MGPipeRouteSetPixelPackState(pack);
+            return sizeof(MGPPixelPackState);
+        }
+
+        // set_patch_state. The trio ALSO travels in pipeline chunk P0, and that redundancy is
+        // a trip wire rather than waste: the applier asserts under verify that the two
+        // carriers agree. 28 bytes on a state that changes about once per program.
+        Uint64 EmitPatchState(GLContext& ctx) {
+            const RenderStateParameters& live = ctx.GetRenderStateParameters();
+            MGPPatchState patch{};
+            patch.Vertices = live.PatchVertices;
+            for (SizeT i = 0; i < 4; ++i)
+                patch.Outer[i] = live.PatchDefaultOuterLevel[i];
+            for (SizeT i = 0; i < 2; ++i)
+                patch.Inner[i] = live.PatchDefaultInnerLevel[i];
+            MGPipeRouteSetPatchState(patch);
+            return sizeof(MGPPatchState);
+        }
+
+        // set_vertex_attrib_defaults is suppressed by the set-hash suppressor over all 32 resolved
+        // attributes. GLContext converts each value numerically between its float, int and uint
+        // views, so MGPAttribValue carries all three views verbatim plus the class the frontend
+        // wrote, and the applier copies each view without reconverting. The per-attribute diff
+        // compares views only: identical views rebuild identically whatever their class. Outside
+        // run-ahead the emitter then compares the applier's mirror with the frontend value and on
+        // a mismatch copies the field itself and counts it here, because the residual fill skips
+        // this record-supplied field and nothing else would repair it.
+        Uint64 g_attribDefaultRepairs = 0;
+
+        // The header of the last set_vertex_attrib_defaults that actually went out. Count == 0
+        // means none ever did, because a call that names no attribute is not emitted at all.
+        // It is the observable for the two things about this call that cannot be read back
+        // without a poisoned read of m_currentVertexAttribute: that a fresh context republishes
+        // the COMPLETE set, and that a single moved attribute publishes exactly that one.
+        MGPVertexAttribDefaults g_attribDefaultLastHeader{};
+
+        Uint64 EmitVertexAttribDefaults(GLContext& ctx, Bool freshlyPrimed) {
+            MGPipeTracker& tracker = MGPipeTrackerInstance();
+            auto& staged = tracker.StagedAttribDefaults();
+            constexpr SizeT kAttribs = MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS;
+            static_assert(kAttribs <= 32, "MGPVertexAttribDefaults::Mask is a Uint32");
+
+            Array<MG_State::GLState::CurrentVertexAttributeValue, kAttribs> resolved;
+            for (SizeT i = 0; i < kAttribs; ++i)
+                resolved[i] = ctx.GetCurrentVertexAttribute(static_cast<Uint>(i));
+
+            const Uint64 contentHash = XXH64(resolved.data(), sizeof(resolved), 0);
+            if (!MGPipeSetHashSuppressorInstance().ShouldEmit(MGPipeSuppressorSlot::SetVertexAttribDefaults,
+                                                              contentHash)) {
+                return 0;
+            }
+
+            // A FRESH CONTEXT PUBLISHES ALL 32, not the difference against a mirror that
+            // describes a context that is gone. Tracker::Reset() sets the staging mirror to
+            // AttribDefaults{}, whose NSDMIs are the GL defaults {0,0,0,1} - and a fresh
+            // GLContext's m_currentVertexAttributes hold exactly those, so the diff below is
+            // EMPTY on the one walk that must publish everything. The server's mirror is not
+            // default: MGPipeApplierReset() clears the CSO store and the residual block and
+            // leaves gPipeInputs->m_currentVertexAttribute holding the PREVIOUS context's
+            // defaults. So the InvalidateAll() a fresh context does to the set-hash
+            // suppressor would have been canceled two lines later by this diff, and the one
+            // call P2 fully owns would publish nothing across a context change - exactly the
+            // "memo that serves a stale answer" the tracker's own COMPLETE-state rule
+            // (Tracker.h) exists to forbid. EmitRenderState has the same arm
+            // (freshlyPrimed ? kAllDynamicChunks) and the other two calls send whole values.
+            Array<MGPAttribValue, kAttribs> tail{};
+            MGPVertexAttribDefaults header{};
+            for (SizeT i = 0; i < kAttribs; ++i) {
+                if (!freshlyPrimed && std::memcmp(&resolved[i], &staged[i], sizeof(resolved[i])) == 0) {
+                    continue;
+                }
+                // The class the frontend WROTE, and that class's own bytes. Not a literal 0
+                // and not ClassifyVertexAttribType's answer: that one is the SHADER's question
+                // ("which view does this input consume"), asked at the backend read sites, and
+                // it says nothing about which view holds the value the other two were
+                // converted from.
+                MGPipeFillAttribValue(static_cast<Uint32>(i), resolved[i],
+                                      ctx.GetCurrentVertexAttributeClass(static_cast<Uint>(i)), tail[header.Count]);
+                header.Mask |= Uint32{1} << static_cast<Uint32>(i);
+                ++header.Count;
+                staged[i] = resolved[i];
+            }
+            if (header.Count == 0) return 0;
+            g_attribDefaultLastHeader = header;
+            MGPipeRouteSetVertexAttribDefaults(header, tail.data());
+
+            // Did the applier reproduce it? Byte for byte, over the attributes this call
+            // named - anything less would be a mirror that disagrees with the frontend in a
+            // window no gate looks at.
+            //
+            // P5e (ra, CONTRACT-P5E §3.4): NOT UNDER RUN-AHEAD. The mirror is the APPLIER's
+            // copy of this record, and set_vertex_attrib_defaults is a kWaitNone row - so
+            // under run-ahead this thread has not waited for the apply and the read races it,
+            // and the repair below (a CopyField straight into the block) is precisely the
+            // GL-thread write §3.5 refuses. The client's own authority is `resolved` and
+            // `g_attribDefaultLastHeader`, which is what it just published; there is nothing
+            // the mirror could add that the wire does not already carry. A build that ever
+            // needs the repair arm again has to earn it with a barriered row.
+            if (ClientRunsAhead()) return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
+            const auto* mirror = MGPipeFillAccess::VertexAttribDefaultsOf(MGPipeClientInputs());
+            Bool reproduced = true;
+            for (SizeT i = 0; i < kAttribs && reproduced; ++i) {
+                if ((header.Mask & (Uint32{1} << static_cast<Uint32>(i))) == 0) continue;
+                reproduced = std::memcmp(&mirror[i], &resolved[i], sizeof(resolved[i])) == 0;
+            }
+            if (!reproduced) {
+                ++g_attribDefaultRepairs;
+                MGLOG_W_ONCE("MGPipe: MGPipeApplySetVertexAttribDefaults did not reproduce the "
+                             "carried three views on this build - the client is keeping "
+                             "m_currentVertexAttribute authoritative");
+                MGPipeFillAccess::CopyField(MGPipeClientInputs(), ctx, MGPipeInputField::GetCurrentVertexAttribute);
+            }
+            return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
+        }
+
+        // set_context_values (P5c rv, CONTRACT-P5C.md §5.3): the residual-value record. One
+        // POD carrying every value-class field no other set_* supplies - the two texture-unit
+        // counters, the 15 per-target touched-buffer-binding counts and the five XFB values -
+        // emitted at validate WHEN ANY COVERED VALUE MOVED, which the whole-record hash says:
+        // there is deliberately no dirty bit for the family (the tracker's value-class dirty
+        // accounting is untouched - "no new accounting", ARCHITECTURE.md 5.2) and no dirty mask in the
+        // payload, so a suppressed record means "nothing moved", never "field invalid" (§1).
+        //
+        // THE PRODUCER IS TRANSPORT-GATED, and the residual-fill skip for the same eight fields
+        // is gated on the same answer (MGPipeValidateForVerb's contextValuesWireLive): under
+        // monolith - or with a transport configured but no live session (the bring-up window, a
+        // server-role-only fixture) - nothing is emitted and the fields keep being pulled, byte
+        // for byte as before (G1).
+        Uint64 EmitContextValues(GLContext& ctx) {
+            // P14: nothing the record reads has moved since the record whose hash the suppressor
+            // still holds was built (same context, same input generation): it would be dropped.
+            static MGPContextValues s_lastValues{};
+            static Uint64 s_lastHash = 0;
+            static Uint64 s_lastContextId = 0;
+            static Uint64 s_lastGeneration = 0;
+            auto& suppressor = MGPipeSetHashSuppressorInstance();
+            const Uint64 contextId = ctx.GetTextureContextId();
+            const Uint64 generation = ctx.GetContextValuesGeneration();
+            if (s_lastHash != 0 && contextId == s_lastContextId && generation == s_lastGeneration &&
+                suppressor.LastEmitted(MGPipeSuppressorSlot::SetContextValues) == s_lastHash)
+                return 0;
+            MGPContextValues values{};
+            values.ActiveTextureUnit = static_cast<Uint32>(ctx.GetActiveTextureUnit());
+            values.MaxTouchedTextureUnit = static_cast<Uint32>(ctx.GetMaxTouchedTextureUnit());
+            // The array is indexed by BufferTarget value, all 15 of them (MGPipeTypes.h);
+            // targets with no binding points answer 0 (BufferState::GetTouchedBindPointCount).
+            static_assert(std::extent_v<decltype(MGPContextValues::TouchedBufferBindingPointCount)> ==
+                              static_cast<SizeT>(BufferTarget::BufferTargetCount),
+                          "MGPContextValues' per-target array and BufferTargetCount have drifted");
+            for (Uint32 t = 0; t < static_cast<Uint32>(BufferTarget::BufferTargetCount); ++t) {
+                values.TouchedBufferBindingPointCount[t] =
+                    static_cast<Uint32>(ctx.GetTouchedBufferBindingPointCount(static_cast<BufferTarget>(t)));
+            }
+            values.IsTransformFeedbackActive = ctx.IsTransformFeedbackActive() ? 1 : 0;
+            values.IsTransformFeedbackPaused = ctx.IsTransformFeedbackPaused() ? 1 : 0;
+            values.TransformFeedbackGeneration = ctx.GetTransformFeedbackGeneration();
+            values.BoundTransformFeedbackLifetimeId = ctx.GetBoundTransformFeedbackLifetimeId();
+            values.TransformFeedbackCapturedVertices = ctx.GetTransformFeedbackCapturedVertices();
+            // P14: the record is rebuilt every draw and nearly always equal to the last one. When it
+            // is byte-equal to the record whose hash the suppressor still holds, the suppressor
+            // would drop it: skip the hash. (An InvalidateAll changes what the suppressor holds,
+            // so a reset still re-emits.)
+            s_lastContextId = contextId;
+            s_lastGeneration = generation;
+            if (s_lastHash != 0 && std::memcmp(&values, &s_lastValues, sizeof(values)) == 0 &&
+                suppressor.LastEmitted(MGPipeSuppressorSlot::SetContextValues) == s_lastHash)
+                return 0;
+            // The whole record is the hash input, padding included - `values{}` zeroes it, so
+            // the pad bytes are defined and the hash is stable.
+            const Uint64 contentHash = XXH64(&values, sizeof(values), 0);
+            s_lastValues = values;
+            s_lastHash = contentHash == 0 ? 1 : contentHash; // the suppressor's own latch value
+            if (!suppressor.ShouldEmit(MGPipeSuppressorSlot::SetContextValues, contentHash)) {
+                return 0;
+            }
+            MGPipeRouteSetContextValues(values);
+            return sizeof(MGPContextValues);
+        }
+
+        // The fields set_context_values supplies. A validate whose verb class reads NONE of
+        // them skips the record build entirely - the record exists so a verb's reads are
+        // answered, and a verb that never reads them needs no publication.
+        constexpr Bool VerbMaskReadsContextValues(const MGPipeFieldMask& mask) {
+            return MGPipeFieldMaskHas(mask, MGPipeInputField::GetActiveTextureUnit) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::GetMaxTouchedTextureUnit) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::GetTouchedBufferBindingPointCount) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::IsTransformFeedbackActive) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::IsTransformFeedbackPaused) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::GetTransformFeedbackGeneration) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::GetBoundTransformFeedbackLifetimeId) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::GetTransformFeedbackCapturedVertices);
+        }
+
+        // The residual block is the ONE emission whose gate names a subsystem constant
+        // directly instead of going through MGPipeSubsystemForDirty, and the reason is that
+        // it has no dirty bit: it carries what has no shutter of its own, which is what makes
+        // it the residue. That exception is safe only while no dirty bit claims the same
+        // subsystem - if one ever did, the block would be gated twice and that bit's own
+        // emission would silently inherit the residual A/B switch. Asserted rather than
+        // assumed, the same discipline SubsystemForEmitter's five static_asserts use.
+        constexpr Bool NoDirtyBitOwnsTheResidualSubsystem() {
+            for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
+                if (MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(i)) == kMGPipeSubsystemResidualValues) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        static_assert(NoDirtyBitOwnsTheResidualSubsystem(),
+                      "a MGPipeDirty bit now owns kMGPipeSubsystemResidualValues: route the "
+                      "residual block's gate through MGPipeSubsystemForDirty like every other "
+                      "emission, or the two gates will disagree");
+
+        constexpr Uint32 kAllDynamicChunks = static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1);
+
+        // create/bind_render_state and set_dynamic_state. Returns the bytes that went on the
+        // wire, for the payload histogram.
+        Uint64 EmitRenderState(GLContext& ctx, Uint32 dirty, Bool freshlyPrimed) {
+            MGPipeTracker& tracker = MGPipeTrackerInstance();
+            const RenderStateParameters& live = ctx.GetRenderStateParameters();
+            const auto version = static_cast<Uint16>(ctx.GetRenderStateParametersVersion());
+            const auto pipelineVersion = static_cast<Uint16>(ctx.GetPipelineStateVersion());
+            Uint64 payloadBytes = 0;
+
+            if (dirty & MGPipeDirtyBit(MGPipeDirty::NewPipelineState)) {
+                const MGPipeHandle cso = MGPipeCsoCacheInstance().Acquire(live, payloadBytes);
+                MGPBindRenderState bind{};
+                bind.Cso = cso;
+                bind.Version = version;
+                bind.PipelineVersion = pipelineVersion;
+                MGPipeRouteBindRenderState(bind);
+                payloadBytes += sizeof(MGPBindRenderState);
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::RenderStateCsoBinds, 1);
+                }
+            }
+
+            if (dirty & MGPipeDirtyBit(MGPipeDirty::NewRenderState)) {
+                // The chunk-level suppressor: only the dynamic chunks that differ from what
+                // the server has. A glViewport sends chunk D0 and nothing else; a
+                // glClearColor sends D2. An EMPTY mask still sends the 32-byte header,
+                // because the VERSION is what Magma's dynamic tail gates on and it moved.
+                const Uint32 chunkMask =
+                    freshlyPrimed ? kAllDynamicChunks : MGPipeDynamicChunksThatMoved(live, tracker.Staged());
+                Array<Uint8, kMGPipeDynamicChunkBytes> blob;
+                const SizeT blobBytes = MGPipeDynamicChunkBlobBytes(chunkMask);
+                MGPipeGatherDynamicChunks(live, chunkMask, blob.data());
+                MGPDynamicState dyn{};
+                dyn.ChunkMask = chunkMask;
+                dyn.Version = version;
+                dyn.Blob.Size = blobBytes;
+                MGPipeRouteSetDynamicState(dyn, blob.data());
+                payloadBytes += sizeof(MGPDynamicState) + blobBytes;
+            }
+
+            // tracker.Staged() is what set_dynamic_state diffs against, so only the branch that
+            // sent dynamic chunks may advance it; advancing it on NEW_PIPELINE_STATE alone would
+            // claim the server holds chunks it never received, and those would never be resent.
+            // RenderState's BumpVersions() moves both counters, so that cannot happen today. The
+            // assert (debug and verify builds only) checks it; the narrowed condition below keeps
+            // release builds safe if it breaks, at the cost of a resend.
+            MOBILEGL_ASSERT((dirty & MGPipeDirtyBit(MGPipeDirty::NewPipelineState)) == 0 ||
+                                (dirty & MGPipeDirtyBit(MGPipeDirty::NewRenderState)) != 0,
+                            "NEW_PIPELINE_STATE fired without NEW_RENDER_STATE: RenderState's "
+                            "BumpVersions no longer moves both counters");
+            if (dirty & MGPipeDirtyBit(MGPipeDirty::NewRenderState)) {
+                tracker.Staged() = live;
+            }
+            return payloadBytes;
+        }
+
+        // ---- P3a's three vertex-input emitters (D-G3, D-H3, D-I) ----
+        //
+        // The shape - three functions in the fixed order elements, then buffers, then index,
+        // after the four P2 emitters - is the contract commit's, so that the commit which
+        // fills the bodies in does not also have to edit the validate point. All three now
+        // have bodies and MGPipeSubsystemForDirty maps their bits onto the vertex-input
+        // subsystem, so `wants()` can be true.
+        //
+        // Everything they do lives in MG_Impl/Pipe/VertexInputEmit.h; what is here is the
+        // adaptation to the validate point's byte-counting contract.
+        Uint64 EmitVertexElements(GLContext& ctx) {
+            return MGPipeVertexInputEmitterInstance().EmitVertexElements(ctx);
+        }
+
+        Uint64 EmitVertexBuffers(GLContext& ctx) {
+            MGPipeTracker& tracker = MGPipeTrackerInstance();
+            return MGPipeVertexInputEmitterInstance().EmitVertexBuffers(ctx, tracker.PendingBaseInstance());
+        }
+
+        Uint64 EmitIndexBuffer(GLContext& ctx) {
+            return MGPipeVertexInputEmitterInstance().EmitIndexBuffer(ctx);
+        }
+
+        // ---- P4a's seven emitters (D-C, D-D, D-F, D-G, D-H) ----
+        //
+        // THE SHAPE IS THE CONTRACT COMMIT'S, exactly as P3a's three were: seven adapters
+        // whose bodies live in the five family headers, so the commits that fill those
+        // emitters in never touch this file. Every one of them returns 0 today.
+        //
+        // THE ORDER IS ARCHITECTURE.md 5.4's RECOMMENDED ONE - framebuffer, then program, then
+        // textures/sampler/image/global constants - and that document is explicit that the
+        // order is code organization and NOT a contract: all of a verb's set_*/bind_* must
+        // complete before the verb, and apart from "a resource create precedes a bind to it"
+        // there is no ordering requirement between them. The server specializes the shader and
+        // the pipeline lazily at the verb, from everything it holds at that moment, which is
+        // what makes deriving the fragColor broadcast count from the framebuffer record legal
+        // at the verb rather than at the FBO sync.
+        Uint64 EmitFramebufferState(GLContext& ctx) {
+            return MGPipeFramebufferEmitterInstance().EmitFramebufferState(ctx);
+        }
+
+        Uint64 EmitShaderState(GLContext& ctx) {
+            return MGPipeProgramEmitterInstance().EmitShaderState(ctx);
+        }
+
+        Uint64 EmitGlobalConstants(GLContext& ctx) {
+            return MGPipeProgramEmitterInstance().EmitGlobalConstants(ctx);
+        }
+
+        Uint64 EmitSamplerViews(GLContext& ctx) {
+            return MGPipeSamplerEmitterInstance().EmitSamplerViews(ctx);
+        }
+
+        Uint64 EmitSamplerStates(GLContext& ctx) {
+            return MGPipeSamplerEmitterInstance().EmitSamplerStates(ctx);
+        }
+
+        Uint64 EmitShaderImages(GLContext& ctx) {
+            return MGPipeImageEmitterInstance().EmitShaderImages(ctx);
+        }
+
+        // The texture sub-data DRAIN, and it is the one P4a emitter with no dirty bit over it.
+        // Its calls are dispatched from the GL entry points that cause them (a constructor, a
+        // storage definition, a glTexParameter) and the only thing that has to wait for the
+        // validate point is the accumulated upload, so the gate is the subsystem bit alone.
+        // With nothing dirty the drain list is empty and this is one test.
+        Uint64 DrainTextureSubData(GLContext& ctx) {
+            return MGPipeTextureEmitterInstance().DrainTextureSubData(ctx);
+        }
+
+        // ---- P5e's two, and they are TWO adapters over THREE records (sb, §5.6) ----
+        //
+        // The split is the DIRTY BITS' and not the classes': bit 15 is the uniform binding
+        // points and bit 16 is the two writable classes, which share a shutter because a
+        // storage bind and a counter bind are the same event to every reader of the record.
+        // Bit 17's family (set_stream_output_targets) has no adapter at all - XFB stays
+        // lockstep for the whole of P5e (§5.7) - and that absence is the catalog's split,
+        // not an omission.
+        Uint64 EmitConstBuffers(GLContext& ctx) {
+            return MGPipeShaderBufferEmitterInstance().EmitConstBuffers(ctx);
+        }
+
+        Uint64 EmitShaderBuffers(GLContext& ctx) {
+            return MGPipeShaderBufferEmitterInstance().EmitShaderBuffers(ctx);
+        }
+    } // namespace
+
+    Uint64 MGPipeVertexAttribDefaultRepairCount() {
+        return g_attribDefaultRepairs;
+    }
+    MGPVertexAttribDefaults MGPipeVertexAttribDefaultsLastHeader() {
+        return g_attribDefaultLastHeader;
+    }
+
+    // The unit gate's door onto step 4's predicate (PipeFill.h says why it needs one). It
+    // returns the memo's answer rather than a second copy of the expression, so a case that
+    // moves one input and reads the answer back is a statement about the MEMO and not about a
+    // re-implementation of it.
+    Bool MGPipeResidualFillSuppliesField(MGPipeInputField field, Uint64 pushMask, Bool applierDerives,
+                                         Bool contextValuesWireLive) {
+        return MGPipeFieldMaskHas(SuppliedFieldMask(pushMask, applierDerives, contextValuesWireLive), field);
+    }
+
+    void MGPipeValidateForVerbBarriered(MGPipeVerb verb) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        g_forceBarrieredFill = true;
+        MGPipeValidateForVerb(verb);
+        g_forceBarrieredFill = false;
+#else
+        // Without a transport every fill is barriered already (fillOwed is constant true).
+        MGPipeValidateForVerb(verb);
+#endif
+    }
+
+    // ---- the validate point (P2 brief D1) ----
+    void MGPipeValidateForVerb(MGPipeVerb verb) {
+        // P5f (f1): the fill side's one new spelling. With MOBILEGL_IPC_ROLE_SPLIT_STATE=1 this
+        // is the CLIENT-role block and gPipeInputs is the server's alone; off, or under
+        // monolith transport, it folds back onto gPipeInputs and nothing below changes.
+        PipeInputs& inputs = MGPipeClientInputs();
+        // ---- P5e (ra), CONTRACT-P5E §3: WHO OWNS gPipeInputs FOR THIS VERB ----------------
+        //
+        // Under run-ahead the block is SERVER-ROLE MEMORY for an unbarriered record: the
+        // client does not fill it, does not stamp it and does not withdraw the server's stamp,
+        // because it will not be parked while the apply runs and every one of those writes
+        // would race the applier's own reads. What still runs, unchanged, is the tracker walk
+        // and the emitters (steps 2 and 3): those PRODUCE RECORDS, which is the whole of what
+        // an unbarriered verb is allowed to hand the server.
+        //
+        // `fillOwed` is deliberately a separate name from `barriered`, and that is what makes
+        // the red-once one line: setting it to `true` restores the old behavior (a fill for
+        // every verb) and the guard below then fires Fatal{RoleViolation, "gPipeInputs"} on
+        // the first unbarriered verb, by name.
+        const Bool runAhead = ClientRunsAhead();
+#if MOBILEGL_PIPE_VERIFY
+        ArmVerify();
+#else
+        // The runtime knob without the compiled comparator is a no-op that would look green;
+        // this warning is what a lane's arming assertion turns into red.
+        if (MG_Config::Features.PipeVerify) {
+            MGLOG_W_ONCE("MGPipe: MOBILEGL_PIPE_VERIFY=1 requested but the comparator is not compiled in "
+                         "(configure with -DMOBILEGL_PIPE_VERIFY=ON)");
+        }
+#endif
+        auto* ctx = LiveContext();
+        // THE IDENTITY / LIVENESS PAIR IS WRITTEN ON EVERY VERB, run-ahead or not, and that is
+        // a NAMED DEVIATION from CONTRACT-P5E §3.1's list (see the report): `m_live` and
+        // `m_contextIdentity` are not FIELDS of the residual model - no FieldOwnership.def row
+        // owns them, no applier record carries them, and no server stamp can answer them -
+        // they are "does this process still have a GL context", which every null-context guard
+        // in the backend reads and which only this thread can know. Two stores, no freshness
+        // and no stamp, so an unbarriered apply reading them reads a fact about the client's
+        // process rather than a value the wire owes it.
+        MGPipeFillAccess::SetIdentity(inputs, ctx);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // §2.1's predicate, client-side (see ClientVerbIsBarriered).
+        const Bool barriered = !runAhead || ClientVerbIsBarriered(verb, ctx);
+        // THE ONE LINE THE RED-ONCE FLIPS: `= true` here is "fill for every verb", the
+        // pre-P5e behavior, and it turns the guard below into the abort §3.5 names.
+        const Bool fillOwed = barriered;
+        g_lastFillWasBarriered = fillOwed;
+        if (fillOwed) {
+            // The residual fill writes the pipe-input block from the GL thread. Under lockstep that
+            // is legal because the record is not yet published; under run-ahead only because this
+            // verb is barriered, and that must hold now: QuiesceApplierBeforeFill waits for the
+            // applier, since the serial bump, MGPipeClientClearVerbBoundary() and SetVerb below
+            // change scalars the apply thread reads inside the record it is applying. The guard
+            // then checks the fact and aborts with Fatal{RoleViolation, "gPipeInputs"} if the wait
+            // is missing. See ARCHITECTURE.md §9.2.2.
+            if (runAhead)
+                MG_Remote::Client::ClientSession::NoteBarrieredVerbForStats(kMGPipeVerbNames[static_cast<SizeT>(verb)]);
+            QuiesceApplierBeforeFill("MGPipeValidateForVerb");
+            MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("MGPipeValidateForVerb",
+                                                                                      /*isBarrieredFill=*/barriered);
+        }
+#else
+        constexpr Bool fillOwed = true;
+#endif
+        if (fillOwed) {
+#if MOBILEGL_PIPE_POISON
+            // Starts at 1: FilledGen == 0 is "never filled", and MGPipeInputFieldIsFresh
+            // refuses it on both branches, so a read before this first bump is
+            // Fatal{UnmigratedPipeInput, "<Field>@<none>"} rather than default storage.
+            ++MGPipeFillAccess::Filled(inputs).CurrentVerbSerial;
+#endif
+            // The client is filling, so the server's stamps from its last verb boundary are
+            // withdrawn and the stamps below are the client's. Clearing here rather than when the
+            // applier finishes keeps the flag meaning "the current stamps are the server's"
+            // whichever role ran last. Under run-ahead this runs only inside a barriered fill that
+            // has waited for the applier. With distinct client and server blocks the client block's
+            // flag is never raised, so this is a no-op and PipeApplier::LeaveApplier alone clears
+            // the server's.
+            MGPipeClientClearVerbBoundary();
+            MGPipeFillAccess::SetVerb(inputs, verb);
+        }
+#if MOBILEGL_PIPE_POISON
+        MGPipeFilledState& filled = MGPipeFillAccess::Filled(inputs);
+#endif
+        if (ctx == nullptr) {
+            // The pending base instance belongs to THIS verb, and this exit skips step 3's
+            // clear, so it has to make the same promise here: a base-instanced draw with no
+            // live context is a no-op, but leaving its argument standing would hand it to the
+            // next verb - which, since the tracker's Reset() no longer clears it, is the one
+            // path that could still carry a stale shift across.
+            MGPipeTrackerInstance().ClearPendingBaseInstance();
+            return;
+        }
+        const MGPipeVerbClass verbClass = kMGPipeVerbClass[static_cast<SizeT>(verb)];
+        const MGPipeFieldMask& mask = kMGPipeClassFieldMask[static_cast<SizeT>(verbClass)];
+
+        // ---- step 2: the dirty walk (P2 brief D1, D4) ----
+        // The mask is computed, latched and counted here and nothing is emitted from it
+        // yet: this commit is the safety net that says the walk is semantically free
+        // before any field stops being pulled. The emission steps land on top of it.
+        MGPipeTracker& tracker = MGPipeTrackerInstance();
+        const Uint32 dirty = tracker.Update(*ctx, verbClass);
+
+        // ---- step 3: emission ----
+        // Each dirty-bit gate maps its bit to a subsystem through MGPipeSubsystemForDirty, the one
+        // map; naming subsystem constants here would be a second copy no test of the map covers.
+        // LiveDirtyBits keeps a bit only when its family is live: its bit in the push mask and in
+        // kMGPipeWiredSubsystems, and the family's consumer and dependency checks (see
+        // ComputeLiveDirtyBits). A family with no consumer or an unmet dependency emits nothing,
+        // because acceptance would clear dirty flags the legacy arm still needs
+        // (ARCHITECTURE.md §9.6).
+        const Uint64 pushMask = MG_Config::Features.PipePush;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c rv (CONTRACT-P5C.md §5.3): set_context_values is the carrier for the eight
+        // value-class fields ONLY with a live wire. ONE answer gates both halves - the emission
+        // below and the residual-fill skip in step 4 - so they can never disagree about who
+        // supplies a field: with no live session (a monolith transport, the bring-up window, a
+        // server-role-only fixture) nothing is emitted and the fields keep being pulled, byte
+        // for byte as before (G1).
+        //
+        // P13 W4d: AND ON MONOLITH'S RECORD ARM, where the route is the in-process applier
+        // (Mono_SetContextValues) and the backend reads what the record put in gPipeInputs - the
+        // same supplier as a wire, one call away.
+        const Bool contextValuesWireLive = MG_Config::Transport != MG_Config::TransportMode::Monolith
+                                               ? MG_Remote::Client::ContextValuesWireLive()
+                                               : MG_Config::RecordArmAliasesFrontend();
+#else
+        // P13 W8: a library without a transport is ALWAYS monolith's record arm, so it takes the
+        // eight fields from the record exactly as the split build's monolith does. This branch
+        // used to answer a constant false - the pre-W5 pull shape - and left the shipped (FCL)
+        // build pulling them by residual fill while the split build's monolith carried them; the
+        // recorder goldens (MG_Test/Pipe/RecorderGoldenTest.cpp) found the two streams differ.
+        const Bool contextValuesWireLive = MG_Config::RecordArmAliasesFrontend();
+#endif
+        // AND THE SEVENTH IS P5eFamilyIsLive (ID-106), which is the same sentence for the
+        // binding-point family and asks bit 13's OWN consumer bit rather than the resource
+        // family's. It answers true for every subsystem but bit 13, so nothing that emitted
+        // before P5e changes.
+        const Uint32 liveDirty = LiveDirtyBits(pushMask) & dirty;
+        const auto wants = [&](MGPipeDirty bit) { return (liveDirty & MGPipeDirtyBit(bit)) != 0; };
+        Uint64 payloadBytes = 0;
+
+        // A fresh context is a fresh server, and that is true of EVERY subsystem, so it is
+        // handled BEFORE the per-subsystem gates rather than inside one of them. It used to
+        // live inside EmitRenderState, which runs only when bit 0 of MOBILEGL_PIPE_PUSH is
+        // set - so the per-subsystem A/B D14 invites (clear bit 0, keep bits 1..3) gave a
+        // fresh context a never-reset applier while every other slot WAS invalidated.
+        //   - the CSO cache's handles name slots this client's allocator is about to hand
+        //     out again, so both sides start over together rather than one of them
+        //     remembering the other's objects;
+        //   - what the server has is no longer what any suppressor slot last emitted;
+        //   - and the residual block owes a fresh publication whatever else moved.
+        if (tracker.FreshlyPrimed()) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // With an active transport the server's applier reset crosses as a record, ahead of
+            // the client-side resets below, so ring order sequences it before every later verb;
+            // calling MGPipeApplierReset() directly from the GL thread aborts with
+            // Fatal{RoleViolation, "g_applier"}. Monolith, the apply thread (where EmitAndWait
+            // would wait on itself) and a transport with no live session (EmitApplierResetRecord
+            // returns false) make the direct call instead.
+            const Bool transportActive =
+                MG_Config::Transport != MG_Config::TransportMode::Monolith && !MG_Remote::Client::RunsAsTheServerRole();
+            Bool resetCrossed = false;
+            if (transportActive) {
+                resetCrossed = MG_Remote::Client::EmitApplierResetRecord();
+            }
+#endif
+            MGPipeCsoCacheInstance().Reset();
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (!resetCrossed)
+#endif
+                MGPipeApplierReset();
+            MGPipeSetHashSuppressorInstance().InvalidateAll();
+            // P3a: and the vertex-input emitter's latches. NOT because the applier dropped
+            // its vertex-elements records - it does not, they are share-group object state
+            // and survive a make-current - but because the emitter's OTHER latch, the bound
+            // handle, mirrors the applier's BoundVertexElements, which MGPipeApplierReset
+            // DOES clear. Without this the bind after a make-current would be suppressed as
+            // unchanged and the server would draw with no vertex elements bound. Re-creating
+            // an unchanged configuration alongside it is a bounded over-fire; a dropped bind
+            // is not. The resource tracker is deliberately NOT reset here for the same
+            // reason its records survive: see ResourceTracker.h's ResetForTest.
+            MGPipeVertexInputEmitterInstance().Reset();
+            // P4a's five, and ONLY their latches: MGPipeApplierReset clears the framebuffer
+            // records, the three unit sets and the three program handles, so the emitters'
+            // mirrors of those must go with them or the first emission after a make-current
+            // would be suppressed as unchanged and the server would draw with the previous
+            // context's bindings. What must NOT reset is the RECORD half - the applier keeps
+            // its texture, sampler, view and shader-CSO records across a make-current, because
+            // a GL object lives in a share group, and re-publishing one would move its Serial
+            // for nothing.
+            MGPipeFramebufferEmitterInstance().Reset();
+            MGPipeTextureEmitterInstance().Reset();
+            MGPipeSamplerEmitterInstance().Reset();
+            MGPipeImageEmitterInstance().Reset();
+            MGPipeProgramEmitterInstance().Reset();
+            // P5e (sb): and the binding-point emitter's mirrors. MGPipeApplierReset clears all
+            // three of the applier's windows and ADVANCES ShaderBuffersSerial, so the emitter's
+            // latch has to reset with it - the three suppressor slots are already cleared by
+            // InvalidateAll() above, and without that the first emission after a make-current
+            // would be suppressed as unchanged and the server would draw against a window it
+            // had just been told to empty.
+            MGPipeShaderBufferEmitterInstance().Reset();
+        }
+
+        // P4a's segment, in ARCHITECTURE.md 5.4's RECOMMENDED order - framebuffer, then
+        // program, then textures / sampler / image / global constants - which is why it stands
+        // before the render-state block rather than after it. That order is explicitly code
+        // organization and not a contract (all of a verb's set_*/bind_* complete before the
+        // verb, and the server specializes lazily AT the verb from everything it then holds),
+        // so nothing about the P2 and P3a emissions changes by standing after it; what it buys
+        // is that the file reads in the order the design states.
+        //
+        // ALL SEVEN ARE STUBS AT THE CONTRACT COMMIT and all four family bits are absent from
+        // kMGPipeWiredSubsystems, so `wants()` is false for every one of them - it tests that
+        // mask as its third condition, which is what makes the sentence true rather than
+        // merely intended - and this whole block is dead until the packages that own the
+        // emitters land. Placing it here, once, is what keeps those packages out of this file.
+        if (wants(MGPipeDirty::NewFramebuffer)) {
+            payloadBytes += EmitFramebufferState(*ctx);
+        }
+        if (wants(MGPipeDirty::NewShader) || wants(MGPipeDirty::NewShaderBindings)) {
+            payloadBytes += EmitShaderState(*ctx);
+        }
+        // The texture drain has no dirty bit over it (see its definition); it is gated on the
+        // subsystem bit, on this build having wired the family at all, on a backend having
+        // registered the consumer and on D-K2's dependency bits for the family being set, which
+        // is the same quadruple `wants()` applies to every other emission. The last two are the
+        // whole of ID-39 and of S-3 on the path where they mattered most: the drain is what
+        // clears a level's dirty flags on acceptance, so a drain that ran against an applier no
+        // backend reads is exactly how Magma lost its texel uploads, and a drain that ran at a
+        // mask whose bit 11 or bit 7 is clear is how Espryt lost them at 0x7ff and 0x5ff.
+        if ((pushMask & kMGPipeSubsystemTextureResources) != 0 &&
+            (kMGPipeWiredSubsystems & kMGPipeSubsystemTextureResources) != 0 &&
+            P4aFamilyHasItsConsumer(kMGPipeSubsystemTextureResources) &&
+            P4aFamilyDependenciesAreSet(kMGPipeSubsystemTextureResources, pushMask)) {
+            payloadBytes += DrainTextureSubData(*ctx);
+        }
+        if (wants(MGPipeDirty::NewSamplerViews)) {
+            payloadBytes += EmitSamplerViews(*ctx);
+        }
+        if (wants(MGPipeDirty::NewSamplers)) {
+            payloadBytes += EmitSamplerStates(*ctx);
+        }
+        if (wants(MGPipeDirty::NewShaderImages)) {
+            payloadBytes += EmitShaderImages(*ctx);
+        }
+        if (wants(MGPipeDirty::NewGlobalConstants)) {
+            payloadBytes += EmitGlobalConstants(*ctx);
+        }
+
+        // P5e's segment (sb, §5.6): the indexed buffer binding points, AFTER the program
+        // segment for the same "code organization, not a contract" reason ARCHITECTURE.md 5.4
+        // gives for P4a's order - all of a verb's set_*/bind_* complete before the verb, and
+        // the server resolves a point against its own descriptor at its sync point. It reads
+        // better here because the uniform window is what the program's block bindings INDEX
+        // (DirectGLES.cpp's UBO loop), so the two records that describe a draw's uniform
+        // buffers stand together.
+        //
+        // NOTHING FOR BIT 17: set_stream_output_targets stays unemitted for the whole of P5e
+        // (§5.7). The bit is still computed, counted and mapped onto this subsystem, so an
+        // operator clearing bit 13 gets the whole family's frontend walk back.
+        if (wants(MGPipeDirty::NewConstBuffers)) {
+            payloadBytes += EmitConstBuffers(*ctx);
+        }
+        if (wants(MGPipeDirty::NewShaderBuffers)) {
+            payloadBytes += EmitShaderBuffers(*ctx);
+        }
+
+        if (wants(MGPipeDirty::NewPipelineState) || wants(MGPipeDirty::NewRenderState)) {
+            payloadBytes += EmitRenderState(*ctx, dirty, tracker.FreshlyPrimed());
+        }
+        if (wants(MGPipeDirty::NewPixelPack)) {
+            payloadBytes += EmitPixelPackState(*ctx);
+        }
+        if (wants(MGPipeDirty::NewPatchState)) {
+            payloadBytes += EmitPatchState(*ctx);
+        }
+        if (wants(MGPipeDirty::NewVertexAttribDefaults)) {
+            payloadBytes += EmitVertexAttribDefaults(*ctx, tracker.FreshlyPrimed());
+        }
+
+        // P5c rv (CONTRACT-P5C.md §5.3): the residual-value record, emitted when any covered
+        // value moved. THE GATE IS THE SUBSYSTEM BIT PLUS THE WIRE BEING LIVE - the family has
+        // no dirty bit (NoDirtyBitOwnsTheResidualSubsystem) and no P4a consumer predicate (it
+        // is not one of the four families), and the "did anything move" question is the
+        // whole-record hash inside EmitContextValues. The class-mask test skips the build for
+        // verbs that read none of the eight fields.
+        if (contextValuesWireLive && (pushMask & kMGPipeSubsystemResidualValues) != 0 &&
+            VerbMaskReadsContextValues(mask)) {
+            payloadBytes += EmitContextValues(*ctx);
+        }
+
+        // P3a's vertex segment, in the order the design fixes: vertex elements, then the
+        // vertex buffers that fill them, then the index binding. All three are LIVE now (m1):
+        // bits 5 / 9 / 10 map onto kMGPipeSubsystemVertexInput in Tracker.h's MGPipeSubsystemForDirty and
+        // all three emitters have bodies, so `wants()` answers true whenever bit 8 is in the push
+        // mask - which the phase default 0x1ff sets, on every backend. The sentence that used
+        // to stand here ("all three still resolve to false today - their dirty bits map to no
+        // subsystem") was the contract commit's and stopped being true when the client landed.
+        if (wants(MGPipeDirty::NewVertexElements)) {
+            payloadBytes += EmitVertexElements(*ctx);
+        }
+        if (wants(MGPipeDirty::NewVertexBuffers)) {
+            payloadBytes += EmitVertexBuffers(*ctx);
+        }
+        if (wants(MGPipeDirty::NewIndexBuffer)) {
+            payloadBytes += EmitIndexBuffer(*ctx);
+        }
+        // CONSUMED, so the next verb starts from zero. The tracker's bit-9 shutter read it
+        // above and EmitVertexBuffers put it on the wire; leaving it set would give the next
+        // draw the previous draw's fetch shift, which is the exact defect the explicit field
+        // exists to remove.
+        tracker.ClearPendingBaseInstance();
+
+        // ---- step 4: the residual fill, for what an emitted call did NOT supply ----
+        // THE SUPPLIED QUESTION IS ASKED ONCE PER ENVIRONMENT, NOT ONCE PER FIELD PER VERB
+        // (SuppliedFieldMask above, P5d r3 package C): the conjunction it used to spell inline
+        // here reads nothing about the verb, so it is a memo keyed on the four process facts it
+        // does read. The two halves of P5c rv's gate still read the ONE `contextValuesWireLive`
+        // computed at the top of this function - it is the memo's key AND its argument - so they
+        // cannot disagree about who supplies the eight value-class fields.
+        //
+        // P5e (ra, §3.1): AND IT DOES NOT RUN AT ALL FOR AN UNBARRIERED RECORD. Every write
+        // below - the CopyField and the FilledGen stamp alike - is a GL-thread write into a
+        // block the apply thread is about to read without this thread being parked, which is
+        // exactly what rule F forbids. The server does not go without an answer: it stamps its
+        // own boundary and §3.3's detector turns any field it still needs from here into
+        // Fatal{UnmigratedPipeInput, "<field>@<verb>"} by name, which is what makes the strict
+        // lane a gate rather than a count.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5e (ra2): PHASE 2 OF THE BLOCK WRITE, AND IT NEEDS ITS OWN WAIT. Everything between
+        // the phase-1 wait and here PUBLISHED RECORDS - the fourteen emitters above - and the
+        // apply thread reads gPipeInputs while it applies them. So the window the fill opened at
+        // the top of this function was closed again by this function's own emissions, and the
+        // 63-field walk below would run straight into it. Same call, same arm, same no-op
+        // everywhere run-ahead is not armed; the guard beside it is what turns a missing one
+        // into a named abort rather than a torn read.
+        if (fillOwed) {
+            QuiesceApplierBeforeFill("MGPipeValidateForVerb/residual");
+            MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("MGPipeValidateForVerb/residual",
+                                                                                      /*isBarrieredFill=*/true);
+        }
+#endif
+        const Bool applierDerives = ApplierDerivesRenderStateFields();
+        // BY VALUE, NOT BY REFERENCE: the memo's storage is rebuilt in place when the key moves,
+        // and the walk below holds this across 63 iterations.
+        (void)SuppliedFieldMask(pushMask, applierDerives, contextValuesWireLive);
+        // The plan the call above just validated (or rebuilt) for this key: the class's fields in
+        // index order, sticky ones apart - the same visits, in the same order, as testing all 63.
+        const SizeT planClass = static_cast<SizeT>(verbClass);
+        (void)mask;
+#if MOBILEGL_PIPE_POISON
+        for (SizeT k = 0; fillOwed && k < g_fillPlan.StickyCount[planClass]; ++k) {
+            // Stamped once by the first fill that sees a live context; fresh through the
+            // Sticky -> FilledGen != 0 branch of MGPipeInputFieldIsFresh from then on.
+            const SizeT i = g_fillPlan.Sticky[planClass][k];
+            if (filled.FilledGen[i] == 0) filled.FilledGen[i] = 1;
+        }
+#endif
+        if (fillOwed) {
+            // The copies first, then the stamps: no copy reads a stamp, so splitting the one walk
+            // into two loops changes nothing but the cost (the stamp loop no longer reloads its
+            // bounds and the omission pair around an out-of-line CopyField per entry).
+            const Uint8* const copies = g_fillPlan.Copy[planClass].data();
+            const SizeT copyCount = g_fillPlan.CopyCount[planClass];
+            for (SizeT k = 0; k < copyCount; ++k) {
+                MGPipeFillAccess::CopyField(inputs, *ctx, static_cast<MGPipeInputField>(copies[k]));
+            }
+#if MOBILEGL_PIPE_POISON
+            const Uint8* const walk = g_fillPlan.Walk[planClass].data();
+            const SizeT walkCount = g_fillPlan.WalkCount[planClass];
+            const Uint64 serial = filled.CurrentVerbSerial;
+#if MOBILEGL_PIPE_VERIFY
+            // Negative control B: the omitted pair's stamp goes back after the walk (WithheldStamp).
+            const WithheldStamp withheld = StampToWithhold(filled, verb);
+#endif
+            for (SizeT k = 0; k < walkCount; ++k) {
+                filled.FilledGen[walk[k] & ~ResidualFillPlan::kCopy] = serial;
+            }
+#if MOBILEGL_PIPE_VERIFY
+            withheld.PutBack(filled);
+#endif
+#endif
+        }
+        if (payloadBytes != 0 && MG_Util::PipeStats::Enabled()) {
+            // PipeStats::RecordDrawPayloadBytes has been implemented and unit-tested since
+            // P0 and called by nothing; this is its first emitter, and the 24-bucket
+            // histogram is what answers ROADMAP.md open question 4's chunk-granularity
+            // retune with data instead of a guess.
+            MG_Util::PipeStats::RecordDrawPayloadBytes(payloadBytes);
+        }
+#if MOBILEGL_PIPE_VERIFY
+        EntryCompare(inputs, mask);
+#endif
+    }
+
+    void MGPipeClientDrainTextureUploads() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        if (MG_Remote::Client::RunsAsTheServerRole()) return;
+        auto* ctx = LiveContext();
+        if (ctx == nullptr) return;
+        const Uint64 pushMask = MG_Config::Features.PipePush;
+        if ((pushMask & kMGPipeSubsystemTextureResources) != 0 &&
+            (kMGPipeWiredSubsystems & kMGPipeSubsystemTextureResources) != 0 &&
+            P4aFamilyHasItsConsumer(kMGPipeSubsystemTextureResources) &&
+            P4aFamilyDependenciesAreSet(kMGPipeSubsystemTextureResources, pushMask)) {
+            (void)MGPipeTextureEmitterInstance().DrainTextureSubData(*ctx);
+        }
+#endif
+    }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // Declared in PipeMutation.h, where the list is argued. THE ORDER: the latch goes first, so
+    // everything after it - a pin's last owner dying, a deferred destroy replayed, an evicted
+    // cache entry - finds its handle unpublished and puts nothing on the new wire; then the
+    // references the emitters hold into the caches go back, then the caches themselves.
+    void MGPipeForgetEndedSession() {
+        PublicationLatch().ForgetAll();
+        MGPipeResourceTrackerInstance().ForgetPublication();
+        MGPipeReleaseResidualFillPins();
+        MGPipeDrainDeferredDestroys();
+        MGPipeTrackerInstance().Reset();
+        // The texture emitter's records and its owed uploads belong to the ended server; its
+        // sampler references go back to the cache before the cache is emptied.
+        MGPipeTextureEmitterInstance().ForgetSession();
+        MGPipeSamplerEmitterInstance().Reset();
+        MGPipeSamplerCsoCacheInstance().ForgetSession();
+        MGPipeCsoCacheInstance().Reset();
+        MGPipeSetHashSuppressorInstance().InvalidateAll();
+        MGPipeVertexInputEmitterInstance().Reset();
+        MGPipeFramebufferEmitterInstance().ForgetSession();
+        MGPipeImageEmitterInstance().Reset();
+        MGPipeProgramEmitterInstance().Reset();
+        MGPipeShaderBufferEmitterInstance().Reset();
+        g_attribDefaultLastHeader = MGPVertexAttribDefaults{};
+        g_lastFillWasBarriered = true;
+    }
+#endif
+} // namespace MobileGL::MG_Pipe

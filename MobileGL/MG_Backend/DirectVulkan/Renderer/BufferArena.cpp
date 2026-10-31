@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "BufferArena.h"
+#include <Config.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     Bool BufferArena::Initialize(const BufferArenaDesc& desc) {
@@ -125,6 +126,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         bufferDesc.usage = m_desc.usage;
         bufferDesc.memoryUsage = m_desc.memoryUsage;
         bufferDesc.allocationFlags = m_desc.allocationFlags;
+        // Split staging may also be the destination of a GPU UBO range copy.
+        // Persistent host writes must be coherent: Upload deliberately writes
+        // the mapped pointer without a per-range VMA flush.
+        if (m_desc.persistentlyMapped) {
+            bufferDesc.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        }
         if (!buffer.Create(bufferDesc)) {
             return false;
         }

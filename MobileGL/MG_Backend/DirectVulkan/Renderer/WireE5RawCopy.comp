@@ -1,0 +1,30 @@
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireE5RawCopy.comp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+#version 450
+// Raw texel-block copy out of an E5B9G9R9 image (WireE5RawCopy.h). The source is read through an
+// R32_UINT view, so its words are never decoded, and stored into an R32_UINT twin whose transfer
+// reads move bits rather than values. Layered and plain 2D sources; WireE5RawCopy3D.comp is the
+// volume twin of this shader.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform usampler2DArray sourceImage;
+layout(set = 0, binding = 1, r32ui) uniform writeonly uimage2DArray twinImage;
+layout(push_constant) uniform Region {
+    // xy: the region's texel origin in the source level; z unused (the view starts at the
+    // region's first layer).
+    ivec4 sourceOffset;
+    // xyz: texels by layers to copy.
+    ivec4 extent;
+} region;
+
+void main() {
+    ivec3 id = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(id, region.extent.xyz))) return;
+    uint word = texelFetch(sourceImage, ivec3(region.sourceOffset.xy + id.xy, id.z), 0).r;
+    imageStore(twinImage, id, uvec4(word, 0u, 0u, 0u));
+}

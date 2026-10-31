@@ -39,6 +39,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -180,8 +181,7 @@ void main() {
                 glBindTexture(GL_TEXTURE_2D, 0);
                 GLuint view = 0;
                 glGenTextures(1, &view);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 glTextureView(view, GL_TEXTURE_2D, storage, GL_RGBA8, 0, 1, 0, 1);
                 const bool usable = glGetError() == GL_NO_ERROR;
                 glDeleteTextures(1, &view);
@@ -249,7 +249,7 @@ void main() {
                 glDrawArrays(GL_TRIANGLES, 0, 6);
             }
 
-            // Reads the colour texture currently attached to `fbo` as COLOR_ATTACHMENT0.
+            // Reads the color texture currently attached to `fbo` as COLOR_ATTACHMENT0.
             Image ReadFbo(GLuint fbo, int width, int height) {
                 glBindFramebuffer(GL_FRAMEBUFFER, fbo);
                 glReadBuffer(GL_COLOR_ATTACHMENT0);
@@ -258,7 +258,7 @@ void main() {
 
             // Every pixel of the inclusive region must match `expected` within `tolerance` per
             // channel. Whole-region rather than a spot check, for the reason HeadlessGL.h gives:
-            // three of four vertices carrying stale data still paints a correct centre pixel.
+            // three of four vertices carrying stale data still paints a correct center pixel.
             void ExpectRegion(const Image& image, int x0, int x1, int y0, int y1, Rgba8 expected, int tolerance,
                               const char* what) {
                 int offenders = 0;
@@ -282,10 +282,10 @@ void main() {
                         }
                     }
                 }
-                EXPECT_EQ(offenders, 0) << what << ": " << offenders << " of "
-                                        << (x1 - x0 + 1) * (y1 - y0 + 1) << " pixels disagree; first at (" << firstX
-                                        << ", " << firstY << ") is " << Describe(firstOffender) << ", expected "
-                                        << Describe(expected) << " +/- " << tolerance;
+                EXPECT_EQ(offenders, 0) << what << ": " << offenders << " of " << (x1 - x0 + 1) * (y1 - y0 + 1)
+                                        << " pixels disagree; first at (" << firstX << ", " << firstY << ") is "
+                                        << Describe(firstOffender) << ", expected " << Describe(expected) << " +/- "
+                                        << tolerance;
             }
 
             std::vector<GLuint> m_textures;
@@ -400,7 +400,7 @@ void main() {
             glDepthMask(GL_TRUE);
             glEnable(GL_DEPTH_TEST);
             glDisable(GL_STENCIL_TEST);
-            // The mod's own indexed/non-indexed colour-mask pair (OpenGLRenderer.java:411-412).
+            // The mod's own indexed/non-indexed color-mask pair (OpenGLRenderer.java:411-412).
             glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
             glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
@@ -490,7 +490,7 @@ void main() {
 
             // GL_RGBA8 and GL_R32UI are both VIEW_CLASS_32_BITS, so one may be viewed as the
             // other. Filling the RGBA8 storage with a known byte pattern makes the R32UI view's
-            // answer a fact about the BITS rather than about the colour.
+            // answer a fact about the BITS rather than about the color.
             const GLuint storage = MakeImmutable2D(GL_RGBA8, 1, kSize, kSize);
             std::vector<std::uint8_t> texels(static_cast<std::size_t>(kSize) * kSize * 4);
             for (std::size_t i = 0; i < texels.size(); i += 4) {
@@ -532,7 +532,7 @@ void main() {
             // A REAL GL_R32UI texture holding the very word the storage's bytes spell. The
             // assertion below is that the view and this texture sample IDENTICALLY.
             //
-            // Comparing against a reference texture rather than against a hard-coded colour is
+            // Comparing against a reference texture rather than against a hard-coded color is
             // deliberate. Sampling a 32-bit integer texture is not itself what this scenario is
             // about, and llvmpipe's ES driver does it inconsistently (verified outside MobileGL,
             // with a raw-EGL program that reproduces the same wrong decode with NO view in play).
@@ -540,7 +540,7 @@ void main() {
             // driver makes of a usampler2D fetch, the view has to make the same thing of it, or
             // it is not delivering the storage's bits. A view that samples zero, that lands on
             // the wrong texels, or that lost its format still fails.
-            constexpr std::uint32_t kExpectedWord = 0xFFC08040u;  // little-endian A,B,G,R
+            constexpr std::uint32_t kExpectedWord = 0xFFC08040u; // little-endian A,B,G,R
             const GLuint reference = MakeImmutable2D(GL_R32UI, 1, kSize, kSize);
             std::vector<std::uint32_t> words(static_cast<std::size_t>(kSize) * kSize, kExpectedWord);
             glBindTexture(GL_TEXTURE_2D, reference);
@@ -586,8 +586,9 @@ void main() {
             }
             EXPECT_EQ(mismatches, 0u)
                 << "the GL_R32UI view of GL_RGBA8 storage must sample exactly what a real GL_R32UI texture "
-                   "holding the same word does; view centre is " << Describe(throughView.At(kSize / 2, kSize / 2))
-                << ", reference centre is " << Describe(referenceTexel);
+                   "holding the same word does; view center is "
+                << Describe(throughView.At(kSize / 2, kSize / 2)) << ", reference center is "
+                << Describe(referenceTexel);
             DestroyColorFbo(destination);
         }
 
@@ -653,7 +654,7 @@ void main() {
             glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
 
-            // A different colour per layer, so a view that lost its layer offset reads the wrong
+            // A different color per layer, so a view that lost its layer offset reads the wrong
             // one rather than merely reading nothing.
             const GLuint seedFbo = MakeFbo();
             glBindFramebuffer(GL_FRAMEBUFFER, seedFbo);
@@ -710,21 +711,21 @@ void main() {
             ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
 
             const auto layerFill = [](int layer) {
-                return Rgba8{static_cast<std::uint8_t>(10 + layer * 20),
-                             static_cast<std::uint8_t>(200 - layer * 20), 30, 255};
+                return Rgba8{static_cast<std::uint8_t>(10 + layer * 20), static_cast<std::uint8_t>(200 - layer * 20),
+                             30, 255};
             };
             // Seeded by CPU sub-image rather than by rendering, deliberately: this scenario is
             // about the view's LAYER ORIGIN, and seeding through the GPU would additionally
             // depend on a CPU sub-image reaching a layer whose content the GPU wrote - which
             // DirectVulkan does not currently do even for a plain array texture (no view
             // involved), and which would make a failure here unattributable.
-            const auto uploadLayer = [&](GLuint texture, int layer, Rgba8 colour) {
+            const auto uploadLayer = [&](GLuint texture, int layer, Rgba8 color) {
                 std::vector<std::uint8_t> texels(static_cast<std::size_t>(kSize) * kSize * 4);
                 for (std::size_t i = 0; i < texels.size(); i += 4) {
-                    texels[i + 0] = colour.r;
-                    texels[i + 1] = colour.g;
-                    texels[i + 2] = colour.b;
-                    texels[i + 3] = colour.a;
+                    texels[i + 0] = color.r;
+                    texels[i + 1] = color.g;
+                    texels[i + 2] = color.b;
+                    texels[i + 3] = color.a;
                 }
                 glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -757,8 +758,7 @@ void main() {
             }
             glBindTexture(GL_TEXTURE_2D_ARRAY, view);
             glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, kSize, kSize, 1, GL_RGBA, GL_UNSIGNED_BYTE,
-                            texels.data());
+            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, kSize, kSize, 1, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());
             glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
             ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "writing through the view raised an error";
 
@@ -903,6 +903,217 @@ void main() {
             ExpectRegion(sampled, 1, kSize - 2, 1, kSize - 2, Rgba8{0, 255, 255, 255}, 2,
                          "the view must still reach its storage after the original's name was deleted");
             DestroyColorFbo(destination);
+        }
+
+        // ------------------------------------------------------------------------------------
+        // glGenerateMipmap THROUGH a view: the view's window is a write target, never a shape.
+        //
+        // THE DEFECT this pins. Generating through a view used to (re)allocate the storage
+        // OWNER from the VIEW's own level-zero extent. A view's level-zero extent is one slice
+        // of the owner's layers, so a two-layer view of a four-layer array resized every owner
+        // level it touched to two layers - the storage behind the owner's other layers was gone -
+        // and redefined the owner's other levels out of the view's window. GL 4.6 core 8.18 makes
+        // a view a window INTO storage it does not own: level sizes and layer counts belong to
+        // the owner, and generation through the view is a GPU-side write into that window.
+        //
+        // IT IS ASSERTED HERE, in the transport-agnostic view scenario, because the arm that
+        // reallocated is the MONOLITH one - what every application of a non-disaggregated library
+        // runs, and what the split-only F1WireScenario never reaches (its fixture skips under any
+        // other transport, which is why its copy of this rule runs nowhere).
+        //
+        // BOTH BACKENDS. DirectGLES had the reallocating arm in the frontend it shares with Magma
+        // (MG_Impl/GLImpl/Texture/GL_Texture.cpp), and it clips the generation to the view's LAYER
+        // window itself since 73b37bbe. Magma has its own generate path
+        // (DirectVulkan/Renderer/VulkanRenderer.cpp's GenerateMipmap) - it allocates through the
+        // BOUND object, so through a view it resized the owner's levels to the view's layer count
+        // and regenerated the owner's levels outside the view's window as well. It now takes the
+        // same frontend plan for the window and translates it into the storage image's own level
+        // and layer numbering before it blits anything.
+        // ------------------------------------------------------------------------------------
+        TEST_F(TextureViewScenario, GenerateMipmapThroughAViewLeavesTheOwnerShapeAlone) {
+            if (!Ready() || IsSkipped()) return;
+
+            constexpr int kLevels = 5;
+            constexpr int kBase = 16;
+            constexpr int kLayers = 4;
+            constexpr int kViewMinLevel = 1;
+            constexpr int kViewNumLevels = 3;
+            constexpr int kViewMinLayer = 1;
+            constexpr int kViewNumLayers = 2;
+            // One color per level, so a level that was redefined from the view's base extent reads
+            // as another level's color rather than as a plausible one.
+            const Rgba8 levelColor[kLevels] = {
+                {255, 0, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255}, {255, 0, 255, 255}, {0, 255, 255, 255}};
+
+            const GLuint storage = MakeTexture();
+            glBindTexture(GL_TEXTURE_2D_ARRAY, storage);
+            glTexStorage3D(GL_TEXTURE_2D_ARRAY, kLevels, GL_RGBA8, kBase, kBase, kLayers);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            for (int level = 0; level < kLevels; ++level) {
+                const int side = kBase >> level;
+                std::vector<std::uint8_t> texels(static_cast<std::size_t>(side) * side * kLayers * 4);
+                for (std::size_t at = 0; at < texels.size(); at += 4) {
+                    texels[at + 0] = levelColor[level].r;
+                    texels[at + 1] = levelColor[level].g;
+                    texels[at + 2] = levelColor[level].b;
+                    texels[at + 3] = levelColor[level].a;
+                }
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, level, 0, 0, 0, side, side, kLayers, GL_RGBA, GL_UNSIGNED_BYTE,
+                                texels.data());
+            }
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "seeding the owner raised an error";
+
+            // Levels 0..2 of the view alias the owner's 1..3. Its nonzero BASE_LEVEL makes the
+            // owner's level 2 the source of the generation, and MAX_LEVEL 2 ends it at the owner's
+            // level 3 - both expressed in the VIEW's coordinates.
+            const GLuint view = MakeTexture();
+            glTextureView(view, GL_TEXTURE_2D_ARRAY, storage, GL_RGBA8, kViewMinLevel, kViewNumLevels, kViewMinLayer,
+                          kViewNumLayers);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+            glTextureParameteri(view, GL_TEXTURE_BASE_LEVEL, 1);
+            glTextureParameteri(view, GL_TEXTURE_MAX_LEVEL, 2);
+
+            // The generation's source is the view's base level, the owner's level 2. Writing it in
+            // GREEN on the GPU gives the source and the level generated from it the same color, so
+            // losing either one is visible below.
+            const GLuint fbo = MakeFbo();
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_STENCIL_TEST);
+            glDisable(GL_SCISSOR_TEST);
+            glViewport(0, 0, kBase >> 2, kBase >> 2);
+            for (int layer = kViewMinLayer; layer < kViewMinLayer + kViewNumLayers; ++layer) {
+                glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, storage, 2, layer);
+                ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE))
+                    << "the source level's layer " << layer << " is not attachable";
+                glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "clearing the source level raised an error";
+
+            glGenerateTextureMipmap(view);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR))
+                << "glGenerateTextureMipmap on a view raised an error";
+
+            // The view addresses two layers of the owner; the owner keeps its own four.
+            GLint viewDepth = 0;
+            glBindTexture(GL_TEXTURE_2D_ARRAY, view);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_DEPTH, &viewDepth);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, storage);
+            EXPECT_EQ(viewDepth, kViewNumLayers);
+            for (int level = 0; level < kLevels; ++level) {
+                const int side = kBase >> level;
+                GLint width = 0, height = 0, depth = 0;
+                glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, level, GL_TEXTURE_WIDTH, &width);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, level, GL_TEXTURE_HEIGHT, &height);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, level, GL_TEXTURE_DEPTH, &depth);
+                EXPECT_EQ(width, side) << "the owner's mip " << level << " must keep its own width";
+                EXPECT_EQ(height, side) << "the owner's mip " << level << " must keep its own height";
+                ASSERT_EQ(depth, kLayers) << "generation through a " << kViewNumLayers
+                                          << "-layer view must not resize its owner's mip " << level;
+                for (int layer = 0; layer < kLayers; ++layer) {
+                    // Per-layer FBO readback rather than glGetTexImage: the question is what the
+                    // GPU holds, and a layer outside the view's window proves it by still holding
+                    // its own pixels.
+                    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+                    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, storage, level, layer);
+                    glReadBuffer(GL_COLOR_ATTACHMENT0);
+                    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE))
+                        << "the owner's mip " << level << ", layer " << layer << " lost its storage";
+                    const Image image = ReadPixels(side, side);
+                    // Generation covers levels base+1..max of the view, i.e. the owner's levels 2
+                    // and 3, over the two layers the view names. Everything else keeps its own
+                    // image: the owner's level 4 is past the view's max level, and its layers 0 and
+                    // 3 are outside the view's layer window.
+                    const bool inWindow =
+                        level >= 2 && level <= 3 && layer >= kViewMinLayer && layer < kViewMinLayer + kViewNumLayers;
+                    const Rgba8 expected = inWindow ? Rgba8{0, 255, 0, 255} : levelColor[level];
+                    const std::string what = "the owner's mip " + std::to_string(level) + ", layer " +
+                                             std::to_string(layer) +
+                                             (inWindow ? ", inside the view's window" : ", outside the view's window");
+                    ExpectRegion(image, 0, side - 1, 0, side - 1, expected, 2, what.c_str());
+                }
+            }
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+        }
+
+        // ------------------------------------------------------------------------------------
+        // glGetTexImage THROUGH a layer-windowed view returns the VIEW's image.
+        //
+        // THE DEFECT this pins. Magma answers a readback out of the storage OWNER's image, and its
+        // copy was sized by that image's array layer count while being started at the view's layer
+        // origin. A two-layer view of a four-layer array therefore copied four layers: two the view
+        // does not name, and the fourth past the end of the image. Nothing stopped it, because
+        // glGetTexImage carries no destination size - while the size glGetTextureImage validates is
+        // built from the VIEW's own extents. A caller that sized its buffer for the view (the only
+        // size that definition offers) had it overrun by exactly the layers outside the window.
+        //
+        // The canary slices are the assertion that matters: they are past the view's last layer and
+        // inside the caller's allocation, so a copy that covers the storage's layers writes them.
+        // ------------------------------------------------------------------------------------
+        TEST_F(TextureViewScenario, GetTexImageThroughAViewReturnsOnlyItsOwnLayers) {
+            if (!Ready() || IsSkipped()) return;
+
+            constexpr int kLevels = 3;
+            constexpr int kBase = 8;
+            constexpr int kLayers = 4;
+            constexpr int kViewMinLayer = 1;
+            constexpr int kViewNumLayers = 2;
+            constexpr std::uint8_t kCanaryByte = 0xAB;
+            // One color per storage layer, so a lost layer origin and a read past the window are
+            // both visible as another layer's color rather than as a plausible one.
+            const auto layerColor = [](int layer) {
+                return Rgba8{static_cast<std::uint8_t>(10 * (layer + 1)), 40, 7, 255};
+            };
+            const Rgba8 canary{kCanaryByte, kCanaryByte, kCanaryByte, kCanaryByte};
+
+            const GLuint storage = MakeTexture();
+            glBindTexture(GL_TEXTURE_2D_ARRAY, storage);
+            glTexStorage3D(GL_TEXTURE_2D_ARRAY, kLevels, GL_RGBA8, kBase, kBase, kLayers);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            for (int level = 0; level < kLevels; ++level) {
+                const int side = kBase >> level;
+                std::vector<std::uint8_t> texels(static_cast<std::size_t>(side) * side * kLayers * 4);
+                for (int layer = 0; layer < kLayers; ++layer) {
+                    for (int t = 0; t < side * side; ++t) {
+                        std::uint8_t* p = texels.data() + (static_cast<std::size_t>(layer) * side * side + t) * 4;
+                        const Rgba8 color = layerColor(layer);
+                        p[0] = color.r;
+                        p[1] = color.g;
+                        p[2] = color.b;
+                        p[3] = color.a;
+                    }
+                }
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, level, 0, 0, 0, side, side, kLayers, GL_RGBA, GL_UNSIGNED_BYTE,
+                                texels.data());
+            }
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "seeding the owner raised an error";
+
+            const GLuint view = MakeTexture();
+            glTextureView(view, GL_TEXTURE_2D_ARRAY, storage, GL_RGBA8, 0, kLevels, kViewMinLayer, kViewNumLayers);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+            glBindTexture(GL_TEXTURE_2D_ARRAY, view);
+
+            const int side = kBase >> 2;
+            // Exactly what a caller sizes for the view, plus two canary slices.
+            std::vector<std::uint8_t> dst(static_cast<std::size_t>(side) * side * 4 * (kViewNumLayers + 2),
+                                          kCanaryByte);
+            glGetTexImage(GL_TEXTURE_2D_ARRAY, 2, GL_RGBA, GL_UNSIGNED_BYTE, dst.data());
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR))
+                << "glGetTexImage through the view raised an error";
+
+            for (int slice = 0; slice <= kViewNumLayers + 1; ++slice) {
+                Image image(side, side);
+                std::memcpy(image.Data(), dst.data() + static_cast<std::size_t>(slice) * side * side * 4,
+                            static_cast<std::size_t>(side) * side * 4);
+                const bool inWindow = slice < kViewNumLayers;
+                const Rgba8 expected = inWindow ? layerColor(kViewMinLayer + slice) : canary;
+                const std::string what = inWindow ? "the view's slice " + std::to_string(slice) +
+                                                        ", the owner's layer " + std::to_string(kViewMinLayer + slice)
+                                                  : "slice " + std::to_string(slice) +
+                                                        ", past the view's last layer: the readback must not write it";
+                ExpectRegion(image, 0, side - 1, 0, side - 1, expected, 2, what.c_str());
+            }
         }
     } // namespace
 } // namespace MGITest

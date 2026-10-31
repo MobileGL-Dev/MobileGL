@@ -24,7 +24,7 @@ namespace MobileGL {
             //     Qualcomm, storage blocks:
             //       '[' : indexing into an SSBO array using a non-constant expression is not
             //             permitted
-            //     Mesa, images:
+            //     llvmpipe, images:
             //       image arrays indexed with non-constant expressions are forbidden in GLSL ES
             //
             // glslang keeps the whole array as ONE SPIR-V variable, so SPIRV-Cross prints
@@ -38,7 +38,7 @@ namespace MobileGL {
             // Verified on the device for the storage-block half: an Adreno 830 ES probe with no
             // MobileGL in the loop rejects the non-constant subscript with AND without
             // GL_EXT_gpu_shader5 (which the driver does advertise), and accepts a constant one.
-            // Verified again for the image half on llvmpipe / Mesa 26.1.4 at ES 3.2, on a raw
+            // Verified again for the image half on llvmpipe 26.1.4 at ES 3.2, on a raw
             // GLES probe: a scalar image and an array with literal subscripts both write the
             // units they name, and both a loop-variable subscript and a `const int[]` table
             // lookup are refused with the message above. So the ES 3.2 "dynamically uniform"
@@ -106,9 +106,8 @@ namespace MobileGL {
                 explicit LegalizeResourceArrayIndexPass(Mode mode) : m_mode(mode) {}
 
                 const char* name() const override {
-                    return m_mode == Mode::MarkLoopsForUnroll
-                               ? "mobilegl-mark-resource-array-index-loops"
-                               : "mobilegl-lower-resource-array-index";
+                    return m_mode == Mode::MarkLoopsForUnroll ? "mobilegl-mark-resource-array-index-loops"
+                                                              : "mobilegl-lower-resource-array-index";
                 }
 
                 Status Process() override;
@@ -141,13 +140,11 @@ namespace MobileGL {
                 LoweringOutcome LowerLoad(spvtools::opt::Instruction* accessChain, uint32_t arrayLength,
                                           spvtools::opt::Instruction* load);
                 LoweringOutcome LowerImageChain(spvtools::opt::Instruction* accessChain, uint32_t arrayLength);
-                void KillImageChainIfDead(spvtools::opt::Instruction* accessChain,
-                                          spvtools::opt::Instruction* load);
+                void KillImageChainIfDead(spvtools::opt::Instruction* accessChain, spvtools::opt::Instruction* load);
                 LoweringOutcome LowerImageWrite(spvtools::opt::Instruction* accessChain, uint32_t arrayLength,
                                                 spvtools::opt::Instruction* load,
                                                 spvtools::opt::Instruction* imageWrite);
-                LoweringOutcome LowerImageReadOrQuery(spvtools::opt::Instruction* accessChain,
-                                                      uint32_t arrayLength,
+                LoweringOutcome LowerImageReadOrQuery(spvtools::opt::Instruction* accessChain, uint32_t arrayLength,
                                                       spvtools::opt::Instruction* load,
                                                       spvtools::opt::Instruction* consumer);
 

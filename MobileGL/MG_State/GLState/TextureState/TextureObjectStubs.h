@@ -53,6 +53,10 @@ namespace MobileGL {
             STUB_TEXTURE_OBJECT_CLASS_DEFINITION(TextureObject2DMultisampleArray,
                                                  TextureTarget::Texture2DMultisampleArray,
                                                  {TextureUploadTarget::Texture2DMultisampleArray});
+            // GL_OES_EGL_image_external: level 0 is defined as a 2D image (by glEGLImageTargetTexture2DOES
+            // only - glTexImage2D does not take the target).
+            STUB_TEXTURE_OBJECT_CLASS_DEFINITION(TextureObjectExternal, TextureTarget::External,
+                                                 {TextureUploadTarget::Texture2D});
 #undef STUB_TEXTURE_OBJECT_CLASS_DEFINITION
 
         } // namespace GLState

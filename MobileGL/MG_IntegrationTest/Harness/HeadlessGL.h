@@ -59,7 +59,7 @@ namespace MGITest {
         bool operator!=(const Rgba8& other) const { return !(*this == other); }
     };
 
-    // Prints as "rgba(255,0,0,255)" so a gtest failure names the colour it saw.
+    // Prints as "rgba(255,0,0,255)" so a gtest failure names the color it saw.
     std::ostream& operator<<(std::ostream& os, const Rgba8& c);
 
     // An RGBA8 readback. Row 0 is the BOTTOM row: that is GL's convention for
@@ -88,14 +88,14 @@ namespace MGITest {
         // Count of differing bytes, for a failure message that says how wrong.
         std::size_t ByteDiffCount(const Image& other) const;
 
-        // The four quadrant centres, in the fixed order
+        // The four quadrant centers, in the fixed order
         // bottom-left, bottom-right, top-left, top-right.
         //
         // This replaces the old VerticalSignature(bandCount), which read three
-        // full-width horizontal stripes down the centre line and was therefore
+        // full-width horizontal stripes down the center line and was therefore
         // blind to an X flip, to a transpose, and to a 180 rotation composed with
         // a Y flip - all of those left the stripe order alone. Four quadrant
-        // colours are asymmetric in BOTH axes, so each of the eight square
+        // colors are asymmetric in BOTH axes, so each of the eight square
         // symmetries produces a different string (see OrientationScenario, which
         // spells all eight out).
         std::string QuadrantSignature() const;
@@ -139,6 +139,15 @@ namespace MGITest {
         // destructor with no driver left underneath.
         void ShutDown();
 
+        // A second context in the harness context's share group, for the scenarios that change a
+        // shared object through one context and draw with it through the other. It is made current
+        // on the harness surface; nullptr where EGL refuses one.
+        void* CreateSharingContext();
+        // nullptr makes the harness context current again.
+        bool MakeContextCurrent(void* context);
+        // Makes the harness context current, then destroys `context`.
+        void DestroySharingContext(void* context);
+
     private:
         HeadlessGL();
         HeadlessGL(const HeadlessGL&) = delete;
@@ -156,6 +165,7 @@ namespace MGITest {
         void* m_display = nullptr;
         void* m_surface = nullptr;
         void* m_context = nullptr;
+        void* m_config = nullptr;
     };
 
     // ---- the scenario vocabulary -------------------------------------------
@@ -200,10 +210,14 @@ namespace MGITest {
     unsigned int FirstGLError();
     const char* GLErrorName(unsigned int error);
 
+    // What one case may leave behind in the shared context that the next case cannot be expected
+    // to clean up: no program current, no error pending. ScenarioTest::SetUp calls it.
+    void ResetStateBetweenScenarios();
+
     // ---- whole-region readback predicates ----------------------------------
     // The scenarios used to assert on two or three individual pixels, which is
     // provably too weak: a draw in which 3 of a quad's 4 vertices carry stale
-    // data still paints the sampled centre the expected colour (that exact case
+    // data still paints the sampled center the expected color (that exact case
     // is a standing negative-control test - see CrossFrameBufferScenario). The
     // readback is already fully in memory, so counting every pixel in a region
     // costs nothing and turns "the middle looks right" into "all of it is right".
@@ -223,12 +237,11 @@ namespace MGITest {
 
     // gtest predicate wrapper: EXPECT_TRUE(RegionIsMostly(...)) reports the
     // offender count, the offender fraction and the FIRST offending pixel's
-    // coordinates and colour. `tolerance` is the fraction of the region allowed
+    // coordinates and color. `tolerance` is the fraction of the region allowed
     // to disagree; pass 0.0 to demand every pixel (which is what the scenarios
     // do - they inset their regions away from primitive edges so exactness is
     // achievable).
     ::testing::AssertionResult RegionIsMostly(const Image& image, int x0, int x1, int y0, int y1,
-                                              const char* expectedColor, double tolerance,
-                                              const std::string& when);
+                                              const char* expectedColor, double tolerance, const std::string& when);
 
 } // namespace MGITest

@@ -7,7 +7,7 @@
 // End of Source File Header
 
 #include "CompileEnv.h"
-#include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/BackendObject.h>
 #include <MG_State/GLState/Core.h>
 
 namespace MobileGL::MG_Util::ShaderTranspiler {
@@ -45,8 +45,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // changing the fingerprint, which is exactly the memo-hazard property wanted here.
         HashBytes(state, &env.params, sizeof(env.params));
         if (!env.advertisedExtensions.empty()) {
-            HashBytes(state, env.advertisedExtensions.data(),
-                      env.advertisedExtensions.size() * sizeof(GLExtension));
+            HashBytes(state, env.advertisedExtensions.data(), env.advertisedExtensions.size() * sizeof(GLExtension));
         }
         return state;
     }
@@ -61,6 +60,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         HashValue(state, env.params.MaxImageUnits);
         HashValue(state, env.params.MaxDrawBuffers);
         HashValue(state, env.params.MaxVertexImageUniforms);
+        HashValue(state, env.params.MaxTessControlImageUniforms);
+        HashValue(state, env.params.MaxTessEvaluationImageUniforms);
         HashValue(state, env.params.MaxGeometryImageUniforms);
         HashValue(state, env.params.MaxFragmentImageUniforms);
         HashValue(state, env.params.MaxComputeImageUniforms);
@@ -81,6 +82,16 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // gl_MaxCullDistances / gl_MaxCombinedClipAndCullDistances from the same numbers.
         HashValue(state, env.params.MaxCullDistances);
         HashValue(state, env.params.MaxCombinedClipAndCullDistances);
+        // The inputs of ResolveAtomicCounterLimits, which every gl_Max*AtomicCounter* constant
+        // expands from: the per-stage counter-buffer budget is the stage's storage-block budget.
+        HashValue(state, env.params.MaxVertexShaderStorageBlocks);
+        HashValue(state, env.params.MaxTessControlShaderStorageBlocks);
+        HashValue(state, env.params.MaxTessEvaluationShaderStorageBlocks);
+        HashValue(state, env.params.MaxGeometryShaderStorageBlocks);
+        HashValue(state, env.params.MaxFragmentShaderStorageBlocks);
+        HashValue(state, env.params.MaxComputeShaderStorageBlocks);
+        HashValue(state, env.params.MaxCombinedShaderStorageBlocks);
+        HashValue(state, env.params.MaxShaderStorageBufferBindings);
         // The texture-image-unit family, made env-derived in the same wave. They were stock
         // glslang defaults (32/32/80) that disagreed with what glGetIntegerv answered, and
         // gl_MaxTextureImageUnits / gl_MaxVertexTextureImageUnits / gl_MaxCombinedTextureImageUnits

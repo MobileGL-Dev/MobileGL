@@ -201,6 +201,14 @@ void main() { o_color = texelFetch(u_tex, ivec2(gl_FragCoord.xy) % 4, 0); }
                 glGetProgramiv(program, GL_LINK_STATUS, &linked);
                 EXPECT_EQ(linked, GL_TRUE) << "the copy program did not link";
                 glUseProgram(program);
+                // P11 M: A BARRIER THE SPEC DOES NOT ASK FOR, pinned for the reason
+                // TextureRemintPullScenario's twin gives (ID-P9-11, DEBTS "to be attributed"): on llvmpipe the
+                // kept-allocation case (GpuClearOverAnImmutableUploadSurvives - no re-mint to
+                // serialize anything) read the pre-clear upload once on the push-monolith arm under
+                // load, the same shape P9 measured 3/30 on the split arm. The cases ask what the
+                // storage HOLDS after the first image binding, not how a clear orders against an
+                // image load, so the ordering is pinned here.
+                glMemoryBarrier(GL_ALL_BARRIER_BITS);
                 glDispatchCompute(1, 1, 1);
                 glMemoryBarrier(GL_ALL_BARRIER_BITS);
                 glUseProgram(0);
@@ -494,7 +502,7 @@ void main() { o_color = texelFetch(u_tex, ivec2(gl_FragCoord.xy) % 4, 0); }
             ExpectImage(ImageCopy(t, 0, GL_RG8, "rg8"), kEdge, Solid(kEdge, 0x33, 0x99, 0, 255), 2);
         }
 
-        // Control: a signed-normalized level (not colour-renderable on every ES driver, so its
+        // Control: a signed-normalized level (not color-renderable on every ES driver, so its
         // readback may be refused and the shadow used instead), uploaded only.
         TEST_F(ImageBindableRemintScenario, SnormUploadSurvives) {
             if (!Ready()) return;
@@ -510,8 +518,7 @@ void main() { o_color = texelFetch(u_tex, ivec2(gl_FragCoord.xy) % 4, 0); }
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8_SNORM, kEdge, kEdge, 0, GL_RGBA, GL_BYTE, s.data());
             Nearest(GL_TEXTURE_2D, t, 0);
             SyncBySampling(t);
-            ExpectImage(ImageCopy(t, 0, GL_RGBA8_SNORM, "rgba8_snorm", true), kEdge, Solid(kEdge, 255, 128, 0, 255),
-                        3);
+            ExpectImage(ImageCopy(t, 0, GL_RGBA8_SNORM, "rgba8_snorm", true), kEdge, Solid(kEdge, 255, 128, 0, 255), 3);
         }
 
         // Control: RGBA16_SNORM is desktop-only as an image format, so this re-mint widens too.
@@ -530,8 +537,8 @@ void main() { o_color = texelFetch(u_tex, ivec2(gl_FragCoord.xy) % 4, 0); }
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kEdge, kEdge, GL_RGBA, GL_SHORT, s.data());
             Nearest(GL_TEXTURE_2D, t, 0);
             SyncBySampling(t);
-            ExpectImage(ImageCopy(t, 0, GL_RGBA16_SNORM, "rgba16_snorm", true), kEdge,
-                        Solid(kEdge, 255, 128, 0, 255), 3);
+            ExpectImage(ImageCopy(t, 0, GL_RGBA16_SNORM, "rgba16_snorm", true), kEdge, Solid(kEdge, 255, 128, 0, 255),
+                        3);
         }
 
         // An array texture is read back one layer at a time: the GPU-cleared layer and the

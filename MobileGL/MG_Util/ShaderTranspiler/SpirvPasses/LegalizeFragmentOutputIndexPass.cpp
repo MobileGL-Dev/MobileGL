@@ -114,8 +114,8 @@ namespace MobileGL {
                 // driver rejects.
                 bool IsConstantIndex(IRContext* context, uint32_t indexId) {
                     Instruction* def = context->get_def_use_mgr()->GetDef(indexId);
-                    return def != nullptr && (def->opcode() == spv::Op::OpConstant ||
-                                              def->opcode() == spv::Op::OpConstantNull);
+                    return def != nullptr &&
+                           (def->opcode() == spv::Op::OpConstant || def->opcode() == spv::Op::OpConstantNull);
                 }
 
                 // Access chains that index a fragment output array with a non-constant.
@@ -172,9 +172,8 @@ namespace MobileGL {
                             operands.push_back(accessChain->GetInOperand(i));
                         }
                     }
-                    return builder.AddInstruction(MakeUnique<Instruction>(context, accessChain->opcode(),
-                                                                          accessChain->type_id(),
-                                                                          context->TakeNextId(), operands));
+                    return builder.AddInstruction(MakeUnique<Instruction>(
+                        context, accessChain->opcode(), accessChain->type_id(), context->TakeNextId(), operands));
                 }
 
                 // The id of |element| as a constant of the same integer type as |indexId|.
@@ -195,10 +194,8 @@ namespace MobileGL {
                     if (indexDef == nullptr) {
                         return false;
                     }
-                    const spvtools::opt::analysis::Type* type =
-                        context->get_type_mgr()->GetType(indexDef->type_id());
-                    const spvtools::opt::analysis::Integer* integer =
-                        type != nullptr ? type->AsInteger() : nullptr;
+                    const spvtools::opt::analysis::Type* type = context->get_type_mgr()->GetType(indexDef->type_id());
+                    const spvtools::opt::analysis::Integer* integer = type != nullptr ? type->AsInteger() : nullptr;
                     return integer != nullptr && integer->width() == 32;
                 }
 
@@ -207,8 +204,8 @@ namespace MobileGL {
                 // vector of the same width - built by broadcasting the scalar comparison.
                 // Anything that is neither scalar nor vector (a matrix or struct element) is
                 // refused: pre-1.4 OpSelect cannot express it either.
-                bool TryGetSelectConditionType(IRContext* context, uint32_t resultTypeId,
-                                               uint32_t* conditionTypeId, uint32_t* dimension) {
+                bool TryGetSelectConditionType(IRContext* context, uint32_t resultTypeId, uint32_t* conditionTypeId,
+                                               uint32_t* dimension) {
                     auto* typeMgr = context->get_type_mgr();
                     const spvtools::opt::analysis::Type* resultType = typeMgr->GetType(resultTypeId);
                     if (resultType == nullptr) {
@@ -261,14 +258,12 @@ namespace MobileGL {
                 }
             } // namespace
 
-            bool LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(
-                const std::vector<uint32_t>& binary) {
+            bool LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(const std::vector<uint32_t>& binary) {
                 if (binary.empty()) {
                     return false;
                 }
                 std::unique_ptr<IRContext> context = spvtools::BuildModule(
-                    SPV_ENV_VULKAN_1_1,
-                    [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
+                    SPV_ENV_VULKAN_1_1, [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
                     binary.data(), binary.size());
                 if (!context) {
                     return false;
@@ -317,8 +312,7 @@ namespace MobileGL {
                     // cost proportional to the output array's length.
                     spvtools::opt::LoopDescriptor* loops = irContext->GetLoopDescriptor(function);
                     size_t nestIterations = 1;
-                    for (spvtools::opt::Loop* loop = (*loops)[block->id()]; loop != nullptr;
-                         loop = loop->GetParent()) {
+                    for (spvtools::opt::Loop* loop = (*loops)[block->id()]; loop != nullptr; loop = loop->GetParent()) {
                         size_t iterations = 0;
                         if (!TryGetUnrollTripCount(loop, &iterations)) {
                             break;
@@ -340,8 +334,7 @@ namespace MobileGL {
                                 static_cast<uint32_t>(spv::LoopControlMask::MaskNone)) {
                             break;
                         }
-                        mergeInst->SetOperand(
-                            2, {static_cast<uint32_t>(spv::LoopControlMask::Unroll)});
+                        mergeInst->SetOperand(2, {static_cast<uint32_t>(spv::LoopControlMask::Unroll)});
                         nestIterations *= iterations;
                         modified = true;
                     }
@@ -518,8 +511,7 @@ namespace MobileGL {
                     irContext->set_instr_block(casePtr->GetLabelInst(), casePtr);
 
                     InstructionBuilder caseBuilder(
-                        irContext, casePtr,
-                        IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
+                        irContext, casePtr, IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
                     const uint32_t constantId = ConstantLikeIndex(irContext, indexId, element);
                     Instruction* elementChain =
                         CloneChainWithConstantIndex(caseBuilder, irContext, accessChain, constantId);
@@ -538,16 +530,15 @@ namespace MobileGL {
                     insertAfter = casePtr;
                 }
 
-                InstructionBuilder switchBuilder(
-                    irContext, block, IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
+                InstructionBuilder switchBuilder(irContext, block,
+                                                 IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
                 switchBuilder.AddSwitch(indexId, mergeLabelId, targets, mergeLabelId);
 
                 if (irContext->get_def_use_mgr()->NumUsers(accessChain) == 0) {
                     irContext->KillInst(accessChain);
                 }
                 irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);
-                MGLOG_D("[spirv] fragment-output index: lowered a dynamic write to a %u-way switch",
-                        arrayLength);
+                MGLOG_D("[spirv] fragment-output index: lowered a dynamic write to a %u-way switch", arrayLength);
                 return LoweringOutcome::Changed;
             }
 
@@ -566,8 +557,8 @@ namespace MobileGL {
                 const uint32_t boolTypeId = irContext->get_type_mgr()->GetBoolTypeId();
                 const uint32_t indexId = accessChain->GetSingleWordInOperand(1);
 
-                InstructionBuilder builder(
-                    irContext, load, IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
+                InstructionBuilder builder(irContext, load,
+                                           IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
 
                 uint32_t selectedId = 0;
                 for (uint32_t element = 0; element < arrayLength; ++element) {
@@ -582,16 +573,13 @@ namespace MobileGL {
                         continue;
                     }
 
-                    Instruction* isElement =
-                        builder.AddBinaryOp(boolTypeId, spv::Op::OpIEqual, indexId, constantId);
+                    Instruction* isElement = builder.AddBinaryOp(boolTypeId, spv::Op::OpIEqual, indexId, constantId);
                     uint32_t conditionId = isElement->result_id();
                     if (dimension > 1) {
                         std::vector<uint32_t> components(dimension, conditionId);
                         conditionId = builder.AddCompositeConstruct(conditionTypeId, components)->result_id();
                     }
-                    selectedId = builder
-                                     .AddSelect(load->type_id(), conditionId, elementLoad->result_id(),
-                                                selectedId)
+                    selectedId = builder.AddSelect(load->type_id(), conditionId, elementLoad->result_id(), selectedId)
                                      ->result_id();
                 }
 

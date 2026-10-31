@@ -1,0 +1,143 @@
+# Included by CTest after all GoogleTest discovery files (ID-53).
+# CTest appends ENVIRONMENT here; keep all previously discovered lane settings.
+file(MAKE_DIRECTORY "@CMAKE_CURRENT_BINARY_DIR@/split-logs")
+file(MAKE_DIRECTORY "@CMAKE_CURRENT_BINARY_DIR@/verify-split-logs")
+# CtWireScenario reads the server's control-record counters (`ar`, `od`) off the server role's
+# PipeStats line, so its entries turn the counters on with one line per frame.
+set(mglCtWireStatsEnvironment "MOBILEGL_PIPE_STATS=1;MOBILEGL_PIPE_STATS_PERIOD=1")
+# P5b t2's two lanes ride the same rule: one private log path per entry, or
+# SplitLogPaths.PrivateAndDistinct is red for them (ID-53).
+# P5e vi's client-array lane joins the same list for the same reason: its two entries are the
+# only ones that can reach Fatal{UnmigratedVerb, "DrawArrays+CLIENT_ARRAYS"} once ra publishes
+# the caps bit, and a shared log file is a marker nobody can attribute.
+# P5e pa's strict lane joins it for the same reason as vi's: its four entries exist to CARRY a
+# Fatal marker (the two program rows), and a shared log file is a marker nobody can attribute.
+# P6 `t6`: ONE LIST FOR EVERY ENTRY THE SHARED REGISTRATION MACRO EMITS, on BOTH arms. The
+# per-block TEST_LIST variables this replaces were a list somebody had to remember to extend;
+# a block added without its variable got no private log and nothing said so until
+# PrivateAndDistinct happened to notice. The macro accumulates instead.
+# The macro's per-call lists, walked by NAME: gtest_discover_tests populates each of them when
+# ctest runs, which is also when this file is included.
+foreach(listName IN ITEMS @MGL_SPLIT_ARM_TEST_LISTS@)
+    foreach(entry IN LISTS ${listName})
+        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
+        if(entry MATCHES "TriangleScenario.TheServerStampedAVerbBoundaryOnThisDrawingFrame$")
+            set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+                "MGITEST_STRICT_ARMING_LANE=1;MOBILEGL_PIPE_STATS=1;MOBILEGL_PIPE_STATS_PERIOD=1")
+        elseif(entry MATCHES "PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares$")
+            set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+                "MGITEST_PMAP_LANE=1;MGITEST_PERSISTENT_MAP_ARM=emulated;MOBILEGL_PIPE_STATS=1;MOBILEGL_PIPE_STATS_PERIOD=1")
+        elseif(entry MATCHES "PersistentCoherentMapScenario.ThePushIsTheOnlyRouteAWriteTakesToTheServer$")
+            # The case takes the push away, which only the emulated arm has. Every split arm
+            # emulates by default except Magma in process, which is granted T0 and adopts, so
+            # that entry asks for T2 by name, as the Magma buffer lanes do.
+            set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "MGITEST_PERSISTENT_MAP_ARM=emulated")
+            if(entry MATCHES "^DirectVulkan\\.Split\\.")
+                set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "MOBILEGL_IPC_ADOPT_TIER=2")
+            endif()
+        elseif(entry MATCHES "LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares$")
+            # P11 A2: every split arm runs T2, so the arena is declared emulated.
+            set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "MGITEST_PERSISTENT_MAP_ARM=emulated")
+        elseif(entry MATCHES "CtWireScenario\\.")
+            set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "${mglCtWireStatsEnvironment}")
+        endif()
+    endforeach()
+endforeach()
+# P7 package L tier 3: the whole-suite Magma census. A LIST OF ITS OWN, and the log path is the
+# ONLY property it gets - the loop above also arms the strict-arming, pmap and persistent-map-arm
+# lane markers by entry name, and a census is here to be READ, not to assert three unrelated
+# oracles it never opted into. The path itself is not optional: these entries are
+# DirectVulkan.{Split,Spawn,Tcp}. names, so split_log_paths.py's ownership gate requires exactly
+# one absolute private path each, and on the spawn and tcp arms two processes append to it.
+#
+# One exception, telemetry rather than an oracle: CtWireScenario's counters. Without them the case
+# reds on `server control-record telemetry missing`, which says nothing about Magma, and a switch
+# that makes a counter readable does not make a case assert anything it never opted into, unlike
+# the markers above.
+foreach(listName IN ITEMS @MGL_MAGMA_FULL_TEST_LISTS@)
+    foreach(entry IN LISTS ${listName})
+        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
+        if(entry MATCHES "CtWireScenario\\.")
+            set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "${mglCtWireStatsEnvironment}")
+        endif()
+    endforeach()
+endforeach()
+# P7 wave 3 (V1): the verify comparator on the split arm. A LIST OF ITS OWN, like tier 3's and
+# for tier 3's reason - the first loop also arms the strict-arming, pmap and persistent-map-arm lane
+# markers by entry name, and this lane is here to compare fields, not to opt three unrelated
+# oracles into a whole-binary set. CtWireScenario's counters are the same exception as tier 3's.
+#
+# THE PATH IS WHAT MAKES THE LANE ARMED RATHER THAN MERELY GREEN. These entries carry no
+# MGITEST_SPLIT_LANE marker (MG_IntegrationTest/CMakeLists.txt says why: it reds 13 query-only
+# cases that never move a verb), so the proof that the transport really resolved to inproc and
+# that the comparator really armed is READ FROM THESE FILES by test.yml's verify-split job -
+# ConfigLoader's `MOBILEGL_TRANSPORT=inproc` line and `MGPipe: verify armed`, per entry, in the
+# CLIENT role's log. A shared path would make both unattributable, and under inproc the server
+# role writes its own half of the same base name.
+foreach(listName IN ITEMS @MGL_VERIFY_SPLIT_TEST_LISTS@)
+    foreach(entry IN LISTS ${listName})
+        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/verify-split-logs/${entry}.log")
+        if(entry MATCHES "CtWireScenario\\.")
+            set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "${mglCtWireStatsEnvironment}")
+        endif()
+    endforeach()
+endforeach()
+# The ambient CtWireScenario cases that count control records take the counters and a log of their
+# own as well: the integration job's inproc leg runs them on the inproc transport it exports (under
+# monolith they skip). Only those three: a log would also arm the RoleViolation case's check of the
+# guard's line, which the ambient entries never ran. The log is outside split-logs/, which holds
+# the split arms' entries.
+foreach(entry IN LISTS MGL_AMBIENT_TESTS_GLES MGL_AMBIENT_TESTS_VULKAN)
+    if(entry MATCHES "CtWireScenario\\.(ApplierReset|TextureDeath|FramebufferDeath)")
+        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/ct-wire-${entry}.log;${mglCtWireStatsEnvironment}")
+    endif()
+endforeach()
+
+foreach(entry IN LISTS MGL_SPLIT_PA_STRICT_DRAW_TESTS MGL_SPLIT_PA_STRICT_DISPATCH_TESTS)
+    set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+        "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
+endforeach()
+foreach(scenario @MGL_SPLIT_SMALL_RING_SCENARIOS@)
+    foreach(entry IN LISTS MGL_SPLIT_SMALL_${scenario}_TESTS)
+        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
+        if(entry MATCHES "TriangleScenario.TheServerStampedAVerbBoundaryOnThisDrawingFrame$")
+            set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+                "MGITEST_STRICT_ARMING_LANE=1;MOBILEGL_PIPE_STATS=1;MOBILEGL_PIPE_STATS_PERIOD=1")
+        elseif(entry MATCHES "PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares$")
+            set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+                "MGITEST_PMAP_LANE=1;MGITEST_PERSISTENT_MAP_ARM=emulated;MOBILEGL_PIPE_STATS=1;MOBILEGL_PIPE_STATS_PERIOD=1")
+        elseif(entry MATCHES "PersistentCoherentMapScenario.ThePushIsTheOnlyRouteAWriteTakesToTheServer$")
+            set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "MGITEST_PERSISTENT_MAP_ARM=emulated")
+        endif()
+    endforeach()
+endforeach()
+# d1's entries are covered by MGL_SPLIT_ARM_TESTS above (P6 `t6`).
+
+# P5e mv's five tier-pinned lanes, the same rule for the same reason - and here it also repairs
+# the addendum §4 blind spot for them: these entries carry a third name segment, so the strict
+# census cannot re-derive their MOBILEGL_ESPRYT_MULTIDRAW_MODE, but a private log per entry means
+# its marker can be read where the LANE wrote it instead of from a re-run that lost the pin.
+foreach(tier @MGL_SPLIT_MULTIDRAW_TIERS@)
+    foreach(entry IN LISTS MGL_SPLIT_MULTIDRAW_${tier}_TESTS)
+        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
+    endforeach()
+endforeach()
+
+# P5b package i1's four scenarios, the same shape as the small-ring loop above: every
+# DirectGLES.Split. entry owns exactly one absolute log path and shares it with nobody, which
+# is what SplitLogPaths.PrivateAndDistinct checks over the discovered set.
+# i1's entries are covered by MGL_SPLIT_ARM_TESTS above (P6 `t6`); the loop is kept as a no-op
+# shell only so the surrounding prose still reads against a structure.
+foreach(scenario "")
+    foreach(entry IN LISTS MGL_SPLIT_I1_${scenario}_TESTS)
+        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
+    endforeach()
+endforeach()
+# PersistentMapArm retains its existing private path and RESOURCE_LOCK: b1 reads it.

@@ -12,21 +12,16 @@
 #include "RenderbufferObject.h"
 
 namespace MobileGL::MG_State::GLState {
+    // The per-context half of the renderbuffer state: which renderbuffer is bound. The
+    // objects and their names belong to the share group (ShareGroupState).
     class RenderbufferState {
     public:
         RenderbufferState();
 
-        const SharedPtr<RenderbufferObject>& GetRenderbufferObject(Uint index);
-        void GenerateNames(Uint number, Vector<Uint>& renderbuffers);
-        const SharedPtr<RenderbufferObject>& CreateRenderbufferObject(Uint index);
         BindingSlot<RenderbufferObject>& GetBindingSlot(RenderbufferTarget target);
-        void MarkRenderbufferObjectForDeletion(Uint index);
-        Bool ValidateName(Uint index) const;
-        Bool ValidateRenderbufferObject(Uint index) const;
+        void UnbindRenderbufferObject(const SharedPtr<RenderbufferObject>& renderbufferObject);
 
     private:
-        UnorderedMap<Uint, SharedPtr<RenderbufferObject>> m_renderbufferObjects;
-        IndexGenerator<Uint> m_indexGenerator;
         Array<BindingSlot<RenderbufferObject>, static_cast<SizeT>(RenderbufferTarget::RenderbufferTargetCount)>
             m_bindingSlots;
     };

@@ -14,13 +14,13 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     namespace {
         // Tags keep two different key builders from ever producing the same blob,
         // even if their inputs happened to serialize identically.
-        constexpr Uint32 kSpirvKeyTag = 0x4d474c31u;  // "MGL1"
-        constexpr Uint32 kEsslKeyTag = 0x4d474c32u;   // "MGL2"
+        constexpr Uint32 kSpirvKeyTag = 0x4d474c31u;        // "MGL1"
+        constexpr Uint32 kEsslKeyTag = 0x4d474c32u;         // "MGL2"
         constexpr Uint32 kParseVerdictKeyTag = 0x4d474c43u; // "MGLC" - L1c, the compile half
 
         // Bumped whenever the SHAPE of a key changes (a field added, a field's
         // meaning changed). It is in every blob, so a stale in-memory entry from a
-        // previous shape cannot be honoured - and a future disk tier gets the same
+        // previous shape cannot be honored - and a future disk tier gets the same
         // protection for free.
         //
         // 2: L2 gained atomicCounterEsslBindingTop (wave3's atomic-counter block rebinding
@@ -102,7 +102,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
 
     void TranslationKeyBuilder::TextList(const Vector<String>& values) {
         Value(static_cast<Uint64>(values.size()));
-        for (const String& value : values) Text(value);
+        for (const String& value : values)
+            Text(value);
     }
 
     void TranslationKeyBuilder::StringMap(const std::map<String, String>& map) {
@@ -115,7 +116,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
 
     void TranslationKeyBuilder::NameSet(const std::set<String>& names) {
         Value(static_cast<Uint64>(names.size()));
-        for (const String& name : names) Text(name);
+        for (const String& name : names)
+            Text(name);
     }
 
     TranslationCacheKey MakeTranslationCacheKey(String blob) {
@@ -170,9 +172,9 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
 
     // Leaked for the same exit-order reason as the other two; see the note below.
     BoundedTranslationCache<ShaderParseVerdict>& GetShaderParseVerdictCache() {
-        static auto* const kCache = new BoundedTranslationCache<ShaderParseVerdict>(
-            "ShaderTranslationCache L1c (GLSL->parse verdict)", kParseVerdictCacheMaxEntries,
-            kParseVerdictCacheMaxBytes);
+        static auto* const kCache =
+            new BoundedTranslationCache<ShaderParseVerdict>("ShaderTranslationCache L1c (GLSL->parse verdict)",
+                                                            kParseVerdictCacheMaxEntries, kParseVerdictCacheMaxBytes);
         return *kCache;
     }
 
@@ -181,6 +183,11 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         AppendCommonKeyPrefix(builder, kEsslKeyTag);
         builder.Value(static_cast<Uint32>(inputs.shaderType));
         builder.Value(static_cast<Uint8>(inputs.viewportIndexLoweringArmed));
+        builder.Value(static_cast<Uint8>(inputs.deferGeometryEmitsArmed));
+        builder.Value(static_cast<Uint8>(inputs.subgroupEmulationArmed));
+        builder.Value(inputs.subgroupEmulationScratchBytes);
+        builder.Value(static_cast<Uint8>(inputs.iterationRPBarrierFixArmed));
+        builder.Value(static_cast<Uint8>(inputs.subgroupScratchAtomicReads));
         builder.Value(static_cast<Uint8>(inputs.supportsNoperspectiveInterpolation));
         builder.Value(static_cast<Uint8>(inputs.supportsExtendedImageFormats));
         builder.Value(inputs.maxColorTextureSamples);
@@ -195,13 +202,13 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         static const UnorderedMap<String, Uint> kEmptyFormats;
         builder.NameMap(inputs.glFormatByUniformName ? *inputs.glFormatByUniformName : kEmptyFormats);
         static const UnorderedMap<String, Int> kEmptyBindings;
-        builder.NameMap(inputs.storageBlockBindingOverrides ? *inputs.storageBlockBindingOverrides
-                                                            : kEmptyBindings);
+        builder.NameMap(inputs.storageBlockBindingOverrides ? *inputs.storageBlockBindingOverrides : kEmptyBindings);
         static const std::map<String, String> kEmptyRenames;
         builder.StringMap(inputs.inputBlockRenames ? *inputs.inputBlockRenames : kEmptyRenames);
         builder.StringMap(inputs.outputBlockRenames ? *inputs.outputBlockRenames : kEmptyRenames);
         builder.Value(static_cast<Uint8>(inputs.stripInputBlockLocations));
         builder.Value(static_cast<Uint8>(inputs.stripOutputBlockLocations));
+        builder.Value(static_cast<Uint8>(inputs.narrowIntegerSeedsArmed));
         static const Vector<Uint32> kEmptyWords;
         builder.Words(inputs.spirv ? *inputs.spirv : kEmptyWords);
         return MakeTranslationCacheKey(builder);
@@ -209,7 +216,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
 
     SizeT EsslTranslationResultBytes(const EsslTranslationResult& result) {
         SizeT bytes = result.essl.size();
-        for (const String& name : result.flattenedXfbBlockNames) bytes += name.size();
+        for (const String& name : result.flattenedXfbBlockNames)
+            bytes += name.size();
         bytes += result.atomicCounterGlBindings.size() * sizeof(Int);
         return bytes;
     }

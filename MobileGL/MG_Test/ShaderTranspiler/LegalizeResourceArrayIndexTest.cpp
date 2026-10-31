@@ -79,19 +79,18 @@ namespace {
     // at an array-of-storage-blocks variable carries a non-constant FIRST index, which is
     // exactly what the Qualcomm ES compiler refuses.
     bool HasDynamicBlockArrayIndex(const Vector<Uint32>& spirv) {
-        std::set<Uint32> blockStructs;      // OpTypeStruct ids decorated Block / BufferBlock
-        std::set<Uint32> constants;         // OpConstant / OpConstantNull result ids
-        std::set<Uint32> blockArrayTypes;   // OpTypeArray ids whose element is such a struct
-        std::set<Uint32> blockArrayPointers;// OpTypePointer ids pointing at one of those arrays
-        std::set<Uint32> blockArrayVars;    // OpVariable ids of one of those pointer types
+        std::set<Uint32> blockStructs;       // OpTypeStruct ids decorated Block / BufferBlock
+        std::set<Uint32> constants;          // OpConstant / OpConstantNull result ids
+        std::set<Uint32> blockArrayTypes;    // OpTypeArray ids whose element is such a struct
+        std::set<Uint32> blockArrayPointers; // OpTypePointer ids pointing at one of those arrays
+        std::set<Uint32> blockArrayVars;     // OpVariable ids of one of those pointer types
 
         ForEachInstruction(spirv, [&](spv::Op opcode, const Uint32* words, Uint32 wordCount) {
             switch (opcode) {
             case spv::Op::OpDecorate:
                 if (wordCount >= 3u) {
                     const auto decoration = static_cast<spv::Decoration>(words[2]);
-                    if (decoration == spv::Decoration::Block ||
-                        decoration == spv::Decoration::BufferBlock) {
+                    if (decoration == spv::Decoration::Block || decoration == spv::Decoration::BufferBlock) {
                         blockStructs.insert(words[1]);
                     }
                 }
@@ -273,7 +272,7 @@ void main() {
     // The IMAGE half, and the case that has always been broken independently of any per-element
     // unit remapping: a plain CONSECUTIVE image array subscripted by a loop variable. This is
     // KHR-GL42.shader_image_load_store.advanced-sso-simple's own fragment shader shape, and a raw
-    // GLES probe on Mesa 26.1.4 at ES 3.2 refuses the ESSL it produces with "image arrays indexed
+    // GLES probe on llvmpipe 26.1.4 at ES 3.2 refuses the ESSL it produces with "image arrays indexed
     // with non-constant expressions are forbidden in GLSL ES". Foldable: after unrolling every
     // subscript is a literal.
     constexpr const char* kLoopIndexedImageArray = R"(#version 450 core

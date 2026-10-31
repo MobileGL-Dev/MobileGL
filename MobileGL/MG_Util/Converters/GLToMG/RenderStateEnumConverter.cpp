@@ -48,6 +48,8 @@ namespace MobileGL {
                 return BlendFactor::Src1Alpha;
             case GL_ONE_MINUS_SRC1_ALPHA:
                 return BlendFactor::OneMinusSrc1Alpha;
+            case GL_SRC_ALPHA_SATURATE:
+                return BlendFactor::SrcAlphaSaturate;
             default:
                 return BlendFactor::Unknown;
             }

@@ -1,0 +1,314 @@
+# MobileGL - MobileGL/MG_Test/Wire/CMakeLists.txt
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
+cmake_minimum_required(VERSION 3.14)
+
+# The MG_Remote wire layer: framing, the SPSC ring, the in-process transport,
+# SCM_RIGHTS descriptor passing and the generated control-plane schema. Only
+# reachable with MOBILEGL_BUILD_DISAGGREGATED=ON (see MG_Test/CMakeLists.txt).
+
+set(MOBILEGL_WIRE_TESTS
+        FramingTest
+        RingTest
+        InProcessTransportTest
+        ProtocolSmokeTest
+        # P5 s1: the ring-owning session pair - four ShmSegment-backed segments, the five
+        # watermarks with real writers, the reply slot pool and the event ring.
+        SessionTest
+        # P6 dl: the Fatal-family table and its total projection onto the wire FatalCode.
+        FatalFamilyTest
+        # P12 (on-screen server window): the server's own window holder, driven with a fake
+        # window handle (no GL, no process, no platform window).
+        ServerDisplayTest
+        # P11 B1: the apply thread's affinity / spin chosen per session from the peer's dial mode
+        # (Server/ApplyThreadPolicy.h, a pure function).
+        # ApplyThreadPolicyTest
+        # P14 S5 (docs/Disaggregated/design/11-state-ownership.md): the applier's two halves and
+        # the key they resolve under - {session, context} for the working state, {session, share
+        # group} for the object records. Drives the registry directly: no EGL, no wire.
+        ApplierOwnershipTest
+        # P14 S6 (same doc): the twin tables' key - {session, share group}, the same pair, so a
+        # record and the twin it describes cannot land in different buckets. Drives the real
+        # twin tables directly: no EGL, no wire.
+        TwinOwnershipTest
+)
+
+if (NOT WIN32)
+    # SCM_RIGHTS and fork(): POSIX only.
+    list(APPEND MOBILEGL_WIRE_TESTS FdPassingTest)
+    # P6 so: the SAME nine ITransport-contract cases InProcessTransportTest runs, over a real
+    # socketpair with real threads, plus the three a stream has and a message queue does not.
+    # POSIX for the same reason as FdPassingTest - and because CONTRACT-P6 §2.6 lands POSIX only.
+    list(APPEND MOBILEGL_WIRE_TESTS SocketTransportTest StreamLinkTest StreamClientPublicationTest InitialCapsStartupTest)
+    # P7 F2, PH-7 (5) and fuzz arm 1: the TCP supervisor's pre-auth gate (first-frame shapes, the
+    # exact first-frame reader, the backoff's arithmetic, the knobs). Its reader is a socket read,
+    # so POSIX for the same reason.
+    list(APPEND MOBILEGL_WIRE_TESTS PreAuthGateTest)
+    # P11 PAIR: the unix supervisors' pairing of a client's control and aux connections by the
+    # nonce each presents first (Server/PairAcceptor), over real unix and TCP listeners.
+    list(APPEND MOBILEGL_WIRE_TESTS PairAcceptorTest)
+    # P11 B2: T0's Offers matched to their map_persistent records by seq (Server/AdoptInbox) over
+    # the in-process queue and a real SCM_RIGHTS socket pair: in order, out of order, late, stale,
+    # missing (bounded), not-an-Offer.
+    list(APPEND MOBILEGL_WIRE_TESTS AdoptInboxTest)
+    # Shared images: the registry (memfd-backed on a host), identification of a descriptor that
+    # crossed a socket, session holders, and the inbox keeping their descriptors apart from T0's.
+    list(APPEND MOBILEGL_WIRE_TESTS SharedImageTest)
+    # P9 W3: the graded log forward - the level mapping both ways, the logger's level reaching the
+    # forwarder, and the channel against a transport whose writes can be held (and a real socket
+    # pair nobody reads). POSIX for the socket pair.
+    list(APPEND MOBILEGL_WIRE_TESTS LogForwardTest)
+    # P6 sm: two MobileGL processes. Needs the real server image beside it, so
+    # the dependency is declared after the loop rather than assumed.
+    list(APPEND MOBILEGL_WIRE_TESTS ServerSpawnTest)
+    # P7 F2 latch (PH-1 (3)(4), Ph fuzz arm 2): one raw-peer row per latched site against a real
+    # `--serve` supervisor, each followed by a healthy next session. Needs the server image too.
+    list(APPEND MOBILEGL_WIRE_TESTS PeerLatchTest)
+    # P12 (on-screen server window). InProcessServerTest: the in-process display server entry run on a
+    # thread (sequential sessions, the latch reset, Busy, the backend pin) and D8's parent-death signal
+    # for a forked session child. ServerOwnedSurfaceTest: a real MobileGL client with
+    # MOBILEGL_IPC_SURFACE=server against a display-less `--serve` supervisor. Both drive real peers
+    # and (the second, and D8's case) the real server image, as PeerLatchTest does.
+    list(APPEND MOBILEGL_WIRE_TESTS InProcessServerTest ServerOwnedSurfaceTest)
+    # `eglinfo -B`'s per-API sequence (surfaceless make-current, the ES probe's NULL config) through
+    # a real MobileGL client against a real `--serve` supervisor, as ServerOwnedSurfaceTest does.
+    list(APPEND MOBILEGL_WIRE_TESTS EglInfoSequenceTest)
+    # Xwayland's glamor against MobileGL's EGL (GBM platform, config-less core context, surfaceless,
+    # dma-buf import) and the shared_image Flush verb its glFlush sends; a real supervisor again.
+    list(APPEND MOBILEGL_WIRE_TESTS GlamorEglSequenceTest)
+    # P14 S2 (docs/Disaggregated/design/11-state-ownership.md): several sessions in ONE process.
+    # The in-process unix supervisor serves each session on its own control thread with its own
+    # ServerSession/ServerLoop/PipeInputs block/latch domain/segment resolver; two SHM clients are
+    # live at once, mint the same names without colliding, and one closing leaves the other serving.
+    # It forks its own server and its own clients, so it needs no server image.
+    list(APPEND MOBILEGL_WIRE_TESTS MultiSessionTest)
+    # A client outlives its lost session: after an injected device loss a real EGL/GL client sees
+    # the loss reported, creates new contexts on a FRESH session and renders. Forks the in-process
+    # display server and its client, like MultiSessionTest, so it needs no server image either.
+    list(APPEND MOBILEGL_WIRE_TESTS ClientRecoveryTest)
+    # A compositor outlives its lost session: a client on the server's own window (ServerOwned) that
+    # samples another client's shared image loses its session, re-creates its surface on a fresh one -
+    # waiting for the lost session's window lease - and imports the image again; the image's owner
+    # is untouched. Forks the in-process display server (with a stand-in window) and its clients.
+    list(APPEND MOBILEGL_WIRE_TESTS CompositorRecoveryTest)
+    # Several contexts on several threads of one client, in one share group or one each, drawing at
+    # once against the in-process display server (Qt Quick's shape, and its shape after a loss).
+    list(APPEND MOBILEGL_WIRE_TESTS ConcurrentContextsTest)
+    # P11 A1: MOBILEGL_IPC_ADOPT_TIER=0/1 on a stream data plane, against a real `--serve`
+    # supervisor over loopback TCP (P12ServerRig.h): refused by name once per session on the side
+    # that names it, map_persistent DECLINED, never a Fatal. Needs the server image too.
+    list(APPEND MOBILEGL_WIRE_TESTS AdoptTierStreamTest)
+    # Declining when no server is there (Client/ServerProbe.h): the probe over unix/abstract/TCP
+    # listeners, and the EGL/glvnd/GLX entry points in forked clients, with no server (they decline
+    # inside a second) and against a real `--serve` supervisor (a display). Needs the server image.
+    list(APPEND MOBILEGL_WIRE_TESTS ServerProbeTest)
+endif()
+
+include(GoogleTest)
+
+# ServerSpawnTest execs a real second process, so the image has to exist before
+# the test runs and the test has to be told where it landed. Both stated here
+# rather than left to a working-directory coincidence.
+set(MOBILEGL_SERVER_IMAGE_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so")
+
+foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
+    add_executable(${test} ${test}.cpp)
+
+    target_include_directories(${test} PRIVATE
+            ${MGL_ROOT}/include
+            ${MGL_ROOT}/MobileGL
+            ${MGL_ROOT}/3rdparty/flatbuffers/include
+    )
+    if (test STREQUAL "PeerLatchTest" OR test STREQUAL "InProcessServerTest" OR test STREQUAL "ServerOwnedSurfaceTest" OR
+        test STREQUAL "EglInfoSequenceTest" OR test STREQUAL "GlamorEglSequenceTest" OR
+        test STREQUAL "AdoptTierStreamTest" OR test STREQUAL "MultiSessionTest" OR test STREQUAL "ServerProbeTest" OR
+        test STREQUAL "ClientRecoveryTest" OR test STREQUAL "ConcurrentContextsTest" OR
+        test STREQUAL "CompositorRecoveryTest")
+        # It builds records and a program archive by hand, so it reaches MG_Pipe and MG_State
+        # the way the codec suites do. (P12's two server suites share PeerLatchTest's healthy
+        # session, P12ServerRig.h, and so its include paths.)
+        target_include_directories(${test} PRIVATE
+                ${MGL_ROOT}/MobileGL/MG_Pipe
+                ${MGL_ROOT}/3rdparty/xxHash
+                ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+                ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+        )
+    endif ()
+
+    target_link_libraries(${test} PRIVATE
+            MobileGLTestMain
+            ${LINK_LIBRARIES}
+    )
+    if (test STREQUAL "ServerSpawnTest")
+        # P11 B1: reads the broker's PairBind templates out of android-plugin/.../PairBindFrames.java.
+        target_compile_definitions(${test} PRIVATE MOBILEGL_SOURCE_ROOT="${MGL_ROOT}")
+    endif ()
+
+    if (test STREQUAL "ServerProbeTest")
+        # It calls the glvnd vendor entry point the way libEGL does, and stands in for the GBM
+        # loader's backend-name query with a symbol of its own, which must be visible to dlsym.
+        target_include_directories(${test} PRIVATE ${MGL_ROOT}/3rdparty/glvnd/include)
+        set_target_properties(${test} PROPERTIES ENABLE_EXPORTS ON)
+    endif ()
+
+    if (test STREQUAL "ServerSpawnTest" OR test STREQUAL "PeerLatchTest" OR test STREQUAL "InProcessServerTest" OR
+        test STREQUAL "ServerOwnedSurfaceTest" OR test STREQUAL "EglInfoSequenceTest" OR test STREQUAL "AdoptTierStreamTest" OR
+        test STREQUAL "ServerProbeTest" OR test STREQUAL "GlamorEglSequenceTest")
+        # It execs the real image, so it must be built first and must be told
+        # where it is. MOBILEGL_TEST_SERVER_PATH is read by the test's
+        # ServerImage() helper; without it the test would depend on the working
+        # directory, which ctest does not promise.
+        if (TARGET MobileGLServer)
+            add_dependencies(${test} MobileGLServer)
+        endif()
+        gtest_discover_tests(${test} DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS unit
+                ENVIRONMENT "MOBILEGL_TEST_SERVER_PATH=${MOBILEGL_SERVER_IMAGE_PATH}")
+    else ()
+        gtest_discover_tests(${test} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+    endif ()
+endforeach ()
+
+# P5 w1's G3 codec suite. It is registered on its own rather than in the list above because it
+# links gtest, NOT gtest_main: the R-2 Fatal arms report through MGLOG_F + std::abort, so the
+# cases that drive one fork and read the Fatal line back out of a log file the process names
+# before anything logs - which needs a main() of its own (PipeInputsTest's shape). It also
+# reaches MG_Pipe and MG_State, so it carries their include paths.
+add_executable(PipeWireCodecTest PipeWireCodecTest.cpp)
+
+target_include_directories(PipeWireCodecTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+        ${MGL_ROOT}/MobileGL/MG_Pipe
+        ${MGL_ROOT}/3rdparty/flatbuffers/include
+        ${MGL_ROOT}/3rdparty/xxHash
+        ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+        ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+)
+
+target_link_libraries(PipeWireCodecTest PRIVATE
+        GTest::gtest
+        ${LINK_LIBRARIES}
+)
+
+if (MSVC)
+    target_compile_options(PipeWireCodecTest PRIVATE /Zc:preprocessor)
+endif ()
+
+gtest_discover_tests(PipeWireCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+# P5 c1's, v1's and s1's suites. All three are registered on their own, and all three for
+# PipeWireCodecTest's reason: a Fatal arm reports through MGLOG_F, which writes to stdout and to
+# a named file and NEVER to stderr (and with the console sink compiled out, Defines.h, only to
+# the file), so asserting one means naming a log file before anything logs - which needs a
+# main() of its own. All three also reach MG_Pipe, MG_Backend and MG_State, so all three carry
+# those include paths.
+#
+#   RemoteClientTest       the 73-slot emit table, the caps mirror, R-8's liveness gates, R-17's
+#                          routing and ID-47/ID-49's readback rules (c1)
+#   ServerLoopTest         the apply thread, the blocking control mailbox, the verb stamp and
+#                          R-11's server-owned staging copy (v1)
+#   SessionHandshakeTest   the two null-union guards driven THROUGH ServerSession::Accept and
+#                          ClientSession::StartOverTransportPair, and the ABI fingerprint's
+#                          sensitivity case driven from CapsAbiFingerprint() (s1, ID-46 6 and 7)
+#   StagedTextureStoreTest the texture half of R-11: tx's staged-texture store, its
+#                          Fatal{StageSnapshotTooNarrow}, and the E-P5c #2 production wiring
+#                          through the real resource op table (P5c tx)
+#   SurfaceControlFrameTest P5f fc: the value frame that replaced the control mailbox's
+#                          function-pointer payload, its wire codec against protocol.fbs's
+#                          SurfaceOp/SurfaceReply, and the two named refusals at the wire entry
+#   PersistentMapFaultTest P7 X1: the persistent-map tracker's two client-facing promises -
+#                          that its fault-ownership row runs in the KERNEL's address space
+#                          (arm64 tags every heap pointer, si_addr is untagged) and that a
+#                          map hands back a range writable without the handler
+#
+# THIS FILE IS THE PHASE'S ONE RECURRING MERGE CONFLICT, and it is the same-point-append shape
+# BRIEF §5's ownership table exists to prevent: three packages, three targets, one end-of-file.
+# The loop is what stops there being a fourth: a package adding a suite adds a NAME.
+foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest StagedTextureStoreTest SurfaceControlFrameTest PersistentMapFaultTest ServerContextLiveTest)
+    add_executable(${wiretest} ${wiretest}.cpp)
+
+    target_include_directories(${wiretest} PRIVATE
+            ${MGL_ROOT}/include
+            ${MGL_ROOT}/MobileGL
+            ${MGL_ROOT}/MobileGL/MG_Pipe
+            ${MGL_ROOT}/3rdparty/flatbuffers/include
+            ${MGL_ROOT}/3rdparty/xxHash
+            ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+            ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+    )
+
+    target_link_libraries(${wiretest} PRIVATE
+            GTest::gtest
+            ${LINK_LIBRARIES}
+    )
+
+    if (MSVC)
+        target_compile_options(${wiretest} PRIVATE /Zc:preprocessor)
+    endif ()
+
+    gtest_discover_tests(${wiretest} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+endforeach ()
+
+# P7 wave 2-F, F fix round (PH-7 (4) review). MOBILEGL_PROTOCOL_CONTROL_REVISION is a hand-bumped
+# integer mixed into wireFingerprint, and nothing tied it to protocol.fbs's content: a schema edit
+# that forgot the bump would leave old and new peers agreeing on the fingerprint and surface as a
+# silently absent field. This entry runs the pin ({revision -> sha256(protocol.fbs)},
+# scripts/ci/protocol_revision_pin.py) with its self-test, so that edit is red in the unit lane.
+# No compilation, no GL; label unit, the way MobileGLPurity.IncludeClosure is registered.
+find_package(Python3 COMPONENTS Interpreter)
+if (Python3_Interpreter_FOUND)
+    add_test(NAME ProtocolSchema.RevisionPinsDigest
+             COMMAND ${Python3_EXECUTABLE} ${MGL_ROOT}/scripts/ci/protocol_revision_pin.py --self-test)
+    set_tests_properties(ProtocolSchema.RevisionPinsDigest PROPERTIES LABELS unit)
+    # P7 F2 latch (fuzz arm 2): every per-session latch site in the four PH-1 (3) files has a
+    # PeerLatchTest row whose marker names it, or is argued unreachable in the script; the
+    # self-test drops each covering row and requires its site to go unmapped.
+    add_test(NAME PeerLatch.SiteMap
+             COMMAND ${Python3_EXECUTABLE} ${MGL_ROOT}/scripts/ci/ph_latch_sites.py --self-test)
+    set_tests_properties(PeerLatch.SiteMap PROPERTIES LABELS unit)
+    # The census's rule 2 now covers SessionLatch as well as SessionFail / WireLogFatal; its
+    # self-test feeds it one unmarked call of each and requires every one to be reported.
+    add_test(NAME FatalCensus.RuleTwoSelfTest
+             COMMAND ${Python3_EXECUTABLE} ${MGL_ROOT}/scripts/ci/fatal_census.py --self-test)
+    set_tests_properties(FatalCensus.RuleTwoSelfTest PROPERTIES LABELS unit)
+endif ()
+
+# Ph fuzz arm 3 (PH-6, ID-P7-2): a `--serve` supervisor, a peer that stops draining SEG_EVENT, and
+# the next connection. NOT discovered into `unit`: the peer brings a pbuffer context up on the
+# server, which needs the integration lanes' EGL environment, so MG_IntegrationTest/CMakeLists.txt
+# registers its two cases - SpawnLane.EventForfeitPeer (integration-spawn, the shm data plane) and
+# TcpLane.EventForfeitPeer (integration-tcp, the stream data plane) - beside the TCP supervisor's
+# own protocol controls. It execs the server image, so it is built after it, as ServerSpawnTest is.
+if (NOT WIN32)
+    add_executable(EventForfeitPeerTest EventForfeitPeerTest.cpp)
+    target_include_directories(EventForfeitPeerTest PRIVATE
+            ${MGL_ROOT}/include
+            ${MGL_ROOT}/MobileGL
+            ${MGL_ROOT}/3rdparty/flatbuffers/include
+    )
+    target_link_libraries(EventForfeitPeerTest PRIVATE
+            MobileGLTestMain
+            ${LINK_LIBRARIES}
+    )
+    if (TARGET MobileGLServer)
+        add_dependencies(EventForfeitPeerTest MobileGLServer)
+    endif ()
+endif ()
+
+# P6.5 manual fault-injection probe: requires an explicit live peer and is never
+# registered with ctest, so a device-less unit run cannot silently skip this gate.
+if (NOT WIN32)
+    add_executable(MobileGLPeerLossProbe PeerLossProbe.cpp)
+    target_include_directories(MobileGLPeerLossProbe PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+        ${MGL_ROOT}/3rdparty/flatbuffers/include
+    )
+    target_link_libraries(MobileGLPeerLossProbe PRIVATE ${LINK_LIBRARIES})
+endif ()

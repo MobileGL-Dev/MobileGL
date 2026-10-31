@@ -1,0 +1,644 @@
+// MobileGL - MobileGL/MG_Test/Pipe/PipeInputsTest.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// The P1 poison and verify shapes at the block level (P1 brief C.1): a fake GLContext, the
+// real filler, the real accessors. Needs the push sources, so every case is a visible SKIP
+// in a pull build rather than a vanishing test. The abort cases fork (HeadlessGL.cpp's
+// pre-flight shape): the child performs the read that must be Fatal{UnmigratedPipeInput}
+// and the parent reads SIGABRT out of waitpid and the exact line out of the log file that
+// main() below points MOBILEGL_LOG_FILE_PATH at (LogLevelTest's shape). Never EXPECT_DEATH.
+//
+// The log file is per PROCESS: gtest_discover_tests runs every case as its own process, in
+// parallel under ctest -j, and a name shared between them let a sibling's unlink or Fatal
+// line land in this process's read. A forked child inherits its parent's path on purpose.
+
+#include <gtest/gtest.h>
+#include <MG_Util/Debug/Log.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
+
+#include "Includes.h"
+#include <MG_Pipe/MGPipe.h>
+
+#include <Config.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_State/GLState/Core.h>
+
+#if !defined(_WIN32)
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
+#define MGTEST_HAVE_FORK 1
+#else
+#include <process.h>
+#define MGTEST_HAVE_FORK 0
+#endif
+
+using namespace MobileGL;
+using namespace MobileGL::MG_Pipe;
+
+namespace {
+    std::string g_logPath;
+
+    std::string ReadLog() {
+        // BOTH ROLES' LOGS (P6). A death test asserts that the CHILD said something; which
+        // role's thread said it is not what these cases are about, and refusals raised on the
+        // apply thread are written under the SERVER role by construction.
+        return MobileGL::MG_Util::Debug::ReadRoleLogs(g_logPath.c_str());
+    }
+
+    long ProcessId() {
+#if defined(_WIN32)
+        return static_cast<long>(::_getpid());
+#else
+        return static_cast<long>(::getpid());
+#endif
+    }
+
+    using GLContext = MG_State::GLState::GLContext;
+
+    // A live frontend context for the filler to read (SanityTest's idiom), restored on the
+    // way out so the cases stay independent.
+    class PipeInputsTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            m_previous = MG_State::pGLContext.Take();
+            MG_State::pGLContext = MakeUnique<GLContext>();
+        }
+        void TearDown() override { MG_State::pGLContext = Move(m_previous); }
+        SharedPtr<GLContext> m_previous;
+    };
+
+#if MOBILEGL_PIPE_POISON
+    Bool Fresh(MGPipeInputField field) {
+        return MGPipeInputFieldIsFresh(gPipeInputs->FilledState(), field);
+    }
+
+    // Negative control B's omission, made here rather than by the library: fill `verb`, then put
+    // the stamp of `field` back to what it held before the fill. The value is copied and only the
+    // stamp is withheld, which is what a FillPoints.def row nobody wrote leaves behind.
+    void FillWithholdingTheStamp(MGPipeVerb verb, MGPipeInputField field) {
+        auto& filled = const_cast<MGPipeFilledState&>(gPipeInputs->FilledState());
+        const Uint64 before = filled.FilledGen[static_cast<SizeT>(field)];
+        MGPipeValidateForVerb(verb);
+        filled.FilledGen[static_cast<SizeT>(field)] = before;
+    }
+#endif
+
+    [[maybe_unused]] constexpr const char* kOmittedFatal =
+        "Fatal{UnmigratedPipeInput, \"GetActiveTextureUnit@GenerateMipmap\"}";
+
+#if MGTEST_HAVE_FORK
+    struct ChildResult {
+        int Status = -1; // waitpid's status; -1 when fork or waitpid failed
+        std::string Log; // the lines the child appended to the log file
+    };
+
+    // Runs `body` in a forked child and returns its wait status and log delta. The child
+    // must not use gtest assertions; it _exit(0)s when `body` returns, so a body that is
+    // expected to die must be asserted dead by the parent (WIFSIGNALED), never assumed.
+    template <class Body>
+    ChildResult RunInChild(Body body) {
+        ChildResult result;
+        const std::string before = ReadLog();
+        std::fflush(nullptr);
+        const pid_t pid = ::fork();
+        if (pid < 0) return result;
+        if (pid == 0) {
+            body();
+            ::_exit(0);
+        }
+        int status = 0;
+        if (::waitpid(pid, &status, 0) != pid) return result;
+        result.Status = status;
+        result.Log = ReadLog().substr(before.size());
+        return result;
+    }
+
+    Bool DiedOfAbort(const ChildResult& r) {
+        return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT;
+    }
+    Bool ExitedWith(const ChildResult& r, int code) {
+        return WIFEXITED(r.Status) && WEXITSTATUS(r.Status) == code;
+    }
+    std::string DescribeStatus(const ChildResult& r) {
+        if (r.Status < 0) return "fork/waitpid failed";
+        if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));
+        if (WIFSIGNALED(r.Status)) return "signal " + std::to_string(WTERMSIG(r.Status));
+        return "status " + std::to_string(r.Status);
+    }
+#endif // MGTEST_HAVE_FORK
+} // namespace
+
+// Negative control B, layer 1 (P1 brief D6 / G5): the omitted (verb, field) pair is the
+// ONLY thing that goes stale - every other bit of the verb class's mask is fresh, every
+// field outside it is not, and the verb after it neither heals the field (not in kDraw's
+// mask) nor loses one of its own. The omission is the test's own (FillWithholdingTheStamp); a
+// verify build also checks the scope of the library's (MGPipeSetPoisonOmission).
+TEST_F(PipeInputsTest, OmittingOneFieldForOneVerbLeavesExactlyThatFieldStale) {
+#if !MOBILEGL_PIPE_POISON
+    GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
+#else
+    MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
+    EXPECT_TRUE(Fresh(MGPipeInputField::GetActiveTextureUnit));
+    EXPECT_TRUE(Fresh(MGPipeInputField::GetTextureUnitObject));
+
+    FillWithholdingTheStamp(MGPipeVerb::GenerateMipmap, MGPipeInputField::GetActiveTextureUnit);
+    EXPECT_TRUE(Fresh(MGPipeInputField::GetTextureUnitObject));
+    EXPECT_FALSE(Fresh(MGPipeInputField::GetActiveTextureUnit));
+    // The value was still copied: only the stamp is withheld.
+    EXPECT_EQ(gPipeInputs->CurrentVerb(), MGPipeVerb::GenerateMipmap);
+    // Exactly that field: a field is fresh iff its bit is in kTextureOp's mask and it is not
+    // the omitted one.
+    {
+        const auto cls = kMGPipeVerbClass[static_cast<SizeT>(MGPipeVerb::GenerateMipmap)];
+        const MGPipeFieldMask& mask = kMGPipeClassFieldMask[static_cast<SizeT>(cls)];
+        for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
+            const auto field = static_cast<MGPipeInputField>(f);
+            const Bool expected = MGPipeFieldMaskHas(mask, field) && field != MGPipeInputField::GetActiveTextureUnit;
+            EXPECT_EQ(Fresh(field), expected) << kMGPipeInputFieldNames[f] << " after the omitted GenerateMipmap fill";
+        }
+    }
+
+    MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
+    EXPECT_FALSE(Fresh(MGPipeInputField::GetActiveTextureUnit));
+    EXPECT_TRUE(Fresh(MGPipeInputField::GetBoundVertexArray));
+    EXPECT_TRUE(Fresh(MGPipeInputField::GetRenderStateParameters));
+    // A sticky field stays fresh across every verb.
+    EXPECT_TRUE(Fresh(MGPipeInputField::RecordError));
+
+    // And the omission is scoped to its fill: the next verb of the same class stamps it again.
+    MGPipeValidateForVerb(MGPipeVerb::BindImageTexture);
+    EXPECT_TRUE(Fresh(MGPipeInputField::GetActiveTextureUnit));
+
+#if MOBILEGL_PIPE_VERIFY && MGTEST_HAVE_FORK
+    // The library's own omission, the one the PoisonOmitted entries arm, stays armed across fills
+    // and is scoped to its VERB: a different verb of the same class keeps the stamp. In a child,
+    // because nothing disarms it.
+    const ChildResult r = RunInChild([] {
+        if (!MGPipeSetPoisonOmission("GenerateMipmap", "GetActiveTextureUnit")) ::_exit(3);
+        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
+        if (Fresh(MGPipeInputField::GetActiveTextureUnit)) ::_exit(4);
+        MGPipeValidateForVerb(MGPipeVerb::BindImageTexture);
+        if (!Fresh(MGPipeInputField::GetActiveTextureUnit)) ::_exit(5);
+    });
+    EXPECT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r)
+                                  << " (3: the setter refused the names; 4: GenerateMipmap stamped the omitted "
+                                     "field; 5: BindImageTexture did not stamp it, so the omission matched the "
+                                     "class rather than the verb)\n"
+                                  << r.Log;
+#endif
+#endif
+}
+
+// Negative control B, layer 2 (G5): the read itself. The child fills GenerateMipmap with the
+// stamp of GetActiveTextureUnit withheld and reads gPipeInputs->GetActiveTextureUnit(); the
+// parent expects SIGABRT and the exact Fatal line, and that nothing else was fatal.
+TEST_F(PipeInputsTest, ReadingAnOmittedFieldAbortsNamingTheVerb) {
+#if !MOBILEGL_PIPE_POISON
+    GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
+#elif !MGTEST_HAVE_FORK
+    GTEST_SKIP() << "no fork() on this platform";
+#else
+    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
+    const ChildResult r = RunInChild([] {
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
+        (void)gPipeInputs->GetRenderStateParameters(); // a filled field of the preceding draw: must not abort
+        FillWithholdingTheStamp(MGPipeVerb::GenerateMipmap, MGPipeInputField::GetActiveTextureUnit);
+        (void)gPipeInputs->GetTextureUnitObject(0); // the sibling field: filled, must not abort
+        (void)gPipeInputs->GetActiveTextureUnit();  // the omitted field: Fatal
+        ::_exit(3);                                 // reached only if the poison failed
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find(kOmittedFatal), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("@DrawArrays"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("GetTextureUnitObject@"), std::string::npos) << r.Log;
+#endif
+}
+
+// The sibling: the same reads without the omission complete, and no Fatal is logged.
+TEST_F(PipeInputsTest, ReadingAFilledFieldCompletes) {
+#if !MGTEST_HAVE_FORK
+    GTEST_SKIP() << "no fork() on this platform";
+#else
+    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
+    const ChildResult r = RunInChild([] {
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
+        (void)gPipeInputs->GetRenderStateParameters();
+        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
+        (void)gPipeInputs->GetTextureUnitObject(0);
+        (void)gPipeInputs->GetActiveTextureUnit();
+    });
+    ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_EQ(r.Log.find("Fatal{"), std::string::npos) << r.Log;
+#endif
+}
+
+// The window before the first verb (P1 brief D6: "<Field>@<none>"). Nothing has filled this
+// process's block, so a backend-style read of a value field is Fatal naming no verb: the
+// serial and every stamp are 0, and 0 == 0 is not fresh. In a verify build the child also
+// sets the lane's knob first, the shape of a read reached from initialization: the poison
+// fires at MGP_INPUT_CHECK, before the read hook (armed only by the first fill) could matter.
+TEST_F(PipeInputsTest, ReadingBeforeAnyFillAbortsNamingNoVerb) {
+#if !MOBILEGL_PIPE_POISON
+    GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
+#elif !MGTEST_HAVE_FORK
+    GTEST_SKIP() << "no fork() on this platform";
+#else
+    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
+    if (gPipeInputs->FilledState().CurrentVerbSerial != 0) {
+        GTEST_SKIP() << "another case already filled in this process; gtest_discover_tests runs each case alone";
+    }
+    MG_State::pGLContext->SetLineWidth(7.0f); // a live value the default storage (0) does not hold
+    const ChildResult r = RunInChild([] {
+#if MOBILEGL_PIPE_VERIFY
+        MG_Config::Features.PipeVerify = true;
+#endif
+        (void)gPipeInputs->GetLineWidth(); // Fatal{UnmigratedPipeInput, "GetLineWidth@<none>"}
+        ::_exit(3);                        // reached only if the pre-fill window read as fresh
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetLineWidth@<none>\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("PipeVerifyDiffer"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("verify armed"), std::string::npos) << r.Log;
+#endif
+}
+
+// Negative control A at the block level (G4): a clean snapshot compares equal to the pushed
+// block over the verb's mask; corrupting one field of the snapshot makes the compare name
+// exactly that field, at the serial of the fill it belongs to.
+TEST_F(PipeInputsTest, CorruptedSnapshotFieldIsNamedWithItsSerial) {
+#if !MOBILEGL_PIPE_VERIFY
+    GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
+#else
+    const Uint64 serialBefore = gPipeInputs->FilledState().CurrentVerbSerial;
+    MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
+    const Uint64 serial = gPipeInputs->FilledState().CurrentVerbSerial;
+    EXPECT_EQ(serial, serialBefore + 1);
+    const MGPipeFieldMask& mask = kMGPipeClassFieldMask[static_cast<SizeT>(MGPipeVerbClass::kDraw)];
+
+    static PipeInputs snapshot{};
+    SnapshotFromGLContext(snapshot, mask);
+    MGPipeInputField field = MGPipeInputField::kFieldCount;
+    EXPECT_TRUE(MGPipeVerifyInputs(gPipeInputs, snapshot, mask, &field));
+    EXPECT_EQ(field, MGPipeInputField::kFieldCount);
+
+    ASSERT_TRUE(MGPipeApplyVerifyCorruption(snapshot, MGPipeInputField::GetRenderStateParameters));
+    EXPECT_FALSE(MGPipeVerifyInputs(gPipeInputs, snapshot, mask, &field));
+    EXPECT_EQ(field, MGPipeInputField::GetRenderStateParameters);
+    EXPECT_STREQ(kMGPipeInputFieldNames[static_cast<SizeT>(field)], "GetRenderStateParameters");
+    // The serial the report would print is the fill's, and it stamped that field.
+    EXPECT_EQ(gPipeInputs->FilledState().FilledGen[static_cast<SizeT>(field)], serial);
+
+    // A forwarded field has nothing to corrupt, and the corruption of a field outside the
+    // mask is not seen by a compare over that mask.
+    EXPECT_FALSE(MGPipeApplyVerifyCorruption(snapshot, MGPipeInputField::RecordError));
+    SnapshotFromGLContext(snapshot, mask);
+    ASSERT_TRUE(MGPipeApplyVerifyCorruption(snapshot, MGPipeInputField::GetPixelStoreParameters));
+    EXPECT_FALSE(MGPipeFieldMaskHas(mask, MGPipeInputField::GetPixelStoreParameters));
+    EXPECT_TRUE(MGPipeVerifyInputs(gPipeInputs, snapshot, mask, &field));
+#endif
+}
+
+// The same control for EVERY field, which is where P13 W3c moved the capability cross-check the
+// residual block used to carry: two snapshots of one live context compare equal over all fields,
+// and corrupting any one field that has storage makes the compare name exactly that field. The
+// seven forwarded fields have no storage, so there is nothing to corrupt and nothing to compare.
+TEST_F(PipeInputsTest, EveryCorruptedFieldIsNamedByTheComparator) {
+#if !MOBILEGL_PIPE_VERIFY
+    GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
+#else
+    constexpr MGPipeFieldMask kEveryField{{~Uint64{0}, ~Uint64{0}}};
+    const auto name = [](MGPipeInputField field) {
+        return field == MGPipeInputField::kFieldCount ? "<none>" : kMGPipeInputFieldNames[static_cast<SizeT>(field)];
+    };
+    // A fresh block per snapshot: the snapshot copies only what the context holds (the binding
+    // points past the touched count keep their storage), so a reused block would carry one
+    // field's corruption into the next field's compare.
+    const auto snapshot = [&] {
+        auto block = MakeUnique<PipeInputs>();
+        SnapshotFromGLContext(*block, kEveryField);
+        return block;
+    };
+    const auto reference = snapshot();
+    MGPipeInputField named = MGPipeInputField::kFieldCount;
+    ASSERT_TRUE(MGPipeVerifyInputs(*reference, *snapshot(), kEveryField, &named))
+        << "two snapshots of one context differ at " << name(named);
+
+    SizeT corruptedFields = 0;
+    for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
+        const auto field = static_cast<MGPipeInputField>(f);
+        const auto corrupted = snapshot();
+        if (kMGPipeInputFieldSticky[f]) {
+            EXPECT_FALSE(MGPipeApplyVerifyCorruption(*corrupted, field)) << name(field) << " is forwarded";
+            continue;
+        }
+        ASSERT_TRUE(MGPipeApplyVerifyCorruption(*corrupted, field)) << name(field) << " has no storage to corrupt";
+        ++corruptedFields;
+        named = MGPipeInputField::kFieldCount;
+        EXPECT_FALSE(MGPipeVerifyInputs(*reference, *corrupted, kEveryField, &named))
+            << "the comparator does not see a corrupted " << name(field);
+        EXPECT_EQ(named, field) << "a corrupted " << name(field) << " was reported as " << name(named);
+    }
+    EXPECT_EQ(corruptedFields, kMGPipeInputFieldCount - kMGPipeForwardedFieldCount);
+
+#if MGTEST_HAVE_FORK
+    // And the capability field through the knob and each verb's own mask, at the verbs a clear,
+    // draw and readback frame crosses: every one whose class fills the field must report it at
+    // entry, and at least one must fill it.
+    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
+    static constexpr MGPipeVerb kFrameVerbs[] = {MGPipeVerb::Clear, MGPipeVerb::DrawArrays, MGPipeVerb::ReadPixels};
+    const ChildResult r = RunInChild([] {
+        MG_Config::Features.PipeVerify = true;
+        MG_Config::Features.PipeVerifyFatal = false;
+        ::setenv("MOBILEGL_PIPE_VERIFY_CORRUPT", "IsCapabilityEnabled", 1);
+        for (const MGPipeVerb verb : kFrameVerbs)
+            MGPipeValidateForVerb(verb);
+    });
+    ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
+    SizeT filling = 0;
+    for (const MGPipeVerb verb : kFrameVerbs) {
+        const auto cls = static_cast<SizeT>(kMGPipeVerbClass[static_cast<SizeT>(verb)]);
+        const Bool fills = MGPipeFieldMaskHas(kMGPipeClassFieldMask[cls], MGPipeInputField::IsCapabilityEnabled);
+        filling += fills ? 1 : 0;
+        const std::string report = std::string("Fatal{PipeVerifyDiffer, \"IsCapabilityEnabled@") +
+                                   kMGPipeVerbNames[static_cast<SizeT>(verb)] + "\"";
+        EXPECT_EQ(r.Log.find(report) != std::string::npos, fills)
+            << report << (fills ? " missing" : " unexpected") << " in\n"
+            << r.Log;
+    }
+    EXPECT_GT(filling, 0u) << "no verb of a clear, draw and readback frame fills IsCapabilityEnabled";
+#endif
+#endif
+}
+
+// The compare-at-read arm (P1 brief D8, the arm that is real in P1): a value that changes in
+// the live context between the verb boundary and the read is Fatal{PipeVerifyDiffer,
+// "Field@Verb", verb=<serial>, where=read}; the same read before the mutation completes.
+TEST_F(PipeInputsTest, MutatedFieldIsNamedAtRead) {
+#if !MOBILEGL_PIPE_VERIFY
+    GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
+#elif !MGTEST_HAVE_FORK
+    GTEST_SKIP() << "no fork() on this platform";
+#else
+    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
+    MGPipeValidateForVerb(MGPipeVerb::Clear); // the parent armed nothing: Features.PipeVerify is false here
+    const Uint64 serial = gPipeInputs->FilledState().CurrentVerbSerial + 1; // the child's DrawArrays fill
+    const ChildResult r = RunInChild([] {
+        MG_Config::Features.PipeVerify = true;
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
+        const Float boundary = gPipeInputs->GetLineWidth(); // boundary == live: completes
+        (void)gPipeInputs->GetRenderStateParameters();
+        MG_State::pGLContext->SetLineWidth(boundary + 1.0f);
+        if (MG_State::pGLContext->GetLineWidth() == boundary) ::_exit(7); // the mutation did not take
+        (void)gPipeInputs->GetLineWidth(); // the stored value is stale against the live one: Fatal
+        ::_exit(3);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("MGPipe: verify armed - 63 fields, 71 verbs, fatal=1"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("MGPipe: verify read of GetLineWidth (index 0, 0) differs from the live context"),
+              std::string::npos)
+        << r.Log;
+    const std::string expected =
+        "Fatal{PipeVerifyDiffer, \"GetLineWidth@DrawArrays\", verb=" + std::to_string(serial) + ", where=read}";
+    EXPECT_NE(r.Log.find(expected), std::string::npos) << "expected " << expected << " in\n" << r.Log;
+    EXPECT_EQ(r.Log.find("where=entry"), std::string::npos) << r.Log;
+#endif
+}
+
+// The MOBILEGL_PIPE_VERIFY_CORRUPT knob through the environment, where the lanes set it: the
+// fill after the child sets it logs both arming lines and the entry compare names the
+// corrupted field at that fill's serial, where=entry.
+TEST_F(PipeInputsTest, VerifyCorruptKnobNamesTheFieldAtEntry) {
+#if !MOBILEGL_PIPE_VERIFY
+    GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
+#elif !MGTEST_HAVE_FORK
+    GTEST_SKIP() << "no fork() on this platform";
+#else
+    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
+    MGPipeValidateForVerb(MGPipeVerb::Clear);
+    const Uint64 serial = gPipeInputs->FilledState().CurrentVerbSerial + 1;
+    const ChildResult r = RunInChild([] {
+        MG_Config::Features.PipeVerify = true;
+        ::setenv("MOBILEGL_PIPE_VERIFY_CORRUPT", "GetRenderStateParameters", 1);
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
+        ::_exit(3);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("MGPipe: verify armed - 63 fields, 71 verbs, fatal=1"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("MGPipe: verify corruption armed - GetRenderStateParameters"), std::string::npos) << r.Log;
+    const std::string expected =
+        "Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@DrawArrays\", verb=" + std::to_string(serial) +
+        ", where=entry}";
+    EXPECT_NE(r.Log.find(expected), std::string::npos) << "expected " << expected << " in\n" << r.Log;
+#endif
+}
+
+// An unknown field name in MOBILEGL_PIPE_VERIFY_CORRUPT is Fatal{PipeVerifyBadKnob} at
+// arming, before the comparator reports anything.
+TEST_F(PipeInputsTest, BadVerifyCorruptKnobIsFatalNamingTheKnob) {
+#if !MOBILEGL_PIPE_VERIFY
+    GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
+#elif !MGTEST_HAVE_FORK
+    GTEST_SKIP() << "no fork() on this platform";
+#else
+    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
+    const ChildResult r = RunInChild([] {
+        MG_Config::Features.PipeVerify = true;
+        ::setenv("MOBILEGL_PIPE_VERIFY_CORRUPT", "NoSuchField", 1);
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
+        ::_exit(3);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{PipeVerifyBadKnob, \"MOBILEGL_PIPE_VERIFY_CORRUPT=NoSuchField\": "
+                         "no such field in kMGPipeInputFieldNames}"),
+              std::string::npos)
+        << r.Log;
+    EXPECT_EQ(r.Log.find("verify armed"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("PipeVerifyDiffer"), std::string::npos) << r.Log;
+#endif
+}
+
+// MOBILEGL_PIPE_VERIFY_FATAL=0: the divergence is logged with its field and serial and the
+// process goes on (the fill returns, the next fill's compare runs again), and the teardown
+// summary counts both. The child leaves through std::exit so the comparator's static
+// destructor runs (a _exit would skip the summary line).
+TEST_F(PipeInputsTest, VerifyFatalOffLogsTheDivergenceAndContinues) {
+#if !MOBILEGL_PIPE_VERIFY
+    GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
+#elif !MGTEST_HAVE_FORK
+    GTEST_SKIP() << "no fork() on this platform";
+#else
+    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
+    MGPipeValidateForVerb(MGPipeVerb::Clear);
+    const Uint64 serial = gPipeInputs->FilledState().CurrentVerbSerial + 1;
+    const ChildResult r = RunInChild([] {
+        MG_Config::Features.PipeVerify = true;
+        MG_Config::Features.PipeVerifyFatal = false;
+        ::setenv("MOBILEGL_PIPE_VERIFY_CORRUPT", "GetRenderStateParameters", 1);
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
+        MGPipeValidateForVerb(MGPipeVerb::DrawElements);
+        std::exit(0);
+    });
+    ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("MGPipe: verify armed - 63 fields, 71 verbs, fatal=0"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("MGPipe: verify summary - 2 divergence(s) survived MOBILEGL_PIPE_VERIFY_FATAL=0"),
+              std::string::npos)
+        << r.Log;
+    const std::string first =
+        "Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@DrawArrays\", verb=" + std::to_string(serial) +
+        ", where=entry}";
+    const std::string second =
+        "Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@DrawElements\", verb=" + std::to_string(serial + 1) +
+        ", where=entry}";
+    EXPECT_NE(r.Log.find(first), std::string::npos) << "expected " << first << " in\n" << r.Log;
+    EXPECT_NE(r.Log.find(second), std::string::npos) << "expected " << second << " in\n" << r.Log;
+#endif
+}
+
+// Every verb fills exactly its class mask: after a fill, a field is fresh iff its bit is set
+// (sticky fields included, since every class mask carries them).
+TEST_F(PipeInputsTest, EveryVerbFillsItsClassAndNothingElse) {
+#if !MOBILEGL_PIPE_POISON
+    GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
+#else
+    for (SizeT v = 0; v < kMGPipeVerbCount; ++v) {
+        const auto verb = static_cast<MGPipeVerb>(v);
+        MGPipeValidateForVerb(verb);
+        const MGPipeFieldMask& mask = kMGPipeClassFieldMask[static_cast<SizeT>(kMGPipeVerbClass[v])];
+        for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
+            const auto field = static_cast<MGPipeInputField>(f);
+            EXPECT_EQ(Fresh(field), MGPipeFieldMaskHas(mask, field))
+                << kMGPipeInputFieldNames[f] << " after " << kMGPipeVerbNames[v];
+        }
+    }
+    EXPECT_EQ(gPipeInputs->ContextIdentity(), static_cast<const void*>(MG_State::pGLContext.get()));
+    EXPECT_TRUE(gPipeInputs->IsLive());
+#endif
+}
+
+// Push on mutation (P1 lane finding F2, MG_Pipe/PipeMutation.h). The backends write into
+// frontend objects inside their own verb - Magma synthesises a fallback texture for an
+// unbound sampler and overrides a unit's sampler filter (VulkanRenderer/UniformManager) -
+// and every such write moves a counter the verb boundary already copied. The frontend
+// mutator refreshes that field, so the block still equals the live context at every read.
+// Without the notice the two reads below differ and the pushed value is the stale one.
+TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbRefreshesThePushedField) {
+    auto& ctx = *MG_State::pGLContext;
+    MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
+    ASSERT_EQ(gPipeInputs->GetSamplingResolutionGeneration(), ctx.GetSamplingResolutionGeneration());
+    ASSERT_EQ(gPipeInputs->GetTextureBindGeneration(), ctx.GetTextureBindGeneration());
+    ASSERT_EQ(gPipeInputs->GetMaxTouchedTextureUnit(), ctx.GetMaxTouchedTextureUnit());
+
+    // What UniformManager's fallback path does mid-draw: change a sampler object's filter,
+    // which bumps the context-wide sampling-resolution generation (SamplerObject.cpp).
+    const Uint64 samplingBefore = ctx.GetSamplingResolutionGeneration();
+    auto sampler = MakeShared<MG_State::GLState::SamplerObject>(0u);
+    sampler->SetMinFilter(sampler->GetMinFilter() == SamplerFilterMode::Nearest ? SamplerFilterMode::Linear
+                                                                                : SamplerFilterMode::Nearest);
+    ASSERT_NE(ctx.GetSamplingResolutionGeneration(), samplingBefore) << "the mutation did not move the counter";
+    EXPECT_EQ(gPipeInputs->GetSamplingResolutionGeneration(), ctx.GetSamplingResolutionGeneration());
+
+    // And a bind reached from inside a verb moves both the bind generation and the
+    // high-water mark of touched units (TextureState::NoteUnitTouched).
+    const Uint64 bindBefore = ctx.GetTextureBindGeneration();
+    const Int unit = ctx.GetMaxTouchedTextureUnit() + 1;
+    ctx.NoteTextureUnitTouched(unit);
+    ASSERT_NE(ctx.GetTextureBindGeneration(), bindBefore) << "the bind did not move the counter";
+    ASSERT_EQ(ctx.GetMaxTouchedTextureUnit(), unit);
+    EXPECT_EQ(gPipeInputs->GetTextureBindGeneration(), ctx.GetTextureBindGeneration());
+    EXPECT_EQ(gPipeInputs->GetMaxTouchedTextureUnit(), ctx.GetMaxTouchedTextureUnit());
+}
+
+// The notice refreshes the VALUE and never the stamp: a field this verb withheld the stamp
+// of (negative control B) must stay stale, and a field outside the verb class's mask must
+// stay unfilled rather than be healed by an unrelated frontend write.
+TEST_F(PipeInputsTest, TheMutationNoticeRefreshesTheValueButNotTheStamp) {
+#if !MOBILEGL_PIPE_POISON
+    GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
+#else
+    auto& ctx = *MG_State::pGLContext;
+    FillWithholdingTheStamp(MGPipeVerb::DrawArrays, MGPipeInputField::GetSamplingResolutionGeneration);
+    ASSERT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration));
+    ctx.BumpSamplingResolutionGeneration();
+    EXPECT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration))
+        << "the notice restamped a field whose stamp the fill withheld";
+
+    // FenceSync is a kQuery verb: its mask holds no texture field at all, so the notice must
+    // leave the generation unfilled and a read of it Fatal{UnmigratedPipeInput}.
+    MGPipeValidateForVerb(MGPipeVerb::FenceSync);
+    ASSERT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration));
+    ctx.BumpSamplingResolutionGeneration();
+    EXPECT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration))
+        << "the notice stamped a field the verb class never fills";
+#endif
+}
+
+// The lane failure itself (six DirectVulkan.Verify.UnboundImageDescriptorScenario entries,
+// two SampledSetStalenessScenario, two retrace cases): a frontend write made inside a draw
+// used to make the very next read of the pushed block differ from the live context. The
+// child reproduces it end to end under the armed comparator and must survive; without the
+// notice it dies of Fatal{PipeVerifyDiffer, "GetSamplingResolutionGeneration@DrawArrays",
+// where=read}.
+TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbDoesNotDivergeAtRead) {
+#if !MOBILEGL_PIPE_VERIFY
+    GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
+#elif !MGTEST_HAVE_FORK
+    GTEST_SKIP() << "no fork() on this platform";
+#else
+    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
+    const ChildResult r = RunInChild([] {
+        MG_Config::Features.PipeVerify = true;
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
+        (void)gPipeInputs->GetSamplingResolutionGeneration(); // boundary == live: completes
+        auto& ctx = *MG_State::pGLContext;
+        const Uint64 before = ctx.GetSamplingResolutionGeneration();
+        auto sampler = MakeShared<MG_State::GLState::SamplerObject>(0u);
+        sampler->SetMinFilter(sampler->GetMinFilter() == SamplerFilterMode::Nearest ? SamplerFilterMode::Linear
+                                                                                    : SamplerFilterMode::Nearest);
+        if (ctx.GetSamplingResolutionGeneration() == before) {
+            ::_exit(7); // the mutation did not take: the case would pass for the wrong reason
+        }
+        (void)gPipeInputs->GetSamplingResolutionGeneration(); // Fatal{PipeVerifyDiffer} without the notice
+        ctx.NoteTextureUnitTouched(ctx.GetMaxTouchedTextureUnit() + 1);
+        (void)gPipeInputs->GetTextureBindGeneration();
+        (void)gPipeInputs->GetMaxTouchedTextureUnit();
+    });
+    ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("MGPipe: verify armed"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("Fatal{"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("PipeVerifyDiffer"), std::string::npos) << r.Log;
+#endif
+}
+
+int main(int argc, char** argv) {
+    // Before anything logs: MG_Util::Debug::InitFile() reads the variable once, on the first
+    // write, and caches the FILE*. The name carries this process's pid (see the file header),
+    // and the file is removed on the way out; a forked child that aborts leaves it to us.
+    namespace fs = std::filesystem;
+    const fs::path path =
+        fs::temp_directory_path() / ("mobilegl-pipeinputs-test-" + std::to_string(ProcessId()) + ".log");
+    std::error_code ec;
+    fs::remove(path, ec);
+    g_logPath = path.string();
+#if defined(_WIN32)
+    _putenv_s("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str());
+#else
+    setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
+#endif
+    ::testing::InitGoogleTest(&argc, argv);
+    const int rc = RUN_ALL_TESTS();
+    fs::remove(path, ec);
+    return rc;
+}

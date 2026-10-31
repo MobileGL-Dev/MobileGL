@@ -138,90 +138,194 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             case TextureInternalFormat::DepthComponent32F:
                 out = {1, ShadowComponent::Float32, false};
                 return true;
-            // Stencil is the one single-channel INTEGER shadow that is not a colour format: eight
+            // Stencil is the one single-channel INTEGER shadow that is not a color format: eight
             // bits, held as an unsigned index rather than a normalized value.
             case TextureInternalFormat::StencilIndex8:
                 out = {1, ShadowComponent::UInt8, true};
                 return true;
 
             case TextureInternalFormat::R8:
-            case TextureInternalFormat::Red:     out = {1, ShadowComponent::UNorm8, false}; return true;
+            case TextureInternalFormat::Red:
+                out = {1, ShadowComponent::UNorm8, false};
+                return true;
             case TextureInternalFormat::RG8:
-            case TextureInternalFormat::RG:      out = {2, ShadowComponent::UNorm8, false}; return true;
+            case TextureInternalFormat::RG:
+                out = {2, ShadowComponent::UNorm8, false};
+                return true;
             case TextureInternalFormat::RGB8:
             case TextureInternalFormat::RGB:
-            case TextureInternalFormat::SRGB8:   out = {3, ShadowComponent::UNorm8, false}; return true;
+            case TextureInternalFormat::SRGB8:
+                out = {3, ShadowComponent::UNorm8, false};
+                return true;
             case TextureInternalFormat::RGBA8:
             case TextureInternalFormat::RGBA:
-            case TextureInternalFormat::SRGB8Alpha8: out = {4, ShadowComponent::UNorm8, false}; return true;
+            case TextureInternalFormat::SRGB8Alpha8:
+                out = {4, ShadowComponent::UNorm8, false};
+                return true;
 
             // Legacy desktop-GL sized normalized formats are stored in the closest ES-legal layout
             // (see TextureFormatProcessor::NormalizePixelFormat): 8-bit unorm for <=8-bit channels,
             // 16-bit unorm for 10/12-bit channels.
             case TextureInternalFormat::R3G3B2:
             case TextureInternalFormat::RGB4:
-            case TextureInternalFormat::RGB5:    out = {3, ShadowComponent::UNorm8, false}; return true;
+            case TextureInternalFormat::RGB5:
+                out = {3, ShadowComponent::UNorm8, false};
+                return true;
             case TextureInternalFormat::RGBA2:
             case TextureInternalFormat::RGBA4:
-            case TextureInternalFormat::RGB5A1:  out = {4, ShadowComponent::UNorm8, false}; return true;
+            case TextureInternalFormat::RGB5A1:
+                out = {4, ShadowComponent::UNorm8, false};
+                return true;
             case TextureInternalFormat::RGB10:
-            case TextureInternalFormat::RGB12:   out = {3, ShadowComponent::UNorm16, false}; return true;
-            case TextureInternalFormat::RGBA12:  out = {4, ShadowComponent::UNorm16, false}; return true;
+            case TextureInternalFormat::RGB12:
+                out = {3, ShadowComponent::UNorm16, false};
+                return true;
+            case TextureInternalFormat::RGBA12:
+                out = {4, ShadowComponent::UNorm16, false};
+                return true;
 
-            case TextureInternalFormat::R8Snorm:    out = {1, ShadowComponent::SNorm8, false}; return true;
-            case TextureInternalFormat::RG8Snorm:   out = {2, ShadowComponent::SNorm8, false}; return true;
-            case TextureInternalFormat::RGB8Snorm:  out = {3, ShadowComponent::SNorm8, false}; return true;
-            case TextureInternalFormat::RGBA8Snorm: out = {4, ShadowComponent::SNorm8, false}; return true;
+            case TextureInternalFormat::R8Snorm:
+                out = {1, ShadowComponent::SNorm8, false};
+                return true;
+            case TextureInternalFormat::RG8Snorm:
+                out = {2, ShadowComponent::SNorm8, false};
+                return true;
+            case TextureInternalFormat::RGB8Snorm:
+                out = {3, ShadowComponent::SNorm8, false};
+                return true;
+            case TextureInternalFormat::RGBA8Snorm:
+                out = {4, ShadowComponent::SNorm8, false};
+                return true;
 
-            case TextureInternalFormat::R16:    out = {1, ShadowComponent::UNorm16, false}; return true;
-            case TextureInternalFormat::RG16:   out = {2, ShadowComponent::UNorm16, false}; return true;
-            case TextureInternalFormat::RGB16:  out = {3, ShadowComponent::UNorm16, false}; return true;
-            case TextureInternalFormat::RGBA16: out = {4, ShadowComponent::UNorm16, false}; return true;
+            case TextureInternalFormat::R16:
+                out = {1, ShadowComponent::UNorm16, false};
+                return true;
+            case TextureInternalFormat::RG16:
+                out = {2, ShadowComponent::UNorm16, false};
+                return true;
+            case TextureInternalFormat::RGB16:
+                out = {3, ShadowComponent::UNorm16, false};
+                return true;
+            case TextureInternalFormat::RGBA16:
+                out = {4, ShadowComponent::UNorm16, false};
+                return true;
 
-            case TextureInternalFormat::R16Snorm:    out = {1, ShadowComponent::SNorm16, false}; return true;
-            case TextureInternalFormat::RG16Snorm:   out = {2, ShadowComponent::SNorm16, false}; return true;
-            case TextureInternalFormat::RGB16Snorm:  out = {3, ShadowComponent::SNorm16, false}; return true;
-            case TextureInternalFormat::RGBA16Snorm: out = {4, ShadowComponent::SNorm16, false}; return true;
+            case TextureInternalFormat::R16Snorm:
+                out = {1, ShadowComponent::SNorm16, false};
+                return true;
+            case TextureInternalFormat::RG16Snorm:
+                out = {2, ShadowComponent::SNorm16, false};
+                return true;
+            case TextureInternalFormat::RGB16Snorm:
+                out = {3, ShadowComponent::SNorm16, false};
+                return true;
+            case TextureInternalFormat::RGBA16Snorm:
+                out = {4, ShadowComponent::SNorm16, false};
+                return true;
 
-            case TextureInternalFormat::R16F:    out = {1, ShadowComponent::Half, false}; return true;
-            case TextureInternalFormat::RG16F:   out = {2, ShadowComponent::Half, false}; return true;
-            case TextureInternalFormat::RGB16F:  out = {3, ShadowComponent::Half, false}; return true;
-            case TextureInternalFormat::RGBA16F: out = {4, ShadowComponent::Half, false}; return true;
+            case TextureInternalFormat::R16F:
+                out = {1, ShadowComponent::Half, false};
+                return true;
+            case TextureInternalFormat::RG16F:
+                out = {2, ShadowComponent::Half, false};
+                return true;
+            case TextureInternalFormat::RGB16F:
+                out = {3, ShadowComponent::Half, false};
+                return true;
+            case TextureInternalFormat::RGBA16F:
+                out = {4, ShadowComponent::Half, false};
+                return true;
 
-            case TextureInternalFormat::R32F:    out = {1, ShadowComponent::Float32, false}; return true;
-            case TextureInternalFormat::RG32F:   out = {2, ShadowComponent::Float32, false}; return true;
-            case TextureInternalFormat::RGB32F:  out = {3, ShadowComponent::Float32, false}; return true;
-            case TextureInternalFormat::RGBA32F: out = {4, ShadowComponent::Float32, false}; return true;
+            case TextureInternalFormat::R32F:
+                out = {1, ShadowComponent::Float32, false};
+                return true;
+            case TextureInternalFormat::RG32F:
+                out = {2, ShadowComponent::Float32, false};
+                return true;
+            case TextureInternalFormat::RGB32F:
+                out = {3, ShadowComponent::Float32, false};
+                return true;
+            case TextureInternalFormat::RGBA32F:
+                out = {4, ShadowComponent::Float32, false};
+                return true;
 
-            case TextureInternalFormat::R8UI:    out = {1, ShadowComponent::UInt8, true}; return true;
-            case TextureInternalFormat::RG8UI:   out = {2, ShadowComponent::UInt8, true}; return true;
-            case TextureInternalFormat::RGB8UI:  out = {3, ShadowComponent::UInt8, true}; return true;
-            case TextureInternalFormat::RGBA8UI: out = {4, ShadowComponent::UInt8, true}; return true;
+            case TextureInternalFormat::R8UI:
+                out = {1, ShadowComponent::UInt8, true};
+                return true;
+            case TextureInternalFormat::RG8UI:
+                out = {2, ShadowComponent::UInt8, true};
+                return true;
+            case TextureInternalFormat::RGB8UI:
+                out = {3, ShadowComponent::UInt8, true};
+                return true;
+            case TextureInternalFormat::RGBA8UI:
+                out = {4, ShadowComponent::UInt8, true};
+                return true;
 
-            case TextureInternalFormat::R8I:    out = {1, ShadowComponent::Int8, true}; return true;
-            case TextureInternalFormat::RG8I:   out = {2, ShadowComponent::Int8, true}; return true;
-            case TextureInternalFormat::RGB8I:  out = {3, ShadowComponent::Int8, true}; return true;
-            case TextureInternalFormat::RGBA8I: out = {4, ShadowComponent::Int8, true}; return true;
+            case TextureInternalFormat::R8I:
+                out = {1, ShadowComponent::Int8, true};
+                return true;
+            case TextureInternalFormat::RG8I:
+                out = {2, ShadowComponent::Int8, true};
+                return true;
+            case TextureInternalFormat::RGB8I:
+                out = {3, ShadowComponent::Int8, true};
+                return true;
+            case TextureInternalFormat::RGBA8I:
+                out = {4, ShadowComponent::Int8, true};
+                return true;
 
-            case TextureInternalFormat::R16UI:    out = {1, ShadowComponent::UInt16, true}; return true;
-            case TextureInternalFormat::RG16UI:   out = {2, ShadowComponent::UInt16, true}; return true;
-            case TextureInternalFormat::RGB16UI:  out = {3, ShadowComponent::UInt16, true}; return true;
-            case TextureInternalFormat::RGBA16UI: out = {4, ShadowComponent::UInt16, true}; return true;
+            case TextureInternalFormat::R16UI:
+                out = {1, ShadowComponent::UInt16, true};
+                return true;
+            case TextureInternalFormat::RG16UI:
+                out = {2, ShadowComponent::UInt16, true};
+                return true;
+            case TextureInternalFormat::RGB16UI:
+                out = {3, ShadowComponent::UInt16, true};
+                return true;
+            case TextureInternalFormat::RGBA16UI:
+                out = {4, ShadowComponent::UInt16, true};
+                return true;
 
-            case TextureInternalFormat::R16I:    out = {1, ShadowComponent::Int16, true}; return true;
-            case TextureInternalFormat::RG16I:   out = {2, ShadowComponent::Int16, true}; return true;
-            case TextureInternalFormat::RGB16I:  out = {3, ShadowComponent::Int16, true}; return true;
-            case TextureInternalFormat::RGBA16I: out = {4, ShadowComponent::Int16, true}; return true;
+            case TextureInternalFormat::R16I:
+                out = {1, ShadowComponent::Int16, true};
+                return true;
+            case TextureInternalFormat::RG16I:
+                out = {2, ShadowComponent::Int16, true};
+                return true;
+            case TextureInternalFormat::RGB16I:
+                out = {3, ShadowComponent::Int16, true};
+                return true;
+            case TextureInternalFormat::RGBA16I:
+                out = {4, ShadowComponent::Int16, true};
+                return true;
 
-            case TextureInternalFormat::R32UI:    out = {1, ShadowComponent::UInt32, true}; return true;
-            case TextureInternalFormat::RG32UI:   out = {2, ShadowComponent::UInt32, true}; return true;
-            case TextureInternalFormat::RGB32UI:  out = {3, ShadowComponent::UInt32, true}; return true;
-            case TextureInternalFormat::RGBA32UI: out = {4, ShadowComponent::UInt32, true}; return true;
+            case TextureInternalFormat::R32UI:
+                out = {1, ShadowComponent::UInt32, true};
+                return true;
+            case TextureInternalFormat::RG32UI:
+                out = {2, ShadowComponent::UInt32, true};
+                return true;
+            case TextureInternalFormat::RGB32UI:
+                out = {3, ShadowComponent::UInt32, true};
+                return true;
+            case TextureInternalFormat::RGBA32UI:
+                out = {4, ShadowComponent::UInt32, true};
+                return true;
 
-            case TextureInternalFormat::R32I:    out = {1, ShadowComponent::Int32, true}; return true;
-            case TextureInternalFormat::RG32I:   out = {2, ShadowComponent::Int32, true}; return true;
-            case TextureInternalFormat::RGB32I:  out = {3, ShadowComponent::Int32, true}; return true;
-            case TextureInternalFormat::RGBA32I: out = {4, ShadowComponent::Int32, true}; return true;
+            case TextureInternalFormat::R32I:
+                out = {1, ShadowComponent::Int32, true};
+                return true;
+            case TextureInternalFormat::RG32I:
+                out = {2, ShadowComponent::Int32, true};
+                return true;
+            case TextureInternalFormat::RGB32I:
+                out = {3, ShadowComponent::Int32, true};
+                return true;
+            case TextureInternalFormat::RGBA32I:
+                out = {4, ShadowComponent::Int32, true};
+                return true;
 
             default:
                 // Packed internal layouts (RGB10A2, RGB9E5, ...), depth/stencil and unsized formats
@@ -266,14 +370,12 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
 
         // The one client (format, type) pair whose word is bit-identical to the packed internal
         // word, if any. Everything else has to go through the decode/encode conversion.
-        Bool IsRawPackedPixelPair(PackedInternalKind kind, TextureInputFormat format,
-                                  TexturePixelDataType type) {
+        Bool IsRawPackedPixelPair(PackedInternalKind kind, TextureInputFormat format, TexturePixelDataType type) {
             switch (kind) {
             case PackedInternalKind::UNorm2101010Rev:
                 return format == TextureInputFormat::RGBA && type == TexturePixelDataType::UnsignedInt2101010Rev;
             case PackedInternalKind::UInt2101010Rev:
-                return format == TextureInputFormat::RGBAInteger &&
-                       type == TexturePixelDataType::UnsignedInt2101010Rev;
+                return format == TextureInputFormat::RGBAInteger && type == TexturePixelDataType::UnsignedInt2101010Rev;
             case PackedInternalKind::FloatR11G11B10:
                 return format == TextureInputFormat::RGB && type == TexturePixelDataType::UnsignedInt101111Rev;
             case PackedInternalKind::FloatRGB9E5:
@@ -321,31 +423,71 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
 
         Bool GetUnpackChannelMapping(TextureInputFormat format, UnpackChannelMapping& out) {
             switch (format) {
-            case TextureInputFormat::Red:          out = {{0, -1, -1, -1}, 1, false}; return true;
-            case TextureInputFormat::RInteger:     out = {{0, -1, -1, -1}, 1, true};  return true;
-            case TextureInputFormat::Green:        out = {{-1, 0, -1, -1}, 1, false}; return true;
-            case TextureInputFormat::GreenInteger: out = {{-1, 0, -1, -1}, 1, true};  return true;
-            case TextureInputFormat::Blue:         out = {{-1, -1, 0, -1}, 1, false}; return true;
-            case TextureInputFormat::BlueInteger:  out = {{-1, -1, 0, -1}, 1, true};  return true;
-            case TextureInputFormat::Alpha:        out = {{-1, -1, -1, 0}, 1, false}; return true;
-            case TextureInputFormat::AlphaInteger: out = {{-1, -1, -1, 0}, 1, true};  return true;
-            case TextureInputFormat::RG:           out = {{0, 1, -1, -1}, 2, false};  return true;
-            case TextureInputFormat::RGInteger:    out = {{0, 1, -1, -1}, 2, true};   return true;
-            case TextureInputFormat::RGB:          out = {{0, 1, 2, -1}, 3, false};   return true;
-            case TextureInputFormat::RGBInteger:   out = {{0, 1, 2, -1}, 3, true};    return true;
-            case TextureInputFormat::BGR:          out = {{2, 1, 0, -1}, 3, false};   return true;
-            case TextureInputFormat::BGRInteger:   out = {{2, 1, 0, -1}, 3, true};    return true;
-            case TextureInputFormat::RGBA:         out = {{0, 1, 2, 3}, 4, false};    return true;
-            case TextureInputFormat::RGBAInteger:  out = {{0, 1, 2, 3}, 4, true};     return true;
-            case TextureInputFormat::BGRA:         out = {{2, 1, 0, 3}, 4, false};    return true;
-            case TextureInputFormat::BGRAInteger:  out = {{2, 1, 0, 3}, 4, true};     return true;
+            case TextureInputFormat::Red:
+                out = {{0, -1, -1, -1}, 1, false};
+                return true;
+            case TextureInputFormat::RInteger:
+                out = {{0, -1, -1, -1}, 1, true};
+                return true;
+            case TextureInputFormat::Green:
+                out = {{-1, 0, -1, -1}, 1, false};
+                return true;
+            case TextureInputFormat::GreenInteger:
+                out = {{-1, 0, -1, -1}, 1, true};
+                return true;
+            case TextureInputFormat::Blue:
+                out = {{-1, -1, 0, -1}, 1, false};
+                return true;
+            case TextureInputFormat::BlueInteger:
+                out = {{-1, -1, 0, -1}, 1, true};
+                return true;
+            case TextureInputFormat::Alpha:
+                out = {{-1, -1, -1, 0}, 1, false};
+                return true;
+            case TextureInputFormat::AlphaInteger:
+                out = {{-1, -1, -1, 0}, 1, true};
+                return true;
+            case TextureInputFormat::RG:
+                out = {{0, 1, -1, -1}, 2, false};
+                return true;
+            case TextureInputFormat::RGInteger:
+                out = {{0, 1, -1, -1}, 2, true};
+                return true;
+            case TextureInputFormat::RGB:
+                out = {{0, 1, 2, -1}, 3, false};
+                return true;
+            case TextureInputFormat::RGBInteger:
+                out = {{0, 1, 2, -1}, 3, true};
+                return true;
+            case TextureInputFormat::BGR:
+                out = {{2, 1, 0, -1}, 3, false};
+                return true;
+            case TextureInputFormat::BGRInteger:
+                out = {{2, 1, 0, -1}, 3, true};
+                return true;
+            case TextureInputFormat::RGBA:
+                out = {{0, 1, 2, 3}, 4, false};
+                return true;
+            case TextureInputFormat::RGBAInteger:
+                out = {{0, 1, 2, 3}, 4, true};
+                return true;
+            case TextureInputFormat::BGRA:
+                out = {{2, 1, 0, 3}, 4, false};
+                return true;
+            case TextureInputFormat::BGRAInteger:
+                out = {{2, 1, 0, 3}, 4, true};
+                return true;
             // A depth value converts like a single normalized/float channel.
-            case TextureInputFormat::DepthComponent: out = {{0, -1, -1, -1}, 1, false}; return true;
+            case TextureInputFormat::DepthComponent:
+                out = {{0, -1, -1, -1}, 1, false};
+                return true;
             // A stencil index is a single INTEGER channel (GL 4.6 core 8.4.4.3). Without this the
             // upload fell to the raw-memcpy branch, which copies the client element width into the
             // one-byte STENCIL_INDEX8 shadow verbatim - right for GL_UNSIGNED_BYTE and wrong for
             // every wider type. The state layer keeps this paired with stencil-only storage.
-            case TextureInputFormat::StencilIndex: out = {{0, -1, -1, -1}, 1, true}; return true;
+            case TextureInputFormat::StencilIndex:
+                out = {{0, -1, -1, -1}, 1, true};
+                return true;
             default:
                 return false; // packed depth-stencil / unknown
             }
@@ -360,18 +502,42 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
 
         Bool GetPackedTypeLayout(TexturePixelDataType type, PackedTypeLayout& out) {
             switch (type) {
-            case TexturePixelDataType::UnsignedByte332:      out = {3, {3, 3, 2, 0}, 8, false};  return true;
-            case TexturePixelDataType::UnsignedByte233Rev:   out = {3, {3, 3, 2, 0}, 8, true};   return true;
-            case TexturePixelDataType::UnsignedShort565:     out = {3, {5, 6, 5, 0}, 16, false}; return true;
-            case TexturePixelDataType::UnsignedShort565Rev:  out = {3, {5, 6, 5, 0}, 16, true};  return true;
-            case TexturePixelDataType::UnsignedShort4444:    out = {4, {4, 4, 4, 4}, 16, false}; return true;
-            case TexturePixelDataType::UnsignedShort4444Rev: out = {4, {4, 4, 4, 4}, 16, true};  return true;
-            case TexturePixelDataType::UnsignedShort5551:    out = {4, {5, 5, 5, 1}, 16, false}; return true;
-            case TexturePixelDataType::UnsignedShort1555Rev: out = {4, {5, 5, 5, 1}, 16, true};  return true;
-            case TexturePixelDataType::UnsignedInt8888:      out = {4, {8, 8, 8, 8}, 32, false}; return true;
-            case TexturePixelDataType::UnsignedInt8888Rev:   out = {4, {8, 8, 8, 8}, 32, true};  return true;
-            case TexturePixelDataType::UnsignedInt1010102:   out = {4, {10, 10, 10, 2}, 32, false}; return true;
-            case TexturePixelDataType::UnsignedInt2101010Rev: out = {4, {10, 10, 10, 2}, 32, true}; return true;
+            case TexturePixelDataType::UnsignedByte332:
+                out = {3, {3, 3, 2, 0}, 8, false};
+                return true;
+            case TexturePixelDataType::UnsignedByte233Rev:
+                out = {3, {3, 3, 2, 0}, 8, true};
+                return true;
+            case TexturePixelDataType::UnsignedShort565:
+                out = {3, {5, 6, 5, 0}, 16, false};
+                return true;
+            case TexturePixelDataType::UnsignedShort565Rev:
+                out = {3, {5, 6, 5, 0}, 16, true};
+                return true;
+            case TexturePixelDataType::UnsignedShort4444:
+                out = {4, {4, 4, 4, 4}, 16, false};
+                return true;
+            case TexturePixelDataType::UnsignedShort4444Rev:
+                out = {4, {4, 4, 4, 4}, 16, true};
+                return true;
+            case TexturePixelDataType::UnsignedShort5551:
+                out = {4, {5, 5, 5, 1}, 16, false};
+                return true;
+            case TexturePixelDataType::UnsignedShort1555Rev:
+                out = {4, {5, 5, 5, 1}, 16, true};
+                return true;
+            case TexturePixelDataType::UnsignedInt8888:
+                out = {4, {8, 8, 8, 8}, 32, false};
+                return true;
+            case TexturePixelDataType::UnsignedInt8888Rev:
+                out = {4, {8, 8, 8, 8}, 32, true};
+                return true;
+            case TexturePixelDataType::UnsignedInt1010102:
+                out = {4, {10, 10, 10, 2}, 32, false};
+                return true;
+            case TexturePixelDataType::UnsignedInt2101010Rev:
+                out = {4, {10, 10, 10, 2}, 32, true};
+                return true;
             default:
                 return false; // shared-exponent / packed-float / depth-stencil types stay on the legacy path
             }
@@ -541,8 +707,8 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             out.isPacked = isPacked;
             out.type = type;
             out.inputPixelSize = GetInputBytesPerPixel(format, type);
-            const Bool isPackedFloatWord = type == TexturePixelDataType::UnsignedInt5999Rev ||
-                                           type == TexturePixelDataType::UnsignedInt101111Rev;
+            const Bool isPackedFloatWord =
+                type == TexturePixelDataType::UnsignedInt5999Rev || type == TexturePixelDataType::UnsignedInt101111Rev;
             out.swapGroupSize = isPacked ? static_cast<SizeT>(packed.totalBits / 8)
                                          : (isPackedFloatWord ? 4 : GetBaseTexturePixelDataTypeSize(type));
             out.internalIsPacked = hasPackedInternal;
@@ -652,10 +818,12 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             Int shift;
             if (packed.reversed) {
                 shift = 0;
-                for (Int i = 0; i < position; ++i) shift += packed.width[i];
+                for (Int i = 0; i < position; ++i)
+                    shift += packed.width[i];
             } else {
                 shift = packed.totalBits;
-                for (Int i = 0; i <= position; ++i) shift -= packed.width[i];
+                for (Int i = 0; i <= position; ++i)
+                    shift -= packed.width[i];
             }
             outWidth = packed.width[position];
             const Uint32 mask = (1u << outWidth) - 1u;
@@ -693,8 +861,8 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                 Memcpy(dst, &v, sizeof(v));
                 break;
             case ShadowComponent::UNorm32: {
-                const auto out = static_cast<Uint32>(
-                    std::llround(static_cast<double>(std::clamp(v, 0.0f, 1.0f)) * 4294967295.0));
+                const auto out =
+                    static_cast<Uint32>(std::llround(static_cast<double>(std::clamp(v, 0.0f, 1.0f)) * 4294967295.0));
                 Memcpy(dst, &out, sizeof(out));
                 break;
             }
@@ -769,8 +937,8 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                         continue;
                     }
                     for (Int ch = 0; ch < conv.internal.channelCount; ++ch) {
-                        EncodeShadowComponentInt(d + static_cast<SizeT>(ch) * dstComponentSize,
-                                                 conv.internal.component, rgba[ch]);
+                        EncodeShadowComponentInt(d + static_cast<SizeT>(ch) * dstComponentSize, conv.internal.component,
+                                                 rgba[ch]);
                     }
                 } else {
                     Float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};
@@ -873,8 +1041,8 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
         // format (the stencil half becomes zero); the generic channel converter cannot
         // express the packed shadow words, so convert here.
         const Bool packedDepthStencilInternal = targetInternalFormat == TextureInternalFormat::Depth24Stencil8 ||
-            targetInternalFormat == TextureInternalFormat::DepthStencil ||
-            targetInternalFormat == TextureInternalFormat::Depth32FStencil8;
+                                                targetInternalFormat == TextureInternalFormat::DepthStencil ||
+                                                targetInternalFormat == TextureInternalFormat::Depth32FStencil8;
         if (!isBitmap && packedDepthStencilInternal && textureInputFormat == TextureInputFormat::DepthComponent &&
             (inputDataType == TexturePixelDataType::Float || inputDataType == TexturePixelDataType::UnsignedInt ||
              inputDataType == TexturePixelDataType::UnsignedShort)) {
@@ -886,7 +1054,8 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                 outSize = 0;
                 return nullptr;
             }
-            const Uint8* srcBase = static_cast<const Uint8*>(inputPixels) +
+            const Uint8* srcBase =
+                static_cast<const Uint8*>(inputPixels) +
                 static_cast<SizeT>(params.SkipImages) * static_cast<SizeT>(effectiveHeight) * inputRowStride +
                 static_cast<SizeT>(params.SkipRows) * inputRowStride +
                 static_cast<SizeT>(params.SkipPixels) * pixelSize;
@@ -894,8 +1063,8 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             for (Int z = 0; z < std::max(depth, 1); ++z) {
                 for (Int y = 0; y < height; ++y) {
                     const Uint8* srcRow = srcBase +
-                        static_cast<SizeT>(z) * static_cast<SizeT>(effectiveHeight) * inputRowStride +
-                        static_cast<SizeT>(y) * inputRowStride;
+                                          static_cast<SizeT>(z) * static_cast<SizeT>(effectiveHeight) * inputRowStride +
+                                          static_cast<SizeT>(y) * inputRowStride;
                     for (Int x = 0; x < width; ++x) {
                         Float depthValue = 0.0f;
                         if (inputDataType == TexturePixelDataType::Float) {
@@ -996,8 +1165,7 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                         if (swapGroup == 0) swapGroup = GetBaseTexturePixelDataTypeSize(inputDataType);
                         if (swapGroup > 1) {
                             MGLOG_D("%s: SwapBytes (group %d)", __func__, static_cast<Int>(swapGroup));
-                            SwapBytes(layerDst, swapGroup,
-                                      static_cast<SizeT>(copyWidth) * pixelSize / swapGroup);
+                            SwapBytes(layerDst, swapGroup, static_cast<SizeT>(copyWidth) * pixelSize / swapGroup);
                         }
                     }
 
@@ -1018,25 +1186,22 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
         return outputPixels;
     }
 
-    Bool ConvertOnePixelToInternal(TextureInternalFormat targetInternalFormat,
-                                   TextureInputFormat textureInputFormat,
-                                   TexturePixelDataType inputDataType,
-                                   const void* inputPixel,
+    Bool ConvertOnePixelToInternal(TextureInternalFormat targetInternalFormat, TextureInputFormat textureInputFormat,
+                                   TexturePixelDataType inputDataType, const void* inputPixel,
                                    Vector<Uint8>& outputPixel) {
         outputPixel.clear();
         // A stencil index became a transferable format when STENCIL_INDEX8 texture storage did (see
         // GetUnpackChannelMapping), but this helper serves glClearBufferData, whose internal formats
-        // are all colour (GL 4.6 core table 8.20): a stencil pattern would otherwise pass the size
-        // check and land silently in an equally-sized colour store.
+        // are all color (GL 4.6 core table 8.20): a stencil pattern would otherwise pass the size
+        // check and land silently in an equally-sized color store.
         if (textureInputFormat == TextureInputFormat::StencilIndex) return false;
         if (inputPixel == nullptr || !IsValidUnpackPixelPair(textureInputFormat, inputDataType)) return false;
 
         PixelStoreParameters params{};
         params.Alignment = 1;
         SizeT convertedSize = 0;
-        void* converted = ProcessTexturePixelsDataUnpack(
-            inputPixel, params, targetInternalFormat, textureInputFormat, inputDataType, {1, 1, 1}, false,
-            convertedSize);
+        void* converted = ProcessTexturePixelsDataUnpack(inputPixel, params, targetInternalFormat, textureInputFormat,
+                                                         inputDataType, {1, 1, 1}, false, convertedSize);
         const SizeT expectedSize = MG_Util::GetSizedInternalFormatSizeInBytes(targetInternalFormat);
         if (converted == nullptr || convertedSize != expectedSize || expectedSize == 0) {
             if (converted != nullptr) free(converted);

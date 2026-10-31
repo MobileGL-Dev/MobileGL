@@ -20,7 +20,7 @@
 //      (i/16, 1 - i/16), a quad at each end of clip space, and gl_FragCoord.z read back.
 //      This is the claim that fails loudest against a single-viewport backend, because the
 //      geometry is still in the right place while every depth comes back as viewport 0's.
-//   3. The per-index SCISSOR TEST ENABLE is honoured. Vulkan has no per-viewport scissor-test
+//   3. The per-index SCISSOR TEST ENABLE is honored. Vulkan has no per-viewport scissor-test
 //      toggle, so a disabled index has to be given the whole framebuffer as its rectangle; the
 //      case draws the same primitive into the same index twice, once with the test off and once
 //      with it on, and requires the two results to differ in the documented direction.
@@ -67,8 +67,8 @@ namespace MGITest {
     namespace {
 
         constexpr int kViewportCount = 16;
-        constexpr int kGridSide = 4;   // 4x4 grid of viewports
-        constexpr int kCellSize = 32;  // ... each 32x32
+        constexpr int kGridSide = 4;  // 4x4 grid of viewports
+        constexpr int kCellSize = 32; // ... each 32x32
         constexpr int kSurfaceSide = kGridSide * kCellSize;
         constexpr GLint kUnwritten = -1;
 
@@ -168,8 +168,7 @@ void main() { fragColor = gl_FragCoord.z; }
                 if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
                 if (m_program != 0) glDeleteProgram(m_program);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             // Every case starts from the same slate: this fixture shares its context with every
@@ -256,7 +255,7 @@ void main() { fragColor = gl_FragCoord.z; }
                 return 0;
             }
 
-            // An R32I colour target, pre-filled with kUnwritten so "nothing was drawn here" is
+            // An R32I color target, pre-filled with kUnwritten so "nothing was drawn here" is
             // distinguishable from "index 0 was drawn here".
             struct IntTarget {
                 GLuint fbo = 0;
@@ -299,10 +298,10 @@ void main() { fragColor = gl_FragCoord.z; }
                 return pixels;
             }
 
-            // The centre of grid cell (x, y), in the bottom-left-origin coordinates glReadPixels
-            // returns. Sampling the centre rather than a corner keeps the assertion about WHICH
+            // The center of grid cell (x, y), in the bottom-left-origin coordinates glReadPixels
+            // returns. Sampling the center rather than a corner keeps the assertion about WHICH
             // viewport was selected rather than about edge rounding.
-            static GLint CellCentre(const std::vector<GLint>& pixels, int stride, int x, int y) {
+            static GLint CellCenter(const std::vector<GLint>& pixels, int stride, int x, int y) {
                 const int px = x * kCellSize + kCellSize / 2;
                 const int py = y * kCellSize + kCellSize / 2;
                 return pixels[static_cast<size_t>(py) * stride + px];
@@ -327,7 +326,7 @@ void main() { fragColor = gl_FragCoord.z; }
             for (int y = 0; y < kGridSide; ++y) {
                 for (int x = 0; x < kGridSide; ++x) {
                     const GLint expected = y * kGridSide + x;
-                    EXPECT_EQ(CellCentre(pixels, kSurfaceSide, x, y), expected)
+                    EXPECT_EQ(CellCenter(pixels, kSurfaceSide, x, y), expected)
                         << "cell (" << x << ", " << y << ") should hold viewport index " << expected
                         << "; a single-viewport backend paints the whole image with 15 (the last invocation)";
                 }
@@ -350,7 +349,7 @@ void main() { fragColor = gl_FragCoord.z; }
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
-            // The default framebuffer is 8-bit RGBA, so the index travels as a colour: cell i is
+            // The default framebuffer is 8-bit RGBA, so the index travels as a color: cell i is
             // painted with red = i * 16, which is exact in 8 bits for i in [0, 16).
             const char* const kColorFragmentSource = R"(#version 410 core
 flat in int gsIndex;
@@ -358,7 +357,7 @@ layout(location = 0) out vec4 fragColor;
 void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
 )";
             const GLuint colorProgram = BuildProgram(kGridGeometrySource, kColorFragmentSource);
-            ASSERT_NE(colorProgram, 0u) << "colour program failed to build: " << m_buildLog;
+            ASSERT_NE(colorProgram, 0u) << "color program failed to build: " << m_buildLog;
 
             SetupGridViewports(cellW, cellH);
             glUseProgram(colorProgram);
@@ -375,7 +374,7 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
                     const int red = pixels[(static_cast<size_t>(py) * surfaceW + px) * 4];
                     const int expected = (y * kGridSide + x) * 16;
                     // One LSB of slack for an 8-bit round trip; the values are 16 apart, so this
-                    // cannot confuse two neighbouring indices.
+                    // cannot confuse two neighboring indices.
                     EXPECT_LE(std::abs(red - expected), 1)
                         << "default-framebuffer cell (" << x << ", " << y << ") holds red=" << red << ", expected "
                         << expected << ". A vertically mirrored grid means the Y-flip was applied to viewport 0 "
@@ -433,7 +432,7 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
                 const float farDepth = 1.0f - static_cast<float>(i) / 16.0f;
                 // The tolerance covers depth-buffer-free rasterization of gl_FragCoord.z on a
                 // software rasterizer; the per-index values are 1/16 apart, so it cannot let a
-                // neighbouring viewport's range through, and viewport 0's range (0, 1) differs
+                // neighboring viewport's range through, and viewport 0's range (0, 1) differs
                 // from every other index by at least 1/16.
                 EXPECT_NEAR(pixels[i], nearDepth, 1.0e-3f)
                     << "viewport " << i << " near-plane depth; got viewport 0's range if this is 0";
@@ -474,7 +473,7 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
             const GLint uViewport = glGetUniformLocation(singleProgram, "uViewport");
             ASSERT_NE(uViewport, -1);
 
-            constexpr GLint kProbeIndex = 6;  // grid cell (2, 1)
+            constexpr GLint kProbeIndex = 6; // grid cell (2, 1)
             constexpr int kProbeX = kProbeIndex % kGridSide;
             constexpr int kProbeY = kProbeIndex / kGridSide;
 
@@ -485,12 +484,12 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
             ASSERT_EQ(glGetError(), GL_NO_ERROR);
             {
                 const std::vector<GLint> pixels = ReadInts(kSurfaceSide, kSurfaceSide);
-                EXPECT_EQ(CellCentre(pixels, kSurfaceSide, kProbeX, kProbeY), kProbeIndex)
+                EXPECT_EQ(CellCenter(pixels, kSurfaceSide, kProbeX, kProbeY), kProbeIndex)
                     << "the scissored index must still paint inside its own box";
                 for (int y = 0; y < kGridSide; ++y) {
                     for (int x = 0; x < kGridSide; ++x) {
                         if (x == kProbeX && y == kProbeY) continue;
-                        EXPECT_EQ(CellCentre(pixels, kSurfaceSide, x, y), kUnwritten)
+                        EXPECT_EQ(CellCenter(pixels, kSurfaceSide, x, y), kUnwritten)
                             << "cell (" << x << ", " << y << ") is outside scissor rectangle " << kProbeIndex
                             << " and must be untouched";
                     }
@@ -510,7 +509,7 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
                 const std::vector<GLint> pixels = ReadInts(kSurfaceSide, kSurfaceSide);
                 for (int y = 0; y < kGridSide; ++y) {
                     for (int x = 0; x < kGridSide; ++x) {
-                        EXPECT_EQ(CellCentre(pixels, kSurfaceSide, x, y), kProbeIndex)
+                        EXPECT_EQ(CellCenter(pixels, kSurfaceSide, x, y), kProbeIndex)
                             << "with the scissor test off for index " << kProbeIndex
                             << ", its full-viewport quad must cover cell (" << x << ", " << y << ")";
                     }
@@ -529,7 +528,7 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
         // (the NoViewportArrayEmulation. ctest entry) and requires case 1's
         // result to COLLAPSE: with no routing, every geometry invocation rasterizes against
         // viewport 0's rectangle, so the last invocation paints the whole surface and every cell
-        // reads 15 instead of its own index. That is the pre-emulation behaviour this backend had
+        // reads 15 instead of its own index. That is the pre-emulation behavior this backend had
         // (and the failure signature KHR-GL43.viewport_array reported on it), pinned here so that
         // (a) the three cases above are known to be testing the emulation and not the weather,
         // and (b) the switch itself has a test.
@@ -577,14 +576,14 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
             const std::vector<GLint> pixels = ReadInts(kSurfaceSide, kSurfaceSide);
             // Cell (0, 0) IS viewport 0's rectangle, so it is the one cell an unrouted draw paints
             // with something. Everything it holds comes from the last geometry invocation.
-            EXPECT_EQ(CellCentre(pixels, kSurfaceSide, 0, 0), kViewportCount - 1)
+            EXPECT_EQ(CellCenter(pixels, kSurfaceSide, 0, 0), kViewportCount - 1)
                 << "with the emulation off, viewport 0's rectangle must hold the LAST invocation's "
                    "index - if it holds 0 the routing is still happening and this control proves "
                    "nothing";
             for (int y = 0; y < kGridSide; ++y) {
                 for (int x = 0; x < kGridSide; ++x) {
                     if (x == 0 && y == 0) continue;
-                    EXPECT_EQ(CellCentre(pixels, kSurfaceSide, x, y), kUnwritten)
+                    EXPECT_EQ(CellCenter(pixels, kSurfaceSide, x, y), kUnwritten)
                         << "cell (" << x << ", " << y << ") is outside viewport 0's rectangle and an "
                         << "unrouted draw cannot reach it";
                 }
@@ -640,13 +639,12 @@ void main() { fragColor = 7; }
                 glBindTexture(GL_TEXTURE_2D, m_texture);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_R32I, kSurfaceSide, kSurfaceSide, 0, GL_RED_INTEGER, GL_INT,
-                             nullptr);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_R32I, kSurfaceSide, kSurfaceSide, 0, GL_RED_INTEGER, GL_INT, nullptr);
                 glGenFramebuffers(1, &m_fbo);
                 glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_texture, 0);
                 ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE)
-                    << "R32I is required to be colour-renderable; an incomplete target would make every "
+                    << "R32I is required to be color-renderable; an incomplete target would make every "
                        "assertion below vacuous";
 
                 glViewport(0, 0, kSurfaceSide, kSurfaceSide);
@@ -666,8 +664,7 @@ void main() { fragColor = 7; }
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 if (m_fbo != 0) glDeleteFramebuffers(1, &m_fbo);
                 if (m_texture != 0) glDeleteTextures(1, &m_texture);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             static void ResetScissorState() {
@@ -769,7 +766,8 @@ void main() { fragColor = 7; }
                 const std::vector<GLint> pixels = ReadTarget();
                 for (size_t i = 0; i < pixels.size(); ++i) {
                     ASSERT_EQ(pixels[i], kUnwritten)
-                        << "texel " << i << " was painted through a 0x0 scissor box: the empty rectangle was "
+                        << "texel " << i
+                        << " was painted through a 0x0 scissor box: the empty rectangle was "
                            "substituted with the whole surface, inverting 'clip everything' into 'clip nothing'";
                 }
             }
@@ -800,8 +798,9 @@ void main() { fragColor = 7; }
 
             const std::vector<GLint> pixels = ReadTarget();
             for (size_t i = 0; i < pixels.size(); ++i) {
-                ASSERT_EQ(pixels[i], kUnwritten) << "texel " << i << " was painted through a zero-extent indexed "
-                                                                     "scissor box";
+                ASSERT_EQ(pixels[i], kUnwritten) << "texel " << i
+                                                 << " was painted through a zero-extent indexed "
+                                                    "scissor box";
             }
         }
 

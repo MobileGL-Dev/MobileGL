@@ -778,6 +778,9 @@ namespace MobileGL {
                 CASE(E_GL_EXT_framebuffer_blit_layers)
                 CASE(E_GL_NV_uniform_buffer_std430_layout)
                 CASE(E_GL_MESA_texture_const_bandwidth)
+                CASE(E_GL_EXT_fragment_shading_rate)
+                CASE(E_GL_EXT_fragment_shading_rate_primitive)
+                CASE(E_GL_EXT_fragment_shading_rate_attachment)
             }
             str.erase(0, 2);
             return str;

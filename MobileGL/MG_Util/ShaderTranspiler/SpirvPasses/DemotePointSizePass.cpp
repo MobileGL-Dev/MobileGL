@@ -54,8 +54,8 @@ namespace MobileGL {
 
                 bool IsFloat32Type(IRContext* ctx, uint32_t typeId) {
                     Instruction* t = ctx->get_def_use_mgr()->GetDef(typeId);
-                    return t != nullptr && t->opcode() == spv::Op::OpTypeFloat &&
-                           t->NumInOperands() >= 1 && t->GetSingleWordInOperand(0) == 32;
+                    return t != nullptr && t->opcode() == spv::Op::OpTypeFloat && t->NumInOperands() >= 1 &&
+                           t->GetSingleWordInOperand(0) == 32;
                 }
 
                 // The value of a plain 32-bit OpConstant, or false (spec constants and anything
@@ -79,8 +79,7 @@ namespace MobileGL {
                     analysis::Float f(32);
                     analysis::Type* floatReg = ctx->get_type_mgr()->GetRegisteredType(&f);
                     const analysis::Array::LengthInfo lengthInfo{
-                        lengthConstId,
-                        {static_cast<uint32_t>(analysis::Array::LengthInfo::kConstant), lengthValue}};
+                        lengthConstId, {static_cast<uint32_t>(analysis::Array::LengthInfo::kConstant), lengthValue}};
                     analysis::Array arr(floatReg, lengthInfo);
                     return ctx->get_type_mgr()->GetTypeInstruction(&arr);
                 }
@@ -88,10 +87,8 @@ namespace MobileGL {
                 void AddNameFor(IRContext* ctx, uint32_t id, const String& name) {
                     std::vector<Operand> operands;
                     operands.push_back({SPV_OPERAND_TYPE_ID, {id}});
-                    operands.push_back(
-                        {SPV_OPERAND_TYPE_LITERAL_STRING, spvtools::utils::MakeVector(name)});
-                    ctx->AddDebug2Inst(
-                        spvtools::MakeUnique<Instruction>(ctx, spv::Op::OpName, 0, 0, operands));
+                    operands.push_back({SPV_OPERAND_TYPE_LITERAL_STRING, spvtools::utils::MakeVector(name)});
+                    ctx->AddDebug2Inst(spvtools::MakeUnique<Instruction>(ctx, spv::Op::OpName, 0, 0, operands));
                 }
 
                 void AddLocationDecoration(IRContext* ctx, uint32_t id, uint32_t location) {
@@ -99,8 +96,7 @@ namespace MobileGL {
                         ctx, spv::Op::OpDecorate, 0, 0,
                         std::initializer_list<Operand>{
                             {SPV_OPERAND_TYPE_ID, {id}},
-                            {SPV_OPERAND_TYPE_DECORATION,
-                             {static_cast<uint32_t>(spv::Decoration::Location)}},
+                            {SPV_OPERAND_TYPE_DECORATION, {static_cast<uint32_t>(spv::Decoration::Location)}},
                             {SPV_OPERAND_TYPE_LITERAL_INTEGER, {location}}}));
                 }
 
@@ -108,8 +104,7 @@ namespace MobileGL {
                 // point, and registered with the def-use manager so ReplaceAllUsesWith may name
                 // it before the end-of-pass invalidation.
                 uint32_t CreateCarrierVariable(IRContext* ctx, Instruction* entryPoint, uint32_t pointeeTypeId,
-                                               spv::StorageClass storage, const String& name,
-                                               uint32_t location) {
+                                               spv::StorageClass storage, const String& name, uint32_t location) {
                     const uint32_t ptrTypeId = ctx->get_type_mgr()->FindPointerToType(pointeeTypeId, storage);
                     if (ptrTypeId == 0) return 0;
                     const uint32_t varId = ctx->TakeNextId();
@@ -173,21 +168,16 @@ namespace MobileGL {
                 };
                 for (Instruction& ann : ctx->annotations()) {
                     if (ann.opcode() == spv::Op::OpMemberDecorate && ann.NumInOperands() >= 4 &&
-                        static_cast<spv::Decoration>(ann.GetSingleWordInOperand(2)) ==
-                            spv::Decoration::BuiltIn) {
-                        if (static_cast<spv::BuiltIn>(ann.GetSingleWordInOperand(3)) ==
-                            spv::BuiltIn::PointSize) {
-                            memberSites.push_back(
-                                {ann.GetSingleWordInOperand(0), ann.GetSingleWordInOperand(1)});
+                        static_cast<spv::Decoration>(ann.GetSingleWordInOperand(2)) == spv::Decoration::BuiltIn) {
+                        if (static_cast<spv::BuiltIn>(ann.GetSingleWordInOperand(3)) == spv::BuiltIn::PointSize) {
+                            memberSites.push_back({ann.GetSingleWordInOperand(0), ann.GetSingleWordInOperand(1)});
                         } else if (isClipOrCull(ann.GetSingleWordInOperand(3))) {
-                            clipCullSites.push_back(
-                                {ann.GetSingleWordInOperand(0), ann.GetSingleWordInOperand(1)});
+                            clipCullSites.push_back({ann.GetSingleWordInOperand(0), ann.GetSingleWordInOperand(1)});
                         }
                     } else if (ann.opcode() == spv::Op::OpDecorate && ann.NumInOperands() >= 3 &&
                                static_cast<spv::Decoration>(ann.GetSingleWordInOperand(1)) ==
                                    spv::Decoration::BuiltIn) {
-                        if (static_cast<spv::BuiltIn>(ann.GetSingleWordInOperand(2)) ==
-                            spv::BuiltIn::PointSize) {
+                        if (static_cast<spv::BuiltIn>(ann.GetSingleWordInOperand(2)) == spv::BuiltIn::PointSize) {
                             Instruction* var = defUse->GetDef(ann.GetSingleWordInOperand(0));
                             if (var != nullptr && var->opcode() == spv::Op::OpVariable) {
                                 standaloneVars.push_back(var);
@@ -287,8 +277,7 @@ namespace MobileGL {
                     uint32_t memberConstId = 0;
                     uint32_t ptrOutputFloatId = 0;
                     if (blockVar != nullptr) {
-                        memberConstId = ctx->get_constant_mgr()->GetSIntConstId(
-                            static_cast<int32_t>(memberIndex));
+                        memberConstId = ctx->get_constant_mgr()->GetSIntConstId(static_cast<int32_t>(memberIndex));
                         ptrOutputFloatId =
                             ctx->get_type_mgr()->FindPointerToType(floatTypeId, spv::StorageClass::Output);
                         if (ptrOutputFloatId == 0) return decline("no Output float pointer type");
@@ -303,8 +292,7 @@ namespace MobileGL {
                     for (auto funcIt = ctx->module()->begin(); funcIt != ctx->module()->end(); ++funcIt) {
                         if (funcIt->result_id() != entryFunctionId) continue;
                         funcIt->ForEachInst([&](Instruction* inst) {
-                            if (inst->opcode() != spv::Op::OpReturn &&
-                                inst->opcode() != spv::Op::OpReturnValue) {
+                            if (inst->opcode() != spv::Op::OpReturn && inst->opcode() != spv::Op::OpReturnValue) {
                                 return;
                             }
                             uint32_t valueId = 0;
@@ -312,9 +300,8 @@ namespace MobileGL {
                                 const uint32_t chainId = ctx->TakeNextId();
                                 inst->InsertBefore(spvtools::MakeUnique<Instruction>(
                                     ctx, spv::Op::OpAccessChain, ptrOutputFloatId, chainId,
-                                    std::initializer_list<Operand>{
-                                        {SPV_OPERAND_TYPE_ID, {blockVar->result_id()}},
-                                        {SPV_OPERAND_TYPE_ID, {memberConstId}}}));
+                                    std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {blockVar->result_id()}},
+                                                                   {SPV_OPERAND_TYPE_ID, {memberConstId}}}));
                                 valueId = ctx->TakeNextId();
                                 inst->InsertBefore(spvtools::MakeUnique<Instruction>(
                                     ctx, spv::Op::OpLoad, floatTypeId, valueId,
@@ -408,8 +395,7 @@ namespace MobileGL {
                                          chainUser->opcode() == spv::Op::OpInBoundsAccessChain) &&
                                         chainUser->NumInOperands() >= 2) {
                                         uint32_t member = 0;
-                                        if (PlainConstantValue(ctx, chainUser->GetSingleWordInOperand(1),
-                                                               member) &&
+                                        if (PlainConstantValue(ctx, chainUser->GetSingleWordInOperand(1), member) &&
                                             member == blockVar.memberIndex) {
                                             touchesPointSize = true;
                                         }
@@ -437,8 +423,7 @@ namespace MobileGL {
                                 reason = "an access chain that continues past the PointSize member";
                                 return;
                             }
-                            arrayedRedirects.push_back(
-                                {user, blockVar.storage == spv::StorageClass::Input});
+                            arrayedRedirects.push_back({user, blockVar.storage == spv::StorageClass::Input});
                             return;
                         }
                         case spv::Op::OpLoad:
@@ -519,8 +504,7 @@ namespace MobileGL {
                 if (needsInputCarrier && m_options.inputCarrierName.empty()) {
                     return decline("a PointSize read with no input carrier name to bind it to");
                 }
-                if ((needsOutputCarrier && !standaloneOutputSwapped) &&
-                    m_options.outputCarrierName.empty()) {
+                if ((needsOutputCarrier && !standaloneOutputSwapped) && m_options.outputCarrierName.empty()) {
                     return decline("a PointSize write with no output carrier name to bind it to");
                 }
 
@@ -545,8 +529,7 @@ namespace MobileGL {
                 // built-in for a stage that may not declare it. A control stage asked to
                 // produce a value it never computes is also a program reading undefined data
                 // either way, so this declines rather than growing the pass for it.
-                if (needsOutputCarrier && !standaloneOutputSwapped && !outputCarrierHasWriter &&
-                    isTessControl) {
+                if (needsOutputCarrier && !standaloneOutputSwapped && !outputCarrierHasWriter && isTessControl) {
                     return decline("a control stage asked to produce a point-size carrier it never writes");
                 }
 
@@ -571,21 +554,18 @@ namespace MobileGL {
                         if (outputArrayLengthValue == 0) {
                             return decline("a control stage with neither gl_out nor OutputVertices");
                         }
-                        outputArrayLengthConstId =
-                            ctx->get_constant_mgr()->GetUIntConstId(outputArrayLengthValue);
+                        outputArrayLengthConstId = ctx->get_constant_mgr()->GetUIntConstId(outputArrayLengthValue);
                     }
                 }
 
-                const bool anyWork = needsInputCarrier || needsOutputCarrier ||
-                                     !standaloneSwaps.empty();
+                const bool anyWork = needsInputCarrier || needsOutputCarrier || !standaloneSwaps.empty();
                 // Even with no access left to redirect (a dead read the sanitize chain already
                 // removed), a declared TessellationPointSize/GeometryPointSize capability must
                 // still be stripped - it alone makes the module unbuildable on the device.
                 std::vector<Instruction*> capabilitiesToStrip;
                 for (Instruction& capability : ctx->module()->capabilities()) {
                     if (capability.NumInOperands() < 1) continue;
-                    const auto declared =
-                        static_cast<spv::Capability>(capability.GetSingleWordInOperand(0));
+                    const auto declared = static_cast<spv::Capability>(capability.GetSingleWordInOperand(0));
                     if (declared == spv::Capability::TessellationPointSize ||
                         declared == spv::Capability::GeometryPointSize) {
                         capabilitiesToStrip.push_back(&capability);
@@ -613,8 +593,7 @@ namespace MobileGL {
                 // variable leaves with the demotion.
                 if (isTessControl && !blockVars.empty()) {
                     bool clipOrCullIsLive = false;
-                    const auto memberIsClipOrCull = [&](const uint32_t structId,
-                                                        const uint32_t member) {
+                    const auto memberIsClipOrCull = [&](const uint32_t structId, const uint32_t member) {
                         for (const MemberSite& site : clipCullSites) {
                             if (site.structId == structId && site.memberIndex == member) return true;
                         }
@@ -623,10 +602,8 @@ namespace MobileGL {
                     for (Instruction& inst : ctx->module()->types_values()) {
                         if (clipOrCullIsLive) break;
                         if (inst.opcode() != spv::Op::OpVariable) continue;
-                        const auto storage =
-                            static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0));
-                        if (storage != spv::StorageClass::Input &&
-                            storage != spv::StorageClass::Output) {
+                        const auto storage = static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0));
+                        if (storage != spv::StorageClass::Input && storage != spv::StorageClass::Output) {
                             continue;
                         }
                         // A standalone clip/cull variable counts the moment anything but its
@@ -642,8 +619,7 @@ namespace MobileGL {
                             pointee = defUse->GetDef(pointee->GetSingleWordInOperand(0));
                         }
                         const bool blockCarriesClipCull =
-                            pointee != nullptr && pointee->opcode() == spv::Op::OpTypeStruct &&
-                            [&] {
+                            pointee != nullptr && pointee->opcode() == spv::Op::OpTypeStruct && [&] {
                                 for (const MemberSite& site : clipCullSites) {
                                     if (site.structId == pointee->result_id()) return true;
                                 }
@@ -677,8 +653,7 @@ namespace MobileGL {
                             }
                             uint32_t member = 0;
                             if (user->NumInOperands() <= memberOperand ||
-                                !PlainConstantValue(ctx, user->GetSingleWordInOperand(memberOperand),
-                                                    member)) {
+                                !PlainConstantValue(ctx, user->GetSingleWordInOperand(memberOperand), member)) {
                                 clipOrCullIsLive = true; // cannot prove it misses clip/cull
                                 return;
                             }
@@ -688,9 +663,8 @@ namespace MobileGL {
                     if (clipOrCullIsLive) {
                         for (const BlockVar& blockVar : blockVars) {
                             if (blockVar.storage == spv::StorageClass::Output) {
-                                return decline(
-                                    "a control stage with live clip/cull distance, whose "
-                                    "redeclared output block would still print gl_PointSize");
+                                return decline("a control stage with live clip/cull distance, whose "
+                                               "redeclared output block would still print gl_PointSize");
                             }
                         }
                     }
@@ -700,22 +674,19 @@ namespace MobileGL {
                 const uint32_t floatTypeId = Float32Type(ctx);
                 uint32_t inputCarrierId = 0;
                 if (needsInputCarrier) {
-                    const uint32_t arrayTypeId = ArrayOfFloat32Type(
-                        ctx, arrayedInput->arrayLengthConstId, arrayedInput->arrayLengthValue);
-                    inputCarrierId =
-                        CreateCarrierVariable(ctx, entryPoint, arrayTypeId, spv::StorageClass::Input,
-                                              m_options.inputCarrierName, m_options.location);
+                    const uint32_t arrayTypeId =
+                        ArrayOfFloat32Type(ctx, arrayedInput->arrayLengthConstId, arrayedInput->arrayLengthValue);
+                    inputCarrierId = CreateCarrierVariable(ctx, entryPoint, arrayTypeId, spv::StorageClass::Input,
+                                                           m_options.inputCarrierName, m_options.location);
                 }
                 uint32_t outputCarrierId = 0;
                 if (needsOutputCarrier && !standaloneOutputSwapped) {
                     uint32_t pointeeTypeId = floatTypeId;
                     if (isTessControl) {
-                        pointeeTypeId =
-                            ArrayOfFloat32Type(ctx, outputArrayLengthConstId, outputArrayLengthValue);
+                        pointeeTypeId = ArrayOfFloat32Type(ctx, outputArrayLengthConstId, outputArrayLengthValue);
                     }
-                    outputCarrierId =
-                        CreateCarrierVariable(ctx, entryPoint, pointeeTypeId, spv::StorageClass::Output,
-                                              m_options.outputCarrierName, m_options.location);
+                    outputCarrierId = CreateCarrierVariable(ctx, entryPoint, pointeeTypeId, spv::StorageClass::Output,
+                                                            m_options.outputCarrierName, m_options.location);
                 }
 
                 // Seed a forced carrier nothing writes, so the ES hop keeps it (see the
@@ -726,22 +697,20 @@ namespace MobileGL {
                     const uint32_t defaultPointSizeId = ctx->get_constant_mgr()->GetFloatConstId(1.0f);
                     const uint32_t entryFunctionId = entryPoint->GetSingleWordInOperand(1);
                     std::vector<Instruction*> seedSites;
-                    for (auto funcIt = ctx->module()->begin(); funcIt != ctx->module()->end();
-                         ++funcIt) {
+                    for (auto funcIt = ctx->module()->begin(); funcIt != ctx->module()->end(); ++funcIt) {
                         if (funcIt->result_id() != entryFunctionId) continue;
                         funcIt->ForEachInst([&](Instruction* inst) {
                             const bool emit = inst->opcode() == spv::Op::OpEmitVertex ||
                                               inst->opcode() == spv::Op::OpEmitStreamVertex;
-                            const bool ret = inst->opcode() == spv::Op::OpReturn ||
-                                             inst->opcode() == spv::Op::OpReturnValue;
+                            const bool ret =
+                                inst->opcode() == spv::Op::OpReturn || inst->opcode() == spv::Op::OpReturnValue;
                             if (isGeometry ? emit : ret) seedSites.push_back(inst);
                         });
                         // A geometry stage with no EmitVertex emits nothing at all; seeding the
                         // ends of the function still keeps the varying alive for the capture.
                         if (isGeometry && seedSites.empty()) {
                             funcIt->ForEachInst([&](Instruction* inst) {
-                                if (inst->opcode() == spv::Op::OpReturn ||
-                                    inst->opcode() == spv::Op::OpReturnValue) {
+                                if (inst->opcode() == spv::Op::OpReturn || inst->opcode() == spv::Op::OpReturnValue) {
                                     seedSites.push_back(inst);
                                 }
                             });
@@ -750,9 +719,8 @@ namespace MobileGL {
                     for (Instruction* site : seedSites) {
                         site->InsertBefore(spvtools::MakeUnique<Instruction>(
                             ctx, spv::Op::OpStore, 0, 0,
-                            std::initializer_list<Operand>{
-                                {SPV_OPERAND_TYPE_ID, {outputCarrierId}},
-                                {SPV_OPERAND_TYPE_ID, {defaultPointSizeId}}}));
+                            std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {outputCarrierId}},
+                                                           {SPV_OPERAND_TYPE_ID, {defaultPointSizeId}}}));
                     }
                 }
 
@@ -766,8 +734,8 @@ namespace MobileGL {
                 for (const ArrayedRedirect& redirect : arrayedRedirects) {
                     const uint32_t carrierId = redirect.input ? inputCarrierId : outputCarrierId;
                     const Operand vertexIndex = redirect.chain->GetInOperand(1);
-                    redirect.chain->SetInOperands(Instruction::OperandList{
-                        {SPV_OPERAND_TYPE_ID, {carrierId}}, vertexIndex});
+                    redirect.chain->SetInOperands(
+                        Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {carrierId}}, vertexIndex});
                 }
                 // Standalone form: the variable becomes its own carrier.
                 for (const StandaloneSwap& swap : standaloneSwaps) {
@@ -780,7 +748,8 @@ namespace MobileGL {
                             oldNames.push_back(&debugInst);
                         }
                     }
-                    for (Instruction* oldName : oldNames) ctx->KillInst(oldName);
+                    for (Instruction* oldName : oldNames)
+                        ctx->KillInst(oldName);
                     AddNameFor(ctx, swap.var->result_id(),
                                swap.input ? m_options.inputCarrierName : m_options.outputCarrierName);
                 }
@@ -797,8 +766,7 @@ namespace MobileGL {
 
             spvtools::Optimizer::PassToken DemotePointSizePass::CreateDemotePointSizePass(
                 DemotePointSizeOptions options, DemotePointSizeReport* report) {
-                return spvtools::Optimizer::PassToken(
-                    MakeUnique<DemotePointSizePass>(Move(options), report));
+                return spvtools::Optimizer::PassToken(MakeUnique<DemotePointSizePass>(Move(options), report));
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

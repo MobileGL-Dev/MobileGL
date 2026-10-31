@@ -54,7 +54,7 @@ cmake --build "$MG/build-linux" --parallel "$(nproc)"
 
 Add `-DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=FALSE` when iterating. The
 Release configuration turns LTO on, which makes every relink cost minutes for no
-behavioural difference; a conformance number is identical either way.
+behavioral difference; a conformance number is identical either way.
 
 ## Step 2 — get VK-GL-CTS and build glcts
 

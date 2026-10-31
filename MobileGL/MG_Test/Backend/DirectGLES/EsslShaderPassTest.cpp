@@ -14,12 +14,18 @@
 #include <gtest/gtest.h>
 
 #include <MG_Backend/DirectGLES/Utils.h>
+#include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
+#include <MG_Util/ShaderTranspiler/SpvcSession.h>
+#include <MG_Util/ShaderTranspiler/Types.h>
+
+#include "Init.h"
 
 #include <limits>
 
 using namespace MobileGL;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BakeImageFormatQualifiers;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BuildPassthroughTessControlEssl;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ClampUnsignedMultisampleFetches;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ExtractPerVertexBlockMembers;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ForceFlatIntegerVaryings;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_ARRAY_ELEMENT_PREFIX;
@@ -28,11 +34,15 @@ using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_SPLIT_READ_ALIAS_PREFI
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITE_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITEONLY_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ImageArrayUnitPlan;
-using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemapImageArrayElementUnits;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::LowerZeroGradCubeArrayShadowLookups;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::PointSizeExtensionName;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RedeclareClipCullDistanceInputsInPerVertexBlock;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RedeclareClipCullDistancesInPerVertexBlock;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemapImageArrayElementUnits;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemoveLayoutBinding;
-using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestPointSizeExtension;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestClipCullDistanceExtension;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestExtendedImageFormats;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestPointSizeExtension;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestViewportArrayExtension;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::SplitReadWriteImageUniforms;
 
@@ -51,12 +61,22 @@ namespace {
 
     // The pass tags the name of every declaration it rewrites with the REPAIR it applied, so the
     // expectations have to spell the tag that matches how the fixture uses the image.
-    String RoAlias(const String& name) { return String(IMAGE_READONLY_ALIAS_PREFIX) + name; }
-    String WoAlias(const String& name) { return String(IMAGE_WRITEONLY_ALIAS_PREFIX) + name; }
-    String RwAlias(const String& name) { return String(IMAGE_SPLIT_READ_ALIAS_PREFIX) + name; }
+    String RoAlias(const String& name) {
+        return String(IMAGE_READONLY_ALIAS_PREFIX) + name;
+    }
+    String WoAlias(const String& name) {
+        return String(IMAGE_WRITEONLY_ALIAS_PREFIX) + name;
+    }
+    String RwAlias(const String& name) {
+        return String(IMAGE_SPLIT_READ_ALIAS_PREFIX) + name;
+    }
     // The writeonly half is minted from the ALREADY access-tagged name, so it carries both.
-    String WriteAlias(const String& name) { return String(IMAGE_WRITE_ALIAS_PREFIX) + name; }
-    String SplitWriteAlias(const String& name) { return WriteAlias(RwAlias(name)); }
+    String WriteAlias(const String& name) {
+        return String(IMAGE_WRITE_ALIAS_PREFIX) + name;
+    }
+    String SplitWriteAlias(const String& name) {
+        return WriteAlias(RwAlias(name));
+    }
     // The scalar RemapImageArrayElementUnits declares for one element of a split image array.
     String Elem(const String& name, Int element) {
         return String(IMAGE_ARRAY_ELEMENT_PREFIX) + name + "_" + std::to_string(element);
@@ -84,8 +104,8 @@ void main()
     // Both halves: same binding, same format, same type - which is what makes two image
     // variables on one image unit legal - and both `coherent`, which is what makes the store
     // through one of them visible to the load through the other.
-    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform coherent readonly highp image2D " +
-                                  RwAlias("goku") + ";"))
+    EXPECT_TRUE(
+        Contains(out, "layout(binding = 2, rgba8) uniform coherent readonly highp image2D " + RwAlias("goku") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform coherent writeonly highp image2D " +
                                   SplitWriteAlias("goku") + ";"))
@@ -126,8 +146,8 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba16f) uniform readonly highp image2DArray " +
-                                  RoAlias("trunks") + ";"))
+    EXPECT_TRUE(
+        Contains(out, "layout(binding = 1, rgba16f) uniform readonly highp image2DArray " + RoAlias("trunks") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "imageLoad(" + RoAlias("trunks") + ","));
     EXPECT_FALSE(Contains(out, "writeonly"));
@@ -144,8 +164,7 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(
-        Contains(out, "layout(binding = 3, rgba8) uniform writeonly highp image2D " + WoAlias("gohan") + ";"))
+    EXPECT_TRUE(Contains(out, "layout(binding = 3, rgba8) uniform writeonly highp image2D " + WoAlias("gohan") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias("gohan") + ","));
     EXPECT_FALSE(Contains(out, "readonly"));
@@ -179,11 +198,9 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 0, rgba8) uniform readonly highp image2D " +
-                                  RoAlias("reader") + ";"))
+    EXPECT_TRUE(Contains(out, "layout(binding = 0, rgba8) uniform readonly highp image2D " + RoAlias("reader") + ";"))
         << out;
-    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform writeonly highp image2D " +
-                                  WoAlias("writer") + ";"))
+    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform writeonly highp image2D " + WoAlias("writer") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias("writer") + ",")) << out;
     EXPECT_TRUE(Contains(out, "imageLoad(" + RoAlias("reader") + ",")) << out;
@@ -219,8 +236,8 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform coherent readonly highp image2D " +
-                                  RwAlias("gohan") + "[3];"))
+    EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform coherent readonly highp image2D " + RwAlias("gohan") +
+                                  "[3];"))
         << out;
     EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform coherent writeonly highp image2D " +
                                   SplitWriteAlias("gohan") + "[3];"))
@@ -246,14 +263,13 @@ void main()
 
     // goku is read+write -> split (and coherent with it); goku_hd is write-only -> qualified in
     // place, not split, and left non-coherent because nothing aliases it. Both are renamed.
-    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform coherent readonly highp image2D " +
-                                  RwAlias("goku") + ";"))
+    EXPECT_TRUE(
+        Contains(out, "layout(binding = 1, rgba8) uniform coherent readonly highp image2D " + RwAlias("goku") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform coherent writeonly highp image2D " +
                                   SplitWriteAlias("goku") + ";"))
         << out;
-    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform writeonly highp image2D " +
-                                  WoAlias("goku_hd") + ";"))
+    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform writeonly highp image2D " + WoAlias("goku_hd") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias("goku_hd") + ","));
     EXPECT_FALSE(Contains(out, SplitWriteAlias("goku") + "_hd"));
@@ -271,10 +287,8 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "uniform readonly coherent restrict highp image2D " + RwAlias("goku") + ";"))
-        << out;
-    EXPECT_TRUE(
-        Contains(out, "uniform writeonly coherent restrict highp image2D " + SplitWriteAlias("goku") + ";"))
+    EXPECT_TRUE(Contains(out, "uniform readonly coherent restrict highp image2D " + RwAlias("goku") + ";")) << out;
+    EXPECT_TRUE(Contains(out, "uniform writeonly coherent restrict highp image2D " + SplitWriteAlias("goku") + ";"))
         << out;
     // ...and the coherent the split adds is not a SECOND one: a repeated memory qualifier is a
     // compile error in ESSL, so the source's own has to be recognized.
@@ -301,8 +315,7 @@ void main()
 )";
     const String out = SplitReadWriteImageUniforms(source);
     EXPECT_TRUE(Contains(out, "uniform coherent readonly highp image2D " + RwAlias("goku") + ";")) << out;
-    EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + SplitWriteAlias("goku") + ";"))
-        << out;
+    EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + SplitWriteAlias("goku") + ";")) << out;
     // Exactly the two halves of the pair, and nothing else: the store-only image is repaired in
     // place, has no alias to stay visible to, and must not pay for uncached access.
     EXPECT_EQ(CountOf(out, "coherent"), 2u);
@@ -367,8 +380,8 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "max(imageLoad(" + RwAlias("gohan") +
-                                  "[2], ivec2(0)), vec4(0.5))); memoryBarrierImage();"))
+    EXPECT_TRUE(
+        Contains(out, "max(imageLoad(" + RwAlias("gohan") + "[2], ivec2(0)), vec4(0.5))); memoryBarrierImage();"))
         << out;
     EXPECT_EQ(CountOf(out, "memoryBarrierImage();"), 1u) << out;
 }
@@ -420,8 +433,8 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 8, rgba8ui) uniform readonly highp uimage2D " +
-                                  RoAlias("sizeOnly") + ";"))
+    EXPECT_TRUE(
+        Contains(out, "layout(binding = 8, rgba8ui) uniform readonly highp uimage2D " + RoAlias("sizeOnly") + ";"))
         << out;
     // The rename has to reach imageSize too, or the declaration and its only use stop agreeing.
     EXPECT_TRUE(Contains(out, "imageSize(" + RoAlias("sizeOnly") + ")")) << out;
@@ -583,8 +596,7 @@ void main()
     const String first = SplitReadWriteImageUniforms(stage);
     const String second = SplitReadWriteImageUniforms(stage);
     EXPECT_EQ(first, second);
-    EXPECT_TRUE(Contains(first, "uniform coherent readonly highp image2D " + RoAlias("g_image") + ";"))
-        << first;
+    EXPECT_TRUE(Contains(first, "uniform coherent readonly highp image2D " + RoAlias("g_image") + ";")) << first;
 }
 
 // The other side of that coin, and the one a per-STAGE tag got wrong. Two stages that use the
@@ -620,8 +632,7 @@ void main()
     // back into the single image uniform the application declared.
     for (const String& out : {vsOut, fsOut}) {
         EXPECT_TRUE(Contains(out, "uniform coherent readonly highp image2D " + RwAlias("goku") + ";")) << out;
-        EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + SplitWriteAlias("goku") + ";"))
-            << out;
+        EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + SplitWriteAlias("goku") + ";")) << out;
         EXPECT_TRUE(Contains(out, "imageLoad(" + RwAlias("goku") + ",")) << out;
         EXPECT_TRUE(Contains(out, "imageStore(" + SplitWriteAlias("goku") + ",")) << out;
     }
@@ -683,8 +694,7 @@ void main()
 // units 0, 1, 2, 3.
 TEST(RemapImageArrayElementUnitsTest, NonConsecutiveUnitsSplitIntoOneScalarPerElement) {
     Vector<String> declined;
-    const String out =
-        RemapImageArrayElementUnits(kSsoImageArrayFS, {Plan("g_image", {0, 2, 4, 6})}, &declined);
+    const String out = RemapImageArrayElementUnits(kSsoImageArrayFS, {Plan("g_image", {0, 2, 4, 6})}, &declined);
 
     EXPECT_TRUE(declined.empty()) << (declined.empty() ? String() : declined[0]);
     const Int units[4] = {0, 2, 4, 6};
@@ -692,8 +702,7 @@ TEST(RemapImageArrayElementUnitsTest, NonConsecutiveUnitsSplitIntoOneScalarPerEl
         EXPECT_TRUE(Contains(out, "layout(rgba32f, binding = " + std::to_string(units[element]) +
                                       ") uniform writeonly highp image2D " + Elem("g_image", element) + ";"))
             << out;
-        EXPECT_TRUE(Contains(out, "imageStore(" + Elem("g_image", element) + ", ivec2(gl_FragCoord.xy)"))
-            << out;
+        EXPECT_TRUE(Contains(out, "imageStore(" + Elem("g_image", element) + ", ivec2(gl_FragCoord.xy)")) << out;
     }
     // The array is gone entirely; nothing may still address units 0,1,2,3 through it.
     EXPECT_FALSE(Contains(out, "image2D g_image[4];")) << out;
@@ -717,8 +726,8 @@ void main()
     const String out = RemapImageArrayElementUnits(source, {Plan("g_image", {3, 1, 7, 5})});
     const Int units[4] = {3, 1, 7, 5};
     for (Int element = 0; element < 4; ++element) {
-        EXPECT_TRUE(Contains(out, "binding = " + std::to_string(units[element]) +
-                                      ") uniform writeonly highp image2D " + Elem("g_image", element) + ";"))
+        EXPECT_TRUE(Contains(out, "binding = " + std::to_string(units[element]) + ") uniform writeonly highp image2D " +
+                                      Elem("g_image", element) + ";"))
             << out;
     }
     // Only elements 0 and 3 are ever accessed; elements 1 and 2 are declared and unused, because
@@ -773,8 +782,7 @@ void main()
 }
 )";
     Vector<String> outOfRangeDeclined;
-    EXPECT_EQ(RemapImageArrayElementUnits(outOfRange, {Plan("g_image", {0, 5})}, &outOfRangeDeclined),
-              outOfRange);
+    EXPECT_EQ(RemapImageArrayElementUnits(outOfRange, {Plan("g_image", {0, 5})}, &outOfRangeDeclined), outOfRange);
     ASSERT_EQ(outOfRangeDeclined.size(), 1u);
 }
 
@@ -806,7 +814,7 @@ void main()
     EXPECT_FALSE(Contains(out, "g_image[")) << out;
 }
 
-// ...and the suffix is not a licence to accept anything else that ends in one: `iu` is not a
+// ...and the suffix is not a license to accept anything else that ends in one: `iu` is not a
 // literal, and neither is a bare `u`.
 TEST(RemapImageArrayElementUnitsTest, ASuffixAloneDoesNotMakeAnExpressionALiteral) {
     const String source = R"(#version 320 es
@@ -903,8 +911,7 @@ void main()
     // Element 1 sits on unit 9, and both halves of its split pair say so.
     EXPECT_EQ(CountOf(out, "binding = 9"), 2u) << out;
     EXPECT_TRUE(Contains(out, "readonly highp image2D " + RwAlias(Elem("g_image", 1)) + ";")) << out;
-    EXPECT_TRUE(Contains(out, "writeonly highp image2D " + WriteAlias(RwAlias(Elem("g_image", 1))) + ";"))
-        << out;
+    EXPECT_TRUE(Contains(out, "writeonly highp image2D " + WriteAlias(RwAlias(Elem("g_image", 1))) + ";")) << out;
     EXPECT_EQ(CountOf(out, "binding = 4"), 1u) << out;
 }
 
@@ -912,7 +919,7 @@ void main()
 // image ARRAY, and the regression it caused was in the SCALAR images sitting next to one. A
 // scalar with an explicit binding has to come out of the whole chain still on ITS OWN unit,
 // still spelled once, and named the same thing every stage would name it - it is the array that
-// needs repairing, not its neighbour.
+// needs repairing, not its neighbor.
 TEST(RemapImageArrayElementUnitsTest, AScalarImageWithItsOwnBindingIsUntouchedByTheArrayRepair) {
     const String source = R"(#version 320 es
 layout(rgba8, binding = 7) uniform highp image2D goku;
@@ -976,9 +983,11 @@ void main()
 TEST(RetargetTextureBufferExtensionTest, OesOnlyDriverGetsTheOesDirective) {
     const String out = RetargetTextureBufferExtension(kBufferTextureShader, Tier::ExtensionOES);
     EXPECT_TRUE(Contains(out, "#extension GL_OES_texture_buffer : require"))
-        << "the OES driver's own spelling must reach the directive:\n" << out;
+        << "the OES driver's own spelling must reach the directive:\n"
+        << out;
     EXPECT_FALSE(Contains(out, "GL_EXT_texture_buffer"))
-        << "the EXT spelling this driver does not advertise must be gone:\n" << out;
+        << "the EXT spelling this driver does not advertise must be gone:\n"
+        << out;
     // Only the directive changes; the declaration and the fetch are identical between the two
     // extensions and must not be touched.
     EXPECT_TRUE(Contains(out, "uniform highp isamplerBuffer CloudFaces;"));
@@ -986,17 +995,14 @@ TEST(RetargetTextureBufferExtensionTest, OesOnlyDriverGetsTheOesDirective) {
 }
 
 TEST(RetargetTextureBufferExtensionTest, ExtDriverKeepsWhatSpirvCrossEmitted) {
-    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::ExtensionEXT),
-              kBufferTextureShader);
+    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::ExtensionEXT), kBufferTextureShader);
 }
 
 // ES 3.2 needs no directive at all, and SPIRV-Cross emits none at ESSL 320 - but a shader
 // that arrived with one anyway must not be rewritten to a name the pass was not asked for.
 TEST(RetargetTextureBufferExtensionTest, CoreAndUnsupportedTiersAreNoOps) {
-    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::CoreEs32),
-              kBufferTextureShader);
-    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::None),
-              kBufferTextureShader);
+    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::CoreEs32), kBufferTextureShader);
+    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::None), kBufferTextureShader);
 }
 
 // The name is only the subject of a rewrite where it is the subject of an #extension
@@ -1045,7 +1051,7 @@ void main() {}
 
 // Whitespace between '#' and the keyword is legal in GLSL, and a shader carrying several
 // extension directives must have exactly the one retargeted.
-TEST(RetargetTextureBufferExtensionTest, SpacedDirectiveIsRewrittenAndNeighboursAreLeftAlone) {
+TEST(RetargetTextureBufferExtensionTest, SpacedDirectiveIsRewrittenAndNeighborsAreLeftAlone) {
     const String source = R"(#version 310 es
 #  extension GL_EXT_texture_buffer : require
 #extension GL_EXT_shader_io_blocks : require
@@ -1055,7 +1061,8 @@ void main() {}
     const String out = RetargetTextureBufferExtension(source, Tier::ExtensionOES);
     EXPECT_TRUE(Contains(out, "#  extension GL_OES_texture_buffer : require")) << out;
     EXPECT_TRUE(Contains(out, "#extension GL_EXT_shader_io_blocks : require"))
-        << "an unrelated extension must survive untouched:\n" << out;
+        << "an unrelated extension must survive untouched:\n"
+        << out;
     EXPECT_EQ(CountOf(out, "GL_OES_texture_buffer"), 1u);
 }
 
@@ -1219,7 +1226,7 @@ void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
 }
 
 // Never speculatively: `#extension` naming an extension the driver does not advertise is itself a
-// compile error, so the caller's "not needed" answer has to be honoured exactly.
+// compile error, so the caller's "not needed" answer has to be honored exactly.
 TEST(RequestExtendedImageFormatsTest, NotNeededMeansNotEmitted) {
     const String source = R"(#version 320 es
 layout(rgba8ui, binding = 1) uniform writeonly highp uimage2D uni_image;
@@ -1255,7 +1262,7 @@ void main() { gl_ViewportIndex = gl_InvocationID; EmitVertex(); }
 }
 
 // Never speculatively: ARM's compiler hard-errors on an `#extension` naming a string the driver
-// does not advertise, so the caller's "not needed" answer has to be honoured exactly. A driver
+// does not advertise, so the caller's "not needed" answer has to be honored exactly. A driver
 // without the extension gets the LowerViewportIndexPass fallback instead.
 TEST(RequestViewportArrayExtensionTest, NotNeededMeansNotEmitted) {
     const String source = R"(#version 320 es
@@ -1358,8 +1365,8 @@ layout(points) in;
 layout(points, max_vertices = 1) out;
 void main() { gl_ViewportIndex = 1; gl_PointSize = 2.0; EmitVertex(); }
 )";
-    const String out = RequestPointSizeExtension(RequestViewportArrayExtension(source, true),
-                                                 "GL_EXT_geometry_point_size");
+    const String out =
+        RequestPointSizeExtension(RequestViewportArrayExtension(source, true), "GL_EXT_geometry_point_size");
     EXPECT_EQ(out.find("#version 320 es"), 0u) << out;
     EXPECT_TRUE(Contains(out, "#extension GL_OES_viewport_array : require\n")) << out;
     EXPECT_TRUE(Contains(out, "#extension GL_EXT_geometry_point_size : require\n")) << out;
@@ -1370,7 +1377,7 @@ void main() { gl_ViewportIndex = 1; gl_PointSize = 2.0; EmitVertex(); }
 // Desktop GL makes the tessellation control stage optional and takes the levels from
 // PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL; ES 3.2 has neither, and rejects a
 // program that has an evaluation stage without a control stage - with an EMPTY info log. The
-// synthesized stage is what stands in, and it has to MIRROR its two neighbours' gl_PerVertex
+// synthesized stage is what stands in, and it has to MIRROR its two neighbors' gl_PerVertex
 // rather than pick a shape, because a redeclaration that disagrees with the stage it feeds is an
 // ES link error against a program that has nothing else wrong with it.
 
@@ -1379,7 +1386,7 @@ namespace {
     const FloatVec2 kDefaultInner(1.0f, 1.0f);
 } // namespace
 
-// The synthesized stage mirrors its neighbours' gl_PerVertex, so it can be the thing that
+// The synthesized stage mirrors its neighbors' gl_PerVertex, so it can be the thing that
 // declares gl_PointSize - and in ESSL a redeclaration is exactly as illegal as a reference
 // without the extension. The directive has to survive being applied to its output.
 TEST(RequestPointSizeExtensionTest, CoversAMirroredPassthroughControlStage) {
@@ -1397,16 +1404,14 @@ TEST(PassthroughTessControlEsslTest, DeclaresThePatchSizeAndWritesEveryTessLevel
     const String out = BuildPassthroughTessControlEssl(320, 4, "", "", kDefaultOuter, kDefaultInner);
     EXPECT_EQ(out.find("#version 320 es"), 0u) << out;
     EXPECT_TRUE(Contains(out, "layout(vertices = 4) out;")) << out;
-    EXPECT_TRUE(Contains(out,
-                         "gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;"))
-        << out;
+    EXPECT_TRUE(Contains(out, "gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;")) << out;
     // All six, unconditionally: writing a level the evaluation stage's domain does not use is
     // legal and ignored, and it saves the generator from having to know the domain.
     for (const char* level : {"gl_TessLevelOuter[0]", "gl_TessLevelOuter[1]", "gl_TessLevelOuter[2]",
                               "gl_TessLevelOuter[3]", "gl_TessLevelInner[0]", "gl_TessLevelInner[1]"}) {
         EXPECT_TRUE(Contains(out, String(level) + " = 1.0;")) << level << "\n" << out;
     }
-    // Nothing redeclared when the neighbours redeclared nothing - the driver's own built-in
+    // Nothing redeclared when the neighbors redeclared nothing - the driver's own built-in
     // gl_in/gl_out is then what both sides agree on, and redeclaring is what would break it.
     EXPECT_FALSE(Contains(out, "gl_PerVertex")) << out;
 }
@@ -1415,8 +1420,8 @@ TEST(PassthroughTessControlEsslTest, DeclaresThePatchSizeAndWritesEveryTessLevel
 // entry point to forward it to, so a generator that ignored these arguments would tessellate every
 // control-stage-less program at level 1 whatever the application asked for.
 TEST(PassthroughTessControlEsslTest, BakesTheDefaultTessLevelsIn) {
-    const String out = BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(2.0f, 3.0f, 4.0f, 5.0f),
-                                                       FloatVec2(6.5f, 7.25f));
+    const String out =
+        BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(2.0f, 3.0f, 4.0f, 5.0f), FloatVec2(6.5f, 7.25f));
     EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[0] = 2.0;")) << out;
     EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[1] = 3.0;")) << out;
     EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[2] = 4.0;")) << out;
@@ -1429,8 +1434,8 @@ TEST(PassthroughTessControlEsslTest, BakesTheDefaultTessLevelsIn) {
 // `gl_TessLevelOuter[0] = 1;` as an int assigned to a float and refuses to compile the stage,
 // which would take the whole program down with it.
 TEST(PassthroughTessControlEsslTest, SpellsIntegralLevelsAsFloatLiterals) {
-    const String out = BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(2.0f, 2.0f, 2.0f, 2.0f),
-                                                       FloatVec2(2.0f, 2.0f));
+    const String out =
+        BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(2.0f, 2.0f, 2.0f, 2.0f), FloatVec2(2.0f, 2.0f));
     EXPECT_FALSE(Contains(out, "= 2;")) << out;
 }
 
@@ -1442,8 +1447,7 @@ TEST(PassthroughTessControlEsslTest, SpellsIntegralLevelsAsFloatLiterals) {
 TEST(PassthroughTessControlEsslTest, NonFiniteLevelsFollowTheDiscardRule) {
     const Float notANumber = std::numeric_limits<Float>::quiet_NaN();
     const Float infinity = std::numeric_limits<Float>::infinity();
-    const String out = BuildPassthroughTessControlEssl(320, 4, "", "",
-                                                       FloatVec4(notANumber, -infinity, infinity, 1.0f),
+    const String out = BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(notANumber, -infinity, infinity, 1.0f),
                                                        FloatVec2(notANumber, 1.0f));
     EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[0] = 0.0;")) << out;
     EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[1] = 0.0;")) << out;
@@ -1457,9 +1461,8 @@ TEST(PassthroughTessControlEsslTest, NonFiniteLevelsFollowTheDiscardRule) {
 // A level below the old six-decimal format's resolution is still a POSITIVE level, which GL clamps
 // to 1 and draws; rendering it as "0.000000" discarded the patch instead.
 TEST(PassthroughTessControlEsslTest, TinyPositiveLevelsDoNotFlushToZero) {
-    const String out = BuildPassthroughTessControlEssl(320, 4, "", "",
-                                                       FloatVec4(1e-7f, 1.0f, 1.0f, 1.0f),
-                                                       FloatVec2(1.0f, 1.0f));
+    const String out =
+        BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(1e-7f, 1.0f, 1.0f, 1.0f), FloatVec2(1.0f, 1.0f));
     EXPECT_FALSE(Contains(out, "gl_TessLevelOuter[0] = 0.0;")) << out;
     EXPECT_FALSE(Contains(out, "gl_TessLevelOuter[0] = 0.000000;")) << out;
 }
@@ -1472,7 +1475,7 @@ TEST(PassthroughTessControlEsslTest, RequestsTheExtensionBelowEs32) {
     EXPECT_TRUE(Contains(out, "#extension GL_EXT_tessellation_shader : require")) << out;
 }
 
-TEST(PassthroughTessControlEsslTest, MirrorsTheNeighboursPerVertexBlocks) {
+TEST(PassthroughTessControlEsslTest, MirrorsTheNeighborsPerVertexBlocks) {
     const String inMembers = " highp vec4 gl_Position; highp float gl_PointSize; ";
     const String outMembers = " highp vec4 gl_Position; ";
     const String out = BuildPassthroughTessControlEssl(320, 4, inMembers, outMembers, kDefaultOuter, kDefaultInner);
@@ -1516,4 +1519,380 @@ struct fin gl_PerVertex { highp vec4 gl_Position; };
 void main() {}
 )";
     EXPECT_FALSE(ExtractPerVertexBlockMembers(essl, true).has_value()) << essl;
+}
+
+// The shape SPIRV-Cross prints for a vertex stage writing clip and cull distances: standalone,
+// sized, `out` redeclarations an ES compiler refuses as reserved names.
+TEST(RedeclareClipCullDistancesTest, MovesTheStandaloneArraysIntoTheOutputBlock) {
+    const String essl = R"(#version 320 es
+#extension GL_EXT_clip_cull_distance : require
+
+out float gl_ClipDistance[4];
+out float gl_CullDistance[1];
+
+void main()
+{
+    gl_Position = vec4(1.0);
+    gl_ClipDistance[0] = 1.0;
+    gl_CullDistance[0] = 1.0;
+}
+)";
+    const String out = RedeclareClipCullDistancesInPerVertexBlock(essl, GL_VERTEX_SHADER);
+    EXPECT_FALSE(Contains(out, "out float gl_ClipDistance")) << out;
+    EXPECT_FALSE(Contains(out, "out float gl_CullDistance")) << out;
+    EXPECT_TRUE(Contains(out, "out gl_PerVertex\n{\n    highp vec4 gl_Position;\n"
+                              "    highp float gl_ClipDistance[4];\n"
+                              "    highp float gl_CullDistance[1];\n};"))
+        << out;
+    EXPECT_FALSE(Contains(out, "gl_PointSize")) << out;
+    // The body is untouched.
+    EXPECT_TRUE(Contains(out, "gl_ClipDistance[0] = 1.0;")) << out;
+    EXPECT_EQ(CountOf(out, "gl_PerVertex"), 1u) << out;
+    // What a synthesized pass-through control stage would mirror from this stage.
+    const auto members = ExtractPerVertexBlockMembers(out, /*input=*/false);
+    ASSERT_TRUE(members.has_value()) << out;
+    EXPECT_TRUE(Contains(*members, "highp float gl_ClipDistance[4];")) << *members;
+}
+
+TEST(RedeclareClipCullDistancesTest, KeepsAWrittenPointSizeAndFoldsInvariance) {
+    const String essl = R"(#version 320 es
+#extension GL_EXT_clip_cull_distance : require
+layout(points) in;
+layout(points, max_vertices = 1) out;
+
+out float gl_ClipDistance[2];
+
+invariant gl_Position;
+
+void main()
+{
+    gl_Position = gl_in[0].gl_Position;
+    gl_PointSize = gl_in[0].gl_PointSize;
+    gl_ClipDistance[1] = 0.5;
+    EmitVertex();
+}
+)";
+    const String out = RedeclareClipCullDistancesInPerVertexBlock(essl, GL_GEOMETRY_SHADER);
+    EXPECT_TRUE(Contains(out, "    invariant highp vec4 gl_Position;\n    highp float gl_PointSize;\n"
+                              "    highp float gl_ClipDistance[2];\n};"))
+        << out;
+    EXPECT_FALSE(Contains(out, "invariant gl_Position;")) << out;
+    EXPECT_FALSE(Contains(out, "out float gl_ClipDistance")) << out;
+}
+
+// Only a READ of the previous stage's point size: not this stage's output, so not a member.
+TEST(RedeclareClipCullDistancesTest, AnInputPointSizeReadIsNotAMember) {
+    const String essl = R"(#version 320 es
+layout(triangles) in;
+out float gl_ClipDistance[1];
+void main()
+{
+    gl_Position = gl_in[0].gl_Position * gl_in[0].gl_PointSize;
+    gl_ClipDistance[0] = 1.0;
+}
+)";
+    const String out = RedeclareClipCullDistancesInPerVertexBlock(essl, GL_TESS_EVALUATION_SHADER);
+    EXPECT_TRUE(Contains(out, "out gl_PerVertex")) << out;
+    EXPECT_FALSE(Contains(out, "highp float gl_PointSize;")) << out;
+}
+
+TEST(RedeclareClipCullDistancesTest, LeavesFragmentInputsControlStagesAndPlainShadersAlone) {
+    const String fragment = R"(#version 320 es
+in float gl_ClipDistance[4];
+layout(location = 0) out highp vec4 c;
+void main() { c = vec4(gl_ClipDistance[0]); }
+)";
+    EXPECT_EQ(RedeclareClipCullDistancesInPerVertexBlock(fragment, GL_FRAGMENT_SHADER), fragment);
+    const String control = R"(#version 320 es
+layout(vertices = 3) out;
+out gl_PerVertex
+{
+    vec4 gl_Position;
+    float gl_ClipDistance[1];
+} gl_out[3];
+void main() { gl_out[gl_InvocationID].gl_ClipDistance[0] = 1.0; }
+)";
+    EXPECT_EQ(RedeclareClipCullDistancesInPerVertexBlock(control, GL_TESS_CONTROL_SHADER), control);
+    const String plain = "#version 320 es\nvoid main()\n{\n    gl_Position = vec4(0.0);\n}\n";
+    EXPECT_EQ(RedeclareClipCullDistancesInPerVertexBlock(plain, GL_VERTEX_SHADER), plain);
+}
+
+TEST(RequestClipCullDistanceExtensionTest, AddsTheDirectiveOnlyWhenTheArraysAreNamed) {
+    const String mirrored = "#version 320 es\nin gl_PerVertex { highp vec4 gl_Position; highp float "
+                            "gl_ClipDistance[2]; } gl_in[gl_MaxPatchVertices];\nvoid main() {}\n";
+    const String out = RequestClipCullDistanceExtension(mirrored);
+    EXPECT_EQ(out.find("#version 320 es\n#extension GL_EXT_clip_cull_distance : require\n"), 0u) << out;
+    EXPECT_EQ(RequestClipCullDistanceExtension(out), out);
+    const String plain = "#version 320 es\nvoid main() {}\n";
+    EXPECT_EQ(RequestClipCullDistanceExtension(plain), plain);
+}
+
+// End to end against what SPIRV-Cross really prints, so the fixtures above cannot drift from it.
+TEST(RedeclareClipCullDistancesTest, RewritesRealSpirvCrossOutput) {
+    using namespace MG_Util::ShaderTranspiler;
+    MobileGL::Initialize();
+    const char* vertexSource = R"(#version 330 core
+out float gl_ClipDistance[3];
+void main() {
+    gl_Position = vec4(float(gl_VertexID), 0.0, 0.0, 1.0);
+    for (int i = 0; i < 3; ++i) gl_ClipDistance[i] = float(i) - 1.0;
+}
+)";
+    const char* fragmentSource = R"(#version 330 core
+out vec4 color;
+void main() { color = vec4(1.0); }
+)";
+    Vector<SharedPtr<glslang::TShader>> shaders;
+    const Vector<Pair<GLenum, const char*>> stages{{GL_VERTEX_SHADER, vertexSource},
+                                                   {GL_FRAGMENT_SHADER, fragmentSource}};
+    for (const auto& [stage, text] : stages) {
+        ShaderAttrib attrib{.shaderType = stage, .sourceStr = text};
+        auto compiled = ShaderCompiler::CompileShader(attrib);
+        ASSERT_TRUE(compiled) << compiled.error().log;
+        shaders.push_back(compiled.value());
+    }
+    ProgramAttrib programAttrib{.shaders = shaders};
+    auto program = ShaderCompiler::LinkProgram(programAttrib);
+    ASSERT_TRUE(program) << program.error().log;
+    ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_VERTEX_SHADER, GL_FRAGMENT_SHADER},
+                                     .program = *program.value()};
+    auto modules = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    ASSERT_TRUE(modules) << modules.error().log;
+    ASSERT_EQ(modules.value().size(), 2u);
+
+    SpvcSession session(modules.value()[0], SessionUsageBit::Transpile);
+    auto essl = ShaderCompiler::DecompileShader(session);
+    ASSERT_TRUE(essl) << essl.error().log;
+    // The shape the pass exists for really is what SPIRV-Cross prints.
+    ASSERT_TRUE(Contains(essl.value(), "out float gl_ClipDistance[3];")) << essl.value();
+
+    const String out = RedeclareClipCullDistancesInPerVertexBlock(essl.value(), GL_VERTEX_SHADER);
+    EXPECT_FALSE(Contains(out, "out float gl_ClipDistance")) << out;
+    EXPECT_TRUE(Contains(out, "    highp float gl_ClipDistance[3];\n};")) << out;
+    EXPECT_TRUE(Contains(out, "GL_EXT_clip_cull_distance")) << out;
+}
+
+// The consumer half: SPIRV-Cross never redeclares an ES input block, so a stage reading
+// gl_in[i].gl_CullDistance gets the implicitly sized arrays, and a driver that packs cull
+// distances after clip distances reads them from the wrong component
+// (KHR-GL45.cull_distance.functional_test_item_{5,6}). The block mirrors the producer's.
+TEST(RedeclareClipCullDistanceInputsTest, MirrorsTheProducerBlockIntoATessellationStage) {
+    const String producer = "\n    highp vec4 gl_Position;\n    highp float gl_ClipDistance[1];\n"
+                            "    highp float gl_CullDistance[7];\n";
+    const String tes = R"(#version 320 es
+#extension GL_EXT_clip_cull_distance : require
+precision highp float;
+precision highp int;
+layout(triangles, ccw, equal_spacing) in;
+
+out gl_PerVertex
+{
+    highp vec4 gl_Position;
+    highp float gl_CullDistance[7];
+};
+
+void main()
+{
+    gl_CullDistance[0] = dot(vec3(gl_in[0].gl_CullDistance[0], gl_in[1].gl_CullDistance[0], gl_in[2].gl_CullDistance[0]), gl_TessCoord);
+    gl_Position = gl_in[0].gl_Position;
+}
+)";
+    const String out = RedeclareClipCullDistanceInputsInPerVertexBlock(tes, GL_TESS_EVALUATION_SHADER, producer);
+    EXPECT_TRUE(Contains(out, "layout(triangles, ccw, equal_spacing) in;\n\nin gl_PerVertex\n{\n"
+                              "    highp vec4 gl_Position;\n    highp float gl_ClipDistance[1];\n"
+                              "    highp float gl_CullDistance[7];\n} gl_in[gl_MaxPatchVertices];\n"))
+        << out;
+    // Applied once only.
+    EXPECT_EQ(RedeclareClipCullDistanceInputsInPerVertexBlock(out, GL_TESS_EVALUATION_SHADER, producer), out);
+}
+
+TEST(RedeclareClipCullDistanceInputsTest, GeometryStageGetsAnUnsizedBlockAfterItsLayouts) {
+    const String producer = "\n    invariant highp vec4 gl_Position;\n    highp float gl_CullDistance[8];\n";
+    const String gs = R"(#version 320 es
+#extension GL_EXT_clip_cull_distance : require
+precision highp float;
+layout(triangles) in;
+layout(max_vertices = 3, triangle_strip) out;
+
+out gl_PerVertex
+{
+    highp vec4 gl_Position;
+    highp float gl_CullDistance[8];
+};
+
+void main()
+{
+    gl_Position = gl_in[0].gl_Position;
+    gl_CullDistance[0] = gl_in[0].gl_CullDistance[0];
+    EmitVertex();
+}
+)";
+    const String out = RedeclareClipCullDistanceInputsInPerVertexBlock(gs, GL_GEOMETRY_SHADER, producer);
+    EXPECT_TRUE(Contains(out, "layout(max_vertices = 3, triangle_strip) out;\n\nin gl_PerVertex\n{\n"
+                              "    highp vec4 gl_Position;\n    highp float gl_CullDistance[8];\n} gl_in[];\n"))
+        << out;
+    EXPECT_FALSE(Contains(out, "invariant")) << out;
+}
+
+TEST(RedeclareClipCullDistanceInputsTest, LeavesStagesItCannotRedeclareHonestlyAlone) {
+    const String producer = "\n    highp vec4 gl_Position;\n    highp float gl_ClipDistance[2];\n";
+    // Reads gl_PointSize, which the producer's block does not carry.
+    const String readsPointSize = R"(#version 320 es
+layout(points) in;
+layout(points, max_vertices = 1) out;
+void main() { gl_Position = gl_in[0].gl_Position * gl_in[0].gl_PointSize + vec4(gl_in[0].gl_ClipDistance[1]); EmitVertex(); }
+)";
+    EXPECT_EQ(RedeclareClipCullDistanceInputsInPerVertexBlock(readsPointSize, GL_GEOMETRY_SHADER, producer),
+              readsPointSize);
+    // Does not read the distances at all.
+    const String plain = R"(#version 320 es
+layout(points) in;
+layout(points, max_vertices = 1) out;
+void main() { gl_Position = gl_in[0].gl_Position; EmitVertex(); }
+)";
+    EXPECT_EQ(RedeclareClipCullDistanceInputsInPerVertexBlock(plain, GL_GEOMETRY_SHADER, producer), plain);
+    // The producer wrote no distances, and a vertex stage has no gl_in at all.
+    EXPECT_EQ(RedeclareClipCullDistanceInputsInPerVertexBlock(readsPointSize, GL_GEOMETRY_SHADER,
+                                                              "\n    highp vec4 gl_Position;\n"),
+              readsPointSize);
+    EXPECT_EQ(RedeclareClipCullDistanceInputsInPerVertexBlock(readsPointSize, GL_VERTEX_SHADER, producer),
+              readsPointSize);
+}
+
+// The runtime half of the deferred usampler2DMS clamp: the sample argument of every fetch that
+// names an unsigned multisample uniform is bounded by that sampler's own uniform, declared right
+// after it. A float multisample sampler and a non-multisample one are none of its business.
+TEST(ClampUnsignedMultisampleFetchesTest, BoundsTheSampleOfEveryUnsignedMultisampleFetch) {
+    const String essl = "#version 320 es\n"
+                        "precision highp float;\n"
+                        "layout(binding = 0) uniform highp usampler2DMS stencilTex;\n"
+                        "uniform highp sampler2DMS colorMs;\n"
+                        "uniform highp usampler2D plain;\n"
+                        "layout(location = 0) out highp vec4 color;\n"
+                        "void main() {\n"
+                        "    uint a = texelFetch(stencilTex, ivec2(0), 3).x;\n"
+                        "    uint b = texelFetch(stencilTex, ivec2(0), int(gl_FragCoord.x)).x;\n"
+                        "    vec4 c = texelFetch(colorMs, ivec2(0), 3);\n"
+                        "    uint d = texelFetch(plain, ivec2(0), 0).x;\n"
+                        "    color = vec4(float(a), float(b), c.x, float(d));\n"
+                        "}\n";
+    const String out = ClampUnsignedMultisampleFetches(essl);
+    EXPECT_TRUE(Contains(out, "texelFetch(stencilTex, ivec2(0), min(3, mg_msSampleMax_stencilTex))")) << out;
+    EXPECT_TRUE(Contains(out, "texelFetch(stencilTex, ivec2(0), min(int(gl_FragCoord.x), mg_msSampleMax_stencilTex))"))
+        << out;
+    EXPECT_TRUE(Contains(out, "uniform highp usampler2DMS stencilTex;\nuniform highp int mg_msSampleMax_stencilTex;"))
+        << out;
+    EXPECT_EQ(CountOf(out, "uniform highp int mg_msSampleMax_"), 1u) << out;
+    EXPECT_EQ(CountOf(out, "min("), 2u) << out;
+
+    const String untouched = "#version 320 es\nuniform highp sampler2DMS colorMs;\n"
+                             "void main() { highp vec4 c = texelFetch(colorMs, ivec2(0), 3); }\n";
+    EXPECT_EQ(ClampUnsignedMultisampleFetches(untouched), untouched);
+}
+
+// End to end, the way the program build runs it: the SPIR-V pass defers the direct usampler2DMS
+// fetches of KHR-GL4x.texture_stencil8.multisample's checker, SPIRV-Cross prints them with their
+// literal samples intact, and the text pass bounds each one by the runtime uniform.
+TEST(ClampUnsignedMultisampleFetchesTest, BoundsTheStencilCheckerAfterTheDeferredSpirvClamp) {
+    using namespace MG_Util::ShaderTranspiler;
+    MobileGL::Initialize();
+    const char* vertexSource = R"(#version 330 core
+void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }
+)";
+    const char* fragmentSource = R"(#version 330 core
+uniform usampler2DMS stencilTex;
+out vec4 color;
+void main() {
+    uint s0 = texelFetch(stencilTex, ivec2(0), 0).r;
+    uint s1 = texelFetch(stencilTex, ivec2(0), 1).r;
+    uint s2 = texelFetch(stencilTex, ivec2(0), 2).r;
+    uint s3 = texelFetch(stencilTex, ivec2(0), 3).r;
+    color = vec4(float(s0), float(s1), float(s2), float(s3)) / 255.0;
+}
+)";
+    Vector<SharedPtr<glslang::TShader>> shaders;
+    const Vector<Pair<GLenum, const char*>> stages{{GL_VERTEX_SHADER, vertexSource},
+                                                   {GL_FRAGMENT_SHADER, fragmentSource}};
+    for (const auto& [stage, text] : stages) {
+        ShaderAttrib attrib{.shaderType = stage, .sourceStr = text};
+        auto compiled = ShaderCompiler::CompileShader(attrib);
+        ASSERT_TRUE(compiled) << compiled.error().log;
+        shaders.push_back(compiled.value());
+    }
+    ProgramAttrib programAttrib{.shaders = shaders};
+    auto program = ShaderCompiler::LinkProgram(programAttrib);
+    ASSERT_TRUE(program) << program.error().log;
+    ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_VERTEX_SHADER, GL_FRAGMENT_SHADER},
+                                     .program = *program.value()};
+    auto modules = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    ASSERT_TRUE(modules) << modules.error().log;
+    ASSERT_EQ(modules.value().size(), 2u);
+
+    Vector<uint32_t> deferred;
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(modules.value()[1], deferred, 4, 1, 4, 4, true,
+                                                               /*deferDirectUnsignedFetches=*/true));
+    const Vector<uint32_t>& fragmentModule = deferred.empty() ? modules.value()[1] : deferred;
+    SpvcSession session(fragmentModule, SessionUsageBit::Transpile);
+    auto essl = ShaderCompiler::DecompileShader(session);
+    ASSERT_TRUE(essl) << essl.error().log;
+
+    const String out = ClampUnsignedMultisampleFetches(essl.value());
+    for (Int sample = 1; sample <= 3; ++sample) {
+        EXPECT_TRUE(Contains(out, "min(" + std::to_string(sample) + ", mg_msSampleMax_stencilTex)")) << out;
+    }
+    EXPECT_EQ(CountOf(out, "uniform highp int mg_msSampleMax_stencilTex;"), 1u) << out;
+}
+
+// End to end: texture() on a samplerCubeArrayShadow outside the fragment stage is an explicit
+// LOD 0 lookup in SPIR-V, which SPIRV-Cross prints as a textureGrad overload GLSL ES does not
+// have (KHR-GL4x.texture_cube_map_array.sampling). The pass turns it back into texture(), which
+// is level 0 in that stage.
+TEST(LowerZeroGradCubeArrayShadowLookupsTest, RestoresTextureOutsideTheFragmentStage) {
+    using namespace MG_Util::ShaderTranspiler;
+    MobileGL::Initialize();
+    const char* vertexSource = R"(#version 450 core
+uniform samplerCubeArrayShadow depthTex[2];
+uniform samplerCubeArrayShadow single;
+uniform vec4 coord;
+out float result;
+float lookup(samplerCubeArrayShadow s, vec4 p) { return texture(s, p, 0.5); }
+void main() {
+    result = texture(depthTex[1], coord, 0.25) + texture(single, coord, 0.75) + lookup(single, coord);
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+    const char* fragmentSource = R"(#version 450 core
+in float result;
+out vec4 color;
+void main() { color = vec4(result); }
+)";
+    Vector<SharedPtr<glslang::TShader>> shaders;
+    const Vector<Pair<GLenum, const char*>> stages{{GL_VERTEX_SHADER, vertexSource},
+                                                   {GL_FRAGMENT_SHADER, fragmentSource}};
+    for (const auto& [stage, text] : stages) {
+        ShaderAttrib attrib{.shaderType = stage, .sourceStr = text};
+        auto compiled = ShaderCompiler::CompileShader(attrib);
+        ASSERT_TRUE(compiled) << compiled.error().log;
+        shaders.push_back(compiled.value());
+    }
+    ProgramAttrib programAttrib{.shaders = shaders};
+    auto program = ShaderCompiler::LinkProgram(programAttrib);
+    ASSERT_TRUE(program) << program.error().log;
+    ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_VERTEX_SHADER, GL_FRAGMENT_SHADER},
+                                     .program = *program.value()};
+    auto modules = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    ASSERT_TRUE(modules) << modules.error().log;
+    SpvcSession session(modules.value()[0], SessionUsageBit::Transpile);
+    auto essl = ShaderCompiler::DecompileShader(session);
+    ASSERT_TRUE(essl) << essl.error().log;
+    ASSERT_EQ(CountOf(essl.value(), "vec3(0.0), vec3(0.0))"), 3u) << essl.value();
+
+    const String out = LowerZeroGradCubeArrayShadowLookups(essl.value(), GL_VERTEX_SHADER);
+    EXPECT_FALSE(Contains(out, "textureGrad")) << out;
+    EXPECT_EQ(CountOf(out, "texture("), 3u) << out;
+    EXPECT_EQ(LowerZeroGradCubeArrayShadowLookups(essl.value(), GL_FRAGMENT_SHADER), essl.value());
+
+    const String other = "#version 320 es\nuniform highp samplerCube c;\n"
+                         "void main() { highp vec4 v = textureGrad(c, vec3(1.0), vec3(0.0), vec3(0.0)); }\n";
+    EXPECT_EQ(LowerZeroGradCubeArrayShadowLookups(other, GL_VERTEX_SHADER), other);
 }

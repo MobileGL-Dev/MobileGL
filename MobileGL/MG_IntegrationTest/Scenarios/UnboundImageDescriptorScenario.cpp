@@ -27,7 +27,7 @@
 // dispatch filled. All of it is unrelated to the unbound resource and all of it disappeared.
 //
 // The unbound resource is STATICALLY USED in every case, because an unreferenced one is
-// optimised out before it ever reaches a descriptor and would prove nothing. Where the use is a
+// optimized out before it ever reaches a descriptor and would prove nothing. Where the use is a
 // read it sits behind a uniform-controlled branch that is false at runtime - the descriptor is
 // declared and must be written, but no undefined value reaches an assertion. Where it is a write
 // (the `writeonly` cases, which is how the real workloads spell it) it is unconditional: GL says
@@ -261,8 +261,7 @@ void main() {
             static bool LimitIsAtLeastOne(GLenum limit) {
                 GLint value = 0;
                 glGetIntegerv(limit, &value);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return value >= 1;
             }
 
@@ -303,9 +302,8 @@ void main() {
 
                 const std::vector<unsigned int> zeros(static_cast<std::size_t>(kElements), 0u);
                 glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_storage);
-                glBufferData(GL_SHADER_STORAGE_BUFFER,
-                             static_cast<GLsizeiptr>(zeros.size() * sizeof(unsigned int)), zeros.data(),
-                             GL_DYNAMIC_COPY);
+                glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(zeros.size() * sizeof(unsigned int)),
+                             zeros.data(), GL_DYNAMIC_COPY);
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_storage);
                 ASSERT_EQ(FirstGLError(), 0u) << "setting up the output buffer raised a GL error";
 
@@ -350,7 +348,7 @@ void main() {
 
                 const Image image = ReadPixels(kFboSize, kFboSize);
                 ASSERT_FALSE(image.Empty()) << "the readback came back empty";
-                // Whole-region, not a centre pixel: the quad covers the target exactly, so
+                // Whole-region, not a center pixel: the quad covers the target exactly, so
                 // anything short of all of it is a failure worth naming.
                 EXPECT_TRUE(RegionIsMostly(image, 0, kFboSize - 1, 0, kFboSize - 1, "green", 0.0,
                                            std::string("the quad drawn with an unbound ") + what))

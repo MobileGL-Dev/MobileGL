@@ -73,8 +73,7 @@ namespace MobileGL {
                 // spelling, and names the module does not declare, are ignored.
                 using GLFormatByName = UnorderedMap<String, Uint>;
 
-                explicit BakeImageFormatsPass(GLFormatByName glFormatByName)
-                    : m_glFormatByName(Move(glFormatByName)) {}
+                explicit BakeImageFormatsPass(GLFormatByName glFormatByName) : m_glFormatByName(Move(glFormatByName)) {}
 
                 const char* name() const override { return "mobilegl-bake-image-formats"; }
                 Status Process() override;

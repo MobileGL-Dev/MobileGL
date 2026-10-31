@@ -56,7 +56,7 @@ namespace MGITest {
         constexpr int kCubeLayerFaces = 12; // two cubes, which is what the conformance case uses
         // A value no store writes, so "the store never landed" and "the store wrote the wrong
         // thing" cannot be confused - and so a readback served from the stale CPU shadow is
-        // recognisable on sight.
+        // recognizable on sight.
         constexpr GLuint kSeed = 0xFEEDBEEFu;
         // Deliberately not 0: the unit has to travel through glUniform1i and be baked into the
         // generated ESSL, so a defect there cannot hide behind the default.
@@ -109,8 +109,10 @@ void main()
             void TearDown() override {
                 if (!Ready()) return;
                 glUseProgram(0);
-                for (GLuint p : m_programs) glDeleteProgram(p);
-                for (GLuint t : m_textures) glDeleteTextures(1, &t);
+                for (GLuint p : m_programs)
+                    glDeleteProgram(p);
+                for (GLuint t : m_textures)
+                    glDeleteTextures(1, &t);
                 m_programs.clear();
                 m_textures.clear();
                 GLint maxImageUnits = 0;
@@ -118,8 +120,7 @@ void main()
                 for (GLint unit = 0; unit < maxImageUnits; ++unit) {
                     glBindImageTexture(static_cast<GLuint>(unit), 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32UI);
                 }
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             bool ImagesAreUsable() const {
@@ -127,8 +128,7 @@ void main()
                 glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
                 GLint maxComputeImageUniforms = 0;
                 glGetIntegerv(GL_MAX_COMPUTE_IMAGE_UNIFORMS, &maxComputeImageUniforms);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxImageUnits > kImageUnit && maxComputeImageUniforms >= 1;
             }
 
@@ -270,8 +270,7 @@ void main()
             for (int layerFace = 0; layerFace < kCubeLayerFaces; ++layerFace) {
                 for (int y = 0; y < kExtent; ++y) {
                     for (int x = 0; x < kExtent; ++x) {
-                        const std::size_t index =
-                            (static_cast<std::size_t>(layerFace) * kExtent + y) * kExtent + x;
+                        const std::size_t index = (static_cast<std::size_t>(layerFace) * kExtent + y) * kExtent + x;
                         EXPECT_EQ(texels[index], ExpectedCubeArrayTexel(x, y, layerFace))
                             << "layer-face " << layerFace << " texel (" << x << ", " << y << ") read back "
                             << (texels[index] == kSeed ? "the seed (the store never reached it, or the readback "

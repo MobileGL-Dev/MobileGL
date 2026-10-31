@@ -24,7 +24,7 @@
 //
 // On DirectGLES none of this exists natively - ES has no depth or stencil readback in
 // core - so every assertion here is really an assertion about the shader-sampling
-// emulation. The catch is that some ES drivers accept the reads anyway (Mesa does,
+// emulation. The catch is that some ES drivers accept the reads anyway (llvmpipe does,
 // Adreno does not), which would make the emulation dead code on the very stack the
 // headless suite runs on. That is what the second ctest registration is for: the same
 // scenarios run again with MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1, which takes the
@@ -35,13 +35,18 @@
 // only checked "no GL error" would pass against a readback that never touched the buffer,
 // which is precisely how this whole cluster hid for so long.
 
+#include <array>
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
+#include "../Harness/SplitLane.h"
 
 #ifdef GLAPI
 #undef GLAPI
@@ -89,19 +94,24 @@ namespace MGITest {
         GLenum AttachmentPointFor(GLenum internalFormat) {
             switch (internalFormat) {
             case GL_DEPTH24_STENCIL8:
-            case GL_DEPTH32F_STENCIL8: return GL_DEPTH_STENCIL_ATTACHMENT;
-            case GL_STENCIL_INDEX8: return GL_STENCIL_ATTACHMENT;
-            default: return GL_DEPTH_ATTACHMENT;
+            case GL_DEPTH32F_STENCIL8:
+                return GL_DEPTH_STENCIL_ATTACHMENT;
+            case GL_STENCIL_INDEX8:
+                return GL_STENCIL_ATTACHMENT;
+            default:
+                return GL_DEPTH_ATTACHMENT;
             }
         }
 
-        bool FormatHasDepth(GLenum internalFormat) { return internalFormat != GL_STENCIL_INDEX8; }
+        bool FormatHasDepth(GLenum internalFormat) {
+            return internalFormat != GL_STENCIL_INDEX8;
+        }
         bool FormatHasStencil(GLenum internalFormat) {
             return internalFormat == GL_DEPTH24_STENCIL8 || internalFormat == GL_DEPTH32F_STENCIL8 ||
                    internalFormat == GL_STENCIL_INDEX8;
         }
 
-        // A framebuffer whose depth/stencil lives in a TEXTURE. The colour attachment is
+        // A framebuffer whose depth/stencil lives in a TEXTURE. The color attachment is
         // there so a stencil-only or depth-only framebuffer still has something to size it.
         DepthSource MakeTextureSource(GLenum internalFormat) {
             DepthSource source;
@@ -193,7 +203,7 @@ namespace MGITest {
 
             // "every value in the region is `expected`" rather than "the middle pixel is":
             // a staging blit that lands the wrong rectangle, or a conversion pass with a
-            // half-texel offset, still gets the centre right.
+            // half-texel offset, still gets the center right.
             static void ExpectAllDepth(const std::vector<float>& values, float expected, const char* what) {
                 size_t bad = 0;
                 float worst = expected;
@@ -203,8 +213,8 @@ namespace MGITest {
                         ++bad;
                     }
                 }
-                EXPECT_EQ(bad, 0u) << what << ": " << bad << " of " << values.size()
-                                   << " depth values differ from " << expected << "; first bad value " << worst
+                EXPECT_EQ(bad, 0u) << what << ": " << bad << " of " << values.size() << " depth values differ from "
+                                   << expected << "; first bad value " << worst
                                    << (std::fabs(worst - kDepthPoison) < 1e-6f
                                            ? " - which is the poison value, so nothing was written at all"
                                            : "");
@@ -219,11 +229,120 @@ namespace MGITest {
                         ++bad;
                     }
                 }
-                EXPECT_EQ(bad, 0u) << what << ": " << bad << " of " << values.size()
-                                   << " stencil values differ from " << expected << "; first bad value " << worst
+                EXPECT_EQ(bad, 0u) << what << ": " << bad << " of " << values.size() << " stencil values differ from "
+                                   << expected << "; first bad value " << worst
                                    << (worst == kStencilPoison
                                            ? " - which is the poison value, so nothing was written at all"
                                            : "");
+            }
+
+            // P7 gate 5 (g5-msrbo review round, g5-msprobe): WHICH WIRE ARM RESOLVED, WHERE THE ENTRY
+            // SAYS WHICH ONE IT HAS TO BE. Lavapipe resolves a multisample depth/stencil aspect
+            // correctly through both of ResolveWireDepthStencil's arms, so the pixel assertions
+            // above cannot tell them apart - and the fix that made
+            // KHR-GL46.direct_state_access.renderbuffers_storage_multisample pass on the Redmi is
+            // exactly an arm ORDER, chosen by a resolve probe at the server's device bring-up (the
+            // shader pass first where the no-draw resolve render pass is measured leaving its target
+            // unwritten, as the Adreno 830's does). Three kinds of entry name the arm:
+            //   - MsResolveBug. / MsFlipBug. set MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug, which hands
+            //     the server's arm choice a canned "the render pass wrote nothing" measurement in
+            //     place of running the probe: the shader pass must resolve, the render pass never;
+            //   - MsResolve1. / MsFlip1. set MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1, which drops
+            //     the render-pass arm altogether: same assertion;
+            //   - MsResolveElide. sets MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject, which runs the
+            //     REAL probe with its render-pass resolve left unrecorded: the measurement itself (not
+            //     a canned one) must report the defect - a reading whose render pass kept the sentinel
+            //     in every texel while the shader control resolved all of them - and the shader pass
+            //     must then resolve, the render pass never. The Bug entries cannot see the real
+            //     probe's recording, readback or tally stop detecting the defect; this one does;
+            //   - MsResolve0. on split and spawn sets MGITEST_EXPECT_DEPTH_RESOLVE_PROBE=clean - a
+            //     marker only this function reads - and asserts the REAL probe ran on the lane's
+            //     device (lavapipe), found the render pass clean, and that the render pass resolved.
+            //     Without it a probe that stopped working (or started reporting lavapipe as broken)
+            //     would leave every pixel green.
+            // The claim is read off the SERVER's private log (the backend runs on the apply thread,
+            // the server role, on every arm), where ResolveWireDepthStencil says once per arm which
+            // one ran and ArmWireDepthResolveOrder states the verdict; keep the phrases in step with
+            // WireFramebuffer.cpp and VulkanRenderer.cpp. Every other entry asserts nothing here.
+            //
+            // Red once (executed, reverted): EvaluateWireDepthResolveProbe answering Clean for every
+            // measurement fails the four Bug entries here (the render-pass line is in the log and
+            // the verdict line says clean) while their pixels stay green. The two Elide entries go
+            // red under that too, and ALONE go red when the real probe's tally counts every subject
+            // texel as resolved (the canned Bug readings never pass through it).
+            static void ExpectTheResolveArmWhereTheLaneAsks(const char* what) {
+                const std::string probe = SplitLane::MarkerValue("MGITEST_MAGMA_DEPTH_RESOLVE_PROBE");
+                const bool forcedBug = probe == "bug";
+                const bool elidedSubject = probe == "elide-subject";
+                const bool renderPassDropped = SplitLane::MarkerIsOne("MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE");
+                const bool measuredClean = SplitLane::MarkerValue("MGITEST_EXPECT_DEPTH_RESOLVE_PROBE") == "clean";
+                if (!forcedBug && !elidedSubject && !renderPassDropped && !measuredClean) return;
+                if (PipeStatsWindow::ServerLibraryLogPath().empty()) {
+                    ADD_FAILURE() << what << ": the entry names the resolve arm (probe=" << probe
+                                  << ", force-shader=" << renderPassDropped << ", expect-clean=" << measuredClean
+                                  << ") but configured no MOBILEGL_LOG_FILE_PATH, and the server's log "
+                                     "is the only place the arm is visible";
+                    return;
+                }
+                glFinish();
+                const std::string server = PipeStatsWindow::ReadServerLogSince(PipeStatsWindow::LogMark{});
+                const bool shaderResolved =
+                    server.find("ResolveWireDepthStencil: resolved by the shader pass") != std::string::npos;
+                const bool renderPassResolved =
+                    server.find("ResolveWireDepthStencil: resolved by the VK_KHR_depth_stencil_resolve render pass") !=
+                    std::string::npos;
+                if (forcedBug || elidedSubject || renderPassDropped) {
+                    EXPECT_TRUE(shaderResolved)
+                        << what << ": the server never resolved with the shader pass (probe=" << probe
+                        << ", force-shader=" << renderPassDropped << ")";
+                    EXPECT_FALSE(renderPassResolved)
+                        << what
+                        << ": the server resolved with the no-draw render pass, the arm the probe verdict "
+                           "(or the knob) rules out (probe="
+                        << probe << ", force-shader=" << renderPassDropped << ")";
+                    if (forcedBug) {
+                        EXPECT_NE(server.find("verdict=render-pass-resolve-broken"), std::string::npos)
+                            << what << ": the forced `bug` measurement did not evaluate to the defect verdict";
+                    }
+                    if (elidedSubject) {
+                        // The source phrase is the REAL measurement's (a canned one says "forced by"),
+                        // and ArmWireDepthResolveOrder states it once per process.
+                        EXPECT_NE(
+                            server.find("depth/stencil resolve probe (measured on this device with its render-pass "
+                                        "resolve elided by MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject) "
+                                        "verdict=render-pass-resolve-broken"),
+                            std::string::npos)
+                            << what << ": the real probe, its render-pass resolve elided, did not report the defect";
+                        // DescribeWireDepthResolveFormat's reading, one line per probed format: some
+                        // format's render pass matched no texel and kept the sentinel in all 16, and its
+                        // shader control resolved all 16.
+                        bool sentinelKeptBesideAResolvedControl = false;
+                        for (std::string::size_type at = server.find("depth/stencil resolve probe ");
+                             at != std::string::npos && !sentinelKeptBesideAResolvedControl;
+                             at = server.find("depth/stencil resolve probe ", at + 1)) {
+                            const std::string::size_type end = server.find('\n', at);
+                            const std::string line =
+                                server.substr(at, end == std::string::npos ? std::string::npos : end - at);
+                            sentinelKeptBesideAResolvedControl =
+                                line.find(" x4: ") != std::string::npos &&
+                                line.find("render pass 0/16 (first ") != std::string::npos &&
+                                line.find("sentinel 16), shader control 16/16") != std::string::npos;
+                        }
+                        EXPECT_TRUE(sentinelKeptBesideAResolvedControl)
+                            << what
+                            << ": no real reading shows the elided render pass's sentinel kept beside a "
+                               "shader control that resolved";
+                    }
+                    return;
+                }
+                EXPECT_NE(server.find("depth/stencil resolve probe (measured on this device) verdict=clean"),
+                          std::string::npos)
+                    << what << ": the server's resolve probe did not measure this device's render pass clean";
+                EXPECT_TRUE(renderPassResolved)
+                    << what << ": a clean probe verdict must leave the render pass first, and it never resolved";
+                EXPECT_FALSE(shaderResolved) << what
+                                             << ": the shader pass resolved although the probe found the "
+                                                "render pass clean";
             }
         };
 
@@ -361,13 +480,13 @@ namespace MGITest {
             GTEST_SKIP() << "this driver cannot host a 4x multisample DEPTH24_STENCIL8 renderbuffer";
         }
         FirstGLError();
-        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.875f, 0);
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.875f, 63);
         ASSERT_EQ(FirstGLError(), 0u);
 
         // The destination starts at a depth the resolve must overwrite everywhere.
         DepthSource resolved = MakeTextureSource(GL_DEPTH24_STENCIL8);
         ASSERT_TRUE(SourceIsUsable());
-        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.125f, 0);
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.125f, 17);
         ASSERT_EQ(FirstGLError(), 0u);
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
@@ -380,10 +499,489 @@ namespace MGITest {
         const std::vector<float> depth = ReadDepthFloat(0, 0, kWidth, kHeight);
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectAllDepth(depth, 0.875f, "resolved multisample depth");
+        const std::vector<int> stencil = ReadStencilInt(0, 0, kWidth, kHeight);
+        EXPECT_EQ(FirstGLError(), 0u);
+        ExpectAllStencil(stencil, 17, "depth-only resolve preserves destination stencil");
+
+        // Exercise stencil independently too: resolving a combined native image
+        // must not leak its depth into a stencil-only GL blit.
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.375f, 17);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
+        glBlitFramebuffer(0, 0, kWidth, kHeight, 0, 0, kWidth, kHeight, GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+        ASSERT_EQ(FirstGLError(), 0u);
+        glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+        ExpectAllStencil(ReadStencilInt(0, 0, kWidth, kHeight), 63, "resolved multisample stencil");
+        ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.375f,
+                       "stencil-only resolve preserves destination depth");
+        EXPECT_EQ(FirstGLError(), 0u);
+        ExpectTheResolveArmWhereTheLaneAsks("depth-only and stencil-only resolves");
 
         DestroySource(resolved);
         DestroySource(multisampled);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        Gl().EndFrame();
+    }
+
+    // P7 wave 2-B2 (review round): A MULTISAMPLE DEPTH RESOLVE THAT FLIPS, AND ONE THAT SCALES.
+    //
+    // GL 4.6 core 18.3.1 asks a multisample blit for identical rectangle DIMENSIONS, not for
+    // identical corners - a conforming check compares absolute spans - so `glBlitFramebuffer(0, h, w, 0, ...)`
+    // out of a multisample framebuffer is legal and owes a mirrored picture, while a blit whose
+    // sizes differ is INVALID_OPERATION and owes nothing. The wire arm used to end the SESSION
+    // on both: `Magma:multisample-depth-resolve-region` covered the reversed rectangle and the
+    // scaled one under one Fatal.
+    //
+    // COLOR AND DEPTH IN ONE CALL, because that is the shape that made this visible: the color
+    // arm has handled a flip since P5f and handles a scale as of this package, so
+    // GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT resolved its color correctly and then died on its
+    // depth. Asserting both aspects of the same blit is what pins them together.
+    //
+    // THE BANDS ARE UNEQUAL ON PURPOSE (0.25 bottom / 0.75 top): a flip that did not happen
+    // returns the bands the right way up, and a "flip" that merely reordered the readback would
+    // move the color too - so color and depth are checked to agree about which way up they are.
+    //
+    // THE CASE IS ARMED ON THE MAGMA WIRE ARM ONLY, and the two gates below say which of the
+    // other arms that discover it (the suite is registered whole on the monolith DirectVulkan
+    // arm and on every DirectGLES arm) owe this picture and do not yet produce it. Both are
+    // recorded debts (§6), not agreements with the wrong answer:
+    //   - Espryt (DirectGLES, monolith and split alike): the flipped resolve writes nothing and
+    //     raises no error, and the scaled one raises no error either. P3b/P4b.
+    //   - the monolith DirectVulkan arm: `VulkanRenderer.cpp` refuses a depth blit with a
+    //     flipped rectangle ("depth blits with flipped rectangles are not supported yet" - the
+    //     destination keeps its clear, no error) and scales a multisample depth blit that GL
+    //     calls INVALID_OPERATION. The wire arm is the more correct one here; the monolith fix
+    //     is P13/G1-bound.
+    // The backend gate runs first so a DirectGLES entry names the backend that owes the fix,
+    // whichever lane it sits in. The second gate is THE TRANSPORT THE PROCESS RESOLVED, read out
+    // of the process (SplitRuntimePeek.h), because that is the very fork that selects the wire
+    // arm: VulkanRenderer::BlitFramebuffer hands the call to BlitWireFramebuffers whenever
+    // MG_Config::Transport is not Monolith. MGITEST_SPLIT_LANE would be the wrong question
+    // (review round 3): it marks the CURATED lanes, not the transport - the whole-binary
+    // `DirectVulkan.{Split,Spawn,Tcp}.Full.` census and the `DirectVulkan.VerifySplit.` lane run
+    // inproc/spawn/tcp WITHOUT it on purpose (their CMake blocks say why), and a marker gate
+    // skipped this case there with a message about a monolith that was not running. The marker
+    // plays no part in this gate at all (review round 4): when it is set and the transport did
+    // not resolve, the fixture's SetUp has already skipped the case through
+    // SplitLane::SkipReasonForSplitOnlyAssertions() -> SplitRuntimeSkipReason() ("MG_Config::
+    // Transport resolved to 'monolith', not to a split transport"), so Ready() is false and this
+    // line is never reached - a `!IsSplitLane() &&` conjunct here could only ever be true, and
+    // round 3's comment described a branch nothing reaches.
+    TEST_F(DepthStencilReadbackMatrixScenario, AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines) {
+        if (!Ready()) return;
+        if (Gl().BackendName() != "DirectVulkan") {
+            GTEST_SKIP() << "Espryt (" << Gl().BackendName()
+                         << ") does not produce this picture yet: a "
+                            "flipped multisample depth resolve writes nothing with no error and a scaled "
+                            "one raises no INVALID_OPERATION - a P3b/P4b debt (§6)";
+        }
+        if (!PeekSplitRuntime().transportResolved) {
+            GTEST_SKIP() << "the monolith DirectVulkan transport (this process resolved no split "
+                            "transport, so BlitFramebuffer takes the monolith arm) refuses a flipped "
+                            "depth blit (\"depth blits with flipped rectangles are not supported yet\", "
+                            "destination untouched, no error) and scales a multisample depth blit GL "
+                            "calls INVALID_OPERATION - a wire-vs-monolith divergence where the wire arm "
+                            "is the correct one; the monolith fix is P13/G1-bound (§6)";
+        }
+        DepthSource multisampled = MakeRenderbufferSource(GL_DEPTH24_STENCIL8, 4);
+        if (!SourceIsUsable()) {
+            DestroySource(multisampled);
+            GTEST_SKIP() << "this driver cannot host a 4x multisample DEPTH24_STENCIL8 renderbuffer";
+        }
+        constexpr int kBottomStencil = 11;
+        constexpr int kTopStencil = 99;
+        constexpr int kPrimeStencil = 3;
+        FirstGLError();
+        glDisable(GL_SCISSOR_TEST);
+        glViewport(0, 0, kWidth, kHeight);
+        glDepthMask(GL_TRUE);
+        glStencilMask(0xFFu);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, 0, kWidth, kHeight / 2);
+        glClearDepth(0.25);
+        glClearStencil(kBottomStencil);
+        glClearColor(1, 0, 0, 1);
+        glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        glScissor(0, kHeight / 2, kWidth, kHeight - kHeight / 2);
+        glClearDepth(0.75);
+        glClearStencil(kTopStencil);
+        glClearColor(0, 1, 0, 1);
+        glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
+        ASSERT_EQ(FirstGLError(), 0u) << "banding the multisample source";
+
+        DepthSource resolved = MakeTextureSource(GL_DEPTH24_STENCIL8);
+        ASSERT_TRUE(SourceIsUsable());
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.5f, kPrimeStencil);
+        glClearColor(0, 0, 1, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ASSERT_EQ(FirstGLError(), 0u) << "priming the resolve destination";
+
+        // Y REVERSED ON THE SOURCE SIDE, identical dimensions.
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
+        glDisable(GL_SCISSOR_TEST);
+        glBlitFramebuffer(0, kHeight, kWidth, 0, 0, 0, kWidth, kHeight, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
+                          GL_NEAREST);
+        glFinish();
+        EXPECT_EQ(FirstGLError(), 0u) << "a flipped multisample resolve is a legal blit";
+
+        glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+        // The bands come back swapped: the destination's bottom rows hold what was the top.
+        const std::vector<float> bottom = ReadDepthFloat(0, 0, kWidth, kHeight / 4);
+        EXPECT_EQ(FirstGLError(), 0u);
+        ExpectAllDepth(bottom, 0.75f, "flipped resolve: the destination's bottom band");
+        const std::vector<float> top = ReadDepthFloat(0, kHeight - kHeight / 4, kWidth, kHeight / 4);
+        EXPECT_EQ(FirstGLError(), 0u);
+        ExpectAllDepth(top, 0.25f, "flipped resolve: the destination's top band");
+        // Color went the same way up, through the arm that could already do this.
+        std::array<GLubyte, 4> color{};
+        glReadPixels(kWidth / 2, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, color.data());
+        EXPECT_EQ(color, (std::array<GLubyte, 4>{0, 255, 0, 255}))
+            << "flipped resolve: color and depth must agree about which way up the blit landed";
+
+        // THE STENCIL ASPECT, NARROW AND OFFSET ON BOTH SIDES. The copy-out moves one aspect
+        // through a buffer one row per region, and a depth/stencil buffer<->image copy wants
+        // every bufferOffset on a multiple of 4 (VUID-vkCmdCopyBufferToImage-pRegions-07978).
+        // A stencil texel is ONE byte, so a tightly packed row whose width is not a multiple
+        // of 4 puts every row but the first on an illegal offset - which the 64-wide depth
+        // leg above (4-byte texels) can never show. 29 is odd, so a 2-byte (D16) texel would
+        // miss the alignment too. The rectangle also sits away from the origin on both sides
+        // (source x 5, y 8; destination x 20, y 4), so a copy-out that forgot the min corner
+        // on either side lands the band somewhere else.
+        {
+            constexpr int kSx = 5, kSy = 8, kDx = 20, kDy = 4, kW = 29, kH = 32;
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
+            glBlitFramebuffer(kSx, kSy + kH, kSx + kW, kSy, kDx, kDy, kDx + kW, kDy + kH, GL_STENCIL_BUFFER_BIT,
+                              GL_NEAREST);
+            glFinish();
+            EXPECT_EQ(FirstGLError(), 0u) << "a flipped, narrow multisample stencil resolve is a legal blit";
+            glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+            const std::vector<int> stencil = ReadStencilInt(0, 0, kWidth, kHeight);
+            EXPECT_EQ(FirstGLError(), 0u);
+            size_t bad = 0;
+            int firstX = -1, firstY = -1, firstGot = 0, firstWant = 0;
+            for (int y = 0; y < kHeight; ++y) {
+                for (int x = 0; x < kWidth; ++x) {
+                    int want = kPrimeStencil;
+                    if (x >= kDx && x < kDx + kW && y >= kDy && y < kDy + kH) {
+                        const int sourceRow = kSy + kH - 1 - (y - kDy); // the mirror
+                        want = sourceRow < kHeight / 2 ? kBottomStencil : kTopStencil;
+                    }
+                    const int got = stencil[static_cast<size_t>(y) * kWidth + x];
+                    if (got != want) {
+                        if (bad == 0) {
+                            firstX = x;
+                            firstY = y;
+                            firstGot = got;
+                            firstWant = want;
+                        }
+                        ++bad;
+                    }
+                }
+            }
+            EXPECT_EQ(bad, 0u) << "flipped narrow stencil resolve: " << bad << " of " << stencil.size()
+                               << " stencil values are wrong; first at (" << firstX << ", " << firstY << "): got "
+                               << firstGot << ", want " << firstWant;
+        }
+        // The two flipped resolves above are the only ones in this case that reach an arm: every
+        // leg below declines on its shape first.
+        ExpectTheResolveArmWhereTheLaneAsks("flipped depth and narrow stencil resolves");
+
+        // A SCALE, which is INVALID_OPERATION and must leave the destination as it is.
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.5f, 3);
+        ASSERT_EQ(FirstGLError(), 0u);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
+        glBlitFramebuffer(0, 0, kWidth, kHeight, 0, 0, kWidth / 2, kHeight / 2, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glFinish(); // the decline's error rides a later reply under a transport
+        EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
+            << "a scaled multisample resolve is INVALID_OPERATION, not a picture";
+        glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+        ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.5f,
+                       "the declined scale must have left the destination alone");
+        EXPECT_EQ(FirstGLError(), 0u) << "the session survived the decline";
+
+        // THE SAME SCALE WITH COLOR IN THE MASK. An erroring blit writes nothing (18.3.1), so
+        // the color attachment must come through untouched too. The color arm CAN scale a
+        // multisample resolve on its own, and it runs before the depth arm - so a decline
+        // decided per aspect scaled and wrote the color and then raised the error on the
+        // depth. The shape is decided once, before any aspect, and this is what pins it.
+        glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.5f, kPrimeStencil);
+        glClearColor(0, 0, 1, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ASSERT_EQ(FirstGLError(), 0u);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
+        glBlitFramebuffer(0, 0, kWidth, kHeight, 0, 0, kWidth / 2, kHeight / 2,
+                          GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glFinish();
+        EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
+            << "a scaled multisample COLOR|DEPTH blit is INVALID_OPERATION as a whole";
+        glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+        std::array<GLubyte, 4> untouched{};
+        glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, untouched.data());
+        EXPECT_EQ(untouched, (std::array<GLubyte, 4>{0, 0, 255, 255}))
+            << "the declined COLOR|DEPTH scale must not have written its color either";
+        ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.5f,
+                       "the declined COLOR|DEPTH scale must have left the depth alone");
+        EXPECT_EQ(FirstGLError(), 0u) << "the session survived the combined decline";
+
+        // AN EMPTY DESTINATION BEHIND A NON-EMPTY SOURCE is a size mismatch as well, not a
+        // no-op: 64x48 cannot reach 0x48.
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
+        glBlitFramebuffer(0, 0, kWidth, kHeight, 0, 0, 0, kHeight, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glFinish();
+        EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
+            << "a multisample resolve onto an empty destination rectangle is a size mismatch";
+        glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+        ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.5f,
+                       "the empty-destination decline must have left the depth alone");
+        EXPECT_EQ(FirstGLError(), 0u) << "the session survived the empty-destination decline";
+
+        // THE SAME SCALE ONTO THE WINDOW (review round 3). The default framebuffer was the one
+        // destination the round-2 pre-pass left to the per-aspect lambdas, on the belief that a
+        // default draw framebuffer behind a multisample read was the resolve arm's region Fatal
+        // whatever the shape - but that arm asks the shape question BEFORE its region check, so
+        // a scaled COLOR|DEPTH resolve onto the window scaled and wrote its color through the
+        // swapchain blit and then recorded INVALID_OPERATION on its depth: the partial effect
+        // the previous leg pins for a user framebuffer, reproduced on the only other kind of
+        // destination there is. The window is primed MAGENTA at depth 0.625 - values no other
+        // surface in this test holds (review round 4): the user framebuffer above is blue at 0.5
+        // and still is after its own declined blit, and the source is red/green at 0.25/0.75.
+        // Round 3 primed the window blue at 0.5 as well, so a glBindFramebuffer(0) that landed
+        // on the user framebuffer, or a default-framebuffer readback that resolved the wrong
+        // surface, read the same priming and passed for nothing; pointing the probes at the
+        // user framebuffer now fails on both aspects, shown once and restored. The source (red
+        // below, green above) is blown up over the whole of the window, and three probes - a
+        // corner, the center, the far corner - must all still read the priming on both
+        // aspects. The harness's pbuffer default framebuffer has no other way of being looked
+        // at than glReadPixels, which is what both probes use.
+        {
+            HeadlessGL& gl = Gl();
+            const int windowWidth = gl.Width();
+            const int windowHeight = gl.Height();
+            ASSERT_GE(windowWidth, 4);
+            ASSERT_GE(windowHeight, 4);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDisable(GL_SCISSOR_TEST);
+            glViewport(0, 0, windowWidth, windowHeight);
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            glDepthMask(GL_TRUE);
+            glClearColor(1, 0, 1, 1);
+            glClearDepth(0.625);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            ASSERT_EQ(FirstGLError(), 0u) << "priming the default framebuffer";
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glBlitFramebuffer(0, 0, kWidth, kHeight, 0, 0, windowWidth, windowHeight,
+                              GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+            glFinish();
+            EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
+                << "a scaled multisample COLOR|DEPTH blit onto the default framebuffer is INVALID_OPERATION as a whole";
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            const int probeX[3] = {1, windowWidth / 2, windowWidth - 2};
+            const int probeY[3] = {1, windowHeight / 2, windowHeight - 2};
+            for (int i = 0; i < 3; ++i) {
+                const int x = probeX[i], y = probeY[i];
+                std::array<GLubyte, 4> window{};
+                glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, window.data());
+                EXPECT_EQ(window, (std::array<GLubyte, 4>{255, 0, 255, 255}))
+                    << "the declined COLOR|DEPTH scale onto the window must not have written its color at (" << x
+                    << ", " << y << ")";
+                float depth = kDepthPoison;
+                glReadPixels(x, y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
+                EXPECT_NEAR(depth, 0.625f, 1.0f / 4096.0f)
+                    << "the declined COLOR|DEPTH scale onto the window must have left its depth alone at (" << x << ", "
+                    << y << ")";
+            }
+            EXPECT_EQ(FirstGLError(), 0u) << "the session survived the default-framebuffer decline";
+        }
+
+        DestroySource(resolved);
+        DestroySource(multisampled);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        Gl().EndFrame();
+    }
+
+    // P7 gate 5 (g5-msrbo): A SINGLE-SAMPLED DEPTH/STENCIL BLIT, EVERY FORMAT, EVERY ASPECT.
+    //
+    // KHR-GL46.direct_state_access.renderbuffers_storage_multisample reduced to its samples == 0
+    // leg: two renderbuffers of one depth/stencil format (glNamedRenderbufferStorageMultisample
+    // with samples 0, the conformance case's own call), clear the first, glBlitFramebuffer
+    // COLOR|DEPTH|STENCIL into the second at 1:1, read both aspects back from the second. The
+    // wire arm moved every depth/stencil aspect with vkCmdBlitImage, which needs BLIT_SRC/BLIT_DST
+    // (optional for depth/stencil formats: the Adreno 830 has no BLIT_DST on any of them) where
+    // the monolith arm copies at 1:1 - and for ONE aspect of a packed format the blit moved the
+    // whole native word.
+    //
+    // THE SUB-RECTANGLE LEG is the red one without the copy arm on lavapipe (the only host it was
+    // measured on): a depth-only blit of a packed DEPTH24_STENCIL8 replaced the destination's
+    // stencil there. A driver whose one-aspect blit keeps the other aspect stays green without
+    // the copy arm, so this leg is a lavapipe pin, not a universal one. It also pins
+    // the min corners on both sides and a 1-byte stencil row whose width is not a multiple of 4
+    // (the buffer round trip's padded stride). THE SCALED LEG is the shape that still takes
+    // vkCmdBlitImage, so the copy arm must not have swallowed it.
+    TEST_F(DepthStencilReadbackMatrixScenario, ASingleSampledDepthStencilBlitCopiesEveryAspect) {
+        if (!Ready()) return;
+        struct BlitFormat {
+            const char* name;
+            GLenum internalFormat;
+        };
+        const BlitFormat formats[] = {
+            {"GL_DEPTH_COMPONENT16", GL_DEPTH_COMPONENT16},   {"GL_DEPTH_COMPONENT24", GL_DEPTH_COMPONENT24},
+            {"GL_DEPTH_COMPONENT32F", GL_DEPTH_COMPONENT32F}, {"GL_DEPTH24_STENCIL8", GL_DEPTH24_STENCIL8},
+            {"GL_DEPTH32F_STENCIL8", GL_DEPTH32F_STENCIL8},   {"GL_STENCIL_INDEX8", GL_STENCIL_INDEX8},
+        };
+        struct Extent {
+            int width, height;
+        };
+        // The conformance case's three shapes ({1,1}, {max/2,1}, {1,max/2}), with strips short
+        // enough for a CPU rasterizer, plus the matrix's own rectangle.
+        const Extent extents[] = {{1, 1}, {256, 1}, {1, 256}, {kWidth, kHeight}};
+
+        const auto makePair = [](GLenum internalFormat, int width, int height, GLuint(&fbo)[2], GLuint(&rbo)[2]) {
+            glGenFramebuffers(2, fbo);
+            glCreateRenderbuffers(2, rbo);
+            for (int i = 0; i < 2; ++i) {
+                glNamedRenderbufferStorageMultisample(rbo[i], 0, internalFormat, width, height);
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo[i]);
+                if (FormatHasDepth(internalFormat))
+                    glNamedFramebufferRenderbuffer(fbo[i], GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbo[i]);
+                if (FormatHasStencil(internalFormat))
+                    glNamedFramebufferRenderbuffer(fbo[i], GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo[i]);
+            }
+        };
+        const auto clearBound = [](GLenum internalFormat, int width, int height, float depth, int stencil) {
+            glDisable(GL_SCISSOR_TEST);
+            glViewport(0, 0, width, height);
+            glDepthMask(GL_TRUE);
+            glStencilMask(0xFFu);
+            glClearDepth(depth);
+            glClearStencil(stencil);
+            GLbitfield mask = 0;
+            if (FormatHasDepth(internalFormat)) mask |= GL_DEPTH_BUFFER_BIT;
+            if (FormatHasStencil(internalFormat)) mask |= GL_STENCIL_BUFFER_BIT;
+            glClear(mask);
+        };
+
+        int exercised = 0;
+        for (const BlitFormat& format : formats) {
+            for (const Extent& extent : extents) {
+                SCOPED_TRACE(std::string(format.name) + " " + std::to_string(extent.width) + "x" +
+                             std::to_string(extent.height));
+                GLuint fbo[2] = {0, 0};
+                GLuint rbo[2] = {0, 0};
+                makePair(format.internalFormat, extent.width, extent.height, fbo, rbo);
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+                const bool usable = SourceIsUsable();
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+                if (!usable || !SourceIsUsable()) {
+                    glDeleteFramebuffers(2, fbo);
+                    glDeleteRenderbuffers(2, rbo);
+                    FirstGLError();
+                    continue;
+                }
+                ASSERT_EQ(FirstGLError(), 0u) << "creating the renderbuffer pair";
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+                clearBound(format.internalFormat, extent.width, extent.height, kDepthPoison, kStencilPoison);
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+                clearBound(format.internalFormat, extent.width, extent.height, 0.5f, 7);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo[0]);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo[1]);
+                glBlitFramebuffer(0, 0, extent.width, extent.height, 0, 0, extent.width, extent.height,
+                                  GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+                EXPECT_EQ(FirstGLError(), 0u) << "a 1:1 single-sampled depth/stencil blit";
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+                if (FormatHasDepth(format.internalFormat))
+                    ExpectAllDepth(ReadDepthFloat(0, 0, extent.width, extent.height), 0.5f, "blitted depth");
+                if (FormatHasStencil(format.internalFormat))
+                    ExpectAllStencil(ReadStencilInt(0, 0, extent.width, extent.height), 7, "blitted stencil");
+                EXPECT_EQ(FirstGLError(), 0u);
+                ++exercised;
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                glDeleteFramebuffers(2, fbo);
+                glDeleteRenderbuffers(2, rbo);
+            }
+        }
+        // Six formats times four extents; a machine that hosts fewer than half is not a matrix.
+        EXPECT_GE(exercised, 12) << "too few depth/stencil renderbuffer pairs were usable";
+
+        // THE SUB-RECTANGLE LEG, packed DEPTH24_STENCIL8: a depth-only band, then a stencil-only
+        // band, each offset from the origin on both sides and narrow enough that a 1-byte stencil
+        // row is not a multiple of 4.
+        {
+            GLuint fbo[2] = {0, 0};
+            GLuint rbo[2] = {0, 0};
+            makePair(GL_DEPTH24_STENCIL8, kWidth, kHeight, fbo, rbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+            ASSERT_TRUE(SourceIsUsable());
+            clearBound(GL_DEPTH24_STENCIL8, kWidth, kHeight, 0.75f, 99);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+            clearBound(GL_DEPTH24_STENCIL8, kWidth, kHeight, 0.25f, 11);
+            ASSERT_EQ(FirstGLError(), 0u);
+            constexpr int kSx = 5, kSy = 8, kDx = 20, kDy = 4, kW = 29, kH = 32;
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo[0]);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo[1]);
+            glBlitFramebuffer(kSx, kSy, kSx + kW, kSy + kH, kDx, kDy, kDx + kW, kDy + kH, GL_DEPTH_BUFFER_BIT,
+                              GL_NEAREST);
+            EXPECT_EQ(FirstGLError(), 0u) << "a depth-only sub-rectangle blit";
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+            const std::vector<float> depth = ReadDepthFloat(0, 0, kWidth, kHeight);
+            const std::vector<int> stencil = ReadStencilInt(0, 0, kWidth, kHeight);
+            size_t badDepth = 0, badStencil = 0;
+            for (int y = 0; y < kHeight; ++y) {
+                for (int x = 0; x < kWidth; ++x) {
+                    const bool inside = x >= kDx && x < kDx + kW && y >= kDy && y < kDy + kH;
+                    const size_t at = static_cast<size_t>(y) * kWidth + x;
+                    if (std::fabs(depth[at] - (inside ? 0.75f : 0.25f)) > 1.0f / 4096.0f) ++badDepth;
+                    if (stencil[at] != 11) ++badStencil;
+                }
+            }
+            EXPECT_EQ(badDepth, 0u) << "the depth-only band landed somewhere other than its destination rectangle";
+            EXPECT_EQ(badStencil, 0u) << "a depth-only blit replaced the destination's stencil";
+
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo[0]);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo[1]);
+            glBlitFramebuffer(kSx, kSy, kSx + kW, kSy + kH, kDx, kDy, kDx + kW, kDy + kH, GL_STENCIL_BUFFER_BIT,
+                              GL_NEAREST);
+            EXPECT_EQ(FirstGLError(), 0u) << "a stencil-only sub-rectangle blit";
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+            const std::vector<float> depthAfter = ReadDepthFloat(0, 0, kWidth, kHeight);
+            const std::vector<int> stencilAfter = ReadStencilInt(0, 0, kWidth, kHeight);
+            badDepth = badStencil = 0;
+            for (int y = 0; y < kHeight; ++y) {
+                for (int x = 0; x < kWidth; ++x) {
+                    const bool inside = x >= kDx && x < kDx + kW && y >= kDy && y < kDy + kH;
+                    const size_t at = static_cast<size_t>(y) * kWidth + x;
+                    if (std::fabs(depthAfter[at] - (inside ? 0.75f : 0.25f)) > 1.0f / 4096.0f) ++badDepth;
+                    if (stencilAfter[at] != (inside ? 99 : 11)) ++badStencil;
+                }
+            }
+            EXPECT_EQ(badStencil, 0u) << "the stencil-only band landed somewhere other than its destination rectangle";
+            EXPECT_EQ(badDepth, 0u) << "a stencil-only blit replaced the destination's depth";
+
+            // THE SCALED LEG: half the source onto the whole destination - the shape that still
+            // takes vkCmdBlitImage.
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+            clearBound(GL_DEPTH24_STENCIL8, kWidth, kHeight, 0.25f, 11);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo[0]);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo[1]);
+            glBlitFramebuffer(0, 0, kWidth / 2, kHeight / 2, 0, 0, kWidth, kHeight, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+            glFinish();
+            EXPECT_EQ(FirstGLError(), 0u) << "a scaled depth blit with NEAREST is legal GL";
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+            ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.75f, "a scaled depth blit");
+            EXPECT_EQ(FirstGLError(), 0u) << "the session survived the scaled leg";
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDeleteFramebuffers(2, fbo);
+            glDeleteRenderbuffers(2, rbo);
+        }
         Gl().EndFrame();
     }
 
@@ -536,6 +1134,70 @@ namespace MGITest {
         Gl().EndFrame();
     }
 
+    TEST_F(DepthStencilReadbackMatrixScenario, TextureDepthReadbackUsesSignedRangesAndHalfFloatEncoding) {
+        if (!Ready()) return;
+        DepthSource source = MakeTextureSource(GL_DEPTH_COMPONENT32F);
+        ASSERT_TRUE(SourceIsUsable());
+        struct Sample {
+            float depth;
+            GLbyte byte;
+            GLshort shortValue;
+            GLint intValue;
+            GLushort halfBits;
+        };
+        const Sample samples[] = {
+            {0.0f, 0, 0, 0, 0x0000},
+            {0.5f, 64, 16384, 1073741824, 0x3800},
+            {1.0f, 127, 32767, 2147483647, 0x3c00},
+        };
+        for (const auto& sample : samples) {
+            glBindFramebuffer(GL_FRAMEBUFFER, source.fbo);
+            ClearDepthStencil(GL_DEPTH_COMPONENT32F, sample.depth, 0);
+            ASSERT_EQ(FirstGLError(), 0u);
+            // GPU clear, then a texture read with the source FBO unbound: neither
+            // the upload shadow nor the currently bound FBO can supply the result.
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindTexture(GL_TEXTURE_2D, source.depthTexture);
+            const auto read = [&](GLenum type, auto expected) {
+                using Value = decltype(expected);
+                std::vector<Value> values(static_cast<size_t>(kWidth) * kHeight, static_cast<Value>(-37));
+                glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, type, values.data());
+                EXPECT_EQ(FirstGLError(), 0u) << "depth=" << sample.depth << " type=" << type;
+                const auto bad =
+                    std::count_if(values.begin(), values.end(), [&](Value value) { return value != expected; });
+                EXPECT_EQ(bad, 0) << "depth=" << sample.depth << " type=" << type
+                                  << " first=" << static_cast<long long>(values[0])
+                                  << " expected=" << static_cast<long long>(expected);
+            };
+            read(GL_BYTE, sample.byte);
+            read(GL_SHORT, sample.shortValue);
+            read(GL_INT, sample.intValue);
+            read(GL_HALF_FLOAT, sample.halfBits);
+        }
+        glBindTexture(GL_TEXTURE_2D, 0);
+        DestroySource(source);
+        Gl().EndFrame();
+    }
+
+    TEST_F(DepthStencilReadbackMatrixScenario, TextureStencilHalfFloatReadbackEncodesTheIndex) {
+        if (!Ready()) return;
+        DepthSource source = MakeTextureSource(GL_STENCIL_INDEX8);
+        ASSERT_TRUE(SourceIsUsable());
+        ClearDepthStencil(GL_STENCIL_INDEX8, 0.0f, 5);
+        ASSERT_EQ(FirstGLError(), 0u);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindTexture(GL_TEXTURE_2D, source.depthTexture);
+        std::vector<GLushort> values(static_cast<size_t>(kWidth) * kHeight, 0xdead);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_STENCIL_INDEX, GL_HALF_FLOAT, values.data());
+        EXPECT_EQ(FirstGLError(), 0u);
+        // Half-float 5.0 is 0x4500. Writing the raw index 0x0005 is a different value.
+        EXPECT_EQ(std::count_if(values.begin(), values.end(), [](GLushort value) { return value != 0x4500; }), 0)
+            << "first half word=" << std::hex << values[0];
+        glBindTexture(GL_TEXTURE_2D, 0);
+        DestroySource(source);
+        Gl().EndFrame();
+    }
+
     // glCopyTexImage2D out of a depth attachment, then read the copy - verify_copy_tex_image.
     TEST_F(DepthStencilReadbackMatrixScenario, CopyTexImageFromADepthAttachmentSurvivesAReadBack) {
         if (!Ready()) return;
@@ -548,8 +1210,8 @@ namespace MGITest {
         GLuint copy = 0;
         glGenTextures(1, &copy);
         glBindTexture(GL_TEXTURE_2D, copy);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, kWidth, kHeight, 0, GL_DEPTH_STENCIL,
-                     GL_UNSIGNED_INT_24_8, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, kWidth, kHeight, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8,
+                     nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, 0, 0, kWidth, kHeight, 0);
@@ -616,9 +1278,9 @@ namespace MGITest {
         Gl().EndFrame();
     }
 
-    // The PACK pixel-store parameters apply to a depth read exactly as they do to a colour
+    // The PACK pixel-store parameters apply to a depth read exactly as they do to a color
     // one, and the gap regions they create must be left alone.
-    TEST_F(DepthStencilReadbackMatrixScenario, DepthReadbackHonoursThePackPixelStoreParameters) {
+    TEST_F(DepthStencilReadbackMatrixScenario, DepthReadbackHonorsThePackPixelStoreParameters) {
         if (!Ready()) return;
         DepthSource source = MakeTextureSource(GL_DEPTH_COMPONENT24);
         ASSERT_TRUE(SourceIsUsable());

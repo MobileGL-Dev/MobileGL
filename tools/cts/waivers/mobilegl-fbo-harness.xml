@@ -17,7 +17,7 @@
 			implicitly rebinds framebuffer target 0, the TRUE default
 			framebuffer this time, not the wrapper. Restoring the captured
 			GL_COLOR_ATTACHMENTn value against the true default framebuffer
-			correctly raises GL_INVALID_ENUM per spec (only FRONT/BACK style
+			correctly raises GL_INVALID_OPERATION per spec (only FRONT/BACK style
 			tokens are valid there), so the test fails with a fully
 			spec conformant driver. This can only happen when the harness's
 			"default framebuffer" is a real dEQP created FBO instead of a

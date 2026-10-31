@@ -12,12 +12,15 @@
 #include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
 #include "MG_Util/ShaderTranspiler/SpvcSession.h"
 #include "MG_Util/ShaderTranspiler/Types.h"
+#include <Config.h>
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstring>
 #include <format>
 #include <map>
+#include <unordered_set>
 #include <utility>
 #include <spirv-tools/libspirv.h>
 #include <spirv-tools/optimizer.hpp>
@@ -66,9 +69,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ProgramFactory::DescriptorBindingKind kind = ProgramFactory::DescriptorBindingKind::None;
             String name;
 
-            Bool operator==(const DescriptorKey& other) const {
-                return kind == other.kind && name == other.name;
-            }
+            Bool operator==(const DescriptorKey& other) const { return kind == other.kind && name == other.name; }
         };
 
         struct DescriptorKeyHash {
@@ -134,29 +135,43 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const auto signedness = variable.numeric.scalar.signedness;
             if ((flags & SPV_REFLECT_TYPE_FLAG_FLOAT) != 0) {
                 switch (width) {
-                case 16: return SPVC_BASETYPE_FP16;
-                case 32: return SPVC_BASETYPE_FP32;
-                case 64: return SPVC_BASETYPE_FP64;
-                default: return SPVC_BASETYPE_UNKNOWN;
+                case 16:
+                    return SPVC_BASETYPE_FP16;
+                case 32:
+                    return SPVC_BASETYPE_FP32;
+                case 64:
+                    return SPVC_BASETYPE_FP64;
+                default:
+                    return SPVC_BASETYPE_UNKNOWN;
                 }
             }
             if ((flags & SPV_REFLECT_TYPE_FLAG_INT) != 0) {
                 if (signedness != 0) {
                     switch (width) {
-                    case 8: return SPVC_BASETYPE_INT8;
-                    case 16: return SPVC_BASETYPE_INT16;
-                    case 32: return SPVC_BASETYPE_INT32;
-                    case 64: return SPVC_BASETYPE_INT64;
-                    default: return SPVC_BASETYPE_UNKNOWN;
+                    case 8:
+                        return SPVC_BASETYPE_INT8;
+                    case 16:
+                        return SPVC_BASETYPE_INT16;
+                    case 32:
+                        return SPVC_BASETYPE_INT32;
+                    case 64:
+                        return SPVC_BASETYPE_INT64;
+                    default:
+                        return SPVC_BASETYPE_UNKNOWN;
                     }
                 }
 
                 switch (width) {
-                case 8: return SPVC_BASETYPE_UINT8;
-                case 16: return SPVC_BASETYPE_UINT16;
-                case 32: return SPVC_BASETYPE_UINT32;
-                case 64: return SPVC_BASETYPE_UINT64;
-                default: return SPVC_BASETYPE_UNKNOWN;
+                case 8:
+                    return SPVC_BASETYPE_UINT8;
+                case 16:
+                    return SPVC_BASETYPE_UINT16;
+                case 32:
+                    return SPVC_BASETYPE_UINT32;
+                case 64:
+                    return SPVC_BASETYPE_UINT64;
+                default:
+                    return SPVC_BASETYPE_UNKNOWN;
                 }
             }
             if ((flags & SPV_REFLECT_TYPE_FLAG_BOOL) != 0) {
@@ -201,43 +216,68 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             switch (spvcType.basetype) {
             case SPVC_BASETYPE_BOOLEAN:
                 switch (spvcType.vectorSize) {
-                case 1: return GL_BOOL;
-                case 2: return GL_BOOL_VEC2;
-                case 3: return GL_BOOL_VEC3;
-                case 4: return GL_BOOL_VEC4;
-                default: return GL_FALSE;
+                case 1:
+                    return GL_BOOL;
+                case 2:
+                    return GL_BOOL_VEC2;
+                case 3:
+                    return GL_BOOL_VEC3;
+                case 4:
+                    return GL_BOOL_VEC4;
+                default:
+                    return GL_FALSE;
                 }
             case SPVC_BASETYPE_INT32:
                 switch (spvcType.vectorSize) {
-                case 1: return GL_INT;
-                case 2: return GL_INT_VEC2;
-                case 3: return GL_INT_VEC3;
-                case 4: return GL_INT_VEC4;
-                default: return GL_FALSE;
+                case 1:
+                    return GL_INT;
+                case 2:
+                    return GL_INT_VEC2;
+                case 3:
+                    return GL_INT_VEC3;
+                case 4:
+                    return GL_INT_VEC4;
+                default:
+                    return GL_FALSE;
                 }
             case SPVC_BASETYPE_UINT32:
                 switch (spvcType.vectorSize) {
-                case 1: return GL_UNSIGNED_INT;
-                case 2: return GL_UNSIGNED_INT_VEC2;
-                case 3: return GL_UNSIGNED_INT_VEC3;
-                case 4: return GL_UNSIGNED_INT_VEC4;
-                default: return GL_FALSE;
+                case 1:
+                    return GL_UNSIGNED_INT;
+                case 2:
+                    return GL_UNSIGNED_INT_VEC2;
+                case 3:
+                    return GL_UNSIGNED_INT_VEC3;
+                case 4:
+                    return GL_UNSIGNED_INT_VEC4;
+                default:
+                    return GL_FALSE;
                 }
             case SPVC_BASETYPE_FP32:
                 switch (spvcType.vectorSize) {
-                case 1: return GL_FLOAT;
-                case 2: return GL_FLOAT_VEC2;
-                case 3: return GL_FLOAT_VEC3;
-                case 4: return GL_FLOAT_VEC4;
-                default: return GL_FALSE;
+                case 1:
+                    return GL_FLOAT;
+                case 2:
+                    return GL_FLOAT_VEC2;
+                case 3:
+                    return GL_FLOAT_VEC3;
+                case 4:
+                    return GL_FLOAT_VEC4;
+                default:
+                    return GL_FALSE;
                 }
             case SPVC_BASETYPE_FP64:
                 switch (spvcType.vectorSize) {
-                case 1: return GL_DOUBLE;
-                case 2: return GL_DOUBLE_VEC2;
-                case 3: return GL_DOUBLE_VEC3;
-                case 4: return GL_DOUBLE_VEC4;
-                default: return GL_FALSE;
+                case 1:
+                    return GL_DOUBLE;
+                case 2:
+                    return GL_DOUBLE_VEC2;
+                case 3:
+                    return GL_DOUBLE_VEC3;
+                case 4:
+                    return GL_DOUBLE_VEC4;
+                default:
+                    return GL_FALSE;
                 }
             default:
                 return GL_FALSE;
@@ -372,10 +412,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
 
             auto context = spvtools::BuildModule(
-                GetSpirvTargetEnv(spirv),
-                [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
-                spirv.data(),
-                spirv.size());
+                GetSpirvTargetEnv(spirv), [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
+                spirv.data(), spirv.size());
             if (!context) {
                 return true;
             }
@@ -414,7 +452,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // call was DEBUG-or-env gated and only logged, so an invalid module produced by a backend
         // transform went straight to vkCreateShaderModule. That is not a survivable outcome on
         // this hardware - Mali r54 SIGSEGVs building the pipeline instead of returning an error,
-        // the same "not a validating entry point" behaviour PipelineFactory already documents for
+        // the same "not a validating entry point" behavior PipelineFactory already documents for
         // vkCreateGraphicsPipelines - so the callers that feed the driver now act on it.
         //
         // This function does NOT log the failure at E any more. It used to, unlatched, on the
@@ -436,16 +474,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const spv_target_env targetEnv = GetSpirvTargetEnv(spirv);
 
             spv_context context = spvContextCreate(targetEnv);
-            MOBILEGL_ASSERT(context != nullptr,
-                            "ProgramFactory::ValidateTransformedSpirv: failed to create validator context for stage=%d program=%u",
-                            static_cast<Int>(shaderStage),
-                            programExternalIndex);
+            MOBILEGL_ASSERT(
+                context != nullptr,
+                "ProgramFactory::ValidateTransformedSpirv: failed to create validator context for stage=%d program=%u",
+                static_cast<Int>(shaderStage), programExternalIndex);
 
             spv_validator_options options = spvValidatorOptionsCreate();
-            MOBILEGL_ASSERT(options != nullptr,
-                            "ProgramFactory::ValidateTransformedSpirv: failed to create validator options for stage=%d program=%u",
-                            static_cast<Int>(shaderStage),
-                            programExternalIndex);
+            MOBILEGL_ASSERT(
+                options != nullptr,
+                "ProgramFactory::ValidateTransformedSpirv: failed to create validator options for stage=%d program=%u",
+                static_cast<Int>(shaderStage), programExternalIndex);
             spvValidatorOptionsSetFriendlyNames(options, true);
 
             spv_diagnostic diagnostic = nullptr;
@@ -462,24 +500,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (outFailure != nullptr) {
                     *outFailure = {String(message), static_cast<Int>(result), index};
                 }
-                MGLOG_D(
-                    "ProgramFactory::ValidateTransformedSpirv: validation failed for stage=%d program=%u result=%d index=%zu msg=%s",
-                    static_cast<Int>(shaderStage),
-                    programExternalIndex,
-                    static_cast<Int>(result),
-                    index,
-                    message);
+                MGLOG_D("ProgramFactory::ValidateTransformedSpirv: validation failed for stage=%d program=%u result=%d "
+                        "index=%zu msg=%s",
+                        static_cast<Int>(shaderStage), programExternalIndex, static_cast<Int>(result), index, message);
             }
-            MOBILEGL_ASSERT(
-                result == SPV_SUCCESS,
-                "ProgramFactory::ValidateTransformedSpirv: validation failed for stage=%d program=%u result=%d line=%zu column=%zu index=%zu msg=%s",
-                static_cast<Int>(shaderStage),
-                programExternalIndex,
-                static_cast<Int>(result),
-                diagnostic != nullptr ? diagnostic->position.line : 0,
-                diagnostic != nullptr ? diagnostic->position.column : 0,
-                diagnostic != nullptr ? diagnostic->position.index : 0,
-                diagnostic != nullptr && diagnostic->error != nullptr ? diagnostic->error : "<null>");
+            MOBILEGL_ASSERT(result == SPV_SUCCESS,
+                            "ProgramFactory::ValidateTransformedSpirv: validation failed for stage=%d program=%u "
+                            "result=%d line=%zu column=%zu index=%zu msg=%s",
+                            static_cast<Int>(shaderStage), programExternalIndex, static_cast<Int>(result),
+                            diagnostic != nullptr ? diagnostic->position.line : 0,
+                            diagnostic != nullptr ? diagnostic->position.column : 0,
+                            diagnostic != nullptr ? diagnostic->position.index : 0,
+                            diagnostic != nullptr && diagnostic->error != nullptr ? diagnostic->error : "<null>");
 
             spvDiagnosticDestroy(diagnostic);
             spvValidatorOptionsDestroy(options);
@@ -487,14 +519,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return result == SPV_SUCCESS;
         }
 
-        void ReflectStageInterfaceVariable(const SpvReflectInterfaceVariable& variable,
-                                           Bool reflectInputs,
-                                           StageInterfaceSummary& outSummary,
-                                           Uint programExternalIndex,
-                                           const char* stageLabel,
-                                           StageInterfaceCursor& cursor,
-                                           Uint32 locationBase = 0,
-                                           Bool allowImplicitPacking = false,
+        void ReflectStageInterfaceVariable(const SpvReflectInterfaceVariable& variable, Bool reflectInputs,
+                                           StageInterfaceSummary& outSummary, Uint programExternalIndex,
+                                           const char* stageLabel, StageInterfaceCursor& cursor,
+                                           Uint32 locationBase = 0, Bool allowImplicitPacking = false,
                                            const char* inheritedName = nullptr) {
             if ((variable.decoration_flags & SPV_REFLECT_DECORATION_BUILT_IN) != 0) {
                 return;
@@ -508,12 +536,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 debugName = "<null>";
             }
 
-            const Bool hasConcreteLocation =
-                allowImplicitPacking ? (variable.location != 0 || variable.component != 0)
-                                     : variable.location != std::numeric_limits<Uint32>::max();
-            const Bool hasConcreteComponent =
-                allowImplicitPacking ? (variable.component != 0)
-                                     : variable.component != std::numeric_limits<Uint32>::max();
+            const Bool hasConcreteLocation = allowImplicitPacking
+                                                 ? (variable.location != 0 || variable.component != 0)
+                                                 : variable.location != std::numeric_limits<Uint32>::max();
+            const Bool hasConcreteComponent = allowImplicitPacking
+                                                  ? (variable.component != 0)
+                                                  : variable.component != std::numeric_limits<Uint32>::max();
             const Uint32 explicitLocationBase = locationBase + (hasConcreteLocation ? variable.location : 0u);
 
             if (variable.member_count > 0 && variable.members != nullptr) {
@@ -524,8 +552,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
                 for (Uint32 memberIndex = 0; memberIndex < variable.member_count; ++memberIndex) {
                     ReflectStageInterfaceVariable(variable.members[memberIndex], reflectInputs, outSummary,
-                                                  programExternalIndex, stageLabel, memberCursor,
-                                                  explicitLocationBase, true, debugName);
+                                                  programExternalIndex, stageLabel, memberCursor, explicitLocationBase,
+                                                  true, debugName);
                 }
                 if (memberCursor.location > cursor.location ||
                     (memberCursor.location == cursor.location && memberCursor.component > cursor.component)) {
@@ -537,37 +565,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MOBILEGL_ASSERT(
                 hasConcreteLocation || allowImplicitPacking || locationBase != 0,
                 "ProgramFactory::ReflectStageInterface: missing concrete %s %s location for name='%s' program=%u",
-                stageLabel,
-                reflectInputs ? "input" : "output",
-                debugName,
-                programExternalIndex);
+                stageLabel, reflectInputs ? "input" : "output", debugName, programExternalIndex);
 
             const Uint32 component = variable.component;
-            MOBILEGL_ASSERT(
-                component < 4 || component == std::numeric_limits<Uint32>::max(),
-                "ProgramFactory::ReflectStageInterface: unsupported %s %s component=%u at location=%u name='%s' program=%u",
-                stageLabel,
-                reflectInputs ? "input" : "output",
-                component,
-                explicitLocationBase,
-                debugName,
-                programExternalIndex);
+            MOBILEGL_ASSERT(component < 4 || component == std::numeric_limits<Uint32>::max(),
+                            "ProgramFactory::ReflectStageInterface: unsupported %s %s component=%u at location=%u "
+                            "name='%s' program=%u",
+                            stageLabel, reflectInputs ? "input" : "output", component, explicitLocationBase, debugName,
+                            programExternalIndex);
 
             const Uint32 locationSignature = GetReflectInterfaceLocationSignature(variable);
             MOBILEGL_ASSERT(
                 locationSignature != 0,
-                "ProgramFactory::ReflectStageInterface: unsupported %s %s type at location=%u name='%s' flags=0x%x width=%u signed=%u vec=%u rows=%u cols=%u program=%u",
-                stageLabel,
-                reflectInputs ? "input" : "output",
-                explicitLocationBase,
-                debugName,
+                "ProgramFactory::ReflectStageInterface: unsupported %s %s type at location=%u name='%s' flags=0x%x "
+                "width=%u signed=%u vec=%u rows=%u cols=%u program=%u",
+                stageLabel, reflectInputs ? "input" : "output", explicitLocationBase, debugName,
                 static_cast<Uint32>(variable.type_description != nullptr ? variable.type_description->type_flags : 0),
-                variable.numeric.scalar.width,
-                variable.numeric.scalar.signedness,
-                variable.numeric.vector.component_count,
-                variable.numeric.matrix.row_count,
-                variable.numeric.matrix.column_count,
-                programExternalIndex);
+                variable.numeric.scalar.width, variable.numeric.scalar.signedness,
+                variable.numeric.vector.component_count, variable.numeric.matrix.row_count,
+                variable.numeric.matrix.column_count, programExternalIndex);
 
             const Uint32 vectorSize = GetReflectInterfaceVectorSize(variable);
             const Uint32 locationSpan = GetReflectInterfaceLocationSpan(variable);
@@ -589,62 +605,43 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
 
-            MOBILEGL_ASSERT(
-                startComponent < 4,
-                "ProgramFactory::ReflectStageInterface: %s %s component overflow at location=%u component=%u name='%s' program=%u",
-                stageLabel,
-                reflectInputs ? "input" : "output",
-                startLocation,
-                startComponent,
-                debugName,
-                programExternalIndex);
-            MOBILEGL_ASSERT(
-                locationSpan == 1 || startComponent == 0,
-                "ProgramFactory::ReflectStageInterface: %s %s multi-location variable starts at non-zero component location=%u component=%u name='%s' program=%u",
-                stageLabel,
-                reflectInputs ? "input" : "output",
-                startLocation,
-                startComponent,
-                debugName,
-                programExternalIndex);
+            MOBILEGL_ASSERT(startComponent < 4,
+                            "ProgramFactory::ReflectStageInterface: %s %s component overflow at location=%u "
+                            "component=%u name='%s' program=%u",
+                            stageLabel, reflectInputs ? "input" : "output", startLocation, startComponent, debugName,
+                            programExternalIndex);
+            MOBILEGL_ASSERT(locationSpan == 1 || startComponent == 0,
+                            "ProgramFactory::ReflectStageInterface: %s %s multi-location variable starts at non-zero "
+                            "component location=%u component=%u name='%s' program=%u",
+                            stageLabel, reflectInputs ? "input" : "output", startLocation, startComponent, debugName,
+                            programExternalIndex);
 
             for (Uint32 locationOffset = 0; locationOffset < locationSpan; ++locationOffset) {
                 const Uint32 expandedLocation = startLocation + locationOffset;
                 const Uint32 componentBase = (locationOffset == 0) ? startComponent : 0u;
-                MOBILEGL_ASSERT(
-                    expandedLocation < ProgramFactory::VkProgramObject::kMaxVertexInputLocations,
-                    "ProgramFactory::ReflectStageInterface: %s %s location=%u span=%u exceeds tracked limit for name='%s' program=%u",
-                    stageLabel,
-                    reflectInputs ? "input" : "output",
-                    startLocation,
-                    locationSpan,
-                    debugName,
-                    programExternalIndex);
-                MOBILEGL_ASSERT(
-                    componentBase + vectorSize <= 4,
-                    "ProgramFactory::ReflectStageInterface: %s %s component span overflow at location=%u component=%u vec=%u name='%s' program=%u",
-                    stageLabel,
-                    reflectInputs ? "input" : "output",
-                    expandedLocation,
-                    componentBase,
-                    vectorSize,
-                    debugName,
-                    programExternalIndex);
+                MOBILEGL_ASSERT(expandedLocation < ProgramFactory::VkProgramObject::kMaxVertexInputLocations,
+                                "ProgramFactory::ReflectStageInterface: %s %s location=%u span=%u exceeds tracked "
+                                "limit for name='%s' program=%u",
+                                stageLabel, reflectInputs ? "input" : "output", startLocation, locationSpan, debugName,
+                                programExternalIndex);
+                MOBILEGL_ASSERT(componentBase + vectorSize <= 4,
+                                "ProgramFactory::ReflectStageInterface: %s %s component span overflow at location=%u "
+                                "component=%u vec=%u name='%s' program=%u",
+                                stageLabel, reflectInputs ? "input" : "output", expandedLocation, componentBase,
+                                vectorSize, debugName, programExternalIndex);
                 for (Uint32 componentOffset = 0; componentOffset < vectorSize; ++componentOffset) {
                     const Uint32 expandedComponent = componentBase + componentOffset;
                     const Uint32 slotIndex = expandedLocation * 4 + expandedComponent;
                     MOBILEGL_ASSERT(
-                        outSummary.slotSignatures[slotIndex] == 0 || outSummary.slotSignatures[slotIndex] == locationSignature,
-                        "ProgramFactory::ReflectStageInterface: conflicting %s %s type at location=%u component=%u existingSignature=0x%x existingName='%s' newSignature=0x%x newName='%s' program=%u",
-                        stageLabel,
-                        reflectInputs ? "input" : "output",
-                        expandedLocation,
-                        expandedComponent,
+                        outSummary.slotSignatures[slotIndex] == 0 ||
+                            outSummary.slotSignatures[slotIndex] == locationSignature,
+                        "ProgramFactory::ReflectStageInterface: conflicting %s %s type at location=%u component=%u "
+                        "existingSignature=0x%x existingName='%s' newSignature=0x%x newName='%s' program=%u",
+                        stageLabel, reflectInputs ? "input" : "output", expandedLocation, expandedComponent,
                         outSummary.slotSignatures[slotIndex],
-                        outSummary.slotDebugNames[slotIndex].empty() ? "<null>" : outSummary.slotDebugNames[slotIndex].c_str(),
-                        locationSignature,
-                        debugName,
-                        programExternalIndex);
+                        outSummary.slotDebugNames[slotIndex].empty() ? "<null>"
+                                                                     : outSummary.slotDebugNames[slotIndex].c_str(),
+                        locationSignature, debugName, programExternalIndex);
                     outSummary.slotSignatures[slotIndex] = locationSignature;
                     outSummary.slotDebugNames[slotIndex] = debugName;
                 }
@@ -668,13 +665,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
-        void ReflectStageInterface(ShaderStage targetStage,
-                                   Bool reflectInputs,
-                                   const Vector<ShaderStage>& stages,
-                                   const Vector<Vector<Uint>>& spirv,
-                                   StageInterfaceSummary& outSummary,
-                                   Uint programExternalIndex,
-                                   const char* stageLabel) {
+        void ReflectStageInterface(ShaderStage targetStage, Bool reflectInputs, const Vector<ShaderStage>& stages,
+                                   const Vector<Vector<Uint>>& spirv, StageInterfaceSummary& outSummary,
+                                   Uint programExternalIndex, const char* stageLabel) {
             outSummary.slotSignatures.fill(0);
 
             for (SizeT moduleIndex = 0; moduleIndex < stages.size() && moduleIndex < spirv.size(); ++moduleIndex) {
@@ -690,40 +683,35 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 SpvReflectShaderModule reflectModule{};
                 const SpvReflectResult createResult =
                     spvReflectCreateShaderModule(module.size() * sizeof(Uint), module.data(), &reflectModule);
-                MOBILEGL_ASSERT(
-                    createResult == SPV_REFLECT_RESULT_SUCCESS,
-                    "ProgramFactory::ReflectStageInterface: failed to create reflection module for %s %s (result=%d program=%u)",
-                    stageLabel,
-                    reflectInputs ? "input" : "output",
-                    static_cast<Int>(createResult),
-                    programExternalIndex);
+                MOBILEGL_ASSERT(createResult == SPV_REFLECT_RESULT_SUCCESS,
+                                "ProgramFactory::ReflectStageInterface: failed to create reflection module for %s %s "
+                                "(result=%d program=%u)",
+                                stageLabel, reflectInputs ? "input" : "output", static_cast<Int>(createResult),
+                                programExternalIndex);
                 if (createResult != SPV_REFLECT_RESULT_SUCCESS) {
                     continue;
                 }
 
                 uint32_t variableCount = 0;
-                SpvReflectResult reflectResult = reflectInputs
-                    ? spvReflectEnumerateInputVariables(&reflectModule, &variableCount, nullptr)
-                    : spvReflectEnumerateOutputVariables(&reflectModule, &variableCount, nullptr);
+                SpvReflectResult reflectResult =
+                    reflectInputs ? spvReflectEnumerateInputVariables(&reflectModule, &variableCount, nullptr)
+                                  : spvReflectEnumerateOutputVariables(&reflectModule, &variableCount, nullptr);
                 MOBILEGL_ASSERT(
                     reflectResult == SPV_REFLECT_RESULT_SUCCESS,
                     "ProgramFactory::ReflectStageInterface: failed to enumerate %s %s variables (result=%d program=%u)",
-                    stageLabel,
-                    reflectInputs ? "input" : "output",
-                    static_cast<Int>(reflectResult),
+                    stageLabel, reflectInputs ? "input" : "output", static_cast<Int>(reflectResult),
                     programExternalIndex);
 
                 Vector<SpvReflectInterfaceVariable*> variables(variableCount);
                 if (reflectResult == SPV_REFLECT_RESULT_SUCCESS && variableCount > 0) {
-                    reflectResult = reflectInputs
-                        ? spvReflectEnumerateInputVariables(&reflectModule, &variableCount, variables.data())
-                        : spvReflectEnumerateOutputVariables(&reflectModule, &variableCount, variables.data());
+                    reflectResult =
+                        reflectInputs
+                            ? spvReflectEnumerateInputVariables(&reflectModule, &variableCount, variables.data())
+                            : spvReflectEnumerateOutputVariables(&reflectModule, &variableCount, variables.data());
                     MOBILEGL_ASSERT(
                         reflectResult == SPV_REFLECT_RESULT_SUCCESS,
                         "ProgramFactory::ReflectStageInterface: failed to fetch %s %s variables (result=%d program=%u)",
-                        stageLabel,
-                        reflectInputs ? "input" : "output",
-                        static_cast<Int>(reflectResult),
+                        stageLabel, reflectInputs ? "input" : "output", static_cast<Int>(reflectResult),
                         programExternalIndex);
                 }
 
@@ -746,10 +734,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
-        void ValidateRasterizationStageInterface(const Vector<ShaderStage>& stages,
-                                                 const Vector<Vector<Uint>>& spirv,
-                                                 ProgramFactory::VkProgramObject& entry,
-                                                 Uint programExternalIndex) {
+        void ValidateRasterizationStageInterface(const Vector<ShaderStage>& stages, const Vector<Vector<Uint>>& spirv,
+                                                 ProgramFactory::VkProgramObject& entry, Uint programExternalIndex) {
             const ShaderStage producerStage = PickClipFixupStage(stages);
             entry.rasterizationProducerStage = producerStage;
             entry.producerOutputComponentCount = 0;
@@ -785,13 +771,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                 MOBILEGL_ASSERT(
                     producerOutputs.slotSignatures[slotIndex] == fragmentInputs.slotSignatures[slotIndex],
-                    "ProgramFactory::ValidateRasterizationStageInterface: location=%u component=%u producerSignature=0x%x producerName='%s' fragmentSignature=0x%x fragmentName='%s' program=%u",
-                    slotIndex / 4,
-                    slotIndex % 4,
-                    producerOutputs.slotSignatures[slotIndex],
-                    producerOutputs.slotDebugNames[slotIndex].empty() ? "<null>" : producerOutputs.slotDebugNames[slotIndex].c_str(),
+                    "ProgramFactory::ValidateRasterizationStageInterface: location=%u component=%u "
+                    "producerSignature=0x%x producerName='%s' fragmentSignature=0x%x fragmentName='%s' program=%u",
+                    slotIndex / 4, slotIndex % 4, producerOutputs.slotSignatures[slotIndex],
+                    producerOutputs.slotDebugNames[slotIndex].empty()
+                        ? "<null>"
+                        : producerOutputs.slotDebugNames[slotIndex].c_str(),
                     fragmentInputs.slotSignatures[slotIndex],
-                    fragmentInputs.slotDebugNames[slotIndex].empty() ? "<null>" : fragmentInputs.slotDebugNames[slotIndex].c_str(),
+                    fragmentInputs.slotDebugNames[slotIndex].empty() ? "<null>"
+                                                                     : fragmentInputs.slotDebugNames[slotIndex].c_str(),
                     programExternalIndex);
             }
         }
@@ -864,8 +852,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // declares one of the expected type. Annotations are the search space deliberately:
         // they survive the link-time sanitize chain's interface delisting, which is the whole
         // reason EnsureEntryPointInterface exists.
-        Bool FindBuiltInTarget(spvtools::opt::IRContext* context, spv::BuiltIn builtIn,
-                               BuiltInTypeCheckFn typeCheck, PositionTargetInfo* outTarget) {
+        Bool FindBuiltInTarget(spvtools::opt::IRContext* context, spv::BuiltIn builtIn, BuiltInTypeCheckFn typeCheck,
+                               PositionTargetInfo* outTarget) {
             Vector<Pair<Uint32, Uint32>> memberCandidates;
             constexpr auto kDecorationBuiltIn = static_cast<Uint32>(spv::Decoration::BuiltIn);
             const auto wantedBuiltIn = static_cast<Uint32>(builtIn);
@@ -927,6 +915,36 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return true;
         }
 
+        // Where a per-vertex fix-up of `entryPoint`'s outputs goes: in front of every emit a
+        // geometry shader can execute - EmitVertex and EmitStreamVertex alike, in the entry
+        // function or in any function it calls, since the front end does not inline helpers - and,
+        // for the other stages, in front of each return from the entry function itself, as a
+        // helper's return does not end the invocation. Collected before anything is inserted.
+        Vector<spvtools::opt::Instruction*> CollectPerVertexFixupSites(spvtools::opt::IRContext* context,
+                                                                       const spvtools::opt::Instruction& entryPoint) {
+            Vector<spvtools::opt::Instruction*> sites;
+            const Uint32 entryFunctionId = entryPoint.GetSingleWordInOperand(1);
+            if (context->GetFunction(entryFunctionId) == nullptr) return sites;
+            const auto collect = [&sites](spvtools::opt::Function& function, auto isSite) {
+                function.ForEachInst([&](spvtools::opt::Instruction* inst) {
+                    if (isSite(inst->opcode())) sites.push_back(inst);
+                });
+            };
+            if (static_cast<spv::ExecutionModel>(entryPoint.GetSingleWordInOperand(0)) !=
+                spv::ExecutionModel::Geometry) {
+                collect(*context->GetFunction(entryFunctionId), [](spv::Op op) { return op == spv::Op::OpReturn; });
+                return sites;
+            }
+            std::unordered_set<Uint32> callTree;
+            context->CollectCallTreeFromRoots(entryFunctionId, &callTree);
+            for (auto& function : *context->module()) {
+                if (callTree.count(function.result_id()) == 0) continue;
+                collect(function,
+                        [](spv::Op op) { return op == spv::Op::OpEmitVertex || op == spv::Op::OpEmitStreamVertex; });
+            }
+            return sites;
+        }
+
         // Is `pointerId` the position target itself, or an access chain rooted at it?
         Bool PointerReachesPositionTarget(spvtools::opt::IRContext* context, Uint32 pointerId,
                                           const PositionTargetInfo& target) {
@@ -954,7 +972,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         //
         // Deliberately conservative - it answers "assume yes" for every shape it cannot read
         // exactly, because a false "no" would silently drop the clip-space fixup from a shader
-        // that does write gl_Position, while a false "yes" only reinstates the behaviour this
+        // that does write gl_Position, while a false "yes" only reinstates the behavior this
         // pass has always had. Scans every function rather than just the entry point's: a shader
         // that assigns gl_Position inside a helper is still a shader that writes it, and passing
         // the pointer to a call is a write as far as this can tell.
@@ -1052,8 +1070,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 zValueId = mappedZ->result_id();
             }
 
-            auto* fixedPosition = builder.AddCompositeConstruct(target.vectorTypeId,
-                                                                {xValueId, yValueId, zValueId, w->result_id()});
+            auto* fixedPosition =
+                builder.AddCompositeConstruct(target.vectorTypeId, {xValueId, yValueId, zValueId, w->result_id()});
             if (!fixedPosition) return false;
 
             return builder.AddStore(positionPtrId, fixedPosition->result_id()) != nullptr;
@@ -1071,7 +1089,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (!FindPositionTarget(context(), &target)) return Status::SuccessWithoutChange;
 
                 // Nothing to remap in a Position the shader never writes. Declining is not just
-                // an optimisation: the fixup is load-modify-store, so on an unwritten Position it
+                // an optimization: the fixup is load-modify-store, so on an unwritten Position it
                 // converts "undefined, never written" into "written with whatever the load
                 // returned", and the store is a reference to a variable the link-time sanitize
                 // chain has already delisted from the entry-point interface. glslang emits the
@@ -1094,10 +1112,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 const Bool doYFlip = (m_transformFlags & ProgramFactory::CompileOptionBit::PositionYFlip);
                 const Bool doZRemap = (m_transformFlags & ProgramFactory::CompileOptionBit::PositionZRemap);
                 const Bool doSurfaceRotate90 = (m_transformFlags & ProgramFactory::CompileOptionBit::SurfaceRotate90);
-                const Bool doSurfaceRotate180 =
-                    (m_transformFlags & ProgramFactory::CompileOptionBit::SurfaceRotate180);
-                const Bool doSurfaceRotate270 =
-                    (m_transformFlags & ProgramFactory::CompileOptionBit::SurfaceRotate270);
+                const Bool doSurfaceRotate180 = (m_transformFlags & ProgramFactory::CompileOptionBit::SurfaceRotate180);
+                const Bool doSurfaceRotate270 = (m_transformFlags & ProgramFactory::CompileOptionBit::SurfaceRotate270);
 
                 Bool modified = false;
                 for (auto& entryPoint : get_module()->entry_points()) {
@@ -1110,22 +1126,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         continue;
                     }
 
-                    auto* function = context()->GetFunction(entryPoint.GetSingleWordInOperand(1));
-                    if (!function) continue;
-
                     Bool modifiedThisEntryPoint = false;
-                    for (auto& bb : *function) {
-                        for (auto instIter = bb.begin(); instIter != bb.end(); ++instIter) {
-                            auto* inst = &*instIter;
-                            const Bool needsFixup =
-                                (model == spv::ExecutionModel::Geometry && inst->opcode() == spv::Op::OpEmitVertex) ||
-                                (model != spv::ExecutionModel::Geometry && inst->opcode() == spv::Op::OpReturn);
-                            if (!needsFixup) continue;
-
-                            modifiedThisEntryPoint |=
-                                InsertPositionFixup(context(), inst, target, halfConstId, doYFlip, doZRemap,
-                                                    doSurfaceRotate90, doSurfaceRotate180, doSurfaceRotate270);
-                        }
+                    for (auto* site : CollectPerVertexFixupSites(context(), entryPoint)) {
+                        modifiedThisEntryPoint |=
+                            InsertPositionFixup(context(), site, target, halfConstId, doYFlip, doZRemap,
+                                                doSurfaceRotate90, doSurfaceRotate180, doSurfaceRotate270);
                     }
                     // Per entry point, and only for one this pass actually injected into: the
                     // injected load/store is a static use of the position variable, so the
@@ -1160,7 +1165,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // ivec2(gl_FragCoord.xy)) into an image exactly the size of that viewport, so every
         // store fell outside the image and the test read back zeroes.
         //
-        // The rewrite redirects every read of the builtin to a Private copy initialised once at
+        // The rewrite redirects every read of the builtin to a Private copy initialized once at
         // entry, which is exact for all access forms (whole-vector loads, `.y` access chains,
         // OpCopyMemory) and leaves the builtin itself - and its decorations - untouched.
         class GlFragCoordYFlipPass final : public spvtools::opt::Pass {
@@ -1228,7 +1233,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<Uint32>(spv::StorageClass::Private)}}});
                 context()->AddGlobalValue(std::move(copyVar));
 
-                // Redirect the reads BEFORE emitting the initialiser, so the initialiser's own
+                // Redirect the reads BEFORE emitting the initializer, so the initializer's own
                 // load of the builtin is not rewritten into a load of the (still empty) copy.
                 if (!RedirectReads(builtinVarId, copyVarId)) return Status::SuccessWithoutChange;
 
@@ -1313,6 +1318,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                 });
                 if (!ok) return false;
+                // An access chain into the builtin (gl_FragCoord.y is one) carries an Input
+                // pointer type. Based on the Private copy it has to carry a Private one, and so
+                // does every chain built on top of it - otherwise the module hands the driver a
+                // pointer whose storage class disagrees with its base, which is invalid SPIR-V
+                // and reads an undefined value. Plan every retype before touching anything, so a
+                // shape this pass does not model declines the whole rewrite.
+                Vector<Pair<Instruction*, Uint32>> retypes;
+                Vector<Instruction*> chains;
+                for (Instruction* user : users) {
+                    if (IsAccessChain(user->opcode())) chains.push_back(user);
+                }
+                while (!chains.empty()) {
+                    Instruction* chain = chains.back();
+                    chains.pop_back();
+                    const Uint32 privateType = PrivatePointerTypeFor(chain->type_id());
+                    if (privateType == 0) return false;
+                    retypes.emplace_back(chain, privateType);
+                    context()->get_def_use_mgr()->ForEachUser(chain, [&](Instruction* next) {
+                        if (IsAccessChain(next->opcode()) && next->NumInOperands() > 0 &&
+                            next->GetSingleWordInOperand(0) == chain->result_id()) {
+                            chains.push_back(next);
+                        }
+                    });
+                }
                 for (Instruction* user : users) {
                     for (Uint32 i = 0; i < user->NumInOperands(); ++i) {
                         auto& operand = user->GetInOperand(i);
@@ -1323,7 +1352,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                     context()->AnalyzeUses(user);
                 }
+                for (auto& [chain, privateType] : retypes) {
+                    chain->SetResultType(privateType);
+                    context()->AnalyzeUses(chain);
+                }
                 return true;
+            }
+
+            static Bool IsAccessChain(spv::Op opcode) {
+                return opcode == spv::Op::OpAccessChain || opcode == spv::Op::OpInBoundsAccessChain ||
+                       opcode == spv::Op::OpPtrAccessChain || opcode == spv::Op::OpInBoundsPtrAccessChain;
+            }
+
+            // The Private-storage twin of an Input pointer type, or 0 when `pointerTypeId` is not
+            // an Input pointer (then the chain is not the shape this pass rewrites).
+            Uint32 PrivatePointerTypeFor(Uint32 pointerTypeId) {
+                using namespace spvtools::opt;
+                Instruction* pointerType = context()->get_def_use_mgr()->GetDef(pointerTypeId);
+                if (!pointerType || pointerType->opcode() != spv::Op::OpTypePointer) return 0;
+                if (static_cast<spv::StorageClass>(pointerType->GetSingleWordInOperand(0)) !=
+                    spv::StorageClass::Input) {
+                    return 0;
+                }
+                return context()->get_type_mgr()->FindPointerToType(pointerType->GetSingleWordInOperand(1),
+                                                                    spv::StorageClass::Private);
             }
 
             Uint32 m_framebufferHeight = 0;
@@ -1332,8 +1384,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Decorates the module's captured varyings for VK_EXT_transform_feedback:
         // user outputs get XfbBuffer/XfbStride/Offset directly; a captured
         // gl_Position (a gl_PerVertex member) is mirrored into a dedicated output
-        // variable copied before every OpReturn, BEFORE the position fixup runs,
-        // so the captured value is the shader's own (pre-remap) gl_Position.
+        // variable copied at every CollectPerVertexFixupSites site, BEFORE the position
+        // fixup runs, so the captured value is the shader's own (pre-remap) gl_Position.
         class XfbCaptureDecoratePass final : public spvtools::opt::Pass {
         public:
             struct CapturedVarying {
@@ -1361,7 +1413,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 auto entryPointIter = get_module()->entry_points().begin();
                 if (entryPointIter == get_module()->entry_points().end()) return Status::SuccessWithoutChange;
                 spvtools::opt::Instruction* entryPoint = &*entryPointIter;
-                const Uint32 entryFunctionId = entryPoint->GetSingleWordInOperand(1);
 
                 // Name -> result id map from the debug section.
                 std::unordered_map<std::string, Uint32> idsByName;
@@ -1387,9 +1438,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 const auto decorateMemberForXfb = [&](Uint32 structTypeId, Uint32 memberIndex, Uint32 bufferIndex,
                                                       Uint32 offsetBytes) {
                     const Uint32 stride = bufferIndex < m_strides.size() ? m_strides[bufferIndex] : 0;
-                    decorationManager->AddMemberDecoration(structTypeId, memberIndex,
-                                                           static_cast<Uint32>(spv::Decoration::XfbBuffer),
-                                                           bufferIndex);
+                    decorationManager->AddMemberDecoration(
+                        structTypeId, memberIndex, static_cast<Uint32>(spv::Decoration::XfbBuffer), bufferIndex);
                     decorationManager->AddMemberDecoration(structTypeId, memberIndex,
                                                            static_cast<Uint32>(spv::Decoration::XfbStride), stride);
                     decorationManager->AddMemberDecoration(structTypeId, memberIndex,
@@ -1437,8 +1487,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         // exists to remove. Detected off the module's own debug names, so a
                         // composite built from another program's stage answers for the module it
                         // actually contains.
-                        const auto carrierIt = idsByName.find(
-                            MG_Util::ShaderTranspiler::ShaderCompiler::POINT_SIZE_CAPTURE_CARRIER_NAME);
+                        const auto carrierIt =
+                            idsByName.find(MG_Util::ShaderTranspiler::ShaderCompiler::POINT_SIZE_CAPTURE_CARRIER_NAME);
                         if (carrierIt != idsByName.end()) {
                             decorateForXfb(carrierIt->second, varying.bufferIndex, varying.offsetBytes);
                             modified = true;
@@ -1459,7 +1509,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         }
                         if (structTypeId == 0) {
                             if (const auto it = idsByName.find(varying.blockName); it != idsByName.end()) {
-                                const spvtools::opt::Instruction* def = context()->get_def_use_mgr()->GetDef(it->second);
+                                const spvtools::opt::Instruction* def =
+                                    context()->get_def_use_mgr()->GetDef(it->second);
                                 if (def != nullptr && def->opcode() == spv::Op::OpTypeStruct) {
                                     structTypeId = it->second;
                                 } else if (def != nullptr && def->opcode() == spv::Op::OpVariable) {
@@ -1470,12 +1521,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         if (structTypeId == 0) {
                             MGLOG_E("XfbCaptureDecoratePass: no SPIR-V interface block '%s' (instance '%s') for "
                                     "capture '%s'",
-                                    varying.blockName.c_str(), varying.blockInstanceName.c_str(),
-                                    varying.name.c_str());
+                                    varying.blockName.c_str(), varying.blockInstanceName.c_str(), varying.name.c_str());
                             continue;
                         }
-                        auto& group =
-                            memberGroups[{structTypeId, static_cast<Uint32>(varying.blockMemberIndex)}];
+                        auto& group = memberGroups[{structTypeId, static_cast<Uint32>(varying.blockMemberIndex)}];
                         if (group.offsets.empty() || varying.offsetBytes < group.minOffset) {
                             group.minOffset = varying.offsetBytes;
                         }
@@ -1500,8 +1549,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // decoration, but say so, because the capture layout will not match GL.
                     std::sort(group.offsets.begin(), group.offsets.end());
                     for (SizeT i = 1; i < group.offsets.size(); ++i) {
-                        if (group.elementBytes == 0 ||
-                            group.offsets[i] != group.offsets[i - 1] + group.elementBytes) {
+                        if (group.elementBytes == 0 || group.offsets[i] != group.offsets[i - 1] + group.elementBytes) {
                             MGLOG_D("XfbCaptureDecoratePass: block member %u of type %%%u is captured with a "
                                     "non-contiguous element set; the capture layout will differ from GL's",
                                     key.second, key.first);
@@ -1513,16 +1561,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
 
                 if (needsPositionMirror) {
-                    modified |= MirrorPerVertexBuiltInForCapture(entryFunctionId, *entryPoint,
-                                                                 spv::BuiltIn::Position, IsVec4Float32,
+                    modified |= MirrorPerVertexBuiltInForCapture(*entryPoint, spv::BuiltIn::Position, IsVec4Float32,
                                                                  "gl_Position", positionBufferIndex, positionOffset,
                                                                  decorateForXfb);
                 }
                 if (needsPointSizeMirror) {
-                    modified |= MirrorPerVertexBuiltInForCapture(entryFunctionId, *entryPoint,
-                                                                 spv::BuiltIn::PointSize, IsFloat32Scalar,
-                                                                 "gl_PointSize", pointSizeBufferIndex,
-                                                                 pointSizeOffset, decorateForXfb);
+                    modified |= MirrorPerVertexBuiltInForCapture(*entryPoint, spv::BuiltIn::PointSize, IsFloat32Scalar,
+                                                                 "gl_PointSize", pointSizeBufferIndex, pointSizeOffset,
+                                                                 decorateForXfb);
                 }
 
                 if (!modified) return Status::SuccessWithoutChange;
@@ -1553,8 +1599,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 for (const spvtools::opt::Instruction* pointee = defUse->GetDef(pointeeId); pointee != nullptr;
                      pointee = defUse->GetDef(pointeeId)) {
                     if (pointee->opcode() == spv::Op::OpTypeStruct) return pointeeId;
-                    if (pointee->opcode() != spv::Op::OpTypeArray &&
-                        pointee->opcode() != spv::Op::OpTypeRuntimeArray) {
+                    if (pointee->opcode() != spv::Op::OpTypeArray && pointee->opcode() != spv::Op::OpTypeRuntimeArray) {
                         return 0;
                     }
                     pointeeId = pointee->GetSingleWordInOperand(0);
@@ -1566,11 +1611,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // built-in is looked up and what type it has, so one injector serves both. Anything
             // else in gl_PerVertex would need its own type check before it could be added here.
             template <typename DecorateFn>
-            Bool MirrorPerVertexBuiltInForCapture(Uint32 entryFunctionId, spvtools::opt::Instruction& entryPoint,
-                                                  spv::BuiltIn builtIn, BuiltInTypeCheckFn typeCheck,
-                                                  const char* glslName, Uint32 bufferIndex, Uint32 offsetBytes,
+            Bool MirrorPerVertexBuiltInForCapture(spvtools::opt::Instruction& entryPoint, spv::BuiltIn builtIn,
+                                                  BuiltInTypeCheckFn typeCheck, const char* glslName,
+                                                  Uint32 bufferIndex, Uint32 offsetBytes,
                                                   const DecorateFn& decorateForXfb) {
-                const Uint32 entryPointModel = entryPoint.GetSingleWordInOperand(0);
                 using namespace spvtools::opt;
                 PositionTargetInfo target{};
                 if (!FindBuiltInTarget(context(), builtIn, typeCheck, &target)) {
@@ -1609,33 +1653,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     mirrorLocation = std::max(mirrorLocation, annotation.GetSingleWordInOperand(2) + 1);
                 }
                 auto* decorationManager = context()->get_decoration_mgr();
-                decorationManager->AddDecorationVal(mirrorVariableId,
-                                                    static_cast<Uint32>(spv::Decoration::Location), mirrorLocation);
+                decorationManager->AddDecorationVal(mirrorVariableId, static_cast<Uint32>(spv::Decoration::Location),
+                                                    mirrorLocation);
                 decorateForXfb(mirrorVariableId, bufferIndex, offsetBytes);
                 entryPoint.AddOperand({SPV_OPERAND_TYPE_ID, {mirrorVariableId}});
 
-                auto* function = context()->GetFunction(entryFunctionId);
-                if (function == nullptr) return false;
-                const auto model = static_cast<spv::ExecutionModel>(entryPointModel);
+                // Geometry stages capture per emitted vertex; other stages at return.
                 Bool injected = false;
-                for (auto& block : *function) {
-                    for (auto instIter = block.begin(); instIter != block.end(); ++instIter) {
-                        // Geometry stages capture per emitted vertex; other stages at return.
-                        const Bool isInjectionSite =
-                            model == spv::ExecutionModel::Geometry
-                                ? instIter->opcode() == spv::Op::OpEmitVertex
-                                : instIter->opcode() == spv::Op::OpReturn;
-                        if (!isInjectionSite) continue;
-                        InstructionBuilder builder(context(), &*instIter, IRContext::kAnalysisNone);
-                        const Uint32 memberIndexId = builder.GetUintConstantId(target.memberIndex);
-                        auto* access =
-                            builder.AddAccessChain(target.vectorPtrTypeId, target.variableId, {memberIndexId});
-                        if (access == nullptr) return injected;
-                        auto* value = builder.AddLoad(target.vectorTypeId, access->result_id());
-                        if (value == nullptr) return injected;
-                        builder.AddStore(mirrorVariableId, value->result_id());
-                        injected = true;
-                    }
+                for (auto* site : CollectPerVertexFixupSites(context(), entryPoint)) {
+                    InstructionBuilder builder(context(), site, IRContext::kAnalysisNone);
+                    const Uint32 memberIndexId = builder.GetUintConstantId(target.memberIndex);
+                    auto* access = builder.AddAccessChain(target.vectorPtrTypeId, target.variableId, {memberIndexId});
+                    if (access == nullptr) return injected;
+                    auto* value = builder.AddLoad(target.vectorTypeId, access->result_id());
+                    if (value == nullptr) return injected;
+                    builder.AddStore(mirrorVariableId, value->result_id());
+                    injected = true;
                 }
                 // The mirror was listed on the entry point above, but the loop just added a READ
                 // of the SOURCE block through an access chain, and the interface rule covers
@@ -1655,7 +1688,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         // Adreno 650 (driver 512.502) faults the GPU on an implicit-LOD sample of a full-screen
-        // colour render target: the texture unit's derivative path reads outside the image's
+        // color render target: the texture unit's derivative path reads outside the image's
         // allocation even though the sampler clamps LOD to 0 and the mapping is 1:1. MobileGL's
         // own default-framebuffer blit shader works around it with textureLod, but an
         // application's shader (Minecraft's blit.fsh is `texture(InSampler, texCoord)`) cannot be
@@ -1842,10 +1875,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // FINAL module via ValidateTransformedSpirv, which latches instead of rerouting
             // control flow.
             options.set_run_validator(false);
-            optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
-                                            const char* message) {
-                MGLOG_E("Vulkan: explicit-LOD0 pass: %s", message != nullptr ? message : "");
-            });
+            optimizer.SetMessageConsumer(
+                [](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+                    MGLOG_E("Vulkan: explicit-LOD0 pass: %s", message != nullptr ? message : "");
+                });
             optimizer.RegisterPass(CreateForceExplicitLod0SamplePass());
 
             const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
@@ -1861,37 +1894,37 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return spvtools::Optimizer::PassToken(MakeUnique<GlToVulkanPositionFixPass>(transformFlags));
         }
 
-        Bool TransformSpirvForFragCoordYFlip(const Vector<Uint>& input, Vector<Uint>& output,
-                                             Uint32 framebufferHeight) {
-            if (input.empty()) {
-                output.clear();
-                return true;
-            }
-            if (framebufferHeight == 0) {
-                output = input;
-                return true;
-            }
+    } // namespace
 
-            spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
-            spvtools::OptimizerOptions options;
-            options.set_run_validator(false); // see TransformSpirvForExplicitLod0Sampling
-            optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
-                                            const char* message) {
-                MGLOG_E("Vulkan: fragcoord y-flip pass: %s", message != nullptr ? message : "");
-            });
-            optimizer.RegisterPass(
-                spvtools::Optimizer::PassToken(MakeUnique<GlFragCoordYFlipPass>(framebufferHeight)));
-
-            const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
-            if (!success) {
-                MGLOG_E("Vulkan: failed to run the gl_FragCoord y-flip pass; keeping the original module");
-                output = input;
-            }
-            return success;
+    Bool TransformSpirvForFragCoordYFlip(const Vector<Uint>& input, Vector<Uint>& output, Uint32 framebufferHeight) {
+        if (input.empty()) {
+            output.clear();
+            return true;
+        }
+        if (framebufferHeight == 0) {
+            output = input;
+            return true;
         }
 
+        spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
+        spvtools::OptimizerOptions options;
+        options.set_run_validator(false); // see TransformSpirvForExplicitLod0Sampling
+        optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+            MGLOG_E("Vulkan: fragcoord y-flip pass: %s", message != nullptr ? message : "");
+        });
+        optimizer.RegisterPass(spvtools::Optimizer::PassToken(MakeUnique<GlFragCoordYFlipPass>(framebufferHeight)));
+
+        const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
+        if (!success) {
+            MGLOG_E("Vulkan: failed to run the gl_FragCoord y-flip pass; keeping the original module");
+            output = input;
+        }
+        return success;
+    }
+
+    namespace {
         Bool TransformSpirvForXfbCapture(const Vector<Uint>& input, Vector<Uint>& output,
-                                         const MG_State::GLState::ProgramObject& program) {
+                                         const MagmaProgramSource& program) {
             if (input.empty()) {
                 output.clear();
                 return true;
@@ -1899,9 +1932,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<XfbCaptureDecoratePass::CapturedVarying> varyings;
             varyings.reserve(program.GetTransformFeedbackVaryingCount());
             for (const auto& varying : program.GetTransformFeedbackVaryings()) {
-                varyings.push_back({varying.name, varying.bufferIndex, varying.offsetBytes,
-                                    varying.blockInstanceName, varying.blockName, varying.blockMemberIndex,
-                                    varying.blockMemberElement, varying.byteSize});
+                varyings.push_back({varying.name, varying.bufferIndex, varying.offsetBytes, varying.blockInstanceName,
+                                    varying.blockName, varying.blockMemberIndex, varying.blockMemberElement,
+                                    varying.byteSize});
             }
             Vector<Uint32> strides;
             strides.reserve(program.GetTransformFeedbackBufferCount());
@@ -1912,12 +1945,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
             spvtools::OptimizerOptions options;
             options.set_run_validator(false); // see TransformSpirvForExplicitLod0Sampling
-            optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
-                                            const char* message) {
-                MGLOG_E("Vulkan: xfb capture pass: %s", message != nullptr ? message : "");
-            });
-            optimizer.RegisterPass(spvtools::Optimizer::PassToken(
-                MakeUnique<XfbCaptureDecoratePass>(Move(varyings), Move(strides))));
+            optimizer.SetMessageConsumer(
+                [](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+                    MGLOG_E("Vulkan: xfb capture pass: %s", message != nullptr ? message : "");
+                });
+            optimizer.RegisterPass(
+                spvtools::Optimizer::PassToken(MakeUnique<XfbCaptureDecoratePass>(Move(varyings), Move(strides))));
 
             const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
             if (!success) {
@@ -1926,36 +1959,37 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             return success;
         }
+    } // namespace
 
-        Bool TransformSpirvForVulkanPositionFix(const Vector<Uint>& input, Vector<Uint>& output,
-                                                ProgramFactory::CompileOptionFlags transformFlags) {
-            if (input.empty()) {
-                output.clear();
-                return true;
-            }
-
-            if (!transformFlags) {
-                output = input;
-                return true;
-            }
-
-            spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
-            spvtools::OptimizerOptions options;
-            options.set_run_validator(false); // see TransformSpirvForExplicitLod0Sampling
-            optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
-                                            const char* message) {
-                MGLOG_E("Vulkan: position fix pass: %s", message != nullptr ? message : "");
-            });
-            optimizer.RegisterPass(CreateGlToVulkanPositionFixPass(transformFlags));
-
-            const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
-            if (!success) {
-                MGLOG_E("Vulkan: failed to run GL->Vulkan position fix pass");
-                output = input;
-            }
-            return success;
+    Bool TransformSpirvForVulkanPositionFix(const Vector<Uint>& input, Vector<Uint>& output,
+                                            ProgramFactory::CompileOptionFlags transformFlags) {
+        if (input.empty()) {
+            output.clear();
+            return true;
         }
 
+        if (!transformFlags) {
+            output = input;
+            return true;
+        }
+
+        spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
+        spvtools::OptimizerOptions options;
+        options.set_run_validator(false); // see TransformSpirvForExplicitLod0Sampling
+        optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+            MGLOG_E("Vulkan: position fix pass: %s", message != nullptr ? message : "");
+        });
+        optimizer.RegisterPass(CreateGlToVulkanPositionFixPass(transformFlags));
+
+        const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
+        if (!success) {
+            MGLOG_E("Vulkan: failed to run GL->Vulkan position fix pass");
+            output = input;
+        }
+        return success;
+    }
+
+    namespace {
         ShaderStage PickClipFixupStage(const Vector<ShaderStage>& stages) {
             Bool hasGeometry = false;
             Bool hasTessEval = false;
@@ -1973,7 +2007,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return ShaderStage::Unknown;
         }
 
-        ProgramFactory::DescriptorBindingKind ReflectDescriptorTypeToBindingKind(SpvReflectDescriptorType descriptorType) {
+        ProgramFactory::DescriptorBindingKind ReflectDescriptorTypeToBindingKind(
+            SpvReflectDescriptorType descriptorType) {
             switch (descriptorType) {
             case SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
                 return ProgramFactory::DescriptorBindingKind::UniformBufferDynamic;
@@ -2008,8 +2043,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (name.empty()) {
                 name = std::format("__mg_unnamed_descriptor_set{}_binding{}_id{}", binding.set, binding.binding,
                                    binding.spirv_id);
-                MGLOG_W("ProgramFactory: descriptor has empty name; using generated name '%s' (type=%d)",
-                        name.c_str(), static_cast<Int>(binding.descriptor_type));
+                MGLOG_W("ProgramFactory: descriptor has empty name; using generated name '%s' (type=%d)", name.c_str(),
+                        static_cast<Int>(binding.descriptor_type));
             }
             if (kind == ProgramFactory::DescriptorBindingKind::CombinedImageSampler ||
                 kind == ProgramFactory::DescriptorBindingKind::UniformTexelBuffer ||
@@ -2048,9 +2083,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     continue;
                 }
 
-                const SpvReflectResult createResult =
-                    spvReflectCreateShaderModule(moduleSpv.size() * sizeof(Uint), moduleSpv.data(),
-                                                 &reflectModules[moduleIndex]);
+                const SpvReflectResult createResult = spvReflectCreateShaderModule(
+                    moduleSpv.size() * sizeof(Uint), moduleSpv.data(), &reflectModules[moduleIndex]);
                 MOBILEGL_ASSERT(createResult == SPV_REFLECT_RESULT_SUCCESS,
                                 "ProgramFactory: failed to create reflection module for stage %zu (result=%d)",
                                 moduleIndex, static_cast<Int>(createResult));
@@ -2075,10 +2109,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (bindingCount > 0) {
                     reflectResult = spvReflectEnumerateDescriptorBindings(&reflectModules[moduleIndex], &bindingCount,
                                                                           bindings.data());
-                    MOBILEGL_ASSERT(
-                        reflectResult == SPV_REFLECT_RESULT_SUCCESS,
-                        "ProgramFactory: failed to fetch descriptor bindings for stage %zu (result=%d)", moduleIndex,
-                        static_cast<Int>(reflectResult));
+                    MOBILEGL_ASSERT(reflectResult == SPV_REFLECT_RESULT_SUCCESS,
+                                    "ProgramFactory: failed to fetch descriptor bindings for stage %zu (result=%d)",
+                                    moduleIndex, static_cast<Int>(reflectResult));
                     if (reflectResult != SPV_REFLECT_RESULT_SUCCESS) {
                         destroyReflectModules();
                         return false;
@@ -2113,7 +2146,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // GetOrCreateProgram's MOBILEGL_ASSERT(remapOk) as the only complaint, and
                     // that assert compiles out above DEBUG - so a release build SILENTLY kept
                     // glslang's per-stage auto-mapped binding numbers, skipping the cross-stage
-                    // unification and the set->0 normalisation this function exists to do. A
+                    // unification and the set->0 normalization this function exists to do. A
                     // program with an image array plus any second descriptor got aliased
                     // bindings out of that, and a DEBUG build trapped on the same program.
                     // The refusal below is MGLOG_E and per-program-compile, so it reports every
@@ -2152,7 +2185,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                     if (binding->binding != assignedBinding || binding->set != 0) {
                         reflectResult = spvReflectChangeDescriptorBindingNumbers(&reflectModules[moduleIndex], binding,
-                                                                                assignedBinding, 0);
+                                                                                 assignedBinding, 0);
                         MOBILEGL_ASSERT(reflectResult == SPV_REFLECT_RESULT_SUCCESS,
                                         "ProgramFactory: failed to remap descriptor '%s' in stage %zu (result=%d)",
                                         key.name.c_str(), moduleIndex, static_cast<Int>(reflectResult));
@@ -2171,8 +2204,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                 const Uint32 codeSizeBytes = spvReflectGetCodeSize(&reflectModules[moduleIndex]);
                 MOBILEGL_ASSERT((codeSizeBytes % sizeof(Uint)) == 0,
-                                "ProgramFactory: reflected SPIR-V size is not word aligned for stage %zu",
-                                moduleIndex);
+                                "ProgramFactory: reflected SPIR-V size is not word aligned for stage %zu", moduleIndex);
                 const Uint32* code = spvReflectGetCode(&reflectModules[moduleIndex]);
                 MOBILEGL_ASSERT(code != nullptr, "ProgramFactory: reflected SPIR-V code pointer is null for stage %zu",
                                 moduleIndex);
@@ -2181,28 +2213,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             destroyReflectModules();
             return true;
-        }
-
-        TextureTarget ReflectImageTraitsToTextureTarget(const SpvReflectImageTraits& imageTraits) {
-            switch (imageTraits.dim) {
-            case SpvDim1D:
-                return imageTraits.arrayed != 0 ? TextureTarget::Texture1DArray : TextureTarget::Texture1D;
-            case SpvDim2D:
-                if (imageTraits.ms != 0) {
-                    return imageTraits.arrayed != 0 ? TextureTarget::Texture2DMultisampleArray
-                                                    : TextureTarget::Texture2DMultisample;
-                }
-                return imageTraits.arrayed != 0 ? TextureTarget::Texture2DArray : TextureTarget::Texture2D;
-            case SpvDim3D:
-                return TextureTarget::Texture3D;
-            case SpvDimCube:
-                return imageTraits.arrayed != 0 ? TextureTarget::TextureCubeMapArray : TextureTarget::TextureCubeMap;
-            case SpvDimBuffer:
-                return TextureTarget::TextureBuffer;
-            default:
-                MOBILEGL_ASSERT(false, "ProgramFactory: unsupported sampler image dim %d", imageTraits.dim);
-                return TextureTarget::Unknown;
-            }
         }
 
         Bool IsFloatStorageImageUniformType(GLenum uniformType) {
@@ -2223,7 +2233,83 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return false;
             }
         }
+
+        // ScreenModuleForDriver's memory. Keyed by content, never by program: the same bytes get
+        // the same answer whichever program, variant or session carries them.
+        struct DriverModuleVerdictCache {
+            struct Entry {
+                Uint64 wordCount = 0;
+                Bool valid = true;
+                String reason;
+            };
+            // Generous for any one application's distinct stage modules; past it the whole table
+            // is dropped rather than tracked per entry - a re-validation is the only cost.
+            static constexpr SizeT kMaxEntries = 8192;
+            std::mutex mutex;
+            UnorderedMap<Uint64, Entry> entries;
+            std::atomic<Uint64> validatorRuns{0};
+        };
+
+        DriverModuleVerdictCache& GetDriverModuleVerdictCache() {
+            // Leaked on purpose: screened from session threads that may outlive static destruction.
+            static auto* cache = new DriverModuleVerdictCache();
+            return *cache;
+        }
     } // namespace
+
+    ProgramFactory::DriverModuleVerdict ProgramFactory::ScreenModuleForDriver(const Vector<Uint>& spirv,
+                                                                              Bool allowInvalid, String* outReason) {
+        if (outReason != nullptr) outReason->clear();
+        if (spirv.empty()) return DriverModuleVerdict::Valid;
+
+        auto& cache = GetDriverModuleVerdictCache();
+        const Uint64 key = XXH64(spirv.data(), spirv.size() * sizeof(Uint), 0);
+        Bool valid = true;
+        String reason;
+        Bool known = false;
+        {
+            const std::lock_guard<std::mutex> lock(cache.mutex);
+            const auto it = cache.entries.find(key);
+            if (it != cache.entries.end() && it->second.wordCount == spirv.size()) {
+                known = true;
+                valid = it->second.valid;
+                reason = it->second.reason;
+            }
+        }
+        if (!known) {
+            // Outside the lock: two threads screening the same new module both validate, and
+            // agree; nothing waits on another session's spirv-val.
+            MG_Util::ShaderTranspiler::ShaderCompiler::PrepareSpirvValidation();
+            cache.validatorRuns.fetch_add(1, std::memory_order_relaxed);
+            spv_context context = spvContextCreate(GetSpirvTargetEnv(spirv));
+            spv_validator_options options = spvValidatorOptionsCreate();
+            spvValidatorOptionsSetFriendlyNames(options, true);
+            spv_const_binary_t binary = {spirv.data(), spirv.size()};
+            spv_diagnostic diagnostic = nullptr;
+            const spv_result_t result = spvValidateWithOptions(context, options, &binary, &diagnostic);
+            valid = result == SPV_SUCCESS;
+            if (!valid) {
+                reason = diagnostic != nullptr && diagnostic->error != nullptr ? diagnostic->error : "<no diagnostic>";
+                // The process-wide counter the validating test lanes assert on.
+                MG_Util::ShaderTranspiler::ShaderCompiler::NoteSpirvValidationFailure();
+            }
+            spvDiagnosticDestroy(diagnostic);
+            spvValidatorOptionsDestroy(options);
+            spvContextDestroy(context);
+
+            const std::lock_guard<std::mutex> lock(cache.mutex);
+            if (cache.entries.size() >= DriverModuleVerdictCache::kMaxEntries) cache.entries.clear();
+            cache.entries[key] = DriverModuleVerdictCache::Entry{spirv.size(), valid, reason};
+        }
+
+        if (valid) return DriverModuleVerdict::Valid;
+        if (outReason != nullptr) *outReason = Move(reason);
+        return allowInvalid ? DriverModuleVerdict::AdmittedInvalid : DriverModuleVerdict::DeclinedInvalid;
+    }
+
+    Uint64 ProgramFactory::DriverModuleValidatorRuns() {
+        return GetDriverModuleVerdictCache().validatorRuns.load(std::memory_order_relaxed);
+    }
 
     // A shader that assigns gl_FragDepth (SPIR-V DepthReplacing) supplies depth itself
     // instead of taking the pipeline's interpolated Z, so a driver that varies the vertex
@@ -2266,13 +2352,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool ProgramFactory::ReflectedDeclaresOutputBuiltin(const SpvReflectShaderModule& reflectModule,
-                                                       SpvBuiltIn builtin) {
+                                                        SpvBuiltIn builtin) {
         for (Uint32 entryIndex = 0; entryIndex < reflectModule.entry_point_count; ++entryIndex) {
             const SpvReflectEntryPoint& entryPoint = reflectModule.entry_points[entryIndex];
             for (Uint32 variableIndex = 0; variableIndex < entryPoint.output_variable_count; ++variableIndex) {
                 const SpvReflectInterfaceVariable* variable = entryPoint.output_variables[variableIndex];
-                if (variable != nullptr &&
-                    (variable->decoration_flags & SPV_REFLECT_DECORATION_BUILT_IN) != 0 &&
+                if (variable != nullptr && (variable->decoration_flags & SPV_REFLECT_DECORATION_BUILT_IN) != 0 &&
                     variable->built_in == builtin) {
                     return true;
                 }
@@ -2287,8 +2372,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const SpvReflectEntryPoint& entryPoint = reflectModule.entry_points[entryIndex];
             for (Uint32 variableIndex = 0; variableIndex < entryPoint.input_variable_count; ++variableIndex) {
                 const SpvReflectInterfaceVariable* variable = entryPoint.input_variables[variableIndex];
-                if (variable != nullptr &&
-                    (variable->decoration_flags & SPV_REFLECT_DECORATION_BUILT_IN) != 0 &&
+                if (variable != nullptr && (variable->decoration_flags & SPV_REFLECT_DECORATION_BUILT_IN) != 0 &&
                     variable->built_in == builtin) {
                     return true;
                 }
@@ -2318,17 +2402,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     VkFormat ProgramFactory::ConvertSpirvImageFormatToVkFormat(SpvImageFormat format) {
         switch (format) {
-        case SpvImageFormatUnknown: return VK_FORMAT_UNDEFINED;
-        case SpvImageFormatRgba32f: return VK_FORMAT_R32G32B32A32_SFLOAT;
-        case SpvImageFormatRgba16f: return VK_FORMAT_R16G16B16A16_SFLOAT;
-        case SpvImageFormatR32f: return VK_FORMAT_R32_SFLOAT;
-        case SpvImageFormatRgba8: return VK_FORMAT_R8G8B8A8_UNORM;
-        case SpvImageFormatRgba8Snorm: return VK_FORMAT_R8G8B8A8_SNORM;
-        case SpvImageFormatRg32f: return VK_FORMAT_R32G32_SFLOAT;
-        case SpvImageFormatRg16f: return VK_FORMAT_R16G16_SFLOAT;
-        case SpvImageFormatR11fG11fB10f: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
-        case SpvImageFormatR16f: return VK_FORMAT_R16_SFLOAT;
-        case SpvImageFormatRgba16: return VK_FORMAT_R16G16B16A16_UNORM;
+        case SpvImageFormatUnknown:
+            return VK_FORMAT_UNDEFINED;
+        case SpvImageFormatRgba32f:
+            return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case SpvImageFormatRgba16f:
+            return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case SpvImageFormatR32f:
+            return VK_FORMAT_R32_SFLOAT;
+        case SpvImageFormatRgba8:
+            return VK_FORMAT_R8G8B8A8_UNORM;
+        case SpvImageFormatRgba8Snorm:
+            return VK_FORMAT_R8G8B8A8_SNORM;
+        case SpvImageFormatRg32f:
+            return VK_FORMAT_R32G32_SFLOAT;
+        case SpvImageFormatRg16f:
+            return VK_FORMAT_R16G16_SFLOAT;
+        case SpvImageFormatR11fG11fB10f:
+            return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+        case SpvImageFormatR16f:
+            return VK_FORMAT_R16_SFLOAT;
+        case SpvImageFormatRgba16:
+            return VK_FORMAT_R16G16B16A16_UNORM;
         // A2**B**10G10R10, matching MGToVk::ConvertTextureInternalFormatToVkFormat's RGB10A2.
         // This value becomes the storage image VIEW's format while the image itself was created
         // from the texture's internal format, so the two must name the same bit layout or the
@@ -2337,38 +2432,70 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // 20-29 and A in 30-31, which is Vulkan's A2B10G10R10; A2R10G10B10 transposes R and B.
         // KHR-GL43.shader_image_load_store.basic-allFormats-store read back [2,1,0,3] for an
         // rgb10_a2ui image stored as [0,1,2,3] while these two converters disagreed.
-        case SpvImageFormatRgb10A2: return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
-        case SpvImageFormatRg16: return VK_FORMAT_R16G16_UNORM;
-        case SpvImageFormatRg8: return VK_FORMAT_R8G8_UNORM;
-        case SpvImageFormatR16: return VK_FORMAT_R16_UNORM;
-        case SpvImageFormatR8: return VK_FORMAT_R8_UNORM;
-        case SpvImageFormatRgba16Snorm: return VK_FORMAT_R16G16B16A16_SNORM;
-        case SpvImageFormatRg16Snorm: return VK_FORMAT_R16G16_SNORM;
-        case SpvImageFormatRg8Snorm: return VK_FORMAT_R8G8_SNORM;
-        case SpvImageFormatR16Snorm: return VK_FORMAT_R16_SNORM;
-        case SpvImageFormatR8Snorm: return VK_FORMAT_R8_SNORM;
-        case SpvImageFormatRgba32i: return VK_FORMAT_R32G32B32A32_SINT;
-        case SpvImageFormatRgba16i: return VK_FORMAT_R16G16B16A16_SINT;
-        case SpvImageFormatRgba8i: return VK_FORMAT_R8G8B8A8_SINT;
-        case SpvImageFormatR32i: return VK_FORMAT_R32_SINT;
-        case SpvImageFormatRg32i: return VK_FORMAT_R32G32_SINT;
-        case SpvImageFormatRg16i: return VK_FORMAT_R16G16_SINT;
-        case SpvImageFormatRg8i: return VK_FORMAT_R8G8_SINT;
-        case SpvImageFormatR16i: return VK_FORMAT_R16_SINT;
-        case SpvImageFormatR8i: return VK_FORMAT_R8_SINT;
-        case SpvImageFormatRgba32ui: return VK_FORMAT_R32G32B32A32_UINT;
-        case SpvImageFormatRgba16ui: return VK_FORMAT_R16G16B16A16_UINT;
-        case SpvImageFormatRgba8ui: return VK_FORMAT_R8G8B8A8_UINT;
-        case SpvImageFormatR32ui: return VK_FORMAT_R32_UINT;
-        case SpvImageFormatRgb10a2ui: return VK_FORMAT_A2B10G10R10_UINT_PACK32; // see Rgb10A2 above
-        case SpvImageFormatRg32ui: return VK_FORMAT_R32G32_UINT;
-        case SpvImageFormatRg16ui: return VK_FORMAT_R16G16_UINT;
-        case SpvImageFormatRg8ui: return VK_FORMAT_R8G8_UINT;
-        case SpvImageFormatR16ui: return VK_FORMAT_R16_UINT;
-        case SpvImageFormatR8ui: return VK_FORMAT_R8_UINT;
-        case SpvImageFormatR64ui: return VK_FORMAT_R64_UINT;
-        case SpvImageFormatR64i: return VK_FORMAT_R64_SINT;
-        case SpvImageFormatMax: return VK_FORMAT_UNDEFINED;
+        case SpvImageFormatRgb10A2:
+            return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+        case SpvImageFormatRg16:
+            return VK_FORMAT_R16G16_UNORM;
+        case SpvImageFormatRg8:
+            return VK_FORMAT_R8G8_UNORM;
+        case SpvImageFormatR16:
+            return VK_FORMAT_R16_UNORM;
+        case SpvImageFormatR8:
+            return VK_FORMAT_R8_UNORM;
+        case SpvImageFormatRgba16Snorm:
+            return VK_FORMAT_R16G16B16A16_SNORM;
+        case SpvImageFormatRg16Snorm:
+            return VK_FORMAT_R16G16_SNORM;
+        case SpvImageFormatRg8Snorm:
+            return VK_FORMAT_R8G8_SNORM;
+        case SpvImageFormatR16Snorm:
+            return VK_FORMAT_R16_SNORM;
+        case SpvImageFormatR8Snorm:
+            return VK_FORMAT_R8_SNORM;
+        case SpvImageFormatRgba32i:
+            return VK_FORMAT_R32G32B32A32_SINT;
+        case SpvImageFormatRgba16i:
+            return VK_FORMAT_R16G16B16A16_SINT;
+        case SpvImageFormatRgba8i:
+            return VK_FORMAT_R8G8B8A8_SINT;
+        case SpvImageFormatR32i:
+            return VK_FORMAT_R32_SINT;
+        case SpvImageFormatRg32i:
+            return VK_FORMAT_R32G32_SINT;
+        case SpvImageFormatRg16i:
+            return VK_FORMAT_R16G16_SINT;
+        case SpvImageFormatRg8i:
+            return VK_FORMAT_R8G8_SINT;
+        case SpvImageFormatR16i:
+            return VK_FORMAT_R16_SINT;
+        case SpvImageFormatR8i:
+            return VK_FORMAT_R8_SINT;
+        case SpvImageFormatRgba32ui:
+            return VK_FORMAT_R32G32B32A32_UINT;
+        case SpvImageFormatRgba16ui:
+            return VK_FORMAT_R16G16B16A16_UINT;
+        case SpvImageFormatRgba8ui:
+            return VK_FORMAT_R8G8B8A8_UINT;
+        case SpvImageFormatR32ui:
+            return VK_FORMAT_R32_UINT;
+        case SpvImageFormatRgb10a2ui:
+            return VK_FORMAT_A2B10G10R10_UINT_PACK32; // see Rgb10A2 above
+        case SpvImageFormatRg32ui:
+            return VK_FORMAT_R32G32_UINT;
+        case SpvImageFormatRg16ui:
+            return VK_FORMAT_R16G16_UINT;
+        case SpvImageFormatRg8ui:
+            return VK_FORMAT_R8G8_UINT;
+        case SpvImageFormatR16ui:
+            return VK_FORMAT_R16_UINT;
+        case SpvImageFormatR8ui:
+            return VK_FORMAT_R8_UINT;
+        case SpvImageFormatR64ui:
+            return VK_FORMAT_R64_UINT;
+        case SpvImageFormatR64i:
+            return VK_FORMAT_R64_SINT;
+        case SpvImageFormatMax:
+            return VK_FORMAT_UNDEFINED;
         }
         return VK_FORMAT_UNDEFINED;
     }
@@ -2401,6 +2528,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return SamplerNumericDomain::UnsignedInteger;
         case GL_SAMPLER_1D:
         case GL_SAMPLER_2D:
+        case GL_SAMPLER_EXTERNAL_OES:
         case GL_SAMPLER_3D:
         case GL_SAMPLER_CUBE:
         case GL_SAMPLER_2D_RECT:
@@ -2466,28 +2594,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    ProgramFactory::HashType ProgramFactory::ComputeHash(const MG_State::GLState::ProgramObject& program,
+    ProgramFactory::HashType ProgramFactory::ComputeHash(const MagmaProgramSource& program,
                                                          CompileOptionFlags flags) const {
-        XXHASH_VERIFY(XXH64_reset(m_hashState, m_config.CacheVersion));
+        // P15: one read of the thread_local per hash (emulated TLS: every read is a call).
+        XXH64_state_t* const hashState = m_hashState;
+        XXHASH_VERIFY(XXH64_reset(hashState, m_config.CacheVersion));
         // We expect shader stages in program object are sorted
         const auto& spirvs = program.GetGeneratedSpirv();
         for (const auto& spv : spirvs) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, spv.data(), spv.size() * sizeof(Uint)));
+            XXHASH_VERIFY(XXH64_update(hashState, spv.data(), spv.size() * sizeof(Uint)));
         }
-        XXHASH_VERIFY(XXH64_update(m_hashState, &flags, sizeof(CompileOptionFlags)));
+        XXHASH_VERIFY(XXH64_update(hashState, &flags, sizeof(CompileOptionFlags)));
         // Only FragCoordYFlip variants bake the height in, so mixing it unconditionally would
         // re-key every program in the cache on a resize for no reason.
         if (flags & CompileOptionBit::FragCoordYFlip) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, &m_defaultFramebufferHeight,
-                                        sizeof(m_defaultFramebufferHeight)));
+            XXHASH_VERIFY(XXH64_update(hashState, &m_defaultFramebufferHeight, sizeof(m_defaultFramebufferHeight)));
         }
 
         // Include UBO block bindings in hash so different binding configurations produce different entries
         const Uint32 blockCount = static_cast<Uint32>(program.GetActiveUniformBlocksCount());
-        XXHASH_VERIFY(XXH64_update(m_hashState, &blockCount, sizeof(blockCount)));
+        XXHASH_VERIFY(XXH64_update(hashState, &blockCount, sizeof(blockCount)));
         for (Uint32 i = 0; i < blockCount; ++i) {
             const Uint32 binding = program.GetUniformBlockBinding(i);
-            XXHASH_VERIFY(XXH64_update(m_hashState, &binding, sizeof(binding)));
+            XXHASH_VERIFY(XXH64_update(hashState, &binding, sizeof(binding)));
         }
 
         // The transform feedback capture layout is baked into the modules by
@@ -2498,18 +2627,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // hashed for a capturing compile, so nothing else changes key.
         if (flags & CompileOptionBit::XfbCapture) {
             for (const auto& varying : program.GetTransformFeedbackVaryings()) {
-                XXHASH_VERIFY(XXH64_update(m_hashState, varying.name.data(), varying.name.size()));
-                XXHASH_VERIFY(XXH64_update(m_hashState, &varying.bufferIndex, sizeof(varying.bufferIndex)));
-                XXHASH_VERIFY(XXH64_update(m_hashState, &varying.offsetBytes, sizeof(varying.offsetBytes)));
+                XXHASH_VERIFY(XXH64_update(hashState, varying.name.data(), varying.name.size()));
+                XXHASH_VERIFY(XXH64_update(hashState, &varying.bufferIndex, sizeof(varying.bufferIndex)));
+                XXHASH_VERIFY(XXH64_update(hashState, &varying.offsetBytes, sizeof(varying.offsetBytes)));
             }
             const SizeT bufferCount = program.GetTransformFeedbackBufferCount();
             for (SizeT i = 0; i < bufferCount; ++i) {
                 const Uint32 stride = program.GetTransformFeedbackStride(static_cast<Uint32>(i));
-                XXHASH_VERIFY(XXH64_update(m_hashState, &stride, sizeof(stride)));
+                XXHASH_VERIFY(XXH64_update(hashState, &stride, sizeof(stride)));
             }
         }
 
-        HashType hash = XXH64_digest(m_hashState);
+        HashType hash = XXH64_digest(hashState);
         return hash;
     }
 
@@ -2591,6 +2720,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case GL_UNSIGNED_INT_IMAGE_CUBE_MAP_ARRAY:
             return TextureTarget::TextureCubeMapArray;
         case GL_SAMPLER_2D:
+        case GL_SAMPLER_EXTERNAL_OES: // a 2D texture below the frontend
         case GL_SAMPLER_2D_SHADOW:
         case GL_INT_SAMPLER_2D:
         case GL_UNSIGNED_INT_SAMPLER_2D:
@@ -2602,11 +2732,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    void ProgramFactory::ReflectVertexInputs(const Vector<ShaderStage>& stages,
-                                             const Vector<Vector<Uint>>& spirv,
+    void ProgramFactory::ReflectVertexInputs(const Vector<ShaderStage>& stages, const Vector<Vector<Uint>>& spirv,
                                              VkProgramObject& entry) const {
         entry.activeVertexInputLocationMask = 0;
         entry.vertexInputTypes.fill(0);
+        entry.integerVertexInputs = {};
         entry.readsBaseVertexBuiltin = false;
 
         for (SizeT moduleIndex = 0; moduleIndex < stages.size() && moduleIndex < spirv.size(); ++moduleIndex) {
@@ -2660,10 +2790,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
 
                     const GLenum locationType = GetReflectInterfaceLocationType(*input);
-                    MOBILEGL_ASSERT(locationType != GL_FALSE,
-                                    "ProgramFactory::ReflectVertexInputs: unsupported vertex input type at location=%u name='%s'",
-                                    input->location,
-                                    input->name ? input->name : "<null>");
+                    MOBILEGL_ASSERT(
+                        locationType != GL_FALSE,
+                        "ProgramFactory::ReflectVertexInputs: unsupported vertex input type at location=%u name='%s'",
+                        input->location, input->name ? input->name : "<null>");
                     const Uint32 locationSpan = GetReflectInterfaceLocationSpan(*input);
                     for (Uint32 locationOffset = 0; locationOffset < locationSpan; ++locationOffset) {
                         const Uint32 expandedLocation = input->location + locationOffset;
@@ -2673,6 +2803,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                         entry.activeVertexInputLocationMask |= (1u << expandedLocation);
                         entry.vertexInputTypes[expandedLocation] = locationType;
+                        entry.integerVertexInputs.Note(expandedLocation, locationType);
                     }
                 }
             }
@@ -2687,8 +2818,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // evaluation stages. Rather than guess which one is last, every non-fragment, non-compute
     // module is asked - one writer anywhere means this program's draws need a multi-viewport
     // pipeline, and a false positive costs only a wider viewportCount.
-    void ProgramFactory::ReflectViewportIndexUsage(const Vector<ShaderStage>& stages,
-                                                   const Vector<Vector<Uint>>& spirv,
+    void ProgramFactory::ReflectViewportIndexUsage(const Vector<ShaderStage>& stages, const Vector<Vector<Uint>>& spirv,
                                                    VkProgramObject& entry) const {
         entry.writesViewportIndexBuiltin = false;
 
@@ -2721,8 +2851,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    void ProgramFactory::ReflectFragmentOutputs(const Vector<ShaderStage>& stages,
-                                                const Vector<Vector<Uint>>& spirv,
+    void ProgramFactory::ReflectFragmentOutputs(const Vector<ShaderStage>& stages, const Vector<Vector<Uint>>& spirv,
                                                 VkProgramObject& entry) const {
         entry.activeFragmentOutputLocationMask = 0;
         entry.fragmentOutputTypes.fill(0);
@@ -2775,9 +2904,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                     const GLenum locationType = GetReflectInterfaceLocationType(*output);
                     MOBILEGL_ASSERT(locationType != GL_FALSE,
-                                    "ProgramFactory::ReflectFragmentOutputs: unsupported fragment output type at location=%u name='%s'",
-                                    output->location,
-                                    output->name ? output->name : "<null>");
+                                    "ProgramFactory::ReflectFragmentOutputs: unsupported fragment output type at "
+                                    "location=%u name='%s'",
+                                    output->location, output->name ? output->name : "<null>");
                     const Uint32 locationSpan = GetReflectInterfaceLocationSpan(*output);
                     for (Uint32 locationOffset = 0; locationOffset < locationSpan; ++locationOffset) {
                         const Uint32 expandedLocation = output->location + locationOffset;
@@ -2832,10 +2961,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // key and every element of an array of arrays seeds texture unit 0. Resolving those elements
     // would then paint silently-wrong pixels with no diagnostic at all - strictly worse than
     // declining. The decline goes away together with the seeding fix, not before it.
-    static Uint32 DescriptorCountForOpaqueUniformArray(const MG_State::GLState::ProgramObject& program,
-                                                       const String& uniformName, Uint32 binding, Int baseLocation,
-                                                       Uint32 reflectedCount, Uint32 maxBindings,
-                                                       const char* kindLabel, Bool& outDeclined) {
+    static Uint32 DescriptorCountForOpaqueUniformArray(const MagmaProgramSource& program, const String& uniformName,
+                                                       Uint32 binding, Int baseLocation, Uint32 reflectedCount,
+                                                       Uint32 maxBindings, const char* kindLabel, Bool& outDeclined) {
         const Uint32 count = std::max<Uint32>(1u, reflectedCount);
         if (count == 1) {
             return 1u;
@@ -2861,15 +2989,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_D("ProgramFactory::ReflectLayout: %s array '%s' at binding %u spans %u descriptors but the "
                     "reflection reserved fewer uniform locations for it (base=%d) - a multi-dimensional array "
                     "is the usual cause, and MobileGL declines it rather than resolve elements onto a "
-                    "neighbouring uniform",
+                    "neighboring uniform",
                     kindLabel, uniformName.c_str(), binding, count, baseLocation);
             outDeclined = true;
         }
         return count;
     }
 
-    void ProgramFactory::ReflectLayout(const MG_State::GLState::ProgramObject& program,
-                                       const Vector<Vector<Uint>>& spirv, VkProgramObject& entry) const {
+    void ProgramFactory::ReflectLayout(const MagmaProgramSource& program, const Vector<Vector<Uint>>& spirv,
+                                       VkProgramObject& entry) const {
         // Initialize layout vectors
         entry.bindingKinds.assign(m_maxBindings, DescriptorBindingKind::None);
         entry.uniformBlockIndexByBinding.assign(m_maxBindings, -1);
@@ -2909,8 +3037,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         SPV_REFLECT_RESULT_SUCCESS &&
                     countProbe > 0) {
                     Vector<SpvReflectDescriptorBinding*> probeBindings(countProbe);
-                    if (spvReflectEnumerateDescriptorBindings(&reflectModule, &countProbe,
-                                                              probeBindings.data()) ==
+                    if (spvReflectEnumerateDescriptorBindings(&reflectModule, &countProbe, probeBindings.data()) ==
                         SPV_REFLECT_RESULT_SUCCESS) {
                         for (const auto* probeBinding : probeBindings) {
                             if (probeBinding != nullptr) {
@@ -2932,24 +3059,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                 // Check for global UBO
                 if (std::strstr(ubo.name.c_str(), MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME) != nullptr) {
-                    MOBILEGL_ASSERT(entry.bindingKinds[binding] == DescriptorBindingKind::None ||
-                                        entry.bindingKinds[binding] == DescriptorBindingKind::UniformBufferDynamic,
-                                    "ProgramFactory::ReflectLayout: descriptor binding %u has conflicting kinds for UBO '%s'",
-                                    binding, ubo.name.c_str());
+                    MOBILEGL_ASSERT(
+                        entry.bindingKinds[binding] == DescriptorBindingKind::None ||
+                            entry.bindingKinds[binding] == DescriptorBindingKind::UniformBufferDynamic,
+                        "ProgramFactory::ReflectLayout: descriptor binding %u has conflicting kinds for UBO '%s'",
+                        binding, ubo.name.c_str());
                     entry.bindingKinds[binding] = DescriptorBindingKind::UniformBufferDynamic;
                     MOBILEGL_ASSERT(entry.globalUboBinding < 0 || entry.globalUboBinding == static_cast<Int>(binding),
                                     "ProgramFactory::ReflectLayout: global UBO binding mismatch (%d vs %u)",
                                     entry.globalUboBinding, binding);
-                    MOBILEGL_ASSERT(entry.uniformBlockIndexByBinding[binding] < 0,
-                                    "ProgramFactory::ReflectLayout: global UBO shares binding %u with regular UBO index %d",
-                                    binding, entry.uniformBlockIndexByBinding[binding]);
+                    MOBILEGL_ASSERT(
+                        entry.uniformBlockIndexByBinding[binding] < 0,
+                        "ProgramFactory::ReflectLayout: global UBO shares binding %u with regular UBO index %d",
+                        binding, entry.uniformBlockIndexByBinding[binding]);
                     entry.globalUboBinding = static_cast<Int>(binding);
                     continue;
                 }
 
                 const auto countIt = descriptorCountByBinding.find(binding);
-                const Uint32 descriptorCount =
-                    countIt != descriptorCountByBinding.end() ? countIt->second : 1u;
+                const Uint32 descriptorCount = countIt != descriptorCountByBinding.end() ? countIt->second : 1u;
 
                 if (descriptorCount <= 1) {
                     const Uint blockIndex = program.GetUniformBlockIndex(ubo.name.c_str());
@@ -2959,17 +3087,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         continue;
                     }
 
-                    MOBILEGL_ASSERT(entry.bindingKinds[binding] == DescriptorBindingKind::None ||
-                                        entry.bindingKinds[binding] == DescriptorBindingKind::UniformBufferDynamic,
-                                    "ProgramFactory::ReflectLayout: descriptor binding %u has conflicting kinds for UBO '%s'",
-                                    binding, ubo.name.c_str());
+                    MOBILEGL_ASSERT(
+                        entry.bindingKinds[binding] == DescriptorBindingKind::None ||
+                            entry.bindingKinds[binding] == DescriptorBindingKind::UniformBufferDynamic,
+                        "ProgramFactory::ReflectLayout: descriptor binding %u has conflicting kinds for UBO '%s'",
+                        binding, ubo.name.c_str());
                     entry.bindingKinds[binding] = DescriptorBindingKind::UniformBufferDynamic;
-                    MOBILEGL_ASSERT(entry.globalUboBinding != static_cast<Int>(binding),
-                                    "ProgramFactory::ReflectLayout: regular UBO '%s' collides with global UBO binding %u",
-                                    ubo.name.c_str(), binding);
+                    MOBILEGL_ASSERT(
+                        entry.globalUboBinding != static_cast<Int>(binding),
+                        "ProgramFactory::ReflectLayout: regular UBO '%s' collides with global UBO binding %u",
+                        ubo.name.c_str(), binding);
                     MOBILEGL_ASSERT(entry.uniformBlockIndexByBinding[binding] < 0 ||
                                         entry.uniformBlockIndexByBinding[binding] == static_cast<Int>(blockIndex),
-                                    "ProgramFactory::ReflectLayout: descriptor binding %u maps to conflicting UBO blocks (%d vs %u)",
+                                    "ProgramFactory::ReflectLayout: descriptor binding %u maps to conflicting UBO "
+                                    "blocks (%d vs %u)",
                                     binding, entry.uniformBlockIndexByBinding[binding], blockIndex);
                     entry.uniformBlockIndexByBinding[binding] = static_cast<Int>(blockIndex);
                     continue;
@@ -3014,10 +3145,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     continue;
                 }
 
-                MOBILEGL_ASSERT(entry.bindingKinds[binding] == DescriptorBindingKind::None ||
-                                    entry.bindingKinds[binding] == DescriptorBindingKind::UniformBufferDynamic,
-                                "ProgramFactory::ReflectLayout: descriptor binding %u has conflicting kinds for UBO '%s'",
-                                binding, ubo.name.c_str());
+                MOBILEGL_ASSERT(
+                    entry.bindingKinds[binding] == DescriptorBindingKind::None ||
+                        entry.bindingKinds[binding] == DescriptorBindingKind::UniformBufferDynamic,
+                    "ProgramFactory::ReflectLayout: descriptor binding %u has conflicting kinds for UBO '%s'", binding,
+                    ubo.name.c_str());
                 entry.bindingKinds[binding] = DescriptorBindingKind::UniformBufferDynamic;
                 entry.bindingDescriptorCounts[binding] = static_cast<Uint16>(descriptorCount);
                 entry.uniformBlockIndexByBinding[binding] = elementBlockIndices[0];
@@ -3036,10 +3168,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (reflectedBindingCount > 0) {
                 reflectResult = spvReflectEnumerateDescriptorBindings(&reflectModule, &reflectedBindingCount,
                                                                       reflectedBindings.data());
-                MOBILEGL_ASSERT(
-                    reflectResult == SPV_REFLECT_RESULT_SUCCESS,
-                    "ProgramFactory::ReflectLayout: failed to fetch descriptor bindings (result=%d)",
-                    static_cast<Int>(reflectResult));
+                MOBILEGL_ASSERT(reflectResult == SPV_REFLECT_RESULT_SUCCESS,
+                                "ProgramFactory::ReflectLayout: failed to fetch descriptor bindings (result=%d)",
+                                static_cast<Int>(reflectResult));
             }
 
             for (const auto* sampler : reflectedBindings) {
@@ -3061,14 +3192,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                 "ProgramFactory::ReflectLayout: sampler binding %u exceeds maxBindings=%u for '%s'",
                                 binding, m_maxBindings, uniformName.c_str());
 
-                MOBILEGL_ASSERT(entry.bindingKinds[binding] == DescriptorBindingKind::None ||
-                                    entry.bindingKinds[binding] == descriptorKind,
-                                "ProgramFactory::ReflectLayout: descriptor binding %u has conflicting kinds for resource '%s'",
-                                binding, uniformName.c_str());
+                MOBILEGL_ASSERT(
+                    entry.bindingKinds[binding] == DescriptorBindingKind::None ||
+                        entry.bindingKinds[binding] == descriptorKind,
+                    "ProgramFactory::ReflectLayout: descriptor binding %u has conflicting kinds for resource '%s'",
+                    binding, uniformName.c_str());
                 entry.bindingKinds[binding] = descriptorKind;
 
                 if (descriptorKind == DescriptorBindingKind::StorageBuffer) {
-                    const GLuint blockIndex = GetShaderStorageBlockIndex(program, uniformName);
+                    const GLuint blockIndex = program.GetShaderStorageBlockIndex(uniformName);
                     if (blockIndex == GL_INVALID_INDEX) {
                         MGLOG_D("ProgramFactory::ReflectLayout: skipping inactive SSBO '%s' at binding %u",
                                 uniformName.c_str(), binding);
@@ -3154,11 +3286,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                              m_maxBindings, "image", entry.declinedDescriptors);
                     entry.bindingDescriptorCounts[binding] = static_cast<Uint16>(imageArrayCount);
 
-                    const VkFormat reflectedFormat =
-                        ConvertSpirvImageFormatToVkFormat(sampler->image.image_format);
+                    const VkFormat reflectedFormat = ConvertSpirvImageFormatToVkFormat(sampler->image.image_format);
                     VkFormat& existingFormat = entry.storageImageFormatByBinding[binding];
-                    MOBILEGL_ASSERT(existingFormat == VK_FORMAT_UNDEFINED ||
-                                        reflectedFormat == VK_FORMAT_UNDEFINED ||
+                    MOBILEGL_ASSERT(existingFormat == VK_FORMAT_UNDEFINED || reflectedFormat == VK_FORMAT_UNDEFINED ||
                                         existingFormat == reflectedFormat,
                                     "ProgramFactory::ReflectLayout: storage image binding %u ('%s') has "
                                     "conflicting reflected formats (%d vs %d)",
@@ -3167,8 +3297,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     if (existingFormat == VK_FORMAT_UNDEFINED) {
                         existingFormat = reflectedFormat;
                     }
-                    if (m_unformattedFloatStorageImagesEnabled &&
-                        existingFormat == VK_FORMAT_UNDEFINED &&
+                    if (m_unformattedFloatStorageImagesEnabled && existingFormat == VK_FORMAT_UNDEFINED &&
                         IsFloatStorageImageUniformType(uniformType)) {
                         entry.storageImageUsesBindingFormatByBinding[binding] = true;
                     } else if (reflectedFormat != VK_FORMAT_UNDEFINED) {
@@ -3187,11 +3316,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // exactly as a samplerBuffer array is, so bindingDescriptorCounts stays at the
                     // default 1 and the descriptor write below may take the address of a vector
                     // element without reserving room for extra elements.
-                    const VkFormat reflectedFormat =
-                        ConvertSpirvImageFormatToVkFormat(sampler->image.image_format);
+                    const VkFormat reflectedFormat = ConvertSpirvImageFormatToVkFormat(sampler->image.image_format);
                     VkFormat& existingFormat = entry.storageImageFormatByBinding[binding];
-                    MOBILEGL_ASSERT(existingFormat == VK_FORMAT_UNDEFINED ||
-                                        reflectedFormat == VK_FORMAT_UNDEFINED ||
+                    MOBILEGL_ASSERT(existingFormat == VK_FORMAT_UNDEFINED || reflectedFormat == VK_FORMAT_UNDEFINED ||
                                         existingFormat == reflectedFormat,
                                     "ProgramFactory::ReflectLayout: storage texel buffer binding %u ('%s') "
                                     "has conflicting reflected formats (%d vs %d)",
@@ -3226,8 +3353,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                     "ProgramFactory::ReflectLayout: failed to resolve sampler numeric domain "
                                     "for '%s' (uniformType=0x%x)",
                                     uniformName.c_str(), uniformType);
-                    MOBILEGL_ASSERT(entry.samplerNumericDomainByBinding[binding] ==
-                                            SamplerNumericDomain::Unknown ||
+                    MOBILEGL_ASSERT(entry.samplerNumericDomainByBinding[binding] == SamplerNumericDomain::Unknown ||
                                         entry.samplerNumericDomainByBinding[binding] == numericDomain,
                                     "ProgramFactory::ReflectLayout: sampler binding %u ('%s') has conflicting "
                                     "numeric domains (%d vs %d)",
@@ -3254,8 +3380,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                     "ProgramFactory::ReflectLayout: failed to resolve numeric domain for '%s' "
                                     "(uniformType=0x%x)",
                                     uniformName.c_str(), uniformType);
-                    MOBILEGL_ASSERT(entry.samplerNumericDomainByBinding[binding] ==
-                                            SamplerNumericDomain::Unknown ||
+                    MOBILEGL_ASSERT(entry.samplerNumericDomainByBinding[binding] == SamplerNumericDomain::Unknown ||
                                         entry.samplerNumericDomainByBinding[binding] == opaqueDomain,
                                     "ProgramFactory::ReflectLayout: binding %u ('%s') has conflicting numeric "
                                     "domains (%d vs %d)",
@@ -3266,17 +3391,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
                 MOBILEGL_ASSERT(entry.samplerUniformLocationByBinding[binding] < 0 || location < 0 ||
                                     entry.samplerUniformLocationByBinding[binding] == location,
-                                "ProgramFactory::ReflectLayout: texture binding %u maps to conflicting uniform locations (%d vs %d)",
+                                "ProgramFactory::ReflectLayout: texture binding %u maps to conflicting uniform "
+                                "locations (%d vs %d)",
                                 binding, entry.samplerUniformLocationByBinding[binding], location);
-                MOBILEGL_ASSERT(entry.samplerUniformLocationByBinding[binding] < 0 ||
-                                    entry.samplerTextureTargetByBinding[binding] == target,
-                                "ProgramFactory::ReflectLayout: texture binding %u maps to conflicting texture targets (%d vs %d)",
-                                binding, static_cast<Int>(entry.samplerTextureTargetByBinding[binding]),
-                                static_cast<Int>(target));
-                MOBILEGL_ASSERT(entry.samplerNameByBinding[binding].empty() ||
-                                    entry.samplerNameByBinding[binding] == uniformName,
-                                "ProgramFactory::ReflectLayout: texture binding %u maps to conflicting names ('%s' vs '%s')",
-                                binding, entry.samplerNameByBinding[binding].c_str(), uniformName.c_str());
+                MOBILEGL_ASSERT(
+                    entry.samplerUniformLocationByBinding[binding] < 0 ||
+                        entry.samplerTextureTargetByBinding[binding] == target,
+                    "ProgramFactory::ReflectLayout: texture binding %u maps to conflicting texture targets (%d vs %d)",
+                    binding, static_cast<Int>(entry.samplerTextureTargetByBinding[binding]), static_cast<Int>(target));
+                MOBILEGL_ASSERT(
+                    entry.samplerNameByBinding[binding].empty() || entry.samplerNameByBinding[binding] == uniformName,
+                    "ProgramFactory::ReflectLayout: texture binding %u maps to conflicting names ('%s' vs '%s')",
+                    binding, entry.samplerNameByBinding[binding].c_str(), uniformName.c_str());
 
                 if (location >= 0) {
                     entry.samplerUniformLocationByBinding[binding] = location;
@@ -3335,38 +3461,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (Uint32 binding = 0; binding < m_maxBindings; ++binding) {
             const Uint32 count = entry.bindingDescriptorCounts[binding];
             switch (entry.bindingKinds[binding]) {
-                case DescriptorBindingKind::UniformBufferDynamic:
-                    updateAfterBindUniformBuffers += count;
-                    break;
-                case DescriptorBindingKind::CombinedImageSampler:
-                    updateAfterBindSamplers += count;
-                    updateAfterBindSampledImages += count;
-                    break;
-                case DescriptorBindingKind::UniformTexelBuffer:
-                    updateAfterBindSampledImages += count;
-                    break;
-                case DescriptorBindingKind::StorageBuffer:
-                case DescriptorBindingKind::StorageTexelBuffer:
-                    updateAfterBindStorageBuffers += count;
-                    break;
-                case DescriptorBindingKind::StorageImage:
-                    updateAfterBindStorageImages += count;
-                    break;
-                case DescriptorBindingKind::None:
-                    break;
+            case DescriptorBindingKind::UniformBufferDynamic:
+                updateAfterBindUniformBuffers += count;
+                break;
+            case DescriptorBindingKind::CombinedImageSampler:
+                updateAfterBindSamplers += count;
+                updateAfterBindSampledImages += count;
+                break;
+            case DescriptorBindingKind::UniformTexelBuffer:
+                updateAfterBindSampledImages += count;
+                break;
+            case DescriptorBindingKind::StorageBuffer:
+            case DescriptorBindingKind::StorageTexelBuffer:
+                updateAfterBindStorageBuffers += count;
+                break;
+            case DescriptorBindingKind::StorageImage:
+                updateAfterBindStorageImages += count;
+                break;
+            case DescriptorBindingKind::None:
+                break;
             }
         }
         const Uint32 updateAfterBindResources = updateAfterBindUniformBuffers + updateAfterBindStorageBuffers +
                                                 updateAfterBindSampledImages + updateAfterBindStorageImages;
         const auto& uab = m_updateAfterBindLimits;
         entry.usesUpdateAfterBind =
-            uab.enabled && updateAfterBindSamplers <= uab.maxPerStageSamplers &&
+            // Vulkan forbids ANY update-after-bind binding in a set layout that
+            // contains a dynamic buffer descriptor (VUID 03001/03011). Wire draws
+            // retain UniformManager's per-frame, content-versioned descriptor sets;
+            // this selects the legal ordinary pool, not in-place mutation of a live set.
+            entry.dynamicBindings.empty() && uab.enabled && updateAfterBindSamplers <= uab.maxPerStageSamplers &&
             updateAfterBindUniformBuffers <= uab.maxPerStageUniformBuffers &&
             updateAfterBindStorageBuffers <= uab.maxPerStageStorageBuffers &&
             updateAfterBindSampledImages <= uab.maxPerStageSampledImages &&
             updateAfterBindStorageImages <= uab.maxPerStageStorageImages &&
-            updateAfterBindResources <= uab.maxPerStageResources &&
-            updateAfterBindSamplers <= uab.maxSetSamplers &&
+            updateAfterBindResources <= uab.maxPerStageResources && updateAfterBindSamplers <= uab.maxSetSamplers &&
             updateAfterBindUniformBuffers <= uab.maxSetUniformBuffers &&
             updateAfterBindUniformBuffers <= uab.maxSetUniformBuffersDynamic &&
             updateAfterBindStorageBuffers <= uab.maxSetStorageBuffers &&
@@ -3385,7 +3514,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkDescriptorSetLayoutCreateInfo setLayoutInfo{};
         setLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        setLayoutInfo.flags = entry.usesUpdateAfterBind ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT : 0;
+        setLayoutInfo.flags =
+            entry.usesUpdateAfterBind ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT : 0;
         setLayoutInfo.pNext = entry.usesUpdateAfterBind ? &bindingFlagsInfo : nullptr;
         setLayoutInfo.bindingCount = static_cast<Uint32>(bindings.size());
         setLayoutInfo.pBindings = bindings.data();
@@ -3400,7 +3530,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                   "ProgramFactory::ReflectLayout, vkCreatePipelineLayout");
 
         // Built here rather than where bindingKinds is sized: at that point the vector is only
-        // zero-initialised and the kinds are assigned further down, so a list built there would be
+        // zero-initialized and the kinds are assigned further down, so a list built there would be
         // empty. Ascending by construction because the index walks upward.
         entry.activeBindings.clear();
         for (Uint32 binding = 0; binding < static_cast<Uint32>(entry.bindingKinds.size()); ++binding) {
@@ -3425,8 +3555,79 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ++m_cacheStructureEpoch;
     }
 
-    const ProgramFactory::VkProgramObject& ProgramFactory::GetOrCreateProgram(
-        const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags) {
+    namespace {
+        // The vertex stage's own transforms, in the order they have to run: the ZeroBaseVertex
+        // variant, the unconditional 64-bit input packing, then the narrow-integer variant.
+        void TransformVertexStageForVulkan(Vector<Uint>& module, ProgramFactory::CompileOptionFlags flags,
+                                           const NarrowIntegerVertexInputs& narrowIntegerInputs,
+                                           Bool enableSpirvValidation, Uint programIndex) {
+            // The non-indexed variant of a vertex stage that reads gl_BaseVertex: GL wants zero
+            // there, Vulkan's builtin would hand it the draw's firstVertex. Requested per draw
+            // through CompileOptionBit::ZeroBaseVertex, so the indexed variant of the same
+            // program keeps the native builtin and stays correct for glDrawElementsBaseVertex
+            // and for the baseVertex word of an indexed indirect command.
+            if (flags & ProgramFactory::CompileOptionBit::ZeroBaseVertex) {
+                Vector<Uint> zeroedSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::ZeroBaseVertexForVulkan(module, zeroedSpirv,
+                                                                                       enableSpirvValidation)) {
+                    module = std::move(zeroedSpirv);
+                } else {
+                    // Failing open keeps the native builtin, which is the pre-fix behavior:
+                    // gl_BaseVertex reads firstVertex on a DrawArrays instead of zero.
+                    MGLOG_E("ProgramFactory: failed to zero gl_BaseVertex for program %u; non-indexed "
+                            "draws will read the draw's first vertex from it instead of zero",
+                            programIndex);
+                }
+            }
+
+            // A 64-bit vertex input has to arrive as its 32-bit word pair: VK_FORMAT_R64*_SFLOAT is
+            // optional and lavapipe advertises none of them at all. The pass is unconditional so it
+            // always agrees with the Float64 case in VertexInputStateFactory::ToVkVertexFormat, and
+            // ReflectVertexInputs then sees an ordinary uvec2/uvec4 input.
+            //
+            // Failure here is not recoverable and must not be swallowed: ToVkVertexFormat has already
+            // committed to R32G32{,B32A32}_UINT for the attribute, so a module still declaring
+            // `in double` would reconcile to Unknown and build a pipeline with a UINT format under a
+            // double input - garbage with no diagnostic anywhere.
+            {
+                Vector<Uint> packedSpirv;
+                const Bool packOk = MG_Util::ShaderTranspiler::ShaderCompiler::PackDoubleVertexInputsForVulkan(
+                    module, packedSpirv, enableSpirvValidation);
+                MOBILEGL_ASSERT(packOk,
+                                "ProgramFactory: 64-bit vertex input packing failed for program %u; the "
+                                "vertex-input format and the shader input type now disagree",
+                                programIndex);
+                if (packOk) {
+                    module = std::move(packedSpirv);
+                } else {
+                    MGLOG_E("ProgramFactory: failed to pack 64-bit vertex inputs for program %u; "
+                            "double-typed vertex attributes will be fetched as uint32 words and not "
+                            "reinterpreted",
+                            programIndex);
+                }
+            }
+
+            // The narrow-integer variant: the pipeline fetches these attributes with the format of
+            // the input's signedness, and this restores the extension rule of the data's own (see
+            // ResolveNarrowIntegerVertexInputs). After the 64-bit packing so it sees the inputs in
+            // the shape the pipeline's vertex input state and ReflectVertexInputs describe.
+            if (narrowIntegerInputs.Any()) {
+                Vector<Uint> extendedSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::ExtendNarrowIntegerVertexInputsForVulkan(
+                        module, extendedSpirv, narrowIntegerInputs, enableSpirvValidation)) {
+                    module = std::move(extendedSpirv);
+                } else {
+                    MGLOG_E("ProgramFactory: failed to extend narrow integer vertex inputs for program %u; "
+                            "8/16-bit integer attributes read through an input of the other signedness keep "
+                            "the fetch format's extension",
+                            programIndex);
+                }
+            }
+        }
+    } // namespace
+
+    MagmaProgramSource::BackendHashMemoEntry& ProgramFactory::ProgramHashMemo(const MagmaProgramSource& program,
+                                                                              CompileOptionFlags flags) const {
         // Hashing the full SPIR-V of every stage is far too expensive to repeat per draw;
         // reuse the program's memoized hash while its backend state version is unchanged.
         // The memo keys on the flags word, which ComputeHash is no longer a pure function of:
@@ -3442,16 +3643,46 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Uint memoKey = (flags & CompileOptionBit::FragCoordYFlip)
                                  ? (flags.GetRaw() | (m_defaultFramebufferHeight << 16))
                                  : flags.GetRaw();
-        HashType hash = 0;
-        if (!program.GetBackendHashMemo(memoKey, hash)) {
-            hash = ComputeHash(program, flags);
-            program.SetBackendHashMemo(memoKey, hash);
+        if (auto* memo = program.FindBackendHashMemo(memoKey)) return *memo;
+        return program.SetBackendHashMemo(memoKey, ComputeHash(program, flags));
+    }
+
+    const ProgramFactory::VkProgramObject& ProgramFactory::GetOrCreateProgram(
+        const MagmaProgramSource& program, CompileOptionFlags flags,
+        const NarrowIntegerVertexInputs& narrowIntegerInputs) {
+        auto& memo = ProgramHashMemo(program, flags);
+        // Mixed in after the memo, which keys on the flags word alone: the memo keeps answering
+        // for the plain program, and the variant costs one 16-byte hash on top of it.
+        HashType hash = memo.Hash;
+        if (narrowIntegerInputs.Any()) hash = MixNarrowIntegerVertexInputs(hash, narrowIntegerInputs);
+        memo.LastVariantHash = hash;
+        return FindOrBuildProgram(program, flags, narrowIntegerInputs, hash);
+    }
+
+    const ProgramFactory::VkProgramObject& ProgramFactory::GetOrCreateDrawProgram(const MagmaProgramSource& program,
+                                                                                  CompileOptionFlags flags) {
+        auto& memo = ProgramHashMemo(program, flags);
+        if (memo.LastVariantHash != memo.Hash) {
+            const auto it = m_cache.find(memo.LastVariantHash);
+            if (it != m_cache.end()) {
+                it->second.lastUsedFrame = m_frameCounter;
+                return it->second;
+            }
+            // The variant aged out, and its hash alone cannot rebuild it: start from the plain
+            // program, and the draw settles on its variant again.
+            memo.LastVariantHash = memo.Hash;
         }
+        return FindOrBuildProgram(program, flags, {}, memo.Hash);
+    }
+
+    const ProgramFactory::VkProgramObject& ProgramFactory::FindOrBuildProgram(
+        const MagmaProgramSource& program, CompileOptionFlags flags,
+        const NarrowIntegerVertexInputs& narrowIntegerInputs, HashType hash) {
         auto it = m_cache.find(hash);
         if (it != m_cache.end()) {
-            // Every draw/dispatch funnels through this lookup (the renderer memos only
-            // skip re-hashing, never the factory lookup), so an actively-used entry is
-            // stamped at least once per frame boundary and can never be aged out while
+            // Every draw/dispatch funnels through this lookup or GetOrCreateDrawProgram's (the
+            // renderer memos only skip re-hashing, never the factory lookup), so an actively-used
+            // entry is stamped at least once per frame boundary and can never be aged out while
             // any in-flight command buffer still references it.
             it->second.lastUsedFrame = m_frameCounter;
             return it->second;
@@ -3462,6 +3693,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ++m_cacheStructureEpoch;
         auto& entry = m_cache[hash];
         entry.hash = hash;
+        entry.narrowIntegerInputs = narrowIntegerInputs;
         entry.lastUsedFrame = m_frameCounter;
         // The EXECUTABLE's stage list, not GetAttachedShaders(): `spirv` is a link artifact with
         // one module per linked stage, while the attach list is live and grows on
@@ -3529,8 +3761,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // Once per program on a cache miss, and only for the single stage that carries the
                 // fixups - not per draw and not per module.
                 SpirvValidationFailure fixupFailure{};
-                if (!ValidateTransformedSpirv(moduleSpirvs[i], stages[i], program.GetExternalIndex(),
-                                              &fixupFailure)) {
+                if (!ValidateTransformedSpirv(moduleSpirvs[i], stages[i], program.GetExternalIndex(), &fixupFailure)) {
                     SpirvValidationFailure xfbFailure{};
                     if (fixupInput != &spv &&
                         ValidateTransformedSpirv(*fixupInput, stages[i], program.GetExternalIndex(), &xfbFailure)) {
@@ -3552,10 +3783,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 moduleSpirvs[i] = spv;
             }
 
-            if ((flags & ProgramFactory::CompileOptionBit::ExplicitLod0Sampling) && stages[i] == ShaderStage::Fragment) {
+            if ((flags & ProgramFactory::CompileOptionBit::ExplicitLod0Sampling) &&
+                stages[i] == ShaderStage::Fragment) {
                 Vector<Uint> explicitLodSpirv;
                 if (TransformSpirvForExplicitLod0Sampling(moduleSpirvs[i], explicitLodSpirv)) {
                     moduleSpirvs[i] = Move(explicitLodSpirv);
+                }
+            }
+
+            // Vulkan forbids the PixelCenterInteger execution mode that
+            // `layout(pixel_center_integer) in vec4 gl_FragCoord;` compiles to, so a module
+            // carrying it would fail validation and every draw of the program be refused. This
+            // runs before the FragCoordYFlip variant: the flip then rewrites the unshifted builtin
+            // read and the -0.5 lands on the flipped value, as GL defines it.
+            if (stages[i] == ShaderStage::Fragment) {
+                Vector<Uint> centeredSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerPixelCenterIntegerForVulkan(
+                        moduleSpirvs[i], centeredSpirv, enableSpirvValidation) &&
+                    !centeredSpirv.empty()) {
+                    moduleSpirvs[i] = Move(centeredSpirv);
                 }
             }
 
@@ -3568,8 +3814,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             // GL_KHR_shader_subgroup handling (SubgroupSupportPolicy.h). Native subgroup
             // operations execute natively; module repairs keep the GL contract intact
-            // around them. The opt-in emulation path replaces them only on devices with no
-            // subgroup support at all (MOBILEGL_MAGMA_EMULATE_SUBGROUP).
+            // around them. The emulation path replaces them on devices with no subgroup
+            // support at all, or when MOBILEGL_SUBGROUP_EMULATION forces it.
             if (stages[i] == ShaderStage::Compute) {
                 // Program 203 broadcasts the first reduction through
                 // prefixSumCache[0], then lets the second reduction overwrite that
@@ -3589,8 +3835,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (m_subgroupPolicy.emulateSubgroups) {
                     Vector<Uint> emulatedSpirv;
                     if (MG_Util::ShaderTranspiler::ShaderCompiler::EmulateSubgroupsForVulkan(
-                            moduleSpirvs[i], emulatedSpirv,
-                            m_subgroupPolicy.maxComputeSharedMemoryBytes, enableSpirvValidation)) {
+                            moduleSpirvs[i], emulatedSpirv, m_subgroupPolicy.maxComputeSharedMemoryBytes,
+                            enableSpirvValidation)) {
                         moduleSpirvs[i] = std::move(emulatedSpirv);
                     } else {
                         MGLOG_E("ProgramFactory: subgroup emulation failed for program %u; the "
@@ -3605,8 +3851,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         Vector<Uint> patchedSpirv;
                         if (MG_Util::ShaderTranspiler::ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(
                                 moduleSpirvs[i], patchedSpirv, m_subgroupPolicy.nativeSubgroupSize,
-                                m_subgroupPolicy.maxComputeSharedMemoryBytes,
-                                enableSpirvValidation)) {
+                                m_subgroupPolicy.maxComputeSharedMemoryBytes, enableSpirvValidation)) {
                             moduleSpirvs[i] = std::move(patchedSpirv);
                         } else {
                             MGLOG_E("ProgramFactory: iterationRP subgroup scratch patch failed for "
@@ -3640,7 +3885,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // stored as - which addresses [0,1] where the application addressed texels.
             {
                 Vector<Uint> rectLoweredSpirv;
-                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImages(moduleSpirvs[i], rectLoweredSpirv, enableSpirvValidation) &&
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImages(moduleSpirvs[i], rectLoweredSpirv,
+                                                                               enableSpirvValidation) &&
                     !rectLoweredSpirv.empty()) {
                     moduleSpirvs[i] = Move(rectLoweredSpirv);
                 }
@@ -3675,8 +3921,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // ReflectVertexInputs, which already reflects this stage.
             if (stages[i] == ShaderStage::Vertex && m_shaderDrawParametersEnabled) {
                 Vector<Uint> rebasedSpirv;
-                if (MG_Util::ShaderTranspiler::ShaderCompiler::RebaseInstanceIndexForVulkan(moduleSpirvs[i],
-                                                                                            rebasedSpirv, enableSpirvValidation)) {
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::RebaseInstanceIndexForVulkan(
+                        moduleSpirvs[i], rebasedSpirv, enableSpirvValidation)) {
                     moduleSpirvs[i] = std::move(rebasedSpirv);
                 } else {
                     MGLOG_E("ProgramFactory: failed to rebase gl_InstanceID for program %u; "
@@ -3685,50 +3931,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
 
-            // The non-indexed variant of a vertex stage that reads gl_BaseVertex: GL wants zero
-            // there, Vulkan's builtin would hand it the draw's firstVertex. Requested per draw
-            // through CompileOptionBit::ZeroBaseVertex, so the indexed variant of the same
-            // program keeps the native builtin and stays correct for glDrawElementsBaseVertex
-            // and for the baseVertex word of an indexed indirect command.
-            if (stages[i] == ShaderStage::Vertex && (flags & CompileOptionBit::ZeroBaseVertex)) {
-                Vector<Uint> zeroedSpirv;
-                if (MG_Util::ShaderTranspiler::ShaderCompiler::ZeroBaseVertexForVulkan(moduleSpirvs[i],
-                                                                                       zeroedSpirv, enableSpirvValidation)) {
-                    moduleSpirvs[i] = std::move(zeroedSpirv);
-                } else {
-                    // Failing open keeps the native builtin, which is the pre-fix behavior:
-                    // gl_BaseVertex reads firstVertex on a DrawArrays instead of zero.
-                    MGLOG_E("ProgramFactory: failed to zero gl_BaseVertex for program %u; non-indexed "
-                            "draws will read the draw's first vertex from it instead of zero",
-                            program.GetExternalIndex());
-                }
-            }
-
-            // A 64-bit vertex input has to arrive as its 32-bit word pair: VK_FORMAT_R64*_SFLOAT is
-            // optional and lavapipe advertises none of them at all. The pass is unconditional so it
-            // always agrees with the Float64 case in VertexInputStateFactory::ToVkVertexFormat, and
-            // ReflectVertexInputs below then sees an ordinary uvec2/uvec4 input.
-            //
-            // Failure here is not recoverable and must not be swallowed: ToVkVertexFormat has already
-            // committed to R32G32{,B32A32}_UINT for the attribute, so a module still declaring
-            // `in double` would reconcile to Unknown and build a pipeline with a UINT format under a
-            // double input - garbage with no diagnostic anywhere.
             if (stages[i] == ShaderStage::Vertex) {
-                Vector<Uint> packedSpirv;
-                const Bool packOk = MG_Util::ShaderTranspiler::ShaderCompiler::PackDoubleVertexInputsForVulkan(
-                    moduleSpirvs[i], packedSpirv, enableSpirvValidation);
-                MOBILEGL_ASSERT(packOk,
-                                "ProgramFactory: 64-bit vertex input packing failed for program %u; the "
-                                "vertex-input format and the shader input type now disagree",
-                                program.GetExternalIndex());
-                if (packOk) {
-                    moduleSpirvs[i] = std::move(packedSpirv);
-                } else {
-                    MGLOG_E("ProgramFactory: failed to pack 64-bit vertex inputs for program %u; "
-                            "double-typed vertex attributes will be fetched as uint32 words and not "
-                            "reinterpreted",
-                            program.GetExternalIndex());
-                }
+                TransformVertexStageForVulkan(moduleSpirvs[i], flags, narrowIntegerInputs, enableSpirvValidation,
+                                              program.GetExternalIndex());
             }
 
             // When Vulkan can legally access storage images without a statically declared
@@ -3752,26 +3957,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool remapOk = RemapDescriptorBindingsForVulkan(moduleSpirvs, m_maxBindings, moduleSpirvs);
         MOBILEGL_ASSERT(remapOk, "ProgramFactory::GetOrCreateProgram: descriptor binding remap failed");
 
+        // Last look at the exact bytes the driver receives, in EVERY build rather than only in
+        // DEBUG or with MOBILEGL_ENABLE_SPIRV_VALIDATION armed, and for every stage BEFORE any
+        // module is created. By here the descriptor bindings have been remapped and the layout
+        // about to be reflected describes the remapped module, so there is no module left that
+        // is both valid and consistent with it to fall back to (the recovery that exists lives
+        // one step earlier, at the clip/XFB fixups). What is left is to keep the bytes away from
+        // the driver: a driver is not a validating entry point, and an invalid module it accepts
+        // can fault the GPU into device loss (a frontend translation once put a sampler inside
+        // the default uniform block, and Adreno page-faulted reading its "descriptor" out of
+        // uniform-buffer bytes). One invalid stage declines the whole program: no shader module
+        // of it is created, and every draw or dispatch of it is refused by name
+        // (VkProgramObject::invalidSpirvDeclined). MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV hands the
+        // bytes over anyway, for diagnosing a driver that copes.
         for (SizeT i = 0; i < moduleCount; ++i) {
+            String reason;
+            const DriverModuleVerdict verdict =
+                ScreenModuleForDriver(moduleSpirvs[i], MG_Config::Features.MagmaAllowInvalidSpirv, &reason);
+            if (verdict == DriverModuleVerdict::DeclinedInvalid) {
+                MGLOG_E_ONCE("ProgramFactory: declining program %u - its stage %d module fails SPIR-V validation (%s); "
+                             "no shader module is created and its draws are refused. "
+                             "MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV=1 hands such modules to the driver anyway.",
+                             program.GetExternalIndex(), static_cast<Int>(stages[i]), reason.c_str());
+                entry.invalidSpirvDeclined = true;
+                break;
+            }
+            if (verdict == DriverModuleVerdict::AdmittedInvalid) {
+                MGLOG_E_ONCE("ProgramFactory: handing vkCreateShaderModule an INVALID module for program %u stage %d "
+                             "because MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV is set (%s)",
+                             program.GetExternalIndex(), static_cast<Int>(stages[i]), reason.c_str());
+            }
+        }
+
+        for (SizeT i = 0; i < moduleCount && !entry.invalidSpirvDeclined; ++i) {
             auto& moduleSpv = moduleSpirvs[i];
             if (moduleSpv.empty()) continue;
-
-            // Last look at the exact bytes the driver receives, in EVERY build rather than only
-            // in DEBUG or with MOBILEGL_ENABLE_SPIRV_VALIDATION armed. This one only reports:
-            // by here the descriptor bindings have been remapped and the layout about to be
-            // reflected describes the remapped module, so there is no module left that is both
-            // valid and consistent with it to fall back to. The recovery lives one step earlier,
-            // at the clip/XFB fixups (see the revert there) - which is where a transform can
-            // introduce a reference to a delisted interface variable, the failure this whole
-            // guard exists for. Anything that reaches this line names itself in the log of a
-            // shipping build instead of dying anonymously inside the driver.
-            SpirvValidationFailure finalFailure{};
-            if (!ValidateTransformedSpirv(moduleSpv, stages[i], program.GetExternalIndex(), &finalFailure)) {
-                MGLOG_E_ONCE("ProgramFactory: handing vkCreateShaderModule an INVALID module for program %u stage %d - "
-                             "a backend transform after the clip/XFB fixups broke it (%s)",
-                             program.GetExternalIndex(), static_cast<Int>(stages[i]),
-                             finalFailure.message.c_str());
-            }
 
             // Does the stage the driver will treat as the last pre-rasterization one actually
             // carry Xfb? Asked of the FINAL bytes, so it answers for whatever the whole transform
@@ -3804,8 +4024,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (!m_tessellationAndGeometryPointSizeEnabled &&
                 (stages[i] == ShaderStage::TessControl || stages[i] == ShaderStage::TessEval ||
                  stages[i] == ShaderStage::Geometry) &&
-                MG_Util::ShaderTranspiler::ShaderCompiler::ModuleDeclaresTessellationOrGeometryPointSize(
-                    moduleSpv)) {
+                MG_Util::ShaderTranspiler::ShaderCompiler::ModuleDeclaresTessellationOrGeometryPointSize(moduleSpv)) {
                 MGLOG_E_ONCE("ProgramFactory: program %u stage %d accesses gl_PointSize, but this device does not "
                              "support shaderTessellationAndGeometryPointSize; its draws are refused rather than "
                              "built into a pipeline the driver may fault on. Point size from a non-vertex stage "
@@ -3840,8 +4059,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (shaderStage == ShaderStage::Compute && m_subgroupPolicy.requireFullSubgroups &&
                 !m_subgroupPolicy.emulateSubgroups && m_subgroupPolicy.nativeSubgroupSize != 0) {
                 const ComputeLocalSize localSize = TryGetComputeLocalSize(moduleSpv);
-                const Uint64 fullSubgroupCount =
-                    localSize.Total() / m_subgroupPolicy.nativeSubgroupSize;
+                const Uint64 fullSubgroupCount = localSize.Total() / m_subgroupPolicy.nativeSubgroupSize;
                 if (localSize.x != 0 && localSize.x % m_subgroupPolicy.nativeSubgroupSize == 0 &&
                     fullSubgroupCount <= m_subgroupPolicy.maxComputeWorkgroupSubgroups) {
                     stage.flags |= VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT;
@@ -3850,9 +4068,54 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             entry.modules.push_back(module);
             entry.stages.push_back(stage);
-            entry.stageSpirvDigests.push_back(ShaderStageSpirvDigest{
-                static_cast<Uint32>(stage.stage), static_cast<Uint32>(moduleSpv.size()),
-                XXH64(moduleSpv.data(), moduleSpv.size() * sizeof(Uint), 0)});
+            entry.stageSpirvDigests.push_back(
+                ShaderStageSpirvDigest{static_cast<Uint32>(stage.stage), static_cast<Uint32>(moduleSpv.size()),
+                                       XXH64(moduleSpv.data(), moduleSpv.size() * sizeof(Uint), 0)});
+
+            // GL ignores gl_Layer when the framebuffer is not layered; Vulkan leaves a Layer at or
+            // past the framebuffer's layer count undefined. A stage that stores it gets a second
+            // module storing 0 for draws into a non-layered framebuffer (ZeroLayerOutputPass).
+            VkPipelineShaderStageCreateInfo nonLayeredStage = stage;
+            if (shaderStage == ShaderStage::Vertex || shaderStage == ShaderStage::TessEval ||
+                shaderStage == ShaderStage::Geometry) {
+                Vector<Uint> zeroLayerSpv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::ZeroLayerOutputForVulkan(moduleSpv, zeroLayerSpv,
+                                                                                        enableSpirvValidation) &&
+                    !zeroLayerSpv.empty() && zeroLayerSpv != moduleSpv) {
+                    VkShaderModuleCreateInfo zeroLayerInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+                    zeroLayerInfo.codeSize = zeroLayerSpv.size() * sizeof(Uint);
+                    zeroLayerInfo.pCode = zeroLayerSpv.data();
+                    VkShaderModule zeroLayerModule = VK_NULL_HANDLE;
+                    VK_VERIFY(vkCreateShaderModule(m_device, &zeroLayerInfo, nullptr, &zeroLayerModule),
+                              "vkCreateShaderModule(zero gl_Layer)");
+                    entry.modules.push_back(zeroLayerModule);
+                    nonLayeredStage.module = zeroLayerModule;
+                    // Back-fill: every stage before this one is shared with `stages`.
+                    if (entry.nonLayeredStages.empty()) {
+                        entry.nonLayeredStages.assign(entry.stages.begin(), entry.stages.end() - 1);
+                    }
+                }
+            }
+            if (!entry.nonLayeredStages.empty()) entry.nonLayeredStages.push_back(nonLayeredStage);
+
+            // GL ignores gl_SampleMask without multisample fragment operations; Vulkan discards
+            // a fragment whose one-sample mask has bit 0 clear. A fragment stage that stores it
+            // gets a second module storing all-ones for those draws (FullCoverageSampleMaskPass).
+            if (shaderStage == ShaderStage::Fragment) {
+                Vector<Uint> fullCoverageSpv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::FullCoverageSampleMaskForVulkan(
+                        moduleSpv, fullCoverageSpv, enableSpirvValidation) &&
+                    !fullCoverageSpv.empty() && fullCoverageSpv != moduleSpv) {
+                    VkShaderModuleCreateInfo fullCoverageInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+                    fullCoverageInfo.codeSize = fullCoverageSpv.size() * sizeof(Uint);
+                    fullCoverageInfo.pCode = fullCoverageSpv.data();
+                    VkShaderModule fullCoverageModule = VK_NULL_HANDLE;
+                    VK_VERIFY(vkCreateShaderModule(m_device, &fullCoverageInfo, nullptr, &fullCoverageModule),
+                              "vkCreateShaderModule(full-coverage gl_SampleMask)");
+                    entry.modules.push_back(fullCoverageModule);
+                    entry.fullCoverageFragmentModule = fullCoverageModule;
+                }
+            }
         }
 
         // Reflect and create layout as part of the program object
@@ -3865,7 +4128,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ReflectPassthroughTessControlNeed(stages, moduleSpirvs, entry);
         ReflectLayout(program, moduleSpirvs, entry);
         // A failed remap means the modules kept glslang's per-stage auto-mapped binding numbers -
-        // no cross-stage unification, no set->0 normalisation - so the bindings this layout
+        // no cross-stage unification, no set->0 normalization - so the bindings this layout
         // describes are not the bindings the shader reads. That has to stop the program from
         // drawing, and until now nothing did: the MOBILEGL_ASSERT above compiles out of every
         // build past DEBUG, and RemapDescriptorBindingsForVulkan's own refusal message said so at
@@ -3929,8 +4192,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    Uint64 ProgramFactory::ComputePassthroughTessControlKey(Uint32 patchVertices,
-                                                            const FloatVec4& defaultOuterLevel,
+    Uint64 ProgramFactory::ComputePassthroughTessControlKey(Uint32 patchVertices, const FloatVec4& defaultOuterLevel,
                                                             const FloatVec2& defaultInnerLevel,
                                                             Uint32 perVertexMembers) {
         // A plain 32-byte blob of exactly what the generator reads, hashed once. Deliberately over
@@ -3943,8 +4205,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 perVertexMembers;
         } blob{};
         blob.patchVertices = patchVertices;
-        for (Uint32 i = 0; i < 4; ++i) blob.outerBits[i] = std::bit_cast<Uint32>(defaultOuterLevel[i]);
-        for (Uint32 i = 0; i < 2; ++i) blob.innerBits[i] = std::bit_cast<Uint32>(defaultInnerLevel[i]);
+        for (Uint32 i = 0; i < 4; ++i)
+            blob.outerBits[i] = std::bit_cast<Uint32>(defaultOuterLevel[i]);
+        for (Uint32 i = 0; i < 2; ++i)
+            blob.innerBits[i] = std::bit_cast<Uint32>(defaultInnerLevel[i]);
         blob.perVertexMembers = perVertexMembers;
         return XXH64(&blob, sizeof(blob), 0);
     }
@@ -4016,11 +4280,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (wordCount >= 5 && words[3] == kDecorationBuiltIn) {
                     Uint32 bit = 0;
                     switch (words[4]) {
-                    case kBuiltInPosition: bit = static_cast<Uint32>(PerVertexMemberBit::Position); break;
-                    case kBuiltInPointSize: bit = static_cast<Uint32>(PerVertexMemberBit::PointSize); break;
-                    case kBuiltInClipDistance: bit = static_cast<Uint32>(PerVertexMemberBit::ClipDistance); break;
-                    case kBuiltInCullDistance: bit = static_cast<Uint32>(PerVertexMemberBit::CullDistance); break;
-                    default: break;
+                    case kBuiltInPosition:
+                        bit = static_cast<Uint32>(PerVertexMemberBit::Position);
+                        break;
+                    case kBuiltInPointSize:
+                        bit = static_cast<Uint32>(PerVertexMemberBit::PointSize);
+                        break;
+                    case kBuiltInClipDistance:
+                        bit = static_cast<Uint32>(PerVertexMemberBit::ClipDistance);
+                        break;
+                    case kBuiltInCullDistance:
+                        bit = static_cast<Uint32>(PerVertexMemberBit::CullDistance);
+                        break;
+                    default:
+                        break;
                     }
                     structMembers[words[1]] |= bit;
                 }
@@ -4046,8 +4319,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return 0;
     }
 
-    String ProgramFactory::BuildPassthroughTessControlSource(Uint32 patchVertices,
-                                                             const FloatVec4& defaultOuterLevel,
+    String ProgramFactory::BuildPassthroughTessControlSource(Uint32 patchVertices, const FloatVec4& defaultOuterLevel,
                                                              const FloatVec2& defaultInnerLevel,
                                                              Uint32 perVertexMembers) {
         // The stage GL 4.6 core 11.2.2 describes when a program has an evaluation shader and no
@@ -4056,7 +4328,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL state.
         //
         // Those two levels are baked in as literals - Vulkan has no equivalent dynamic state, so
-        // compiling them in is the only way to honour glPatchParameterfv. That makes them part of
+        // compiling them in is the only way to honor glPatchParameterfv. That makes them part of
         // this module's identity: GetOrCreatePassthroughTessControlStage keys its cache on them,
         // and PipelineFactory hashes them into the pipeline key. The three must move together.
         //
@@ -4072,7 +4344,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // this from having to know the domain.
         String source = "#version 450 core\n";
         source += "layout(vertices = " + std::to_string(patchVertices) + ") out;\n";
-        // gl_in and gl_out are redeclared to the exact gl_PerVertex the NEIGHBOURING EVALUATION
+        // gl_in and gl_out are redeclared to the exact gl_PerVertex the NEIGHBORING EVALUATION
         // STAGE carries, because Vulkan matches built-in interface blocks by their whole shape,
         // and the two obvious spellings are both wrong:
         //   * narrowing the block to gl_Position alone makes the evaluation stage read a patch of
@@ -4174,10 +4446,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the GL thread (the draw path), so the live compile env is the right one, and flags=0
         // is the Vulkan-targeting form (CompileForOpenGL is what the GLES backend adds).
         const SharedPtr<const CompileEnv>& env = GetCurrentCompileEnv();
-        ShaderAttrib shaderAttrib{.shaderType = GL_TESS_CONTROL_SHADER,
-                                  .sourceStr = source,
-                                  .flags = 0,
-                                  .env = env.get()};
+        ShaderAttrib shaderAttrib{
+            .shaderType = GL_TESS_CONTROL_SHADER, .sourceStr = source, .flags = 0, .env = env.get()};
         auto compiled = ShaderCompiler::CompileShader(shaderAttrib);
         if (!compiled) {
             MGLOG_E("ProgramFactory: could not compile the pass-through tessellation control stage for "
@@ -4192,7 +4462,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto linked = ShaderCompiler::LinkProgram(programAttrib);
         if (!linked) {
             MGLOG_E("ProgramFactory: could not link the pass-through tessellation control stage for "
-                    "patchVertices=%u. %s", patchVertices, linked.error().log.c_str());
+                    "patchVertices=%u. %s",
+                    patchVertices, linked.error().log.c_str());
             m_passthroughTessControlStages.emplace(key, stage);
             return stage;
         }
@@ -4201,7 +4472,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto binary = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
         if (!binary || binary.value().empty() || binary.value().front().empty()) {
             MGLOG_E("ProgramFactory: could not generate SPIR-V for the pass-through tessellation control stage "
-                    "for patchVertices=%u", patchVertices);
+                    "for patchVertices=%u",
+                    patchVertices);
             m_passthroughTessControlStages.emplace(key, stage);
             return stage;
         }
@@ -4222,8 +4494,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (validateThisOne) MG_Util::ShaderTranspiler::ShaderCompiler::PrepareSpirvValidation();
 #endif
             SpirvValidationFailure passthroughFailure{};
-            if (validateThisOne &&
-                !ValidateTransformedSpirv(spirv, ShaderStage::TessControl, 0, &passthroughFailure)) {
+            if (validateThisOne && !ValidateTransformedSpirv(spirv, ShaderStage::TessControl, 0, &passthroughFailure)) {
                 MGLOG_E_ONCE("ProgramFactory: the synthesized pass-through tessellation control stage for "
                              "patchVertices=%u does not validate (%s)",
                              patchVertices, passthroughFailure.message.c_str());
@@ -4237,22 +4508,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VkResult result = vkCreateShaderModule(m_device, &smci, nullptr, &module);
         if (result != VK_SUCCESS) {
             MGLOG_E("ProgramFactory: vkCreateShaderModule failed (%d) for the pass-through tessellation control "
-                    "stage for patchVertices=%u", static_cast<Int>(result), patchVertices);
+                    "stage for patchVertices=%u",
+                    static_cast<Int>(result), patchVertices);
             m_passthroughTessControlStages.emplace(key, stage);
             return stage;
         }
 
         stage.module = module;
         MGLOG_D("ProgramFactory: built the pass-through tessellation control stage for patchVertices=%u "
-                "(GL 4.6 11.2.2; Vulkan has no fixed-function equivalent)", patchVertices);
+                "(GL 4.6 11.2.2; Vulkan has no fixed-function equivalent)",
+                patchVertices);
         m_passthroughTessControlStages.emplace(key, stage);
         return stage;
     }
 
-    void ProgramFactory::ReflectPassthroughTessControlNeed(
-        const Vector<ShaderStage>& stages,
-        const Vector<Vector<Uint>>& spirv,
-        VkProgramObject& entry) const {
+    void ProgramFactory::ReflectPassthroughTessControlNeed(const Vector<ShaderStage>& stages,
+                                                           const Vector<Vector<Uint>>& spirv,
+                                                           VkProgramObject& entry) const {
         entry.needsPassthroughTessControl = false;
         entry.passthroughTessControlEmulatable = false;
         entry.passthroughPerVertexMembers = 0;

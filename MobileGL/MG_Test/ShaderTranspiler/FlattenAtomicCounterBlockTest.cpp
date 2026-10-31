@@ -158,21 +158,21 @@ void main() {
 }
 )";
 
-// glslang emits constants in FIRST-USE order, so a shader that does not use the flattened
-// array's length until after it has declared the counter block leaves that constant BELOW the
-// block. The pass needs the length to build `uint[length]` immediately before the block (SPIR-V
-// forbids forward type references), and it used to decline the whole block in that case - which
-// left the offsets in place and made SPIRV-Cross refuse the stage outright:
-//
-//     Push constant block cannot be expressed as neither std430 nor std140.
-//
-// That is KHR-GL43.compute_shader.pipeline-compute-chain: its first kernel declares two counters
-// at offset 8 (so the flattened array is 4 elements) and first uses the value 4 after the block,
-// so the kernel never reached the driver and every buffer, image and counter it writes kept its
-// initial value. Here `i < 4u` is what puts `uint 4` below the block; the ordering assertion
-// below is the fixture's own latch, so a future glslang that emits constants differently reports
-// a stale fixture rather than silently testing nothing.
-constexpr const char* kLateLengthConstantCounters = R"(#version 430 core
+    // glslang emits constants in FIRST-USE order, so a shader that does not use the flattened
+    // array's length until after it has declared the counter block leaves that constant BELOW the
+    // block. The pass needs the length to build `uint[length]` immediately before the block (SPIR-V
+    // forbids forward type references), and it used to decline the whole block in that case - which
+    // left the offsets in place and made SPIRV-Cross refuse the stage outright:
+    //
+    //     Push constant block cannot be expressed as neither std430 nor std140.
+    //
+    // That is KHR-GL43.compute_shader.pipeline-compute-chain: its first kernel declares two counters
+    // at offset 8 (so the flattened array is 4 elements) and first uses the value 4 after the block,
+    // so the kernel never reached the driver and every buffer, image and counter it writes kept its
+    // initial value. Here `i < 4u` is what puts `uint 4` below the block; the ordering assertion
+    // below is the fixture's own latch, so a future glslang that emits constants differently reports
+    // a stale fixture rather than silently testing nothing.
+    constexpr const char* kLateLengthConstantCounters = R"(#version 430 core
 layout(local_size_x = 1) in;
 layout(binding = 1, offset = 8) uniform atomic_uint g_counter[2];
 layout(std430, binding = 0) buffer Output { uint value[]; } g_out;
@@ -182,27 +182,26 @@ void main() {
 }
 )";
 
-// Index of the first OpConstant of type uint with value |value|, and of struct |structId|, in
-// the module's instruction order. -1 when absent.
-std::pair<Int64, Int64> UintConstantAndStructOrder(const Vector<Uint32>& spirv, Uint32 structId,
-                                                   Uint32 value) {
-    Int64 index = 0, constantIndex = -1, structIndex = -1;
-    Uint32 uintTypeId = 0;
-    ForEachInstruction(spirv, [&](spv::Op opcode, const Uint32* words, Uint32 wordCount) {
-        if (opcode == spv::Op::OpTypeInt && wordCount >= 4u && words[2] == 32u && words[3] == 0u) {
-            uintTypeId = words[1];
-        }
-        if (opcode == spv::Op::OpConstant && wordCount >= 4u && words[1] == uintTypeId &&
-            words[3] == value && constantIndex < 0) {
-            constantIndex = index;
-        }
-        if (opcode == spv::Op::OpTypeStruct && wordCount >= 2u && words[1] == structId) {
-            structIndex = index;
-        }
-        ++index;
-    });
-    return {constantIndex, structIndex};
-}
+    // Index of the first OpConstant of type uint with value |value|, and of struct |structId|, in
+    // the module's instruction order. -1 when absent.
+    std::pair<Int64, Int64> UintConstantAndStructOrder(const Vector<Uint32>& spirv, Uint32 structId, Uint32 value) {
+        Int64 index = 0, constantIndex = -1, structIndex = -1;
+        Uint32 uintTypeId = 0;
+        ForEachInstruction(spirv, [&](spv::Op opcode, const Uint32* words, Uint32 wordCount) {
+            if (opcode == spv::Op::OpTypeInt && wordCount >= 4u && words[2] == 32u && words[3] == 0u) {
+                uintTypeId = words[1];
+            }
+            if (opcode == spv::Op::OpConstant && wordCount >= 4u && words[1] == uintTypeId && words[3] == value &&
+                constantIndex < 0) {
+                constantIndex = index;
+            }
+            if (opcode == spv::Op::OpTypeStruct && wordCount >= 2u && words[1] == structId) {
+                structIndex = index;
+            }
+            ++index;
+        });
+        return {constantIndex, structIndex};
+    }
 
 } // namespace
 
@@ -296,8 +295,7 @@ TEST(FlattenAtomicCounterBlockPass, FlattensWhenTheLengthConstantIsDeclaredAfter
     EXPECT_TRUE(Validates(output));
 
     // The symptom the CTS case actually failed on: with the block declined this throws.
-    MG_Util::ShaderTranspiler::SpvcSession session(
-        output, MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
+    MG_Util::ShaderTranspiler::SpvcSession session(output, MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
     auto essl = ShaderCompiler::DecompileShader(session);
     EXPECT_TRUE(essl) << "ESSL transpile failed: " << (essl ? String{} : essl.error().log);
 }

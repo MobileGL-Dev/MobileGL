@@ -16,8 +16,7 @@
 namespace MobileGL::MG_Util::SelfTest {
     namespace {
         [[nodiscard]] IterationRPWitnessValidationResult Failure(IterationRPWitnessValidationFailure failure,
-                                                                 std::string detail,
-                                                                 std::uint32_t scanStage = 0u,
+                                                                 std::string detail, std::uint32_t scanStage = 0u,
                                                                  std::uint32_t subgroup = 0u) {
             IterationRPWitnessValidationResult result;
             result.ok = false;
@@ -60,8 +59,7 @@ namespace MobileGL::MG_Util::SelfTest {
         }
     } // namespace
 
-    IterationRPWitnessEligibilityResult
-    EvaluateIterationRPWitnessEligibility(const IterationRPWitnessLimits& limits) {
+    IterationRPWitnessEligibilityResult EvaluateIterationRPWitnessEligibility(const IterationRPWitnessLimits& limits) {
         // This classification deliberately precedes numeric limits. An absent native
         // compute/basic/arithmetic subgroup contract means there is nothing to witness,
         // whereas every resource/entry-point failure on a capable device is a POST FAIL.
@@ -70,9 +68,10 @@ namespace MobileGL::MG_Util::SelfTest {
             if (!limits.computeStageSupported) missing.emplace_back("VK_SHADER_STAGE_COMPUTE_BIT");
             if (!limits.basicSubgroupSupported) missing.emplace_back("VK_SUBGROUP_FEATURE_BASIC_BIT");
             if (!limits.arithmeticSubgroupSupported) missing.emplace_back("VK_SUBGROUP_FEATURE_ARITHMETIC_BIT");
-            return {IterationRPWitnessEligibility::SkipUnsupportedNativeFeatureSet,
-                    "skipped because the native compute/basic/arithmetic subgroup feature set is unsupported (missing " +
-                        JoinRequirements(missing) + ')'};
+            return {
+                IterationRPWitnessEligibility::SkipUnsupportedNativeFeatureSet,
+                "skipped because the native compute/basic/arithmetic subgroup feature set is unsupported (missing " +
+                    JoinRequirements(missing) + ')'};
         }
 
         std::vector<std::string> inadequate;
@@ -100,14 +99,13 @@ namespace MobileGL::MG_Util::SelfTest {
             inadequate.emplace_back("maxBoundDescriptorSets < 1");
         }
         if (limits.maxStorageBufferRange < sizeof(IterationRPWitnessOutput)) {
-            inadequate.emplace_back("maxStorageBufferRange < " +
-                                    std::to_string(sizeof(IterationRPWitnessOutput)));
+            inadequate.emplace_back("maxStorageBufferRange < " + std::to_string(sizeof(IterationRPWitnessOutput)));
         }
         if (!inadequate.empty()) {
             return {IterationRPWitnessEligibility::FailInadequateLimits,
                     "insufficient Vulkan limits for a 32x16x1 workgroup, one output SSBO, and " +
-                        std::to_string(kIterationRPWitnessSharedMemoryBytes) + " bytes of shared memory: " +
-                        JoinRequirements(inadequate)};
+                        std::to_string(kIterationRPWitnessSharedMemoryBytes) +
+                        " bytes of shared memory: " + JoinRequirements(inadequate)};
         }
         return {IterationRPWitnessEligibility::Execute, {}};
     }
@@ -159,10 +157,9 @@ namespace MobileGL::MG_Util::SelfTest {
             return Failure(IterationRPWitnessValidationFailure::Topology,
                            "topology: an invocation reported an invalid subgroup lane");
         }
-        if ((output.topologyFlags & ~(IterationRPWitnessNonuniformNumSubgroups |
-                                      IterationRPWitnessInvalidNumSubgroups |
-                                      IterationRPWitnessInvalidSubgroupId |
-                                      IterationRPWitnessInvalidSubgroupLane)) != 0u) {
+        if ((output.topologyFlags & ~(IterationRPWitnessNonuniformNumSubgroups | IterationRPWitnessInvalidNumSubgroups |
+                                      IterationRPWitnessInvalidSubgroupId | IterationRPWitnessInvalidSubgroupLane)) !=
+            0u) {
             std::ostringstream detail;
             detail << "topology: unknown topology flags 0x" << std::hex << output.topologyFlags;
             return Failure(IterationRPWitnessValidationFailure::Topology, detail.str());
@@ -170,8 +167,8 @@ namespace MobileGL::MG_Util::SelfTest {
         const std::uint32_t expectedMask = ExpectedSeenSubgroupMask(numSubgroups);
         if (output.seenSubgroupMask != expectedMask) {
             std::ostringstream detail;
-            detail << "topology: seen subgroup-ID mask was 0x" << std::hex << output.seenSubgroupMask
-                   << ", expected 0x" << expectedMask;
+            detail << "topology: seen subgroup-ID mask was 0x" << std::hex << output.seenSubgroupMask << ", expected 0x"
+                   << expectedMask;
             return Failure(IterationRPWitnessValidationFailure::Topology, detail.str());
         }
         const std::uint32_t expectedLoopLength = ComputeIterationRPWitnessLoopLength(numSubgroups);
@@ -184,8 +181,8 @@ namespace MobileGL::MG_Util::SelfTest {
         for (std::uint32_t subgroup = 0u; subgroup < numSubgroups; ++subgroup) {
             if (output.lastLaneWriterCount[subgroup] != 1u) {
                 std::ostringstream detail;
-                detail << "topology: subgroup " << subgroup << " has "
-                       << output.lastLaneWriterCount[subgroup] << " source last-lane writers, expected exactly 1";
+                detail << "topology: subgroup " << subgroup << " has " << output.lastLaneWriterCount[subgroup]
+                       << " source last-lane writers, expected exactly 1";
                 return Failure(IterationRPWitnessValidationFailure::Topology, detail.str(), 0u, subgroup);
             }
         }
@@ -203,8 +200,8 @@ namespace MobileGL::MG_Util::SelfTest {
         }
         if (output.owner511.x == 0u || output.owner511.w != output.owner511.x - 1u) {
             std::ostringstream detail;
-            detail << "final owner: invocation 511 is not the last lane of highest subgroup (size "
-                   << output.owner511.x << ", lane " << output.owner511.w << ')';
+            detail << "final owner: invocation 511 is not the last lane of highest subgroup (size " << output.owner511.x
+                   << ", lane " << output.owner511.w << ')';
             return Failure(IterationRPWitnessValidationFailure::FinalOwner, detail.str());
         }
 
@@ -226,8 +223,7 @@ namespace MobileGL::MG_Util::SelfTest {
                 std::ostringstream detail;
                 detail << "initial subgroup handoff: subgroup " << subgroup << " rawPrefix observed "
                        << Vec2String(output.rawPrefix[subgroup]) << ", expected " << Vec2String(expected);
-                return Failure(IterationRPWitnessValidationFailure::InitialSubgroupHandoff, detail.str(), 0u,
-                               subgroup);
+                return Failure(IterationRPWitnessValidationFailure::InitialSubgroupHandoff, detail.str(), 0u, subgroup);
             }
         }
 
@@ -266,8 +262,8 @@ namespace MobileGL::MG_Util::SelfTest {
         }
 
         std::ostringstream detail;
-        detail << "N=" << numSubgroups << ", owner511=id" << output.owner511.z << "/lane" << output.owner511.w
-               << ", " << expectedLoopLength << " scan stages, average=" << Vec2String(output.finalAverage);
+        detail << "N=" << numSubgroups << ", owner511=id" << output.owner511.z << "/lane" << output.owner511.w << ", "
+               << expectedLoopLength << " scan stages, average=" << Vec2String(output.finalAverage);
         IterationRPWitnessValidationResult result;
         result.ok = true;
         result.failure = IterationRPWitnessValidationFailure::None;

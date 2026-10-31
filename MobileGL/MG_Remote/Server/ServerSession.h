@@ -1,0 +1,407 @@
+// MobileGL - MobileGL/MG_Remote/Server/ServerSession.h
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// The server half of a session: the consumer side of the rings, the doorbell pair (handed out
+// here, not by ITransport, which stays control-plane only), the handshake reply and the caps
+// snapshot. The server allocates the segments and the client attaches; "client-owned" in
+// protocol.fbs means who writes a segment. Accept, in order: receive Hello; authenticate the peer
+// and refuse any ABI, fingerprint or link-terms mismatch before any shared memory exists or any
+// record is decoded; create the segments; send Welcome; bind the stream data connection, if any;
+// install the segment resolver and the reverse-channel callbacks; publish the first CapsSnapshot
+// if SetBackend was called, else defer it with a warning.
+
+#pragma once
+#include "../Transport/ILink.h"
+#include <Includes.h>
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <vector>
+
+#include <MG_Pipe/MGPipe.h>
+
+#include "../Transport/Doorbell.h"
+#include "../Transport/EventRing.h"
+#include "../Transport/ITransport.h"
+#include "../Transport/ReplySlot.h"
+#include "../Transport/Ring.h"
+#include "../Transport/RoleMemory.h"
+#include "../Transport/SessionRings.h"
+#include "../Wire/PipeWireCodec.h"
+#include "AdoptInbox.h"
+#include "SharedImageRegistry.h"
+#include "ApplyThreadPolicy.h"
+#include "PipeApplier.h"
+
+namespace MobileGL::MG_Remote::Server {
+
+    class ServerSession {
+    public:
+        // P14 S2: THE SESSION OF THE CALLING THREAD, else the process's active one. Every
+        // server-role caller that matters (the reverse-channel producers, the applier's role
+        // guards, the decoder, ServerMain's control loop) runs on a session's own thread and
+        // therefore gets ITS session - which is what makes one process able to serve several.
+        static ServerSession* Active();
+
+        ServerSession();
+        ~ServerSession();
+        void AttachDataLink(std::unique_ptr<Transport::ILink> link);
+        Transport::ILink* DataLink() const { return m_link.get(); }
+        void FlushDataProgress();
+
+        // Maps the four segments, answers Hello with Welcome, and publishes the first
+        // CapsSnapshot. The ABI assertion (CapsCodec.h) happens HERE, before a single record is
+        // decoded: sizeof(DynamicBackendParameters), sizeof(MGPCaps), sizeof(GLFunctionsTable)
+        // and the build fingerprint must match, and a mismatch is Fatal{AbiMismatch}.
+        MobileGLResult Accept(Transport::ITransport& transport, const std::vector<Uint8>* firstFrame = nullptr);
+
+        // PH-7 (4), ID-P7-3. WHERE A TCP SESSION'S DATA CONNECTION COMES FROM.
+        //
+        // A Stream data plane is not handed to Accept with the control connection any more: the
+        // client opens it after Welcome and names this session by presenting Welcome.dataNonce
+        // as its first frame (DataBind). Whoever owns the listener - ServerMain's supervisor,
+        // which forwards the descriptor over a socketpair, or the single-session loop, which
+        // accepts it directly - reads that frame and offers the connection here with the nonce
+        // it presented. Accept compares, binds the one that matches, and refuses every other by
+        // name. MOBILEGL_ERR_TIMEOUT from the source means "nothing yet"; anything else ends
+        // the wait (TRANSPORT_CLOSED when the control peer went away while it waited).
+        using DataConnectionSource =
+            std::function<MobileGLResult(std::uint32_t timeoutMs, int* outFd, std::uint8_t* outNonce)>;
+        void SetDataConnectionSource(DataConnectionSource source) { m_dataSource = std::move(source); }
+
+        // Re-publishes the whole snapshot. R-12: a SECOND arrival IS the invalidation signal,
+        // which is how DirectGLES - which has no OnCapsInvalidated producer - tells the client
+        // its InitCapabilities re-ran, without any dev-shaped backend edit. It is also the
+        // re-open signal for "the server's ES context died and its rings were dropped", the
+        // event MGPipeCallbacks has no slot for (the count is pinned by kMGPipeCallbackCount).
+        MobileGLResult PublishCapsSnapshot();
+
+        Transport::RingConsumer& CommandRing();
+        Transport::RingControl& Control();
+        Wire::SegmentTable& Segments();
+        PipeApplier& Applier();
+        ReplyPool& Replies();
+
+        // The client rings this one; the apply thread parks on it.
+        // P6 `sm`: the bells a spawn session parks on, injected because they do
+        // not come from the transport. CONTRACT-P5 §3.9 kept these accessors on
+        // the session precisely so this would be ONE switch in ONE file rather
+        // than two virtuals on every transport - and the switch it produced
+        // aborts for every role but InProcess, which is where a spawn apply
+        // thread died before popping its first record (a6 row A7-1).
+        //
+        // This is the narrow fix, not the general one: `lk` moves both bells
+        // behind ILink and DELETES these accessors, which is what CONTRACT-P6
+        // §8.1 means by retiring the ruling rather than amending it. Until then
+        // an injected pair is honest about where they come from, and the
+        // InProcess arm below is untouched.
+        void SetExternalDoorbells(Transport::Doorbell* consumer, Transport::Doorbell* producer);
+
+        Transport::Doorbell& ConsumerDoorbell();
+        // The server rings this one, but only when producerParked is set (a store to a shared
+        // cache line otherwise burns a big core for a whole frame on a phone).
+        Transport::Doorbell& ProducerDoorbell();
+
+        bool HasExternalDoorbells() const { return m_externalConsumerBell != nullptr; }
+
+        // ---- s1's additions beyond c0's signature block ---------------------------------
+
+        // The sizes to create the segments with. Must be called before Accept; after it, the
+        // geometry is on the wire in Welcome and changing it would desynchronize the peer.
+        void SetSegmentSizes(const Transport::SessionSegmentSizes& sizes);
+
+        // The server role's private BackendObject (ServerLoop::Backend(), v1's). It is NOT
+        // pActiveBackendObject - that global holds the client's BackendObject_Remote (table 3).
+        // Set before Accept to have the first CapsSnapshot published there; set later and call
+        // PublishCapsSnapshot yourself.
+        void SetBackend(MG_Backend::BackendObject* backend);
+
+        // MGPCaps::CallMask's two halves; both are mandatory and neither has a default. The client
+        // decides from the consumer bits which record families to emit and still clears its dirty
+        // flags on acceptance, so a guessed mask (a process-wide registration, a fixed value) loses
+        // uploads silently; CallMask() is Fatal{UnsetCallMask} until both setters have run. This
+        // one takes the MGPCapBit feature bits, each answered by the subsystem that owns it;
+        // SetCapabilityBits(0) is an explicit "no optional capability". kCapViewportArray and the
+        // two host-byte bits (kCapNeedsHost*Bytes, the only thing that asks for an MGHostSpan) are
+        // reserved and stay 0.
+        void SetCapabilityBits(Uint64 capBits);
+
+        // BITS 32..47, THE CONSUMER MASK (R-8 / C-4): which MGPipe subsystems this server has
+        // a consumer for. v1 owns the answer - it owns the apply thread and knows what its
+        // backend took over. Publishing a bit the server does not consume is the failure
+        // above; withholding one the server does consume merely leaves the legacy pull path
+        // running, which is the safe direction.
+        void SetConsumedSubsystems(Uint64 subsystemMask);
+
+        // False until BOTH setters have been called. A caller that can handle the absence
+        // asks this; PublishCapsSnapshot and CallMask abort on it.
+        Bool CallMaskIsSet() const;
+
+        // What PublishCapsSnapshot puts on the wire: capBits | MGCapsConsumerBits(subsystems).
+        // Fatal{UnsetCallMask} if either half was never set.
+        Uint64 CallMask() const;
+
+        Bool Accepted() const;
+        // P11 B1: who the client is - its Hello's dial mode - and whether it uses shared segments
+        // (false = the stream plane), both set by Accept before Welcome. ServerLoop picks the apply
+        // thread's `auto` affinity and spin from them (ApplyThreadPolicy.h).
+        ApplyPeer Peer() const { return m_peer; }
+        Bool PeerSharedSegments() const { return m_peerSharedSegments; }
+        // Teardown: after the apply thread has been joined, never before - a record still in
+        // flight can still resolve a segment offset (table 3's fourth column).
+        //
+        // P14 S2: AND IT IS IDEMPOTENT, because a served session is now a stack object. A session
+        // that has been closed once (RunSession closes it explicitly) is closed again by its
+        // destructor; the second call must not run the teardown twice. Accept re-opens it, so the
+        // in-process display server's accept/close/accept cycle is unchanged.
+        void Close();
+
+        Transport::SessionSegments& Shm();
+        // The apply loop's end of the rings: WaitForWork / ApplyOne / RetireThrough. This is
+        // the only thing that advances appliedSeq, and it advances it by exactly one per
+        // record (R-9's ban on batching it while the verb barrier exists).
+        Transport::SessionConsumer& Consumer();
+        // The reverse channel. P5 only has to be able to CARRY OnBufferWriteback /
+        // OnGpuWritten / OnSurfaceChanged; the overflow policy is P9's.
+        Transport::EventRingProducer& Events();
+        // Publish everything reserved on SEG_EVENT and ring the client. USE THIS rather than
+        // EventRingProducer::PublishAndNotify, which takes a bell and a park flag from its
+        // caller and therefore compiles for every wrong pairing; the session is the thing
+        // that knows which bell belongs to the client.
+        void PublishEvents();
+
+        // ---- P5c ev: the reverse channel's producers (CONTRACT-P5C §4) -------------------
+        //
+        // With an active transport the three reverse MGPipeCallbacks entries are THIS
+        // session's producer callbacks (Accept installs them, Close uninstalls them), and
+        // the fourth event kind is posted through here: PipeInputs::RecordError's transport
+        // arm calls PostGlError with the frontend ErrorCode widened and the ErrorInfo's
+        // message. `message` may be null; a longer message than
+        // Transport::kEventGlErrorMaxMessageBytes is truncated, which is the contract's
+        // ruling (§1), not a check. A session that has not accepted drops the error with a
+        // loud line, exactly as RecordError's own no-live-context arm does.
+        void PostGlError(Uint32 code, const char* message);
+        // P10 (CONTRACT-P10.md §1): one kEventFenceSignaled for a client fence the apply thread
+        // found signaled. Posted and published at once - a client may be polling on it right now.
+        // Dropped with the same loud line as PostGlError before Accept.
+        void PostFenceSignaled(MG_Pipe::MGPipeHandle fence);
+        // True when SEG_EVENT is not latched full: an optional post (a fence report) goes
+        // there without parking the apply thread. False before Accept.
+        Bool EventRingHasRoom() const;
+        Transport::ITransport* Control_Plane();
+
+        // Reverse-channel forfeit: a client that does not drain SEG_EVENT is the peer's fault and
+        // must not abort this process. The first event that cannot be placed within
+        // MOBILEGL_IPC_EVENT_WAIT_MS raises this session's latch (ForfeitReverseChannel logs
+        // `ReverseChannelForfeit{<cause>}` once); that event and every later one is a counted drop
+        // into scratch; the apply loop sees the latch and stops, and ServerMain ends the session
+        // with status 0, not as a fault. The latch is written only on the apply thread (reset by
+        // Accept) and read with acquire elsewhere. See ARCHITECTURE.md §11.7.
+        Bool ReverseChannelForfeited() const { return m_reverseChannelForfeit.load(std::memory_order_acquire); }
+        // Drops since the latch went up, counted HERE because the shared page's eventDropped is
+        // on a page the peer can write.
+        Uint64 ForfeitDrops() const { return m_forfeitDrops.load(std::memory_order_acquire); }
+        // `cause` is one word (the braces' content); `why` the sentence; `shortDrains` how many
+        // times the client cleared the latch without making room. Returns the scratch the caller
+        // writes the dropped event into.
+        void* ForfeitReverseChannel(const char* cause, const char* why, const char* eventName, Uint64 payloadBytes,
+                                    Uint32 waitedMs, Uint32 budgetMs, Uint32 shortDrains);
+        void* DropEventAfterForfeit(Uint64 payloadBytes);
+
+        // PH-6 fix round. SERVERLOOP::STOP'S REQUEST, SEEN BY THE ONE APPLY-THREAD WAIT THAT IS NOT
+        // THE LOOP'S OWN PARK. ReserveEventOrBlock parks on the same consumer bell the loop parks
+        // on, but with its own predicate, so a Stop() that rang that bell used to wake it only to
+        // have it re-test "has the client drained?", find no, and park again for the rest of
+        // MOBILEGL_IPC_EVENT_WAIT_MS - while Stop()'s bounded join (5000 ms) ran out and the
+        // session died of Fatal{ApplyThreadJoinTimeout}. A control stream that ends (EOF, a
+        // malformed frame, a LogFlush ack) while the apply thread waits for a drain is exactly
+        // that shape. Stop() raises this BEFORE it rings; the wait's predicate reads it and the
+        // reservation forfeits as `Stopped`. Start() lowers it for the next run of the loop.
+        void RequestApplyStop() { m_applyStopRequested.store(true, std::memory_order_release); }
+        void ClearApplyStopRequest() {
+            m_controlStreamEnded.store(false, std::memory_order_release);
+            m_applyStopRequested.store(false, std::memory_order_release);
+        }
+        Bool ApplyStopRequested() const { return m_applyStopRequested.load(std::memory_order_acquire); }
+        // WHY the stop came, when the answer is "the peer is gone": ServerMain's control loop
+        // notes an EOF or a transport error on the control stream BEFORE it stops the loop, so a
+        // reservation that the stop wakes names the hangup (PeerGone) and not the stop. Needed
+        // because the stop and the data bell's own death race - on the stream plane the control
+        // EOF routinely wins - and a peer killed mid-wait is not a session somebody stopped.
+        void NoteControlStreamEnded() { m_controlStreamEnded.store(true, std::memory_order_release); }
+        Bool ControlStreamEnded() const { return m_controlStreamEnded.load(std::memory_order_acquire); }
+
+        // completedFrameSerial / presentAckSerial: the two watermarks only the server can
+        // advance, kept together with the other three rather than poked into RingControl from
+        // whatever code happens to notice a present finished.
+        void AdvanceCompletedFrame(Uint64 serial);
+        void ReturnPresentCredit(Uint64 serial);
+
+        // Peak-RSS accounting for t1 (RoleMemory.h). `phase` is a short tag.
+        Transport::RoleMemorySample SampleMemory() const;
+        void LogMemory(const char* phase) const;
+
+        // ---- P11 B2: T0 (B2) --------------------------------------
+        //
+        // The client's Hello asked T0 (LinkTerms.adoptTier = 0 over shared segments).
+        Bool AdoptT0Asked() const { return m_adoptT0Asked; }
+        // This session runs T0 (asked, and granted at the first native bind).
+        Bool AdoptT0() const { return m_adoptT0; }
+        // THE GRANT, once per session, on the apply thread right after the first native bind and
+        // BEFORE the caps that bind republishes: asked, the allow switch
+        // (MOBILEGL_IPC_ALLOW_ADOPT_T0, default 1), AHardwareBuffer on this platform, a backend that
+        // registers ImportExternal + SelfTestExternal, and that backend's POST self-test of the
+        // sustained-lock pattern (run once per process on its live context, the verdict cached).
+        // Granted sets kCapAdoptT0 in every later CapsSnapshot; not granted is one named line and
+        // T2. A session that did not ask does nothing here (knob 2 is today's session byte for byte).
+        void SettleAdoptT0AtBind();
+        // T0's map_persistent, from the codec's arm through the verb sink, on the apply thread:
+        // take the Offer for record `seq` from the aux socket (Server/AdoptInbox.h - bounded, never a
+        // hang), read the AHB off its hop, and import it as `handle`'s store. False = this session is
+        // not T0 (the codec's T2 decline answers); true = handled and `status` is the answer (OK, or
+        // DECLINED with a named line).
+        // A client in this process (inproc) takes no AHardwareBuffer: the backend donates the
+        // store's own mapping and `inProcessBase` carries its address in the OK answer.
+        Bool AdoptStoreT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status, Uint64& inProcessBase);
+        // T0 granted for a client in this process: map_persistent donates (kCapAdoptInProcess).
+        Bool AdoptT0InProcess() const { return m_adoptT0InProcess; }
+        // The arm's proof for this session (B2): stores imported and their bytes, declined.
+        Uint64 T0StoresImported() const { return m_t0Stores; }
+        Uint64 T0BytesImported() const { return m_t0Bytes; }
+        Uint64 T0Declined() const { return m_t0Declined; }
+        // 1 when this session asked T0 and was not granted it (allow switch, no AHardwareBuffer,
+        // POST): counted whether the refusal was named (knob 0) or quiet (the default ask).
+        Uint64 T0Refusals() const { return m_t0Refusals; }
+        // The ask was the client's DEFAULT (kAdoptAskT0Default): a refusal is said at MGLOG_D.
+        Bool AdoptT0Quiet() const { return m_adoptT0Quiet; }
+        AdoptInbox& T0Inbox() { return m_adoptInbox; }
+
+        // ---- shared images -------------
+        // The images this session allocated or imported and has not released; emptied when the
+        // session closes. The control transport is where an allocation's descriptor goes out.
+        SharedImages::SessionHolder& SharedImageHolder() { return m_sharedImages; }
+        Transport::ITransport* ControlTransport() const { return m_transport; }
+
+        // ---- P14 S1 (docs/Disaggregated/design/11-state-ownership.md): the session's contexts -
+        //
+        // THE PLACEHOLDER TABLE. `CreateContext`/`DestroyContext` on the control plane build and
+        // destroy an entry per client token; `BindContext` on the ring makes one of them the
+        // session's current context. What lives in an entry in THIS slice is the token and the
+        // share group it was derived from - no native EGLContext, no GLContext, no working state
+        // (that is S4's). The table exists so that a token the client names can be proved to
+        // have been created before anything is attributed to it, and so that the S4 slice has a
+        // place to put the runtime it will own.
+        //
+        // WRITES ARE THE APPLY THREAD'S. CreateContext/DestroyContext arrive as control frames
+        // dispatched through the frame channel, BindContext as a record through the decoder, and
+        // both run on mgl-srv-apply - so the table needs no lock. CurrentContextToken() is
+        // atomic because a test reads it from the case's own thread.
+        struct ContextRuntime {
+            Uint64 Token = 0;           // the client's context token, dense from 1
+            Uint64 ShareGroupToken = 0; // 0 = this context started a share group
+            Uint32 Flags = 0;           // reserved; the control frame's `flags` field, carried verbatim
+        };
+
+        // False when a context with this token already exists, or when the token is 0 (0 is
+        // "no context" everywhere on both planes and is never a creatable context).
+        Bool CreateContext(Uint64 token, Uint64 shareGroupToken, Uint32 flags);
+        // False when no such token exists - a destroy the peer did not create is the control
+        // frame's own refusal to make, not a silent no-op.
+        Bool DestroyContext(Uint64 token);
+        // Binds the session's current context. Token 0 is legal and means "no context" (the
+        // release edge); any other token must have been created, or this is a named refusal.
+        Bool BindContext(Uint64 token);
+        // 0 = no context is bound. Every record the session has applied so far belongs to this
+        // token; a session that never crossed a bind_context has never bound one.
+        Uint64 CurrentContextToken() const { return m_currentContextToken.load(std::memory_order_acquire); }
+        // The pid the client's Hello names (its own, in its own pid namespace; 0 before Accept).
+        // What the session-targeted device-loss debug knob matches.
+        Uint32 ClientPid() const { return m_clientPid; }
+        Bool HasContext(Uint64 token) const { return m_contexts.find(token) != m_contexts.end(); }
+        Uint64 ContextCount() const { return static_cast<Uint64>(m_contexts.size()); }
+        Uint64 ContextsCreated() const { return m_contextsCreated; }
+        Uint64 ContextsDestroyed() const { return m_contextsDestroyed; }
+        // The per-session tallies the sink keeps for the two control frames it dispatched.
+        Uint64 ContextBinds() const { return m_contextBinds; }
+
+    private:
+        MobileGLResult BindDataConnection(Transport::ITransport& control, Transport::ILink& link, const Uint8* nonce);
+
+        DataConnectionSource m_dataSource;
+        std::unique_ptr<Transport::ILink> m_link;
+        // sm: non-owning; the spawn entry point owns the SocketDoorbells.
+        Transport::Doorbell* m_externalConsumerBell = nullptr;
+        Transport::Doorbell* m_externalProducerBell = nullptr;
+        Transport::RingConsumer* m_commands = nullptr;
+        Wire::SegmentTable m_segments;
+        PipeApplier m_applier;
+        ReplyPool m_replies;
+
+        Transport::SessionConsumer m_consumer;
+        Transport::EventRingProducer* m_events = nullptr;
+        Transport::ITransport* m_transport = nullptr;
+        MG_Backend::BackendObject* m_backend = nullptr;
+        Transport::SessionSegmentSizes m_sizes;
+        Uint64 m_capBits = 0;
+        Uint64 m_consumedSubsystems = 0;
+        Bool m_capBitsSet = false;
+        Bool m_consumedSet = false;
+        Bool m_sizesSet = false;
+        Bool m_accepted = false;
+        // P14 S2: Close() has run for the current accept. Cleared by Accept, which is what keeps
+        // the in-process display server's accept/close/accept cycle working.
+        Bool m_closed = false;
+        ApplyPeer m_peer = ApplyPeer::InProcess;
+        Bool m_peerSharedSegments = true;
+        // PH-6. Written by the apply thread (the only SEG_EVENT producer), reset by Accept.
+        std::atomic<Bool> m_reverseChannelForfeit{false};
+        std::atomic<Uint64> m_forfeitDrops{0};
+        std::vector<Uint8> m_forfeitScratch;
+        // PH-6 fix round. Written by ServerLoop::Start/Stop and ServerMain's control loop, read by
+        // the apply thread's event wait.
+        std::atomic<Bool> m_applyStopRequested{false};
+        std::atomic<Bool> m_controlStreamEnded{false};
+        // P11 B2 (T0). Set by Accept from the Hello, by SettleAdoptT0AtBind on the apply thread;
+        // the inbox and the counters are the apply thread's.
+        Bool m_adoptT0Asked = false;
+        Uint32 m_clientPid = 0;
+        Bool m_adoptT0Quiet = false;
+        Uint8 m_adoptAsk = 2;
+        Bool m_adoptT0Settled = false;
+        Bool m_adoptT0 = false;
+        Bool m_adoptT0InProcess = false;
+        AdoptInbox m_adoptInbox;
+        SharedImages::SessionHolder m_sharedImages;
+        Uint64 m_t0Stores = 0;
+        Uint64 m_t0Bytes = 0;
+        Uint64 m_t0Declined = 0;
+        Uint64 m_t0Refusals = 0;
+        // P14 S1. Apply-thread-only map (see ContextRuntime); the current token is atomic for
+        // the reader on a test thread. Reset by Accept.
+        UnorderedMap<Uint64, ContextRuntime> m_contexts;
+        std::atomic<Uint64> m_currentContextToken{0};
+        Uint64 m_contextsCreated = 0;
+        Uint64 m_contextsDestroyed = 0;
+        Uint64 m_contextBinds = 0;
+    };
+
+    // Leak-at-exit like every other MG_Remote singleton (ID-8): no frontend destructor may
+    // reach pipe or backend state from an exit handler.
+    //
+    // P14 S2 (SessionRuntime.h): THE SINGLETON IS THE FALLBACK, NOT THE SESSION. On a thread that
+    // belongs to a served session (ServerMain::RunSession's control thread, or that session's
+    // mgl-srv-apply) this answers with THAT session; every other thread - the client process, the
+    // inproc one-process client+server shape, a unit case - keeps getting the leaked instance.
+    ServerSession& ServerSessionInstance();
+
+    // P14 S2: sessions accepted and not yet closed in this process. A process-wide fact that must
+    // outlive one session (the reverse-channel callback table, the segment resolver) is released
+    // only when this reaches zero.
+    Uint32 ServerSessionCount();
+
+} // namespace MobileGL::MG_Remote::Server

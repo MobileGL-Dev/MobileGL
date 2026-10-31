@@ -15,8 +15,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Populates the same format-capability cache used by backend startup. The caller
     // must keep the supplied GLES context current for the duration of this call.
     void PopulateFormatCapabilities(const MG_External::GLESFunctionsTable& gl,
-                                    const MG_External::GLESCapabilities& capabilities,
-                                    FormatCapabilityCache& cache);
+                                    const MG_External::GLESCapabilities& capabilities, FormatCapabilityCache& cache);
 
     // Clamps a requested sample count down to what the ES driver can really deliver for this
     // format on this format-capability target: the probed per-format list when there is one, the
@@ -28,20 +27,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Int ClampSamplesToBackendSupport(SizeT targetIndex, TextureInternalFormat logicalFormat, GLenum imageFormat,
                                      Int samples);
 
-    class BackendObject_DirectGLES : public BackendObject {
+    class BackendObject_DirectGLES : public BackendObject, public ServerHooks {
     public:
         ~BackendObject_DirectGLES() override;
 
+        ServerHooks* AsServer() override { return this; }
+
+        // The driver's verdict on this session's context (DirectGLES::LatchIfDeviceLost).
+        Bool LatchIfGpuFaulted() override;
         void Initialize() override;
         Bool InitCapabilities() override;
         Bool InitWindowSurface() override;
         Bool InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) override;
         Bool CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) override;
         Bool CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) override;
+        Bool ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) override;
         Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) override;
         Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) override;
+        // Shared images: a GL blit of default framebuffer 0 into a renderbuffer whose storage is
+        // the image's EGLImage, ordered after the image's pending reads and published as a native
+        // fence without a CPU wait (DirectGLES.h, SharedImageImpl).
+        Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image,
+                                                 const MG_Util::Damage::Region& region) override;
+        // A window surface's age is the driver's (EGL_EXT_buffer_age); a pbuffer keeps its content,
+        // so it is 1 once it has been presented (DirectGLES::CurrentDrawBufferAge).
+        Int32 QueryCurrentBufferAge(Bool damageRegionFollows) override;
+        // eglSetDamageRegionKHR on a window surface whose driver has EGL_KHR_partial_update.
+        Bool SetCurrentDamageRegion(const MG_Util::Damage::Region& region) override;
+        // A glFlush that ends a shared-image producer's frame (SharedImageImpl::PublishPendingAccesses).
+        Bool PublishSharedImageAccesses() override;
+        // An EGL native fence of the session's work (SharedImageImpl::ExportNativeFence).
+        Bool ExportNativeFence(int* fence) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
+        // The server window going and coming back: each window surface on it swaps its native EGL
+        // window surface for a placeholder pbuffer and back (DirectGLES::Suspend/ResumeSessionWindowSurface).
+        Bool SuspendServerWindow(void* window) override;
+        Bool ResumeServerWindow(void* window, Uint32 width, Uint32 height) override;
+        Bool ServerWindowResized(void* window, Uint32 width, Uint32 height) override;
 
         const RendererInfo& GetRendererInfo() const override;
         String GetBackendAPIVersionString() const override;
@@ -57,8 +80,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void UpdateDynamicBackendParameters();
         Bool InitPbufferSurface(EGLint width, EGLint height) override;
         void OnEGLSurfaceReleased(EGLSurface surface) override;
+        void OnEGLSurfaceForgotten(EGLSurface surface) override;
+        // An existing native surface for the client surface being activated, re-bound; false when
+        // there is none yet (the caller creates it).
+        Bool RebindNativeSurfaceFor(EGLSurface surface);
+        // EGL: creating a surface does not change what is current. The creation bound the new
+        // surface natively; put the previous one back for the context that held it.
+        void RestoreSurfaceAfterCreation(EGLSurface previousNativeDraw);
 
         Bool m_initialized = false;
+        // P14: ONE NATIVE SURFACE PER CLIENT SURFACE, created on its first activation and re-bound
+        // on every later one. A multi-window client switches surfaces every frame; making a new
+        // native surface each time leaked them and lost what the window had drawn.
+        UnorderedMap<EGLSurface, EGLSurface> m_nativeSurfaces;
+        // Window surfaces whose window is gone (SuspendServerWindow): their native surface is a
+        // placeholder pbuffer until ResumeServerWindow.
+        Vector<EGLSurface> m_suspendedWindowSurfaces;
         MG_External::EGLFunctionsTable m_EGLFunctions;
         MG_External::GLESFunctionsTable m_GLESFunctions;
         MG_External::GLESCapabilities m_GLESCapabilities;
@@ -78,12 +115,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     // The full OpenGL extension list Espryt advertises (glGetString(GL_EXTENSIONS))
     // for a device whose timer queries / anisotropic filtering / native indirect draws /
-    // non-zero indirect baseInstance semantics / EXT-OES texture views are (or are not) usable.
-    // The MOBILEGL_DISABLE_TIMERQUERY escape hatch is applied inside.
+    // non-zero indirect baseInstance semantics / EXT-OES texture views are (or are not) usable,
+    // plus the feature set in `features`. The MOBILEGL_DISABLE_TIMERQUERY escape hatch is applied
+    // inside.
     Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported,
-                                                  Bool drawIndirectSupported,
-                                                  Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool textureViewSupported, Bool cubeMapArraySupported);
+                                                  Bool drawIndirectSupported, Bool nonZeroIndirectBaseInstanceSupported,
+                                                  Bool textureViewSupported, Bool cubeMapArraySupported,
+                                                  const AdvertisedFeatureSupport& features = {});
 
     // Format: <OpenGL ES Renderer>, OpenGL ES <Major>.<Minor> — the exact string an
     // initialized backend returns from GetBackendAPIVersionString (and that ends up

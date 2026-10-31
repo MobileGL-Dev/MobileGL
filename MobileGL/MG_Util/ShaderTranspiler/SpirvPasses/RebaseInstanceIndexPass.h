@@ -22,7 +22,7 @@ namespace MobileGL {
             // (Flywheel's glMultiDrawElementsIndirect, glDrawElementsInstancedBaseInstance)
             // therefore feeds shaders an InstanceID offset by baseInstance. This pass rebases
             // every load of the InstanceIndex builtin to (InstanceIndex - BaseInstance), the
-            // same lowering Zink/DXVK use, so the value seen by the shader matches GL's
+            // same lowering other API-on-Vulkan translation layers use, so the value seen by the shader matches GL's
             // zero-based gl_InstanceID. Vulkan backend only - the DirectGLES transpile path
             // already receives a zero-based gl_InstanceID from SPIRV-Cross.
             class RebaseInstanceIndexPass : public spvtools::opt::Pass {

@@ -1,0 +1,117 @@
+// MobileGL - MobileGL/MG_Impl/Pipe/SetHashSuppressor.h
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+#pragma once
+#include <Includes.h>
+
+// Set-hash suppression (ARCHITECTURE.md §5.4): every kVarTail set_* hashes the resolved set on
+// the client and is not emitted while the hash is unchanged, in place of the backends' own
+// "same set as last time" debounce. A slot's hash must cover every input its record carries,
+// not only the set: MGPipeVertexBufferSetContentHash mixes in BaseInstance, which is draw state
+// that moves without the buffer set, or a changed fetch shift would be suppressed. A latched 0
+// means "never emitted", so the first emission always goes out; a computed 0 is latched as 1,
+// costing at worst one extra emission, never a missed one.
+#include <MG_Pipe/MGPipe.h>
+
+namespace MobileGL::MG_Pipe {
+
+    // One slot per kVarTail set_* (ARCHITECTURE.md 5.1's call list), PLUS
+    // SetFramebufferState, which is not kVarTail at all: MGPFramebufferState carries a
+    // ContentHash for TWO jobs - the server's render-pass memo key and the client's emission
+    // suppressor - and the second one needs a slot here like any other, PLUS
+    // SetContextValues (P5c rv), also not kVarTail: one fixed-width POD whose whole-record
+    // hash is the "did any covered value move" answer. The enum is
+    // CLIENT-ONLY and is not a wire opcode, so appending before Count is safe.
+    enum class MGPipeSuppressorSlot : Uint32 {
+        SetVertexBuffers = 0, // P3a - wired, and its hash includes BaseInstance
+        // P4a - WIRED. The three unit sets' suppressors are not optional and were never a
+        // later phase's: MGPipeTypes.h makes the pattern mandatory for every kVarTail set_*,
+        // because GetTextureBindGeneration() bumps on a REDUNDANT rebind - MC 26.2 rebinds the
+        // same sampler at every texture-unit switch - so an unsuppressed set is a
+        // several-hundred-byte variable-length record per batch, which is the exact regression
+        // the design names. What P3b/P4b owns is the ~175-line BACKEND debounce these replace
+        // (UnitBindingsSnapshot / CaptureUnitBindings / UnitBindingsUnchanged and the two
+        // g_*SyncList tables); P4a wires the carrier, P3b/P4b deletes the backend copy.
+        SetSamplerViews,   // P4a - wired (backend debounce deletion: P3b/P4b)
+        BindSamplerStates, // P4a - wired (backend debounce deletion: P3b/P4b)
+        SetShaderImages,   // P4a - wired (backend debounce deletion: P3b/P4b)
+                           // P5e (§1, ruling 11): THREE SLOTS, ONE PER CLASS, not one
+        // for the call. set_shader_buffers is emitted per Class (Uniform / ShaderStorage /
+        // AtomicCounter) because the record's own Class field says which binding-point array
+        // it describes - so a single slot would make every emission of one class cancel the
+        // previous emission of another, and the shader-storage set would be suppressed as
+        // "unchanged" by a uniform set that happened to hash the same way. Three slots also
+        // keep the per-family fire tally and the A/B meaningful, which one keyed on
+        // (slot, Class) would not.
+        SetShaderBuffersUniform,       // P5e (sb)
+        SetShaderBuffersShaderStorage, // P5e (sb)
+        SetShaderBuffersAtomicCounter, // P5e (sb)
+        SetStreamOutputTargets,        // P4b
+        // P5e (CONTRACT-P5E.md §1): set_program_bindings, the post-link binding record. Not
+        // kVarTail-only - it has three tails - but the same rule applies: the emitter latches
+        // on (Cso, backendStateVersion, blockBindingVersion) and the whole-record hash is what
+        // says "nothing moved".
+        SetProgramBindings,      // P5e (pg)
+        SetVertexAttribDefaults, // P2 - the one consumer that is wired
+        SetFramebufferState,     // P4a - wired
+        // P5c rv (CONTRACT-P5C.md §5.3). NOT kVarTail either - the same shape as
+        // SetFramebufferState's note: MGPContextValues is one fixed-width POD, and the
+        // whole-record hash IS its "did any covered value move" answer (there is deliberately
+        // no dirty mask in the payload - a suppressed record means "nothing moved", never
+        // "field invalid").
+        SetContextValues, // P5c rv - wired, split+transport only (PipeFill.cpp gates)
+        Count,
+    };
+
+    inline constexpr SizeT kMGPipeSuppressorSlotCount = static_cast<SizeT>(MGPipeSuppressorSlot::Count);
+
+    class MGPipeSetHashSuppressor {
+    public:
+        // True when `contentHash` differs from what this slot last emitted, and LATCHES it.
+        // False means the resolved set has not moved and the call must not go out.
+        Bool ShouldEmit(MGPipeSuppressorSlot slot, Uint64 contentHash) {
+            const Uint64 latched = contentHash == 0 ? 1 : contentHash;
+            const SizeT index = static_cast<SizeT>(slot);
+            if (m_lastEmitted[index] == latched) return false;
+            m_lastEmitted[index] = latched;
+            return true;
+        }
+
+        // The server now holds the set `contentHash` names without this slot having emitted it
+        // (P14: bind_vertex_elements re-applies the array's kept set). Same 0 -> 1 remap as
+        // ShouldEmit, so the next ShouldEmit of the same hash answers false.
+        void Latch(MGPipeSuppressorSlot slot, Uint64 contentHash) {
+            m_lastEmitted[static_cast<SizeT>(slot)] = contentHash == 0 ? 1 : contentHash;
+        }
+
+        // A context change or a server reset: what the server has is no longer what this
+        // slot last emitted, so the next resolved set must go out whatever it hashes to.
+        void Invalidate(MGPipeSuppressorSlot slot) { m_lastEmitted[static_cast<SizeT>(slot)] = 0; }
+
+        void InvalidateAll() {
+            for (SizeT i = 0; i < kMGPipeSuppressorSlotCount; ++i)
+                m_lastEmitted[i] = 0;
+        }
+
+        // 0 == "never emitted". Exposed for the unit test, which is what pins that the
+        // reserved value really is reserved.
+        Uint64 LastEmitted(MGPipeSuppressorSlot slot) const { return m_lastEmitted[static_cast<SizeT>(slot)]; }
+
+    private:
+        Array<Uint64, kMGPipeSuppressorSlotCount> m_lastEmitted{};
+    };
+
+    // The monolith's one suppressor, beside the tracker and the CSO cache.
+    inline MGPipeSetHashSuppressor& MGPipeSetHashSuppressorInstance() {
+        // NEVER DESTROYED, for MGPipeTrackerInstance()' reason (MG_Impl/Pipe/Tracker.h): the
+        // rule covers every MGPipe process singleton, not only the ones on today's death
+        // paths.
+        static MGPipeSetHashSuppressor* suppressor = new MGPipeSetHashSuppressor();
+        return *suppressor;
+    }
+} // namespace MobileGL::MG_Pipe

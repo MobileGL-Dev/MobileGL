@@ -17,8 +17,9 @@
 #include <initializer_list>
 #include <utility>
 #include <Config.h>
-#include <MG_Backend/BackendObjects.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
+#include <MG_Util/Converters/MGToGL/ProgramEnumConverter.h>
+#include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 
 #include "EsslBuiltinFunctionNames.h"
@@ -52,7 +53,12 @@ namespace {
     // contains "/*" one byte in, and a naive search for that opener treats the rest of the file as
     // an unterminated comment.
     MobileGL::String MaskCommentsAndQuotedText(const MobileGL::String& source) {
-        enum class Region { Code, SingleLineComment, MultiLineComment, QuotedText };
+        enum class Region {
+            Code,
+            SingleLineComment,
+            MultiLineComment,
+            QuotedText
+        };
 
         MobileGL::String masked = source;
         Region region = Region::Code;
@@ -215,13 +221,26 @@ namespace {
     // desktop and ES version) so the normalizer never starts rejecting a form it used to accept.
     bool IsRecognizedGlslVersion(unsigned version) {
         switch (version) {
-            case 100: case 110: case 120: case 130: case 140: case 150:
-            case 300: case 310: case 320:
-            case 330: case 400: case 410: case 420: case 430:
-            case 440: case 450: case 460:
-                return true;
-            default:
-                return false;
+        case 100:
+        case 110:
+        case 120:
+        case 130:
+        case 140:
+        case 150:
+        case 300:
+        case 310:
+        case 320:
+        case 330:
+        case 400:
+        case 410:
+        case 420:
+        case 430:
+        case 440:
+        case 450:
+        case 460:
+            return true;
+        default:
+            return false;
         }
     }
 
@@ -390,13 +409,12 @@ namespace {
                 // '#' follows - which is the ordinary shape of a resolved shader-pack source (one
                 // leading #version, nothing after it), and it makes this whole sweep quadratic in
                 // shader size. A 131 KB glsl-transformer output in .trace-work has exactly one '#'
-                // in the file. Searching the line span is behaviour-identical: every hashPos the
+                // in the file. Searching the line span is behavior-identical: every hashPos the
                 // unbounded form could accept already had to satisfy hashPos < lineEnd.
                 if (info.hasValidVersionDirective && probe < lineEnd) {
                     const void* hash = std::memchr(code.data() + probe, '#', lineEnd - probe);
                     if (hash != nullptr) {
-                        recordIfRedundant(static_cast<SizeT>(static_cast<const char*>(hash) - code.data()),
-                                          lineEnd);
+                        recordIfRedundant(static_cast<SizeT>(static_cast<const char*>(hash) - code.data()), lineEnd);
                     }
                 }
             } else {
@@ -426,10 +444,9 @@ namespace {
                         probe++;
                         SkipDirectiveWhitespace(code, probe, lineEnd);
                         const MobileGL::String behavior = ReadDirectiveIdentifier(code, probe, lineEnd);
-                        const bool isGpuShader5 = extension == "GL_ARB_gpu_shader5" ||
-                                                  extension == "GL_NV_gpu_shader5";
-                        const bool enablesExtension = behavior == "enable" || behavior == "require" ||
-                                                      behavior == "warn";
+                        const bool isGpuShader5 = extension == "GL_ARB_gpu_shader5" || extension == "GL_NV_gpu_shader5";
+                        const bool enablesExtension =
+                            behavior == "enable" || behavior == "require" || behavior == "warn";
                         if (!extension.empty()) {
                             info.namedExtensions.insert(extension);
                             if (enablesExtension) info.enabledExtensions.insert(extension);
@@ -463,13 +480,18 @@ namespace {
     // Stamped onto the normalized directive when a legacy (or absent) desktop
     // version was rewritten to 330; consumed by RetargetLegacyVersionDirectiveTo460.
     constexpr const char* kNormalizedLegacyMarker = "/*mobilegl-normalized-legacy*/";
+    // Stamped onto the directive an ES source is rewritten to, with the ESSL version it declared:
+    // the rules ESSL has and desktop GLSL does not are enforced off it (FindEsOrigin), and it keeps
+    // an ES source from sharing a parse verdict with a byte-identical desktop one.
+    constexpr const char* kEsOriginMarkerPrefix = "/*mobilegl-es-origin:";
 
     MobileGL::String GetNormalizedVersionDirective(const ShaderLanguageInfo& info) {
         if (info.profile == MobileGL::ShaderProfile::ES) {
             // Preserve the pre-existing behavior for standard lowercase "es" directives. MobileGL's Vulkan
             // glslang resource table cannot parse its ESSL built-ins today, even at ESSL 310, whereas the same
             // source is accepted through the normalized desktop core path.
-            return "#version 460 core\n";
+            return MobileGL::String("#version 460 core ") + kEsOriginMarkerPrefix + std::to_string(info.version) +
+                   "*/\n";
         }
 
         // Keep compatibility-profile handling on its pre-existing 460 path. Vulkan glslang does not accept that
@@ -487,8 +509,7 @@ namespace {
             return "#version " + std::to_string(info.version) + " core\n";
         }
 
-        const bool useLegacyDesktopVersion =
-            info.version < 400 && !info.enablesGpuShader5;
+        const bool useLegacyDesktopVersion = info.version < 400 && !info.enablesGpuShader5;
         // The trailing marker records that this 330 came from a legacy declaration
         // (or none at all), so the compile-failure retry may re-raise it to 460.
         // An application's own "#version 330" never carries it and keeps strict
@@ -519,7 +540,7 @@ namespace {
     // gets the second one spliced into the tail of the first - which is exactly what VK-GL-CTS's
     // ShaderImageLoadStoreBase::BuildProgram does (kGLSLPrec ends without a newline, and
     // NegativeUniform's own sources begin with "#version 310 es"). Desktop drivers accept it; the
-    // duplicate says nothing new, so honouring it costs no semantics.
+    // duplicate says nothing new, so honoring it costs no semantics.
     //
     // Blanked rather than erased so that every offset in `info` - which was measured against this
     // same source - stays valid, and so the line count, and with it __LINE__ and every glslang
@@ -635,10 +656,9 @@ namespace {
     bool IsInDirectiveLine(const Vector<std::pair<SizeT, SizeT>>& ranges, SizeT offset) {
         // Ranges are disjoint and sorted, so the only candidate is the last one starting at or
         // before the offset.
-        const auto next = std::upper_bound(ranges.begin(), ranges.end(), offset,
-                                           [](SizeT value, const std::pair<SizeT, SizeT>& range) {
-                                               return value < range.first;
-                                           });
+        const auto next =
+            std::upper_bound(ranges.begin(), ranges.end(), offset,
+                             [](SizeT value, const std::pair<SizeT, SizeT>& range) { return value < range.first; });
         return next != ranges.begin() && offset < std::prev(next)->second;
     }
 
@@ -651,8 +671,8 @@ namespace {
     };
 
     bool IsStatementKeywordToken(const CodeToken& token) {
-        return std::binary_search(std::begin(kStatementKeywordsBeforeCall),
-                                  std::end(kStatementKeywordsBeforeCall), std::string_view(token.text));
+        return std::binary_search(std::begin(kStatementKeywordsBeforeCall), std::end(kStatementKeywordsBeforeCall),
+                                  std::string_view(token.text));
     }
 
     // A brace counter over raw tokens is preprocessor-blind: it counts the braces of BOTH arms of
@@ -850,7 +870,8 @@ namespace {
             if (lastLine) lineEnd = source.size();
 
             SizeT probe = lineStart;
-            while (probe < lineEnd && (source[probe] == ' ' || source[probe] == '\t')) probe++;
+            while (probe < lineEnd && (source[probe] == ' ' || source[probe] == '\t'))
+                probe++;
 
             const bool isLineDirective = masked.compare(probe, 5, "#line") == 0 &&
                                          (probe + 5 >= lineEnd || !IsIdentifierChar(source[probe + 5]));
@@ -884,7 +905,6 @@ namespace {
         source = std::move(result);
     }
 
-
     MobileGL::String TrimDirectiveToken(const MobileGL::String& token) {
         SizeT start = 0;
         while (start < token.size() && std::isspace(static_cast<unsigned char>(token[start]))) {
@@ -898,17 +918,75 @@ namespace {
         return token.substr(start, end - start);
     }
 
-    void FilterUnsupportedGpuShaderInt64(const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env,
-                                         MobileGL::String& source) {
-        if (env.IsExtensionAdvertised(MobileGL::E_GL_ARB_gpu_shader_int64)) {
-            return;
+    // GL_SHADER_STAGE bit of a stage, as GL_SUBGROUP_SUPPORTED_STAGES_KHR spells it.
+    GLbitfield SubgroupStageBit(MobileGL::ShaderStage stage) {
+        switch (MobileGL::MG_Util::ConvertShaderStageToGLEnum(stage)) {
+        case GL_VERTEX_SHADER:
+            return GL_VERTEX_SHADER_BIT;
+        case GL_TESS_CONTROL_SHADER:
+            return GL_TESS_CONTROL_SHADER_BIT;
+        case GL_TESS_EVALUATION_SHADER:
+            return GL_TESS_EVALUATION_SHADER_BIT;
+        case GL_GEOMETRY_SHADER:
+            return GL_GEOMETRY_SHADER_BIT;
+        case GL_FRAGMENT_SHADER:
+            return GL_FRAGMENT_SHADER_BIT;
+        case GL_COMPUTE_SHADER:
+            return GL_COMPUTE_SHADER_BIT;
+        default:
+            return 0;
         }
+    }
 
+    // The GL_SUBGROUP_FEATURE_*_BIT_KHR an extension name stands for, or 0 for a name that is
+    // not one of the eight GL_KHR_shader_subgroup_* extensions.
+    GLbitfield SubgroupFeatureBit(const MobileGL::String& name) {
+        static const std::pair<const char*, GLbitfield> kFeatures[] = {
+            {"GL_KHR_shader_subgroup_basic", GL_SUBGROUP_FEATURE_BASIC_BIT_KHR},
+            {"GL_KHR_shader_subgroup_vote", GL_SUBGROUP_FEATURE_VOTE_BIT_KHR},
+            {"GL_KHR_shader_subgroup_arithmetic", GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR},
+            {"GL_KHR_shader_subgroup_ballot", GL_SUBGROUP_FEATURE_BALLOT_BIT_KHR},
+            {"GL_KHR_shader_subgroup_shuffle", GL_SUBGROUP_FEATURE_SHUFFLE_BIT_KHR},
+            {"GL_KHR_shader_subgroup_shuffle_relative", GL_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT_KHR},
+            {"GL_KHR_shader_subgroup_clustered", GL_SUBGROUP_FEATURE_CLUSTERED_BIT_KHR},
+            {"GL_KHR_shader_subgroup_quad", GL_SUBGROUP_FEATURE_QUAD_BIT_KHR},
+        };
+        for (const auto& [featureName, bit] : kFeatures) {
+            if (name == featureName) return bit;
+        }
+        return 0;
+    }
+
+    // Whether the shader-language extension `name` is one this backend cannot honor in this
+    // stage - which is what a `#extension name : require` must then fail on, and what an
+    // `enable` must not pretend to have turned on. glslang parses desktop GLSL 4.60, where
+    // these are always available, so without this a shader would compile here and then fail
+    // (or worse, silently do nothing) at the backend:
+    //   * GL_ARB_gpu_shader_int64 when the extension is not advertised;
+    //   * any GL_KHR_shader_subgroup_* when GL_KHR_shader_subgroup is not advertised, when
+    //     this stage is not in GL_SUBGROUP_SUPPORTED_STAGES_KHR, or when that extension's
+    //     feature is not in GL_SUBGROUP_SUPPORTED_FEATURES_KHR - the KHR spec's own terms for
+    //     where each of the eight may be used. The stage and feature tests need a backend:
+    //     with none, every extension reads as available (CompileEnv::IsExtensionAdvertised).
+    bool IsUnavailableShaderExtension(const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env,
+                                      MobileGL::ShaderStage stage, const MobileGL::String& name) {
+        if (name == "GL_ARB_gpu_shader_int64") return !env.IsExtensionAdvertised(MobileGL::E_GL_ARB_gpu_shader_int64);
+        const GLbitfield feature = SubgroupFeatureBit(name);
+        if (feature == 0) return false;
+        if (!env.IsExtensionAdvertised(MobileGL::E_GL_KHR_shader_subgroup)) return true;
+        if (!env.HasBackend()) return false;
+        return (env.params.SubgroupSupportedStages & SubgroupStageBit(stage)) == 0 ||
+               (env.params.SubgroupSupportedFeatures & feature) == 0;
+    }
+
+    void FilterUnavailableShaderExtensions(const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env,
+                                           MobileGL::ShaderStage stage, MobileGL::String& source) {
         // Detect the directive on a comment/string-masked copy so a commented-out
-        // "#extension GL_ARB_gpu_shader_int64" is never turned into a synthesized #error. Comments are
-        // no longer blanked in the delivered source (glslang handles them), so this pass must mask
-        // locally like its siblings. Masking preserves offsets, so edits collected against the scan
-        // apply verbatim to `source`; they are applied back-to-front to keep earlier offsets valid.
+        // "#extension" is never turned into a synthesized #error. Comments are no longer
+        // blanked in the delivered source (glslang handles them), so this pass must mask
+        // locally like its siblings. Masking preserves offsets, so edits collected against the
+        // scan apply verbatim to `source`; they are applied back-to-front to keep earlier
+        // offsets valid.
         const MobileGL::String scan = MaskCommentsAndQuotedText(source);
         struct DirectiveEdit {
             SizeT pos;
@@ -916,6 +994,7 @@ namespace {
             MobileGL::String replacement;
         };
         Vector<DirectiveEdit> edits;
+        Vector<MobileGL::String> hiddenNames;
 
         SizeT lineStart = 0;
         while (lineStart < scan.size()) {
@@ -924,69 +1003,59 @@ namespace {
             if (!hasLineBreak) {
                 lineEnd = scan.size();
             }
-
             const MobileGL::String line = scan.substr(lineStart, lineEnd - lineStart);
+            const SizeT replaceLen = lineEnd - lineStart + (hasLineBreak ? 1 : 0);
             SizeT probe = 0;
-            while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe]))) {
-                probe++;
-            }
-
+            const auto skipSpace = [&] {
+                while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe])))
+                    probe++;
+            };
+            skipSpace();
             if (probe < line.size() && line[probe] == '#') {
                 probe++;
-                while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe]))) {
-                    probe++;
-                }
-
+                skipSpace();
                 constexpr const char* extensionToken = "extension";
                 constexpr SizeT extensionLen = 9;
-                const bool hasExtensionDirective =
-                    probe + extensionLen <= line.size() &&
-                    line.compare(probe, extensionLen, extensionToken) == 0 &&
-                    (probe + extensionLen == line.size() || !IsIdentifierChar(line[probe + extensionLen]));
-                if (hasExtensionDirective) {
+                if (probe + extensionLen <= line.size() && line.compare(probe, extensionLen, extensionToken) == 0 &&
+                    (probe + extensionLen == line.size() || !IsIdentifierChar(line[probe + extensionLen]))) {
                     probe += extensionLen;
-                    while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe]))) {
+                    skipSpace();
+                    const SizeT nameStart = probe;
+                    while (probe < line.size() && IsIdentifierChar(line[probe]))
                         probe++;
-                    }
-
-                    constexpr const char* int64Extension = "GL_ARB_gpu_shader_int64";
-                    constexpr SizeT int64ExtensionLen = 23;
-                    const bool hasInt64Extension =
-                        probe + int64ExtensionLen <= line.size() &&
-                        line.compare(probe, int64ExtensionLen, int64Extension) == 0 &&
-                        (probe + int64ExtensionLen == line.size() ||
-                         !IsIdentifierChar(line[probe + int64ExtensionLen]));
-                    if (hasInt64Extension) {
-                        probe += int64ExtensionLen;
-                        while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe]))) {
-                            probe++;
+                    const MobileGL::String name = line.substr(nameStart, probe - nameStart);
+                    skipSpace();
+                    if (!name.empty() && probe < line.size() && line[probe] == ':' &&
+                        IsUnavailableShaderExtension(env, stage, name)) {
+                        const MobileGL::String behavior = TrimDirectiveToken(line.substr(probe + 1));
+                        if (behavior == "require") {
+                            edits.push_back(
+                                {lineStart, replaceLen,
+                                 "#error " + name + " is not available to this shader stage in MobileGL\n"});
+                        } else if (behavior == "enable" || behavior == "warn") {
+                            edits.push_back({lineStart, replaceLen, "\n"});
                         }
-
-                        if (probe < line.size() && line[probe] == ':') {
-                            probe++;
-                            const MobileGL::String behavior = TrimDirectiveToken(line.substr(probe));
-                            const SizeT replaceLen = lineEnd - lineStart + (hasLineBreak ? 1 : 0);
-                            if (behavior == "require") {
-                                edits.push_back({lineStart, replaceLen,
-                                                 "#error GL_ARB_gpu_shader_int64 is not advertised by MobileGL\n"});
-                            } else if (behavior == "enable" || behavior == "warn") {
-                                edits.push_back({lineStart, replaceLen, "\n"});
-                            }
-                            lineStart = lineEnd + (hasLineBreak ? 1 : 0);
-                            continue;
+                        if (std::find(hiddenNames.begin(), hiddenNames.end(), name) == hiddenNames.end()) {
+                            hiddenNames.push_back(name);
                         }
                     }
                 }
             }
-
             lineStart = lineEnd + (hasLineBreak ? 1 : 0);
         }
 
         for (auto it = edits.rbegin(); it != edits.rend(); ++it) {
             source.replace(it->pos, it->len, it->replacement);
         }
-
-        ReplaceIdentifier(source, "GL_ARB_gpu_shader_int64", "MG_DISABLED_GL_ARB_gpu_shader_int64");
+        // The extension's own feature-test macro, so an `#ifdef` guard takes the fallback branch.
+        // int64 keeps its historical treatment: hidden whether or not the source names it.
+        if (IsUnavailableShaderExtension(env, stage, "GL_ARB_gpu_shader_int64") &&
+            std::find(hiddenNames.begin(), hiddenNames.end(), "GL_ARB_gpu_shader_int64") == hiddenNames.end()) {
+            hiddenNames.push_back("GL_ARB_gpu_shader_int64");
+        }
+        for (const auto& name : hiddenNames) {
+            ReplaceIdentifier(source, name, "MG_DISABLED_" + name);
+        }
     }
 
     // GLSL 4.30 4.1.9 allows an interface-block member array to be left unsized when it is NOT the
@@ -1003,7 +1072,7 @@ namespace {
     // block (no other block kind may hold an unsized member at all), only on a member that is not
     // the last one, and only when every subscript of that member's name in the source is a decimal
     // literal. Anything outside that shape is left exactly as it was - and the shape itself has no
-    // correct behaviour today, so the rewrite cannot take a working case away.
+    // correct behavior today, so the rewrite cannot take a working case away.
     void SizeNonFinalUnsizedBufferBlockMembers(MobileGL::String& source) {
         // Both tokens must be present for the shape to exist, and "[]" is absent from essentially
         // every real shader source, so this is the whole cost for them.
@@ -1012,9 +1081,8 @@ namespace {
         }
 
         const auto isDecimalInteger = [](const String& text) {
-            return !text.empty() && std::all_of(text.begin(), text.end(), [](char ch) {
-                       return ch >= '0' && ch <= '9';
-                   });
+            return !text.empty() &&
+                   std::all_of(text.begin(), text.end(), [](char ch) { return ch >= '0' && ch <= '9'; });
         };
 
         const Vector<CodeToken> tokens = TokenizeCode(source);
@@ -1140,17 +1208,17 @@ namespace {
 
     bool IsParameterQualifierKeyword(const String& text) {
         static constexpr std::string_view kQualifiers[] = {
-            "const",    "in",       "out",      "inout",     "highp",     "mediump", "lowp",
-            "precise",  "coherent", "volatile", "restrict",  "readonly",  "writeonly",
+            "const",   "in",       "out",      "inout",    "highp",    "mediump",   "lowp",
+            "precise", "coherent", "volatile", "restrict", "readonly", "writeonly",
         };
         return std::find(std::begin(kQualifiers), std::end(kQualifiers), std::string_view(text)) !=
-            std::end(kQualifiers);
+               std::end(kQualifiers);
     }
 
     // The #if/#ifdef/#ifndef nesting in effect at each offset, as (offset, depth) marks. Every
     // mark takes effect at the END of the directive line that changed the depth.
     Vector<std::pair<SizeT, int>> BuildConditionalDepthMarks(const MobileGL::String& source,
-                                                            const Vector<std::pair<SizeT, SizeT>>& ranges) {
+                                                             const Vector<std::pair<SizeT, SizeT>>& ranges) {
         Vector<std::pair<SizeT, int>> marks;
         marks.emplace_back(static_cast<SizeT>(0), 0);
         int depth = 0;
@@ -1174,10 +1242,9 @@ namespace {
     }
 
     int ConditionalDepthAt(const Vector<std::pair<SizeT, int>>& marks, SizeT offset) {
-        const auto next = std::upper_bound(marks.begin(), marks.end(), offset,
-                                           [](SizeT value, const std::pair<SizeT, int>& mark) {
-                                               return value < mark.first;
-                                           });
+        const auto next =
+            std::upper_bound(marks.begin(), marks.end(), offset,
+                             [](SizeT value, const std::pair<SizeT, int>& mark) { return value < mark.first; });
         return next == marks.begin() ? 0 : std::prev(next)->second;
     }
 
@@ -1273,7 +1340,7 @@ namespace {
     // it is left to fail at compile time exactly as it does today rather than silently pinned to
     // one of the alternatives.
     //
-    //     subroutine void FuncType(int coord);          ->  (blanked)
+    //     subroutine void FuncType(int coord);          ->  void FuncType(int coord);
     //     subroutine uniform FuncType g_func;           ->  void g_func(int mgl_sr_arg0);
     //     subroutine(FuncType) void Func0(int c) { }    ->  void Func0(int c) { }
     //                                                       ...plus, appended at end of source,
@@ -1292,7 +1359,7 @@ namespace {
     // All-or-nothing, in the discipline of the scanners below it: an array subroutine uniform, a
     // subroutine token inside a #if arm or a macro body, an unbalanced file, a type that is never
     // declared - anything outside the grammar abandons the whole pass with the source untouched,
-    // which is exactly today's behaviour.
+    // which is exactly today's behavior.
     void LowerShaderSubroutines(MobileGL::String& source) {
         if (source.find("subroutine") == MobileGL::String::npos) return;
 
@@ -1301,8 +1368,7 @@ namespace {
         if (count < 4 || !HasBalancedBraces(tokens)) return;
 
         const Vector<std::pair<SizeT, SizeT>> directiveRanges = FindDirectiveLineRanges(source);
-        const Vector<std::pair<SizeT, int>> conditionalDepth =
-            BuildConditionalDepthMarks(source, directiveRanges);
+        const Vector<std::pair<SizeT, int>> conditionalDepth = BuildConditionalDepthMarks(source, directiveRanges);
 
         struct SubroutineType {
             String returnText; // empty until the type declaration itself is seen
@@ -1438,7 +1504,11 @@ namespace {
             type.returnText = JoinTokenText(tokens, i + 1, paren - 1);
             if (type.returnText.empty()) return;
             if (!ParseSubroutineParameters(tokens, paren + 1, listEnd - 1, type.parameters)) return;
-            blanks.push_back({token.begin, tokens[listEnd].end});
+            // Only the keyword goes. What is left is an ordinary prototype that is never defined
+            // or called - legal - and it keeps the type NAME in front of glslang, which is what
+            // still rejects a reserved word there (`subroutine void const();`) instead of the
+            // name vanishing with the declaration.
+            blanks.push_back({token.begin, token.end});
             i = listEnd;
         }
 
@@ -1470,7 +1540,7 @@ namespace {
                 const String signature = type.returnText + " " + variable + "(" + parameterList + ")";
                 text += signature + "; ";
                 appended += signature + " {\n    " + (type.returnText == "void" ? "" : "return ") +
-                    type.implementations.front() + "(" + arguments + ");\n}\n";
+                            type.implementations.front() + "(" + arguments + ");\n}\n";
             }
             prototypes.emplace_back(site.begin, std::move(text));
         }
@@ -1484,10 +1554,9 @@ namespace {
         for (const UniformSite& site : uniformSites) {
             BlankSpan(source, site.begin, site.end);
         }
-        std::sort(prototypes.begin(), prototypes.end(),
-                  [](const std::pair<SizeT, String>& a, const std::pair<SizeT, String>& b) {
-                      return a.first < b.first;
-                  });
+        std::sort(
+            prototypes.begin(), prototypes.end(),
+            [](const std::pair<SizeT, String>& a, const std::pair<SizeT, String>& b) { return a.first < b.first; });
         for (auto it = prototypes.rbegin(); it != prototypes.rend(); ++it) {
             source.insert(it->first, it->second);
         }
@@ -1544,8 +1613,8 @@ namespace {
                         identifierEnd++;
                     }
                     const SizeT identifierLen = identifierEnd - cursor;
-                    if (identifierLen == 6 && (source.compare(cursor, 6, "packed") == 0 ||
-                                               source.compare(cursor, 6, "shared") == 0)) {
+                    if (identifierLen == 6 &&
+                        (source.compare(cursor, 6, "packed") == 0 || source.compare(cursor, 6, "shared") == 0)) {
                         source.replace(cursor, 6, "std140");
                     }
                     cursor = identifierEnd;
@@ -1561,8 +1630,7 @@ namespace {
     // tracker rather than a bare offset because this pass rewrites identifiers first, and those
     // rewrites are raw text: a leading comment banner mentioning `varying` or `texture2D` moves the
     // anchor, and the tracker notices.
-    void ModernizeLegacyGLSL(MobileGL::ShaderStage stage, MobileGL::String& source,
-                             AfterVersionAnchor& afterVersion) {
+    void ModernizeLegacyGLSL(MobileGL::ShaderStage stage, MobileGL::String& source, AfterVersionAnchor& afterVersion) {
         // Precision qualifiers (highp/mediump/lowp and default-precision statements) are legal and
         // ignored in the normalized desktop core profiles, so glslang handles them natively.
 
@@ -1705,7 +1773,7 @@ namespace {
     // extension macro the shader is entitled to disappears with it. A CTS shader guarded by
     // `#if !GL_OES_sample_variables / this is broken / #endif` then takes the broken branch.
     //
-    // The extension BEHAVIOUR survives the rewrite (glslang honours "#extension X : require" under
+    // The extension BEHAVIOR survives the rewrite (glslang honors "#extension X : require" under
     // either profile), so this is a preamble-fidelity gap and nothing more; restoring the macros is
     // the whole fix.
     //
@@ -1725,18 +1793,17 @@ namespace {
         // preamble defines all of them, and the CTS-shaped "#if !GL_OES_sample_variables" guard
         // reads one of them.
         //
-        // `#extension all : warn` is deliberately NOT honoured here, unlike in the built-in gate.
+        // `#extension all : warn` is deliberately NOT honored here, unlike in the built-in gate.
         // The two answer different questions: the gate asks "would glslang have this extension
         // turned on", where `all` genuinely says yes, while this asks "which preamble macros did
         // the ES -> desktop rewrite take away". glslang's preamble runs BEFORE any #extension line
         // and defines the ES macros regardless of behavior, so `all` adds no information - and
         // emitting all thirty-five for a source that named nothing is exactly the broad rewrite
         // the named-extensions-only policy exists to avoid.
-        const bool hasMacroToRestore =
-            std::any_of(info.namedExtensions.begin(), info.namedExtensions.end(),
-                        [&info](const MobileGL::String& extension) {
-                            return IsEsOnlyPreambleExtensionMacro(extension, info.version);
-                        });
+        const bool hasMacroToRestore = std::any_of(info.namedExtensions.begin(), info.namedExtensions.end(),
+                                                   [&info](const MobileGL::String& extension) {
+                                                       return IsEsOnlyPreambleExtensionMacro(extension, info.version);
+                                                   });
         // Nothing the desktop preamble is missing: leave the source byte-identical.
         if (!hasMacroToRestore) return;
 
@@ -1808,10 +1875,89 @@ namespace {
             return;
         }
 
-        constexpr const char* shim =
-            "uniform int mg_NumSamples;\n"
-            "#define gl_NumSamples mg_NumSamples\n";
+        constexpr const char* shim = "uniform int mg_NumSamples;\n"
+                                     "#define gl_NumSamples mg_NumSamples\n";
         source.insert(afterVersion.Get(source), shim);
+    }
+
+    // The uniforms `text` declares with the external sampler type, and (into `others`) the names it
+    // declares with any other type - the same name can be both in a source whose #if branches pick
+    // one (a compositor's shader generator does exactly that).
+    void ScanExternalSamplerDeclarations(const MobileGL::String& text, Vector<MobileGL::String>& external,
+                                         Vector<MobileGL::String>* others) {
+        const Vector<CodeToken> tokens = TokenizeCode(text);
+        for (SizeT i = 0; i < tokens.size(); ++i) {
+            if (tokens[i].text != "uniform") continue;
+            // The type is the first identifier after `uniform` that is not a precision qualifier.
+            SizeT type = i + 1;
+            while (type < tokens.size() &&
+                   (tokens[type].text == "lowp" || tokens[type].text == "mediump" || tokens[type].text == "highp"))
+                ++type;
+            if (type >= tokens.size() || !IsIdentifierToken(tokens[type])) continue;
+            const bool isExternal = tokens[type].text == "samplerExternalOES";
+            Vector<MobileGL::String>* into = isExternal ? &external : others;
+            // `name`, `name[N]`, and comma-separated lists of them, up to the `;` (a block's `{`
+            // ends the scan: its members are not samplers).
+            for (SizeT j = type + 1; j < tokens.size() && tokens[j].text != ";" && tokens[j].text != "{";) {
+                if (IsIdentifierToken(tokens[j])) {
+                    if (into != nullptr && std::find(into->begin(), into->end(), tokens[j].text) == into->end())
+                        into->push_back(tokens[j].text);
+                    ++j;
+                    if (j < tokens.size() && tokens[j].text == "[") {
+                        while (j < tokens.size() && tokens[j].text != "]")
+                            ++j;
+                        ++j;
+                    }
+                    continue;
+                }
+                ++j;
+            }
+        }
+    }
+
+    // GL_OES_EGL_image_external's sampler type, which the desktop profile the shader is compiled
+    // under has no texture() overloads for. Below the frontend an external texture IS a 2D one (its
+    // EGLImage arrives converted to RGBA), so the type becomes sampler2D, and the names of the
+    // uniforms declared with it ride in a marker (kExternalSamplerMarkerPrefix) to the reflection,
+    // which reports them as GL_SAMPLER_EXTERNAL_OES and so sends their units to the external binding.
+    // The marker is also what keeps such a shader's caches apart from a sampler2D twin's.
+    //
+    // THE NAMES COME FROM THE PREPROCESSED TEXT. A source may declare one name as samplerExternalOES
+    // in one #if branch and as sampler2D in another (a compositor's shader generator does, per trait); only
+    // the branch the preprocessor keeps says what the uniform is. Should glslang's preprocessor
+    // refuse the source, a name declared both ways is left out - a 2D binding is the safe reading.
+    constexpr const char* kExternalSamplerMarkerPrefix = "/*mobilegl-external-samplers:";
+
+    void LowerExternalSamplers(MobileGL::ShaderStage stage, MobileGL::String& source,
+                               AfterVersionAnchor& afterVersion) {
+        if (source.find("samplerExternalOES") == MobileGL::String::npos) return;
+        Vector<MobileGL::String> names;
+        MobileGL::String preprocessed;
+        if (MobileGL::MG_Util::ShaderTranspiler::PreprocessForInspection(
+                MobileGL::MG_Util::ConvertShaderStageToGLEnum(stage), source, preprocessed)) {
+            ScanExternalSamplerDeclarations(preprocessed, names, nullptr);
+        } else {
+            Vector<MobileGL::String> external, others;
+            ScanExternalSamplerDeclarations(source, external, &others);
+            for (const MobileGL::String& name : external) {
+                if (std::find(others.begin(), others.end(), name) == others.end()) names.push_back(name);
+            }
+        }
+        // Every spelling of the type, in any branch: what the preprocessor drops does not matter.
+        Vector<SizeT> typeOffsets;
+        for (const CodeToken& token : TokenizeCode(source)) {
+            if (token.text == "samplerExternalOES") typeOffsets.push_back(token.begin);
+        }
+        if (typeOffsets.empty()) return;
+        for (auto offset = typeOffsets.rbegin(); offset != typeOffsets.rend(); ++offset)
+            source.replace(*offset, std::strlen("samplerExternalOES"), "sampler2D");
+        MobileGL::String marker = kExternalSamplerMarkerPrefix;
+        for (SizeT i = 0; i < names.size(); ++i) {
+            if (i != 0) marker += ',';
+            marker += names[i];
+        }
+        marker += "*/\n";
+        source.insert(afterVersion.Get(source), marker);
     }
 } // namespace
 
@@ -1856,7 +2002,7 @@ namespace MobileGL {
                 // identifier that merely contained the word. The GLES fallback for devices without
                 // the extension lives in the backend, where device capabilities are known.
 
-                FilterUnsupportedGpuShaderInt64(env, source);
+                FilterUnavailableShaderExtensions(env, stage, source);
                 CoerceUniformBlockPackingToStd140(source);
                 // After the packing coercion: that one rewrites `packed`/`shared` in place and so
                 // cannot move an offset this pass depends on, and reading the block declarations
@@ -1870,10 +2016,53 @@ namespace MobileGL {
 
                 RenameBuiltinShadowingFunctions(source);
 
+                LowerExternalSamplers(stage, source, afterVersion);
                 ModernizeLegacyGLSL(stage, source, afterVersion);
                 InjectDepthRangeBuiltinShim(stage, source, afterVersion);
                 InjectNumSamplesBuiltinShim(stage, originalLanguage, source, afterVersion);
+            }
 
+            Vector<String> ExternalSamplerUniformNames(const String& preprocessedSource) {
+                Vector<String> names;
+                const SizeT start = preprocessedSource.find(kExternalSamplerMarkerPrefix);
+                if (start == String::npos) return names;
+                const SizeT from = start + std::strlen(kExternalSamplerMarkerPrefix);
+                const SizeT end = preprocessedSource.find("*/", from);
+                if (end == String::npos) return names;
+                SizeT at = from;
+                while (at < end) {
+                    SizeT comma = preprocessedSource.find(',', at);
+                    if (comma == String::npos || comma > end) comma = end;
+                    if (comma > at) names.push_back(preprocessedSource.substr(at, comma - at));
+                    at = comma + 1;
+                }
+                return names;
+            }
+
+            std::optional<EsOrigin> FindEsOrigin(const String& preprocessedSource) {
+                const SizeT markerStart = preprocessedSource.find(kEsOriginMarkerPrefix);
+                if (markerStart == String::npos) return std::nullopt;
+                SizeT probe = markerStart + std::char_traits<char>::length(kEsOriginMarkerPrefix);
+                Uint esVersion = 0;
+                bool hasDigits = false;
+                while (probe < preprocessedSource.size() && preprocessedSource[probe] >= '0' &&
+                       preprocessedSource[probe] <= '9') {
+                    hasDigits = true;
+                    esVersion = esVersion * 10 + static_cast<Uint>(preprocessedSource[probe] - '0');
+                    if (esVersion > 1000) return std::nullopt; // absurd; not a marker this pipeline wrote
+                    probe++;
+                }
+                if (!hasDigits || preprocessedSource.compare(probe, 2, "*/") != 0) return std::nullopt;
+
+                // The #extension lines survive preprocessing, and enabledExtensions is already
+                // closed under glslang's implication graph (GL_ANDROID_extension_pack_es31a turns
+                // GL_EXT_gpu_shader5 on).
+                const ShaderLanguageInfo info = InspectShaderLanguage(preprocessedSource);
+                EsOrigin origin;
+                origin.version = esVersion;
+                origin.gpuShader5 =
+                    ExtensionTurnedOn(info, "GL_EXT_gpu_shader5") || ExtensionTurnedOn(info, "GL_OES_gpu_shader5");
+                return origin;
             }
 
             String CollectEsPreambleMacroDefines(const String& preprocessedSource) {
@@ -1948,18 +2137,20 @@ namespace MobileGL {
 
                 const SizeT length = source.size();
                 SizeT i = 0;
-                Int layoutParenDepth = 0;   // >0 while inside layout(...)
+                Int layoutParenDepth = 0;        // >0 while inside layout(...)
                 Bool pendingLayoutParen = false; // saw "layout", awaiting its '('
                 while (i < length) {
                     const char c = source[i];
                     // Comments.
                     if (c == '/' && i + 1 < length && source[i + 1] == '/') {
-                        while (i < length && source[i] != '\n') ++i;
+                        while (i < length && source[i] != '\n')
+                            ++i;
                         continue;
                     }
                     if (c == '/' && i + 1 < length && source[i + 1] == '*') {
                         i += 2;
-                        while (i + 1 < length && !(source[i] == '*' && source[i + 1] == '/')) ++i;
+                        while (i + 1 < length && !(source[i] == '*' && source[i + 1] == '/'))
+                            ++i;
                         i = (i + 1 < length) ? i + 2 : length;
                         continue;
                     }
@@ -1994,7 +2185,8 @@ namespace MobileGL {
                     }
                     if (isIdentChar(c) && !(c >= '0' && c <= '9')) {
                         const SizeT start = i;
-                        while (i < length && isIdentChar(source[i])) ++i;
+                        while (i < length && isIdentChar(source[i]))
+                            ++i;
                         const StringView word(source.data() + start, i - start);
                         if (word == "layout") {
                             pendingLayoutParen = true;
@@ -2010,14 +2202,15 @@ namespace MobileGL {
                             for (const char* keyword : kLayoutOnlyKeywords) {
                                 if (word == keyword) {
                                     return String("ERROR: '") + keyword +
-                                        "' is a keyword and may not be used as an identifier.";
+                                           "' is a keyword and may not be used as an identifier.";
                                 }
                             }
                         }
                         continue;
                     }
                     if (isIdentChar(c)) { // digit-led token: skip the whole number/identifier tail
-                        while (i < length && isIdentChar(source[i])) ++i;
+                        while (i < length && isIdentChar(source[i]))
+                            ++i;
                         pendingLayoutParen = false;
                         continue;
                     }
@@ -2030,9 +2223,9 @@ namespace MobileGL {
             namespace {
                 bool IsNonLayoutQualifierKeyword(const String& text) {
                     static const char* kQualifiers[] = {
-                        "highp",    "mediump",  "lowp",     "precise",  "const",    "flat",
-                        "noperspective", "smooth", "centroid", "sample", "patch",   "invariant",
-                        "coherent", "volatile", "restrict", "readonly", "writeonly", "subroutine",
+                        "highp",         "mediump",  "lowp",     "precise",  "const",     "flat",
+                        "noperspective", "smooth",   "centroid", "sample",   "patch",     "invariant",
+                        "coherent",      "volatile", "restrict", "readonly", "writeonly", "subroutine",
                     };
                     for (const char* qualifier : kQualifiers) {
                         if (text == qualifier) return true;
@@ -2068,8 +2261,7 @@ namespace MobileGL {
                 // form, which declares no block at all); the element count for an instance array,
                 // whose elements take base, base+1, ... (GLSL 4.30 4.4.5). -1 means "the grammar
                 // here is outside this scanner's narrow subset", i.e. do not judge this one.
-                long long StorageBlockBindingPointCount(const Vector<CodeToken>& tokens, SizeT bufferPos,
-                                                        SizeT count) {
+                long long StorageBlockBindingPointCount(const Vector<CodeToken>& tokens, SizeT bufferPos, SizeT count) {
                     SizeT k = bufferPos + 1;
                     if (k < count && IsIdentifierToken(tokens[k])) ++k; // block type name
                     if (k >= count || tokens[k].text != "{") return 1;

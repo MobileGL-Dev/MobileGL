@@ -141,21 +141,19 @@ namespace MobileGL {
                 // The cases here have to match the cases in UpdateUse: a use the rewrite
                 // does not know how to update disqualifies the variable.
                 switch (inst->opcode()) {
-                    case spv::Op::OpLoad:
-                    case spv::Op::OpImageTexelPointer: // treat like a load
-                        return true;
-                    case spv::Op::OpStore:
-                        // Storing the variable's ADDRESS somewhere else escapes it.
-                        return inst->GetOperand(1).AsId() != variableId;
-                    case spv::Op::OpAccessChain:
-                        return context()->get_def_use_mgr()->WhileEachUser(
-                            inst, [this, inst](const Instruction* user) {
-                                return IsValidUse(user, inst->result_id());
-                            });
-                    case spv::Op::OpName:
-                        return true;
-                    default:
-                        return spvOpcodeIsDecoration(inst->opcode());
+                case spv::Op::OpLoad:
+                case spv::Op::OpImageTexelPointer: // treat like a load
+                    return true;
+                case spv::Op::OpStore:
+                    // Storing the variable's ADDRESS somewhere else escapes it.
+                    return inst->GetOperand(1).AsId() != variableId;
+                case spv::Op::OpAccessChain:
+                    return context()->get_def_use_mgr()->WhileEachUser(
+                        inst, [this, inst](const Instruction* user) { return IsValidUse(user, inst->result_id()); });
+                case spv::Op::OpName:
+                    return true;
+                default:
+                    return spvOpcodeIsDecoration(inst->opcode());
                 }
             }
 
@@ -166,8 +164,7 @@ namespace MobileGL {
                 std::unique_ptr<Instruction> var(variable); // take ownership
                 context()->ForgetUses(variable);
 
-                variable->SetInOperand(kVariableStorageClassInIdx,
-                                       {uint32_t(spv::StorageClass::Function)});
+                variable->SetInOperand(kVariableStorageClassInIdx, {uint32_t(spv::StorageClass::Function)});
 
                 const uint32_t newTypeId = GetNewType(variable->type_id());
                 if (newTypeId == 0) {
@@ -185,10 +182,8 @@ namespace MobileGL {
             uint32_t PrivateToEntryLocalPass::GetNewType(uint32_t oldTypeId) {
                 auto* typeMgr = context()->get_type_mgr();
                 Instruction* oldTypeInst = get_def_use_mgr()->GetDef(oldTypeId);
-                const uint32_t pointeeTypeId =
-                    oldTypeInst->GetSingleWordInOperand(kSpvTypePointerTypeIdInIdx);
-                const uint32_t newTypeId =
-                    typeMgr->FindPointerToType(pointeeTypeId, spv::StorageClass::Function);
+                const uint32_t pointeeTypeId = oldTypeInst->GetSingleWordInOperand(kSpvTypePointerTypeIdInIdx);
+                const uint32_t newTypeId = typeMgr->FindPointerToType(pointeeTypeId, spv::StorageClass::Function);
                 if (newTypeId != 0) {
                     context()->UpdateDefUse(context()->get_def_use_mgr()->GetDef(newTypeId));
                 }
@@ -198,31 +193,30 @@ namespace MobileGL {
             bool PrivateToEntryLocalPass::UpdateUse(Instruction* inst, Instruction* user) {
                 // The cases here have to match the cases in IsValidUse.
                 switch (inst->opcode()) {
-                    case spv::Op::OpLoad:
-                    case spv::Op::OpStore:
-                    case spv::Op::OpImageTexelPointer: // treat like a load
-                        // Fine as-is: their type is the pointed-to type, which is unchanged.
-                        break;
-                    case spv::Op::OpAccessChain: {
-                        context()->ForgetUses(inst);
-                        const uint32_t newTypeId = GetNewType(inst->type_id());
-                        if (newTypeId == 0) {
-                            return false;
-                        }
-                        inst->SetResultType(newTypeId);
-                        context()->AnalyzeUses(inst);
-                        if (!UpdateUses(inst)) {
-                            return false;
-                        }
-                        break;
+                case spv::Op::OpLoad:
+                case spv::Op::OpStore:
+                case spv::Op::OpImageTexelPointer: // treat like a load
+                    // Fine as-is: their type is the pointed-to type, which is unchanged.
+                    break;
+                case spv::Op::OpAccessChain: {
+                    context()->ForgetUses(inst);
+                    const uint32_t newTypeId = GetNewType(inst->type_id());
+                    if (newTypeId == 0) {
+                        return false;
                     }
-                    case spv::Op::OpName:
-                    case spv::Op::OpEntryPoint: // handled separately in Process()
-                        break;
-                    default:
-                        assert(spvOpcodeIsDecoration(inst->opcode()) &&
-                               "PrivateToEntryLocalPass: unexpected use opcode");
-                        break;
+                    inst->SetResultType(newTypeId);
+                    context()->AnalyzeUses(inst);
+                    if (!UpdateUses(inst)) {
+                        return false;
+                    }
+                    break;
+                }
+                case spv::Op::OpName:
+                case spv::Op::OpEntryPoint: // handled separately in Process()
+                    break;
+                default:
+                    assert(spvOpcodeIsDecoration(inst->opcode()) && "PrivateToEntryLocalPass: unexpected use opcode");
+                    break;
                 }
                 (void)user;
                 return true;
@@ -231,8 +225,7 @@ namespace MobileGL {
             bool PrivateToEntryLocalPass::UpdateUses(Instruction* inst) {
                 const uint32_t id = inst->result_id();
                 std::vector<Instruction*> uses;
-                context()->get_def_use_mgr()->ForEachUser(id,
-                                                          [&uses](Instruction* use) { uses.push_back(use); });
+                context()->get_def_use_mgr()->ForEachUser(id, [&uses](Instruction* use) { uses.push_back(use); });
                 for (Instruction* use : uses) {
                     if (!UpdateUse(use, inst)) {
                         return false;
@@ -242,8 +235,7 @@ namespace MobileGL {
             }
 
             spvtools::Optimizer::PassToken PrivateToEntryLocalPass::CreatePrivateToEntryLocalPass() {
-                return spvtools::Optimizer::PassToken(
-                    spvtools::MakeUnique<PrivateToEntryLocalPass>());
+                return spvtools::Optimizer::PassToken(spvtools::MakeUnique<PrivateToEntryLocalPass>());
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

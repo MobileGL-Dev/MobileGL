@@ -76,8 +76,7 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
     // blocks are the same SIZE - not that they share a base internal format. RGBA32UI into
     // RGBA32F is legal (both 128-bit) while RGBA8 into RGBA32F is not, and a compressed image
     // pairs with an uncompressed one whose texel is as big as the compressed block.
-    Bool ValidateCopyImageFormatCompatibility(const CopyImageTexelBlock& srcBlock,
-                                              const CopyImageTexelBlock& dstBlock);
+    Bool ValidateCopyImageFormatCompatibility(const CopyImageTexelBlock& srcBlock, const CopyImageTexelBlock& dstBlock);
     // GL 4.6 core 18.3.2: for a compressed image the region's origin must sit on a block
     // boundary and its size must be a whole number of blocks - unless the edge it runs to is
     // the edge of the image.

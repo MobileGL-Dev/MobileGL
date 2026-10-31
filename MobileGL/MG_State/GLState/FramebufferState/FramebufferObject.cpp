@@ -7,9 +7,11 @@
 // End of Source File Header
 
 #include "FramebufferObject.h"
+#include "MG_State/GLState/StateObjectDeathNotice.h"
 #include "MG_Util/Types.h"
 
 #include <atomic>
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL::MG_State::GLState {
     // Starts at 1 so a zero-initialized memo slot can never carry a live object's id.
@@ -21,12 +23,31 @@ namespace MobileGL::MG_State::GLState {
         return s_nextFramebufferLifetimeId.fetch_add(1, std::memory_order_relaxed);
     }
 
+    FramebufferObject::~FramebufferObject() {
+        // P4a D-I2: A FRAMEBUFFER HAS A HANDLE AND NO WIRE LIFETIME. PipeCalls.def carries
+        // resource_destroy and five delete_* rows and NO framebuffer delete, because a
+        // framebuffer is not a resource and is not a CSO - it is STATE, and
+        // set_framebuffer_state is the only call that names one - and the catalog is closed,
+        // so P4a invents no row. The helper is therefore steps 2 and 3 only: the death notice,
+        // raised while the handle still resolves (this is the P2 step-e2 announcement that used
+        // to stand here alone - the last SharedPtr to this object dropping, not the glDelete*
+        // that only marks the name and leaves a still-bound object very much alive), and then
+        // the slot.
+        //
+        // What makes a dangling Fbo unreachable is the frontend's own
+        // MarkFramebufferObjectForDeletion path, which already rebinds any slot holding the
+        // victim to framebuffer 0; and a RECYCLED framebuffer handle can never be suppressed
+        // against its predecessor's record, because Fbo carries Gen and Gen is inside the
+        // record's ContentHash.
+        MG_Pipe::MGPipeEmitFramebufferDestroyAndFree(m_lifetimeId);
+    }
+
     // FramebufferAttachmentObject
     FramebufferAttachmentObject::FramebufferAttachmentObject(
         const SharedPtr<MG_State::GLState::ITextureObject>& texture, TextureUploadTarget textureUploadTarget, Int level,
         Int layer, Bool layered)
-        : m_texture(texture), m_textureUploadTarget(textureUploadTarget), m_textureLevel(level),
-          m_textureLayer(layer), m_layered(layered) {}
+        : m_texture(texture), m_textureUploadTarget(textureUploadTarget), m_textureLevel(level), m_textureLayer(layer),
+          m_layered(layered) {}
     FramebufferAttachmentObject::FramebufferAttachmentObject(const SharedPtr<RenderbufferObject>& renderbuffer)
         : m_renderbuffer(renderbuffer) {}
     FramebufferAttachmentObject::FramebufferAttachmentObject(Bool IsValid)
@@ -72,8 +93,31 @@ namespace MobileGL::MG_State::GLState {
 
     Bool FramebufferAttachmentObject::IsComplete() const {
         if (IsTexture()) {
-            Bool complete = m_texture->IsComplete();
-            return complete;
+            if (!m_texture->IsComplete()) return false;
+            // GL 4.6 core 9.4.1: a single layer of a three-dimensional, array or cube map array
+            // texture must exist, i.e. FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER has to be smaller than
+            // the level's depth / layer count. Attaching it is legal up to the implementation's
+            // layer limit (9.2.8), so this is where an out-of-range layer is caught. A cube map
+            // array counts layer-faces, which is the depth it was specified with.
+            if (!m_layered) {
+                const IntVec3 size = GetSize();
+                Int layerCount = -1;
+                switch (m_texture->GetTarget()) {
+                case TextureTarget::Texture1DArray:
+                    layerCount = size.y();
+                    break;
+                case TextureTarget::Texture3D:
+                case TextureTarget::Texture2DArray:
+                case TextureTarget::Texture2DMultisampleArray:
+                case TextureTarget::TextureCubeMapArray:
+                    layerCount = size.z();
+                    break;
+                default:
+                    break;
+                }
+                if (layerCount >= 0 && m_textureLayer >= layerCount) return false;
+            }
+            return true;
         } else if (IsRenderbuffer()) {
             Bool complete = m_renderbuffer->IsAllocated();
             return complete;
@@ -173,7 +217,33 @@ namespace MobileGL::MG_State::GLState {
         }
 
         if (validAttachmentCount == 0) return false;
-        return true;
+        return !HasLayerTargetMismatch();
+    }
+
+    Bool FramebufferObject::HasLayerTargetMismatch() const {
+        Bool anyLayered = false;
+        Bool anyNonLayered = false;
+        TextureTarget layeredColorTarget = TextureTarget::Unknown;
+        Bool colorTargetsDiffer = false;
+        for (SizeT index = 0; index < m_attachmentObjects.size(); ++index) {
+            const auto& attachment = m_attachmentObjects[index];
+            if (!attachment.IsValid() || attachment.IsEmpty()) continue;
+            // A renderbuffer is never layered.
+            const Bool layered = attachment.IsTexture() && attachment.IsLayered();
+            (layered ? anyLayered : anyNonLayered) = true;
+
+            const auto type = static_cast<FramebufferAttachmentType>(index);
+            if (!layered || type < FramebufferAttachmentType::Color0 || type > FramebufferAttachmentType::ColorMax) {
+                continue;
+            }
+            const TextureTarget target = attachment.GetTexture()->GetTarget();
+            if (layeredColorTarget == TextureTarget::Unknown) {
+                layeredColorTarget = target;
+            } else if (layeredColorTarget != target) {
+                colorTargetsDiffer = true;
+            }
+        }
+        return anyLayered && (anyNonLayered || colorTargetsDiffer);
     }
 
     void FramebufferObject::SetDrawBuffer(Uint index, FramebufferAttachmentType buffer) {
@@ -190,17 +260,19 @@ namespace MobileGL::MG_State::GLState {
         if (m_readBuffer == buf) return;
         m_readBuffer = buf;
         ++m_objectVersion;
+        MGP_NOTE_AGGREGATE(FramebufferAttachment);
     }
 
     Uint FramebufferObject::GetExternalIndex() const {
         return m_externalIndex;
     }
 
-#define MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(name, member, type)                                                \
+#define MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(name, member, type)                                                 \
     void FramebufferObject::Set##name(type value) {                                                                    \
-        if (member == value) return;                                                                                    \
-        member = value;                                                                                                 \
-        ++m_objectVersion;                                                                                              \
+        if (member == value) return;                                                                                   \
+        member = value;                                                                                                \
+        ++m_objectVersion;                                                                                             \
+        MGP_NOTE_AGGREGATE(FramebufferAttachment);                                                                     \
     }
 
     MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(DefaultWidth, m_defaultWidth, Int)
@@ -213,5 +285,6 @@ namespace MobileGL::MG_State::GLState {
     void FramebufferObject::BumpAttachmentVersion(FramebufferAttachmentType type) {
         ++m_attachmentVersions[static_cast<SizeT>(type)];
         ++m_objectVersion;
+        MGP_NOTE_AGGREGATE(FramebufferAttachment);
     }
 } // namespace MobileGL::MG_State::GLState

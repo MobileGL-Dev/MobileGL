@@ -16,12 +16,14 @@
 #include <MG_Backend/DirectGLES/DirectGLES.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/Utils.h>
+#include <MG_Backend/ClientReadback.h>
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_Test/ScopedPipeVerb.h>
 
 using namespace MobileGL;
 
@@ -42,8 +44,8 @@ namespace {
     GLenum g_lastReadPixelsType = GL_NONE;
 
     void RecordBlitNamedFramebuffer(const SharedPtr<MG_State::GLState::FramebufferObject>& readFramebuffer,
-                                    const SharedPtr<MG_State::GLState::FramebufferObject>& drawFramebuffer,
-                                    GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) {
+                                    const SharedPtr<MG_State::GLState::FramebufferObject>& drawFramebuffer, GLint,
+                                    GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) {
         g_lastBlitReadFramebuffer = readFramebuffer;
         g_lastBlitDrawFramebuffer = drawFramebuffer;
         ++g_blitNamedFramebufferCallCount;
@@ -87,8 +89,7 @@ protected:
     // binary, so drain whatever an earlier test left pending - otherwise an error-code assertion
     // here reads someone else's error. Bounded: one flag per code, so this cannot hang the suite.
     static void DrainPendingGlErrors() {
-        for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {
-        }
+        for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {}
     }
 
     // The call under test must raise exactly the expected error and nothing more: a second pending
@@ -248,10 +249,8 @@ TEST_F(FramebufferTest, NamedFramebufferTextureAttachesWithoutChangingBindings) 
     MG_State::pGLContext->GenTextureNames(1, textureNames);
     MG_State::pGLContext->CreateTextureObject(textureNames[0], TextureTarget::Texture2D);
 
-    const auto originalDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto originalRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto originalDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto originalRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
 
     MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, textureNames[0], 3);
 
@@ -271,10 +270,8 @@ TEST_F(FramebufferTest, NamedDepthFramebufferTextureStorageIsCompleteWithoutBind
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
 
-    const auto originalDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto originalRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto originalDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto originalRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
 
     MG_Impl::GLImpl::TextureStorage2D(texture, 1, GL_DEPTH_COMPONENT24, 64, 32);
     MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_DEPTH_ATTACHMENT, texture, 0);
@@ -319,11 +316,10 @@ TEST_F(FramebufferTest, ReadPixelsAllowsPersistentMappedPixelPackBuffer) {
     MG_Impl::GLImpl::BindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
 
     MG_Impl::GLImpl::BindBuffer(GL_PIXEL_PACK_BUFFER, pixelPackBuffer);
-    MG_Impl::GLImpl::BufferStorage(GL_PIXEL_PACK_BUFFER, 4 * 4 * 4, nullptr,
-                                   GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT);
-    ASSERT_NE(MG_Impl::GLImpl::MapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 4 * 4 * 4,
-                                              GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT),
-              nullptr);
+    MG_Impl::GLImpl::BufferStorage(GL_PIXEL_PACK_BUFFER, 4 * 4 * 4, nullptr, GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT);
+    ASSERT_NE(
+        MG_Impl::GLImpl::MapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 4 * 4 * 4, GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT),
+        nullptr);
 
     MG_Backend::gBackendFunctionsTable.GL.ReadPixels = RecordReadPixels;
     MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -409,10 +405,8 @@ TEST_F(FramebufferTest, NamedRenderbufferStorageAndFramebufferAttachDoNotChangeB
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
     MG_Impl::GLImpl::CreateRenderbuffers(1, &renderbuffer);
 
-    const auto originalDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto originalRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto originalDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto originalRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
     const auto originalRenderbuffer =
         MG_State::pGLContext->GetRenderbufferBindingSlot(RenderbufferTarget::Renderbuffer).GetBoundObject();
 
@@ -446,10 +440,8 @@ TEST_F(FramebufferTest, NamedFramebufferDrawBuffersDoNotModifyDefaultFramebuffer
     GLuint framebuffer = 0;
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
 
-    const auto defaultDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto defaultRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto defaultDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto defaultRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
     const auto defaultDrawBuffer = defaultDraw->GetDrawBuffers()[0];
     const auto defaultReadBuffer = defaultRead->GetReadBuffer();
 
@@ -469,8 +461,7 @@ TEST_F(FramebufferTest, NamedFramebufferDrawBuffersDoNotModifyDefaultFramebuffer
 }
 
 TEST_F(FramebufferTest, DefaultFramebufferReadBufferAcceptsGLBackAlias) {
-    const auto defaultRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto defaultRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
 
     MG_Impl::GLImpl::ReadBuffer(GL_BACK);
 
@@ -479,8 +470,7 @@ TEST_F(FramebufferTest, DefaultFramebufferReadBufferAcceptsGLBackAlias) {
 }
 
 TEST_F(FramebufferTest, DefaultFramebufferDrawBufferAcceptsGLFrontAlias) {
-    const auto defaultDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto defaultDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
 
     MG_Impl::GLImpl::DrawBuffer(GL_FRONT);
 
@@ -512,10 +502,8 @@ TEST_F(FramebufferTest, ClearNamedFramebufferfvUsesNamedObjectWithoutChangingBin
     GLuint framebuffer = 0;
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
 
-    const auto defaultDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto defaultRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto defaultDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto defaultRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
 
     const GLfloat depth[] = {0.25f};
     MG_Backend::gBackendFunctionsTable.GL.ClearNamedFramebufferfv = RecordClearNamedFramebufferfv;
@@ -536,10 +524,8 @@ TEST_F(FramebufferTest, ClearNamedFramebufferfiAllowsDefaultFramebufferZero) {
     GLuint framebuffer = 0;
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
 
-    const auto defaultDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto defaultRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto defaultDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto defaultRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
 
     MG_Backend::gBackendFunctionsTable.GL.ClearNamedFramebufferfi = RecordClearNamedFramebufferfi;
     MG_Impl::GLImpl::ClearNamedFramebufferfi(0, GL_DEPTH_STENCIL, 0, 0.5f, 7);
@@ -567,12 +553,12 @@ TEST_F(FramebufferTest, GetNamedFramebufferAttachmentParameterivReadsTargetObjec
     GLint objectType = 0;
     GLint objectName = 0;
     GLint textureLevel = 0;
-    MG_Impl::GLImpl::GetNamedFramebufferAttachmentParameteriv(
-        framebuffer, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objectType);
-    MG_Impl::GLImpl::GetNamedFramebufferAttachmentParameteriv(
-        framebuffer, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &objectName);
-    MG_Impl::GLImpl::GetNamedFramebufferAttachmentParameteriv(
-        framebuffer, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL, &textureLevel);
+    MG_Impl::GLImpl::GetNamedFramebufferAttachmentParameteriv(framebuffer, GL_COLOR_ATTACHMENT0,
+                                                              GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objectType);
+    MG_Impl::GLImpl::GetNamedFramebufferAttachmentParameteriv(framebuffer, GL_COLOR_ATTACHMENT0,
+                                                              GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &objectName);
+    MG_Impl::GLImpl::GetNamedFramebufferAttachmentParameteriv(framebuffer, GL_COLOR_ATTACHMENT0,
+                                                              GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL, &textureLevel);
 
     EXPECT_EQ(objectType, GL_TEXTURE);
     EXPECT_EQ(objectName, static_cast<GLint>(textureNames[0]));
@@ -584,14 +570,11 @@ TEST_F(FramebufferTest, BlitNamedFramebufferAllowsDefaultFramebufferZero) {
     GLuint framebuffer = 0;
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
 
-    const auto defaultDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto defaultRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto defaultDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto defaultRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
 
     MG_Backend::gBackendFunctionsTable.GL.BlitNamedFramebuffer = RecordBlitNamedFramebuffer;
-    MG_Impl::GLImpl::BlitNamedFramebuffer(framebuffer, 0, 0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT,
-                                          GL_NEAREST);
+    MG_Impl::GLImpl::BlitNamedFramebuffer(framebuffer, 0, 0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
     const auto framebufferObject = MG_State::pGLContext->GetFramebufferObject(framebuffer);
     EXPECT_EQ(g_blitNamedFramebufferCallCount, 1);
@@ -604,26 +587,24 @@ TEST_F(FramebufferTest, BlitNamedFramebufferAllowsDefaultFramebufferZero) {
 
 // ---- Packed-type readback encoding ------------------------------------------------------------------
 // Oracle-independent guard for the DirectGLES client-format readback conversion: feeds known wide RGBA
-// rows through ReadbackImpl::ConvertWideReadbackRow and asserts the exact packed words. Field positions
+// rows through ClientReadback::ConvertWideReadbackRow and asserts the exact packed words. Field positions
 // were hand-computed from GL 3.3 table 3.6 and match the GL CTS packed_pixels comparison functions
 // (glcPackedPixelsTests.cpp pack_UNSIGNED_*): non-REV types pack the first format component from the
 // most significant bit, *_REV types from the least significant bit.
 
 namespace {
-    namespace ReadbackImpl = MG_Backend::DirectGLES::ReadbackImpl;
+    namespace ClientReadback = MG_Backend::ClientReadback;
 
     // Converts a row of wide pixels (4 components of wideType each) into `format`/`type` words.
     template <typename WordT, typename SrcT>
-    Vector<WordT> ConvertWideRowToPackedWords(const Vector<SrcT>& wide, GLenum wideType, GLenum format,
-                                              GLenum type) {
-        ReadbackImpl::ReadbackChannelMapping mapping{};
-        EXPECT_TRUE(ReadbackImpl::GetReadbackChannelMapping(format, mapping));
-        EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(mapping, type), sizeof(WordT));
+    Vector<WordT> ConvertWideRowToPackedWords(const Vector<SrcT>& wide, GLenum wideType, GLenum format, GLenum type) {
+        ClientReadback::ReadbackChannelMapping mapping{};
+        EXPECT_TRUE(ClientReadback::GetReadbackChannelMapping(format, mapping));
+        EXPECT_EQ(ClientReadback::GetReadbackDstPixelSize(mapping, type), sizeof(WordT));
         const SizeT width = wide.size() / 4;
         Vector<WordT> out(width, static_cast<WordT>(0));
-        ReadbackImpl::ConvertWideReadbackRow(reinterpret_cast<const Uint8*>(wide.data()),
-                                             reinterpret_cast<Uint8*>(out.data()), width, wideType, mapping,
-                                             type);
+        ClientReadback::ConvertWideReadbackRow(reinterpret_cast<const Uint8*>(wide.data()),
+                                               reinterpret_cast<Uint8*>(out.data()), width, wideType, mapping, type);
         return out;
     }
 
@@ -636,9 +617,9 @@ namespace {
     // Wide RGBA8 pattern shared by the normalized-encode tests. Expected fields below are
     // round(v / 255 * (2^bits - 1)), computed by hand per pixel.
     //                            R     G     B     A
-    const Vector<Uint8> kRGBA8Row{255,  0,    128,  64,     // P0
-                                  10,   250,  33,   200,    // P1
-                                  85,   170,  255,  0};     // P2
+    const Vector<Uint8> kRGBA8Row{255, 0,   128, 64,  // P0
+                                  10,  250, 33,  200, // P1
+                                  85,  170, 255, 0};  // P2
 } // namespace
 
 TEST(PackedReadbackEncodeTest, EncodesUnsignedShort565) {
@@ -766,17 +747,17 @@ TEST(PackedReadbackEncodeTest, EncodesSharedExponent5999Rev) {
 }
 
 TEST(PackedReadbackEncodeTest, RejectsMismatchedPackedFieldCounts) {
-    ReadbackImpl::ReadbackChannelMapping rgba{};
-    ASSERT_TRUE(ReadbackImpl::GetReadbackChannelMapping(GL_RGBA, rgba));
-    ReadbackImpl::ReadbackChannelMapping rgbInteger{};
-    ASSERT_TRUE(ReadbackImpl::GetReadbackChannelMapping(GL_RGB_INTEGER, rgbInteger));
+    ClientReadback::ReadbackChannelMapping rgba{};
+    ASSERT_TRUE(ClientReadback::GetReadbackChannelMapping(GL_RGBA, rgba));
+    ClientReadback::ReadbackChannelMapping rgbInteger{};
+    ASSERT_TRUE(ClientReadback::GetReadbackChannelMapping(GL_RGB_INTEGER, rgbInteger));
 
     // 3-field packed types never pair with 4-component formats and vice versa.
-    EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgba, GL_UNSIGNED_SHORT_5_6_5), 0u);
-    EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_SHORT_4_4_4_4), 0u);
+    EXPECT_EQ(ClientReadback::GetReadbackDstPixelSize(rgba, GL_UNSIGNED_SHORT_5_6_5), 0u);
+    EXPECT_EQ(ClientReadback::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_SHORT_4_4_4_4), 0u);
     // Packed-float RGB types never pair with integer formats.
-    EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_INT_5_9_9_9_REV), 0u);
-    EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_INT_10F_11F_11F_REV), 0u);
+    EXPECT_EQ(ClientReadback::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_INT_5_9_9_9_REV), 0u);
+    EXPECT_EQ(ClientReadback::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_INT_10F_11F_11F_REV), 0u);
 }
 
 // ---- GL CTS packed_pixels readback root-cause regressions --------------------------------------
@@ -862,7 +843,7 @@ TEST_F(FramebufferTest, NonRenderableColorFormatsReportUnsupportedFramebuffer) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_FRAMEBUFFER_OPERATION);
 }
 
-// ---- Three-channel colour attachments: the Complementary Reimagined / Iris load failure --------
+// ---- Three-channel color attachments: the Complementary Reimagined / Iris load failure --------
 //
 // Complementary declares colortex1 = RGB8_SNORM and colortex2 = RGB16F. No real OpenGL ES driver
 // renders to a three-channel image (EXT_render_snorm covers R/RG/RGBA only; EXT_color_buffer_float
@@ -925,8 +906,8 @@ namespace {
 
     class ScopedBackendOverride {
     public:
-        explicit ScopedBackendOverride(UniquePtr<MG_Backend::BackendObject> backend):
-            m_previous(Move(MG_Backend::pActiveBackendObject)) {
+        explicit ScopedBackendOverride(UniquePtr<MG_Backend::BackendObject> backend)
+            : m_previous(Move(MG_Backend::pActiveBackendObject)) {
             MG_Backend::pActiveBackendObject = Move(backend);
         }
 
@@ -948,7 +929,7 @@ namespace {
 } // namespace
 
 TEST_F(FramebufferTest, ThreeChannelColorAttachmentsAreUnsupportedWithoutTheWidenedSubstitution) {
-    // The pre-fix behaviour, pinned so a regression is a red test rather than a shaderpack that
+    // The pre-fix behavior, pinned so a regression is a red test rather than a shaderpack that
     // silently stops loading: no caveat capability, so nothing makes these renderable.
     ScopedBackendOverride backend(MakeUnique<ThreeChannelAttachmentBackend>(/*substituted=*/false));
 
@@ -1006,7 +987,7 @@ TEST_F(FramebufferTest, TwoAttachmentCompositeFramebufferMatchesIrisComplementar
 // buffer's alpha write mask forced off so nothing can move it again.
 //
 // These cases pin the two halves of that pairing at the seam where they are visible - what the ES
-// driver is actually handed - and pin the invariant that the application's own colour mask is
+// driver is actually handed - and pin the invariant that the application's own color mask is
 // never touched.
 namespace {
     struct RecordedColorMask {
@@ -1019,7 +1000,8 @@ namespace {
     RecordedColorMask g_driverUniformColorMask;
 
     void ResetRecordedColorMasks() {
-        for (auto& recorded : g_driverIndexedColorMasks) recorded = {};
+        for (auto& recorded : g_driverIndexedColorMasks)
+            recorded = {};
         g_driverUniformColorMask = {};
     }
 
@@ -1027,7 +1009,8 @@ namespace {
         g_driverUniformColorMask = {true, r, g, b, a};
         // The non-indexed call sets every draw buffer, so record it as such: a later assertion
         // about draw buffer 1 must not read a stale indexed record the uniform push overwrote.
-        for (auto& recorded : g_driverIndexedColorMasks) recorded = {true, r, g, b, a};
+        for (auto& recorded : g_driverIndexedColorMasks)
+            recorded = {true, r, g, b, a};
     }
 
     void StubColorMaski(GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
@@ -1046,7 +1029,8 @@ namespace {
     RecordedBlend g_driverBlend[kRecordedDrawBuffers];
 
     void ResetRecordedBlend() {
-        for (auto& recorded : g_driverBlend) recorded = {};
+        for (auto& recorded : g_driverBlend)
+            recorded = {};
     }
 
     void RecordBlendEnable(Bool enabled) {
@@ -1111,7 +1095,21 @@ namespace {
     void StubClearStencil(GLint) {}
     void StubCullFace(GLenum) {}
     void StubFrontFace(GLenum) {}
-    void StubPolygonOffset(GLfloat, GLfloat) {}
+    // The polygon offset the driver was last handed, and through which entry point.
+    struct RecordedPolygonOffset {
+        Bool viaClamp = false;
+        Bool seen = false;
+        GLfloat factor = 0.0f;
+        GLfloat units = 0.0f;
+        GLfloat clamp = 0.0f;
+    };
+    RecordedPolygonOffset g_driverPolygonOffset;
+    void StubPolygonOffset(GLfloat factor, GLfloat units) {
+        g_driverPolygonOffset = {false, true, factor, units, 0.0f};
+    }
+    void StubPolygonOffsetClampEXT(GLfloat factor, GLfloat units, GLfloat clamp) {
+        g_driverPolygonOffset = {true, true, factor, units, clamp};
+    }
     void StubLineWidth(GLfloat) {}
     void StubSampleCoverage(GLfloat, GLboolean) {}
 
@@ -1123,8 +1121,8 @@ namespace {
     public:
         // dualSourceBlendSupported models GL_EXT_blend_func_extended on the ES driver, which is
         // the one capability in here that a real device is commonly WITHOUT.
-        explicit ScopedRenderStateDriverStubs(Bool dualSourceBlendSupported = true):
-            m_funcs(MG_Backend::DirectGLES::g_GLESFuncs), m_caps(MG_Backend::DirectGLES::g_GLESCapabilities) {
+        explicit ScopedRenderStateDriverStubs(Bool dualSourceBlendSupported = true)
+            : m_funcs(MG_Backend::DirectGLES::g_GLESFuncs), m_caps(MG_Backend::DirectGLES::g_GLESCapabilities) {
             auto& gl = MG_Backend::DirectGLES::g_GLESFuncs;
             gl = MG_External::GLESFunctionsTable{};
             gl.glViewport = StubViewport;
@@ -1190,45 +1188,17 @@ namespace {
     };
 } // namespace
 
-TEST_F(FramebufferTest, WidenedDrawBufferIsIdentifiedPerDrawBufferSlotNotPerAttachmentPoint) {
-    ScopedBackendOverride backend(MakeUnique<ThreeChannelAttachmentBackend>(/*substituted=*/true));
-
-    // Complementary's `composite` framebuffer again: draw buffer 0 is a natively renderable
-    // RGBA8, draw buffer 1 is the widened RGB8_SNORM. Only the second may be doctored.
-    GLuint framebuffer = 0;
-    GLuint colortex7 = 0;
-    GLuint colortex1 = 0;
-    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
-    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &colortex7);
-    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &colortex1);
-    MG_Impl::GLImpl::TextureStorage2D(colortex7, 1, GL_RGBA8, 4, 4);
-    MG_Impl::GLImpl::TextureStorage2D(colortex1, 1, GL_RGB8_SNORM, 4, 4);
-    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, colortex7, 0);
-    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT1, colortex1, 0);
-
-    auto& framebufferObject = MG_State::pGLContext->GetFramebufferObject(framebuffer);
-    ASSERT_NE(framebufferObject, nullptr);
-    framebufferObject->SetDrawBuffer(0, FramebufferAttachmentType::Color0);
-    framebufferObject->SetDrawBuffer(1, FramebufferAttachmentType::Color1);
-
-    EXPECT_EQ(MG_Backend::DirectGLES::FramebufferImpl::ComputeAlphaWidenedDrawBufferMask(*framebufferObject),
-              1u << 1);
-
-    // Swapping the draw-buffer array moves the bit with the SLOT, not with the attachment point:
-    // glColorMaski and glClearBufferfv both address slots.
-    framebufferObject->SetDrawBuffer(0, FramebufferAttachmentType::Color1);
-    framebufferObject->SetDrawBuffer(1, FramebufferAttachmentType::Color0);
-    EXPECT_EQ(MG_Backend::DirectGLES::FramebufferImpl::ComputeAlphaWidenedDrawBufferMask(*framebufferObject),
-              1u << 0);
-    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
-}
-
 TEST_F(FramebufferTest, DrawIntoAWidenedDrawBufferReachesTheDriverWithAlphaWritesMaskedOff) {
     ScopedRenderStateDriverStubs driver;
     MG_Backend::DirectGLES::FramebufferImpl::g_alphaWidenedDrawBufferMask = 1u << 1;
 
     // What the application asked for: write every channel of every draw buffer.
     MG_Impl::GLImpl::ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    // SyncRenderState is reached from a verb, never on its own: a test that calls it directly
+    // has to say which verb it stands in, or the block it reads is unfilled and unstamped and
+    // its first read is Fatal{UnmigratedPipeInput} in a push build. forColorClear=false is the
+    // draw arm.
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
 
     // What the driver was told. Draw buffer 0 is untouched; draw buffer 1 loses alpha.
@@ -1260,15 +1230,23 @@ TEST_F(FramebufferTest, ClearIntoAWidenedDrawBufferKeepsAlphaWritableAndSubstitu
     MG_Impl::GLImpl::ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
     // A draw first, so the mask really is doctored when the clear arrives...
-    MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    {
+        MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
+        MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    }
     ASSERT_EQ(g_driverIndexedColorMasks[1].a, GL_FALSE);
 
     // ...and now the clear, with NOTHING changed in the frontend parameter block. The frontend's
     // render-state version has not moved, so only the purpose-aware memo can force this push -
     // without it the clear would inherit the draw's alpha-off mask and never write the 1.0.
     ResetRecordedColorMasks();
-    MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/true);
-    ASSERT_TRUE(g_driverIndexedColorMasks[1].seen) << "the clear must re-push the colour mask";
+    {
+        // A different verb CLASS, so a scope of its own: kClear's fill set is what a clear may
+        // read, and this half has to go through on that set alone.
+        MG_Test::ScopedPipeVerb clear(MG_Pipe::MGPipeVerb::Clear);
+        MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/true);
+    }
+    ASSERT_TRUE(g_driverIndexedColorMasks[1].seen) << "the clear must re-push the color mask";
     EXPECT_EQ(g_driverIndexedColorMasks[1].a, GL_TRUE) << "a clear is what puts the 1.0 in the stored alpha";
 
     // The value that clear writes: the application's RGB, alpha replaced by the 1.0 the
@@ -1296,7 +1274,57 @@ TEST_F(FramebufferTest, ClearIntoAWidenedDrawBufferKeepsAlphaWritableAndSubstitu
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
-TEST_F(FramebufferTest, ApplicationAlphaMaskOffIsStillHonouredOnANativeDrawBuffer) {
+TEST_F(FramebufferTest, PolygonOffsetClampReachesTheDriverWhenItHasTheClampEntryPoint) {
+    ScopedRenderStateDriverStubs driver;
+    MG_Backend::DirectGLES::g_GLESFuncs.glPolygonOffsetClampEXT = StubPolygonOffsetClampEXT;
+    MG_Backend::DirectGLES::g_GLESCapabilities.SupportsPolygonOffsetClamp = true;
+    g_driverPolygonOffset = {};
+
+    MG_Impl::GLImpl::PolygonOffsetClamp(0.0f, 5000.0f, 0.0001f);
+    {
+        MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
+        MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    }
+    ASSERT_TRUE(g_driverPolygonOffset.seen);
+    EXPECT_TRUE(g_driverPolygonOffset.viaClamp) << "the clamp must not be dropped on the way to the driver";
+    EXPECT_EQ(g_driverPolygonOffset.factor, 0.0f);
+    EXPECT_EQ(g_driverPolygonOffset.units, 5000.0f);
+    EXPECT_EQ(g_driverPolygonOffset.clamp, 0.0001f);
+
+    // A clamp-only change (same factor and units) is still a change the driver has to see.
+    g_driverPolygonOffset = {};
+    MG_Impl::GLImpl::PolygonOffset(0.0f, 5000.0f);
+    {
+        MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
+        MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    }
+    ASSERT_TRUE(g_driverPolygonOffset.seen) << "glPolygonOffset resets the clamp to 0";
+    EXPECT_EQ(g_driverPolygonOffset.clamp, 0.0f);
+
+    MG_Impl::GLImpl::PolygonOffset(0.0f, 0.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, PolygonOffsetFallsBackToTheUnclampedEntryPointWithoutTheExtension) {
+    ScopedRenderStateDriverStubs driver;
+    MG_Backend::DirectGLES::g_GLESCapabilities.SupportsPolygonOffsetClamp = false;
+    g_driverPolygonOffset = {};
+
+    MG_Impl::GLImpl::PolygonOffsetClamp(1.0f, 2.0f, 0.5f);
+    {
+        MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
+        MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    }
+    ASSERT_TRUE(g_driverPolygonOffset.seen);
+    EXPECT_FALSE(g_driverPolygonOffset.viaClamp);
+    EXPECT_EQ(g_driverPolygonOffset.factor, 1.0f);
+    EXPECT_EQ(g_driverPolygonOffset.units, 2.0f);
+
+    MG_Impl::GLImpl::PolygonOffset(0.0f, 0.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, ApplicationAlphaMaskOffIsStillHonoredOnANativeDrawBuffer) {
     // The doctoring only ever REMOVES alpha writes on a widened buffer; it must never add them
     // back on a buffer the application masked itself, and must never touch a native one.
     ScopedRenderStateDriverStubs driver;
@@ -1305,6 +1333,7 @@ TEST_F(FramebufferTest, ApplicationAlphaMaskOffIsStillHonouredOnANativeDrawBuffe
     MG_Impl::GLImpl::ColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
     MG_Impl::GLImpl::ColorMaski(1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     MG_Impl::GLImpl::ColorMaski(2, GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE);
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
 
     EXPECT_EQ(g_driverIndexedColorMasks[0].a, GL_FALSE) << "the application's own alpha mask survives";
@@ -1337,6 +1366,7 @@ TEST_F(FramebufferTest, DualSourceBlendFactorsReachTheDriverWhenTheExtensionIsTh
     MG_Impl::GLImpl::BlendFunc(GL_SRC1_COLOR, GL_ONE_MINUS_SRC1_COLOR);
     ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_SRC1_* is core since 3.3; glBlendFunc must take it";
     ResetRecordedBlend();
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
 
     ASSERT_TRUE(g_driverBlend[0].factorsSeen);
@@ -1357,6 +1387,7 @@ TEST_F(FramebufferTest, DualSourceBlendIsDeclinedRatherThanThrownWhenTheExtensio
     ResetRecordedBlend();
 
     // The whole point: this used to be `throw std::runtime_error` straight through the GL ABI.
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     ASSERT_NO_THROW(MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false));
 
     ASSERT_TRUE(g_driverBlend[0].enableSeen) << "the blend enable still has to be pushed";
@@ -1374,6 +1405,7 @@ TEST_F(FramebufferTest, DualSourceBlendIsDeclinedRatherThanThrownWhenTheExtensio
     // is what has to push it.
     MG_Impl::GLImpl::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     ResetRecordedBlend();
+    draw.Renew();
     MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
     ASSERT_TRUE(g_driverBlend[0].factorsSeen);
     EXPECT_TRUE(g_driverBlend[0].enabled);
@@ -1400,6 +1432,7 @@ TEST_F(FramebufferTest, DualSourceFactorsAreDeclinedEvenWithBlendingDisabled) {
     ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
     ResetRecordedBlend();
 
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     ASSERT_NO_THROW(MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false));
 
     for (Uint i = 0; i < kRecordedDrawBuffers; ++i) {
@@ -1413,10 +1446,13 @@ TEST_F(FramebufferTest, DualSourceFactorsAreDeclinedEvenWithBlendingDisabled) {
     }
 
     // A clear reaches the same block by the same route (SyncRenderState(forColorClear=true)), and
-    // the flag only steers the alpha-widen colour mask, so it must not reopen this either.
+    // the flag only steers the alpha-widen color mask, so it must not reopen this either.
     MG_Impl::GLImpl::BlendFunc(GL_SRC1_COLOR, GL_ONE_MINUS_SRC1_COLOR);
     ResetRecordedBlend();
-    ASSERT_NO_THROW(MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/true));
+    {
+        MG_Test::ScopedPipeVerb clear(MG_Pipe::MGPipeVerb::Clear);
+        ASSERT_NO_THROW(MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/true));
+    }
     for (Uint i = 0; i < kRecordedDrawBuffers; ++i) {
         EXPECT_NE(g_driverBlend[i].srcRGB, static_cast<GLenum>(GL_SRC1_COLOR)) << "draw buffer " << i;
         EXPECT_NE(g_driverBlend[i].dstRGB, static_cast<GLenum>(GL_ONE_MINUS_SRC1_COLOR)) << "draw buffer " << i;
@@ -1427,6 +1463,7 @@ TEST_F(FramebufferTest, DualSourceFactorsAreDeclinedEvenWithBlendingDisabled) {
     MG_Impl::GLImpl::Enable(GL_BLEND);
     MG_Impl::GLImpl::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     ResetRecordedBlend();
+    draw.Renew();
     MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
     ASSERT_TRUE(g_driverBlend[0].factorsSeen);
     EXPECT_TRUE(g_driverBlend[0].enabled) << "the enable has to be pushed - the shadow said 'off' because it was";
@@ -1444,6 +1481,7 @@ TEST_F(FramebufferTest, DualSourceFactorsWithBlendingDisabledStillReachACapableD
     MG_Impl::GLImpl::Disable(GL_BLEND);
     MG_Impl::GLImpl::BlendFunc(GL_SRC1_ALPHA, GL_ONE_MINUS_SRC1_ALPHA);
     ResetRecordedBlend();
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
 
     ASSERT_TRUE(g_driverBlend[0].factorsSeen);
@@ -1475,7 +1513,7 @@ TEST_F(FramebufferTest, FramebufferTextureRejectsTheDefaultFramebuffer) {
     DrainPendingGlErrors();
 }
 
-TEST_F(FramebufferTest, FramebufferTextureRejectsAColourAttachmentPastTheLimit) {
+TEST_F(FramebufferTest, FramebufferTextureRejectsAColorAttachmentPastTheLimit) {
     GLuint framebuffer = 0;
     GLuint texture = 0;
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
@@ -1486,21 +1524,21 @@ TEST_F(FramebufferTest, FramebufferTextureRejectsAColourAttachmentPastTheLimit) 
 
     // The same limit ValidateColorAttachmentInRange reads, so the test cannot disagree with the
     // implementation about where the boundary is.
-    const GLint limit = MG_Backend::pActiveBackendObject
-                            ? static_cast<GLint>(
-                                  MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxColorAttachments)
-                            : static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
+    const GLint limit =
+        MG_Backend::pActiveBackendObject
+            ? static_cast<GLint>(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxColorAttachments)
+            : static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
     ASSERT_GT(limit, 0);
-    ASSERT_LT(limit, 32) << "the test needs a colour attachment enum past the limit to exist";
+    ASSERT_LT(limit, 32) << "the test needs a color attachment enum past the limit to exist";
 
-    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER,
-                                        static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit), texture, 0);
+    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER, static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit), texture,
+                                        0);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
     DrainPendingGlErrors();
 
     // The last legal one still attaches, so the boundary is off-by-none.
-    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER,
-                                        static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit - 1), texture, 0);
+    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER, static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit - 1),
+                                        texture, 0);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
@@ -1546,7 +1584,7 @@ TEST_F(FramebufferTest, FramebufferTextureRejectsALevelTheTextureDoesNotHave) {
 // than through the shared helper - so each of them has to be asked separately or one entry point
 // answers differently from its aliases. glFramebufferTexture2D is the most-used of the five, and
 // the default-framebuffer case is the damaging one: the attach used to succeed and replace
-// framebuffer 0's colour attachment, which nothing ever puts back.
+// framebuffer 0's color attachment, which nothing ever puts back.
 
 TEST_F(FramebufferTest, FramebufferTexture2DRejectsTheDefaultFramebufferAndBadAttachments) {
     GLuint texture = 0;
@@ -1568,7 +1606,7 @@ TEST_F(FramebufferTest, FramebufferTexture2DRejectsTheDefaultFramebufferAndBadAt
     EXPECT_EQ(colorAfter.IsTexture(), hadTextureBefore);
     if (colorAfter.IsTexture() && hadTextureBefore) {
         EXPECT_NE(colorAfter.GetTexture()->GetExternalIndex(), texture)
-            << "the refused attach must not have replaced framebuffer 0's colour attachment";
+            << "the refused attach must not have replaced framebuffer 0's color attachment";
     }
 
     GLuint framebuffer = 0;
@@ -1576,13 +1614,12 @@ TEST_F(FramebufferTest, FramebufferTexture2DRejectsTheDefaultFramebufferAndBadAt
     MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
     ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
-    const GLint limit = MG_Backend::pActiveBackendObject
-                            ? static_cast<GLint>(
-                                  MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxColorAttachments)
-                            : static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
-    MG_Impl::GLImpl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER,
-                                          static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit), GL_TEXTURE_2D,
-                                          texture, 0);
+    const GLint limit =
+        MG_Backend::pActiveBackendObject
+            ? static_cast<GLint>(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxColorAttachments)
+            : static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
+    MG_Impl::GLImpl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit),
+                                          GL_TEXTURE_2D, texture, 0);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
     DrainPendingGlErrors();
 
@@ -1641,5 +1678,71 @@ TEST_F(FramebufferTest, NamedFramebufferTextureRejectsALevelTheTextureDoesNotHav
 
     MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, texture, 2);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    DrainPendingGlErrors();
+}
+
+// GL 4.6 core 9.4.2: if any populated attachment is layered, all of them must be, and the layered
+// color attachments must come from textures of one target - otherwise the framebuffer is
+// FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS (KHR-GL4x geometry_shader.layered_fbo,
+// texture_cube_map_array.fbo_incompleteness).
+TEST_F(FramebufferTest, MixedLayeredAttachmentsAreIncompleteLayerTargets) {
+    GLuint textures[3] = {};
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &textures[0]);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_ARRAY, 1, &textures[1]);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_3D, 1, &textures[2]);
+    MG_Impl::GLImpl::TextureStorage2D(textures[0], 1, GL_RGBA8, 8, 8);
+    MG_Impl::GLImpl::TextureStorage3D(textures[1], 1, GL_RGBA8, 8, 8, 4);
+    MG_Impl::GLImpl::TextureStorage3D(textures[2], 1, GL_RGBA8, 8, 8, 4);
+    GLuint framebuffer = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // One layered (the whole 2D array) beside one that is not.
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, textures[1], 0);
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT1, textures[0], 0);
+    EXPECT_EQ(MG_Impl::GLImpl::CheckNamedFramebufferStatus(framebuffer, GL_DRAW_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS));
+
+    // Both layered, but from a 2D array and a 3D texture.
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT1, textures[2], 0);
+    EXPECT_EQ(MG_Impl::GLImpl::CheckNamedFramebufferStatus(framebuffer, GL_DRAW_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS));
+
+    // The positive control: one layered target throughout.
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT1, 0, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::CheckNamedFramebufferStatus(framebuffer, GL_DRAW_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::DeleteFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::DeleteTextures(3, textures);
+    DrainPendingGlErrors();
+}
+
+// GL 4.6 core 9.4.1: a single layer of a 3D / array texture has to exist. Attaching layer == depth
+// is legal (only the implementation's layer limit is checked at attach time); the attachment is
+// what is incomplete.
+TEST_F(FramebufferTest, AttachedLayerPastTheLastLayerIsIncompleteAttachment) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_3D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage3D(texture, 1, GL_RGBA8, 8, 8, 2);
+    GLuint framebuffer = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::FramebufferTexture3D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_3D, texture, 0, 2);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(MG_Impl::GLImpl::CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT));
+
+    MG_Impl::GLImpl::FramebufferTexture3D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_3D, texture, 0, 1);
+    EXPECT_EQ(MG_Impl::GLImpl::CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    MG_Impl::GLImpl::DeleteFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
     DrainPendingGlErrors();
 }

@@ -17,7 +17,7 @@
 //
 // The two routes had different arming. The declared route armed the widening on the format
 // alone; the baked route armed it only when the driver lacked GL_NV_image_formats. That reads
-// like an optimisation and is not one: SPIRV-Cross throws for its is_desktop_only_format set the
+// like an optimization and is not one: SPIRV-Cross throws for its is_desktop_only_format set the
 // moment it targets ESSL, whatever the driver would have accepted, so on a driver that HAS the
 // extension the shader half of the widening stayed switched off while TextureImpl's storage/bind
 // half - which keys on SpirvCrossCanPrintEsslImageFormat, not on the driver bit - still ran. The
@@ -26,7 +26,7 @@
 // KHR-GL43.stencil_texturing.functional is where it surfaced: its compute half writes through a
 // format-less `uimage2D` bound to an R8UI texture, and returned zeros for every texel.
 //
-// DISCRIMINATING ONLY WHERE THE DRIVER ADVERTISES GL_NV_image_formats - Mesa does, which is what
+// DISCRIMINATING ONLY WHERE THE DRIVER ADVERTISES GL_NV_image_formats - llvmpipe does, which is what
 // the software lanes run and where this was found. On Adreno 830 and both Malis the extension is
 // absent, the old code already armed the widening, and these cases pass before and after; they
 // are kept running there as a guard against the opposite mistake.
@@ -71,8 +71,8 @@ void main()
                 ScenarioTest::SetUp();
                 if (!Ready()) return;
                 if (!BackendHostsCompute()) {
-                    GTEST_SKIP() << "no compute stage on " << Gl().BackendName() << " ("
-                                 << Gl().RendererString() << ")";
+                    GTEST_SKIP() << "no compute stage on " << Gl().BackendName() << " (" << Gl().RendererString()
+                                 << ")";
                 }
             }
 
@@ -84,8 +84,7 @@ void main()
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             static GLuint BuildCompute(const char* source, std::string& log) {
@@ -174,9 +173,9 @@ void main()
                 for (int i = 0; i < kExtent * kExtent; ++i) {
                     if (readback[i] != expected[i]) ++offenders;
                 }
-                EXPECT_EQ(offenders, 0) << "the dispatch wrote " << offenders << " of "
-                                        << (kExtent * kExtent) << " texels wrongly; texel 0 was "
-                                        << readback[0] << ", expected " << expected[0]
+                EXPECT_EQ(offenders, 0) << "the dispatch wrote " << offenders << " of " << (kExtent * kExtent)
+                                        << " texels wrongly; texel 0 was " << readback[0] << ", expected "
+                                        << expected[0]
                                         << ". A whole stage lost to the ESSL emitter looks exactly like this.";
 
                 glUseProgram(0);

@@ -56,7 +56,8 @@ namespace {
             storage.MarkDirtyRegion(0, offset, extent);
             for (Int z = offset.z(); z < offset.z() + extent.z(); ++z)
                 for (Int y = offset.y(); y < offset.y() + extent.y(); ++y)
-                    for (Int x = offset.x(); x < offset.x() + extent.x(); ++x) written[Index(x, y, z)] = true;
+                    for (Int x = offset.x(); x < offset.x() + extent.x(); ++x)
+                        written[Index(x, y, z)] = true;
         }
 
         void Expect(const char* what) const {
@@ -75,7 +76,8 @@ namespace {
                 ASSERT_LE(box.hi.z(), size.z());
                 for (Int z = box.lo.z(); z < box.hi.z(); ++z)
                     for (Int y = box.lo.y(); y < box.hi.y(); ++y)
-                        for (Int x = box.lo.x(); x < box.hi.x(); ++x) ++covered[Index(x, y, z)];
+                        for (Int x = box.lo.x(); x < box.hi.x(); ++x)
+                            ++covered[Index(x, y, z)];
             }
             SizeT missing = 0, extra = 0, twice = 0;
             MipmapDirtyRegion bounds{size, IntVec3{0, 0, 0}};
@@ -149,7 +151,8 @@ namespace {
     TEST(MipmapFootprintTest, MoreBoxesThanTheListKeeps) {
         Level level({40, 40, 1});
         for (int j = 0; j < 10; ++j)
-            for (int i = 0; i < 10; ++i) level.Write({4 * i + 1, 4 * j + 1, 0}, {2, 2, 1});
+            for (int i = 0; i < 10; ++i)
+                level.Write({4 * i + 1, 4 * j + 1, 0}, {2, 2, 1});
         level.Expect("a hundred 2x2");
         std::vector<MipmapDirtyRegion> footprint;
         level.storage.GetDirtyFootprint(0, footprint);
@@ -159,7 +162,8 @@ namespace {
     // Scanlines of one width merge exactly and stay one box without ever starting the log.
     TEST(MipmapFootprintTest, AbuttingScanlinesStayOneBox) {
         Level level({32, 32, 1});
-        for (int y = 4; y < 20; ++y) level.Write({3, y, 0}, {10, 1, 1});
+        for (int y = 4; y < 20; ++y)
+            level.Write({3, y, 0}, {10, 1, 1});
         level.Expect("scanlines");
         std::vector<MipmapDirtyRegion> footprint;
         level.storage.GetDirtyFootprint(0, footprint);

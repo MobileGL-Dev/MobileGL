@@ -66,14 +66,14 @@ namespace MobileGL::MG_Util::SelfTest {
     //
     // THE CONTROL DISCIPLINE (DriverBugProbes.h): the substitute slots are the
     // probe's controls, and the DISCARD dimension is measured separately because
-    // it is a real fault line, not paranoia: Mesa llvmpipe short-circuits its
+    // it is a real fault line, not paranoia: llvmpipe short-circuits its
     // clipping statistics under rasterizer discard (reading 0 there while counting
     // the identical undiscarded draw exactly) while its dedicated
     // primitives-generated query counts both - measured 2026-08, and the reason
     // the verdict ranks the dedicated query first. A substitute qualifies only by
     // answering the exact expected count on every shape it is required to cover;
     // a device where no substitute qualifies even for the plain shape gets none
-    // (the honest verdict is the current behaviour); anything that fits neither
+    // (the honest verdict is the current behavior); anything that fits neither
     // the defect nor health is INCONCLUSIVE and must never arm anything. The
     // expected counts are exact (1 triangle per shape), not merely nonzero, so a
     // driver that half-counts cannot arm a half-right repair.
@@ -223,7 +223,7 @@ namespace MobileGL::MG_Util::SelfTest {
         // The defect is present and no substitute qualifies: none is exact
         // everywhere, and the plain-only fallback either misses the plain shape
         // or fails the domination rule above. The honest verdict is the current
-        // behaviour.
+        // behavior.
         Unfixable,
     };
 

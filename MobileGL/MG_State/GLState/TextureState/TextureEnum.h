@@ -21,6 +21,10 @@ namespace MobileGL {
         Texture2DArray,
         TextureCubeMapArray,
         Texture2DMultisampleArray,
+        // GL_OES_EGL_image_external: a 2D texture whose only storage is an EGLImage (a YUV one is
+        // converted to RGBA by the backend), with its own binding point on every unit. Below the
+        // frontend it IS a 2D texture: the pipe and the backends never see this target.
+        External,
         TextureTargetCount,
         Unknown = -1
     };

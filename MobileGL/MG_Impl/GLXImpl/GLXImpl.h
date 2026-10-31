@@ -33,14 +33,13 @@ namespace MobileGL::MG_Impl::GLXImpl {
     int GetConfig(Display* dpy, void* visualInfo, int attribute, int* value);
 
     GLXContextHandle CreateContext(Display* dpy, void* visualInfo, GLXContextHandle share, int direct);
-    GLXContextHandle CreateNewContext(Display* dpy, GLXFBConfigHandle config, int renderType,
-                                      GLXContextHandle share, int direct);
-    GLXContextHandle CreateContextAttribsARB(Display* dpy, GLXFBConfigHandle config, GLXContextHandle share,
-                                             int direct, const int* attribList);
+    GLXContextHandle CreateNewContext(Display* dpy, GLXFBConfigHandle config, int renderType, GLXContextHandle share,
+                                      int direct);
+    GLXContextHandle CreateContextAttribsARB(Display* dpy, GLXFBConfigHandle config, GLXContextHandle share, int direct,
+                                             const int* attribList);
     void DestroyContext(Display* dpy, GLXContextHandle context);
     int MakeCurrent(Display* dpy, GLXDrawableHandle drawable, GLXContextHandle context);
-    int MakeContextCurrent(Display* dpy, GLXDrawableHandle draw, GLXDrawableHandle read,
-                           GLXContextHandle context);
+    int MakeContextCurrent(Display* dpy, GLXDrawableHandle draw, GLXDrawableHandle read, GLXContextHandle context);
     void SwapBuffers(Display* dpy, GLXDrawableHandle drawable);
 
     GLXDrawableHandle CreateWindow(Display* dpy, GLXFBConfigHandle config, GLXDrawableHandle window,

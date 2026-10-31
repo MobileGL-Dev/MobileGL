@@ -9,26 +9,95 @@
 #include "ProgramObject.h"
 #include "ProgramLinkTask.h"
 #include "ProgramSpirvTask.h"
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
+#include <MG_Pipe/PipeMutation.h>
+#include <MG_State/GLState/StateObjectDeathNotice.h>
 
 const char* kDefaultFragmentShaderSource = R"(#version 460 core
 layout(location = 0) out vec4 FragColor;
 void main() {}
 )";
 
-
 namespace MobileGL::MG_State::GLState {
     static std::atomic<Uint64> s_nextProgramLifetimeId = 1;
+
+    Int ProgramObject::GetAttributeArrayElementLocation(const String& name) {
+        if (name.empty()) return -1;
+        if (name.back() != ']') return GetAttributeArrayElementLocation(name + "[0]");
+        // A strict decimal subscript: no white space, no sign, no leading zeros.
+        const SizeT bracket = name.rfind('[');
+        if (bracket == String::npos || bracket == 0) return -1;
+        const SizeT first = bracket + 1;
+        const SizeT last = name.size() - 1;
+        if (first >= last || (name[first] == '0' && last - first > 1)) return -1;
+        Int element = 0;
+        for (SizeT i = first; i < last; ++i) {
+            if (name[i] < '0' || name[i] > '9') return -1;
+            element = element * 10 + (name[i] - '0');
+            if (element > 0xFFFF) return -1;
+        }
+        const String base = name.substr(0, bracket);
+
+        const auto& artifacts = Artifacts();
+        const auto& attribs = artifacts.attribs;
+        for (const auto& input : artifacts.pipeInputReflection) {
+            // Reflection may spell an array with or without its "[0]".
+            if (input.name != base && input.name != base + "[0]") continue;
+            if (!input.type.isArray || element >= input.arraySize) return -1;
+            // The link expanded the array over consecutive locations, every one carrying the
+            // reflected name (ProgramLinkTask's attribute table), so its span is the run of them.
+            // An exact match for the reflected name was already tried by GetAttributeLocation, so
+            // this is reached for element 0 only through the plain-name spelling.
+            const auto it = std::find(attribs.begin(), attribs.end(), input.name);
+            if (it == attribs.end()) return -1;
+            const Int baseLocation = static_cast<Int>(std::distance(attribs.begin(), it));
+            Int span = 0;
+            while (baseLocation + span < static_cast<Int>(attribs.size()) &&
+                   attribs[static_cast<SizeT>(baseLocation + span)] == input.name) {
+                ++span;
+            }
+            const Int locationsPerElement = std::max<Int>(1, span / std::max<Int>(input.arraySize, 1));
+            const Int location = baseLocation + element * locationsPerElement;
+            return location < baseLocation + span ? location : -1;
+        }
+        return -1;
+    }
 
     Uint64 ProgramObject::AllocateLifetimeId() {
         return s_nextProgramLifetimeId.fetch_add(1, std::memory_order_relaxed);
     }
 
-    ProgramObject::~ProgramObject() { CancelLink(); }
+    ProgramObject::~ProgramObject() {
+        CancelLink();
+        // P2 step e2: ANNOUNCE the death instead of leaving the backend to discover it in a
+        // garbage sweep. This is the last SharedPtr to this object dropping - not
+        // glDeleteProgram, which only marks the name and leaves a still-bound object very much
+        // alive - so it is the exact moment the backend's twin, and the driver storage that
+        // twin owns, stop being reachable. The notice carries the lifetime id because the
+        // object no longer exists to be passed, and because the lifetime id is what the client
+        // slot allocator resolves the handle from. No-op unless a backend registered the ops
+        // (a pull build declares none at all).
+        //
+        // P4a D-I1: the notice is no longer raised directly - it is step 2 of the ONE
+        // client-side death helper for this kind, which emits delete_shader_state first,
+        // raises the notice second and frees the slot last. The client mints the ShaderCso, so
+        // the client is where its death has to be spoken from: a backend death-ops table is a
+        // redundant, idempotent SECOND path, and under a backend that installs none it was
+        // previously the ONLY one, which is how a slot leaks for the life of the process.
+        //
+        // AN ORDINARY PROGRAM AND A PIPELINE COMPOSITE TAKE THIS SAME LINE. A composite is an
+        // ordinary ProgramObject with its own lifetime id, its slot merely comes out of the
+        // reserved band, and its OTHER release path - the pipeline cache dropping it when the
+        // draw-program signature moves - goes through the same helper. Whichever runs second is
+        // a proven no-op, because the slot allocator refuses a slot that is not live at that
+        // generation.
+        MG_Pipe::MGPipeEmitShaderCsoDestroyAndFree(m_lifetimeId);
+    }
 
     // EnsureLinkJoined() is defined inline in ProgramObject.h (see the comment there for
     // why: ~1200 call sites, no LTO). Only its blocking half lives here.
@@ -57,7 +126,7 @@ namespace MobileGL::MG_State::GLState {
             // and describe a program that no longer exists.
             BumpLinkObservableVersions();
         }
-        // A node that settled as Cancelled published nothing, and m_artifacts still holds
+        // A node that settled as Canceled published nothing, and m_artifacts still holds
         // what Link()'s prologue left there: cleared, LINK_STATUS false, no info log. That is
         // the correct answer for a link that was superseded or abandoned, and it is why no
         // caller of CancelLink() has to repair anything afterwards.
@@ -68,9 +137,13 @@ namespace MobileGL::MG_State::GLState {
         MG_Util::Async::ApplyDeferredDiagnostics(*pending);
     }
 
-    Bool ProgramObject::IsPendingLinkTerminal() const { return m_pendingLink->IsTerminal(); }
+    Bool ProgramObject::IsPendingLinkTerminal() const {
+        return m_pendingLink->IsTerminal();
+    }
 
-    Bool ProgramObject::IsPendingSpirvTerminal() const { return m_pendingSpirv->IsTerminal(); }
+    Bool ProgramObject::IsPendingSpirvTerminal() const {
+        return m_pendingSpirv->IsTerminal();
+    }
 
     void ProgramObject::JoinPendingSpirv() const {
         MOBILEGL_ASSERT(!MG_Util::Async::ShaderCompilePool::IsPoolThread(),
@@ -87,7 +160,7 @@ namespace MobileGL::MG_State::GLState {
         if (pending->IsComplete()) {
             m_spirv = Move(pending->artifacts);
         }
-        // A node that settled as Cancelled published nothing, so m_spirv stays empty with
+        // A node that settled as Canceled published nothing, so m_spirv stays empty with
         // spirvStatus false: linked, queryable, not drawable. Nothing to repair.
 
         // Order matters, and it is the GL order. The shadow arrives zero-filled; the shaders'
@@ -121,11 +194,11 @@ namespace MobileGL::MG_State::GLState {
         const SizeT dataOffset = m_pendingUniformBytes.size();
         m_pendingUniformBytes.resize(dataOffset + byteSize);
         std::memcpy(m_pendingUniformBytes.data() + dataOffset, source, byteSize);
-        m_pendingUniformWrites.push_back(PendingUniformWrite{.location = location,
-                                                             .byteOffsetInUniform =
-                                                                 static_cast<Uint>(byteOffsetInUniform),
-                                                             .byteSize = static_cast<Uint>(byteSize),
-                                                             .dataOffset = static_cast<Uint>(dataOffset)});
+        m_pendingUniformWrites.push_back(
+            PendingUniformWrite{.location = location,
+                                .byteOffsetInUniform = static_cast<Uint>(byteOffsetInUniform),
+                                .byteSize = static_cast<Uint>(byteSize),
+                                .dataOffset = static_cast<Uint>(dataOffset)});
         return true;
     }
 
@@ -134,7 +207,7 @@ namespace MobileGL::MG_State::GLState {
     // MobileGL parses with Vulkan-relaxed rules, which sweep default-block uniforms into
     // MGL_GLOBAL_UBO; a block member cannot carry an initializer in SPIR-V, so glslang hands
     // the folded constants over as a side-channel (TIntermediate::getUniformInitializers) and
-    // this is where they are honoured. Without it every such uniform silently read zero -
+    // this is where they are honored. Without it every such uniform silently read zero -
     // which is what half of KHR-GL43.shader_storage_buffer_object was actually failing on.
     //
     // Writes go straight into the shadow rather than through glUniform*: this runs INSIDE the
@@ -148,7 +221,7 @@ namespace MobileGL::MG_State::GLState {
         const auto& initializers = Artifacts().uniformInitialValues;
         if (initializers.empty()) return;
         if (m_spirv.globalUboScratch.empty() || m_spirv.uniformOffsets.empty()) {
-            // Phase B published no shadow (cancelled, or superseded by a relink). The program
+            // Phase B published no shadow (canceled, or superseded by a relink). The program
             // is not drawable; there is nowhere for these to land.
             return;
         }
@@ -176,8 +249,7 @@ namespace MobileGL::MG_State::GLState {
             // has an 8-byte one, which the store width below picks up. glslang folded the value
             // into floatValues, a vector<double>, in both cases. Leaving it out meant the
             // initializer was silently dropped and the uniform came up zero.
-            const Bool isFloat = init.basicType == glslang::EbtFloat ||
-                                 init.basicType == glslang::EbtFloat16 ||
+            const Bool isFloat = init.basicType == glslang::EbtFloat || init.basicType == glslang::EbtFloat16 ||
                                  init.basicType == glslang::EbtDouble;
             const Bool isInt = init.basicType == glslang::EbtInt || init.basicType == glslang::EbtUint ||
                                init.basicType == glslang::EbtBool;
@@ -206,8 +278,7 @@ namespace MobileGL::MG_State::GLState {
                 const SizeT slotSpan =
                     UniformStorageSpanInBytes(GetUniformTypeFacts(static_cast<Uint>(location)),
                                               GetUniformSizesInBytes(static_cast<Uint>(location)), nativeFloat64);
-                const SizeT columnStride =
-                    columns > 0 ? slotSpan / static_cast<SizeT>(columns) : slotSpan;
+                const SizeT columnStride = columns > 0 ? slotSpan / static_cast<SizeT>(columns) : slotSpan;
                 const Int componentsPerColumn = columns > 0 ? rows : componentsPerElement;
                 const Int columnCount = columns > 0 ? columns : 1;
 
@@ -257,7 +328,7 @@ namespace MobileGL::MG_State::GLState {
         bytes.swap(m_pendingUniformBytes);
 
         if (m_spirv.globalUboScratch.empty() || m_spirv.uniformOffsets.empty()) {
-            // Phase B produced nothing (cancelled at teardown, or a relink superseded it).
+            // Phase B produced nothing (canceled at teardown, or a relink superseded it).
             // The program is not drawable, so there is nowhere for these to land and nothing
             // that could observe them.
             MGLOG_D("ProgramObject %u: dropping %zu buffered uniform write(s); the SPIR-V job published no shadow",
@@ -275,8 +346,8 @@ namespace MobileGL::MG_State::GLState {
                 // Same verdict the live write path reaches for a uniform without backing
                 // storage: log and drop, rather than fault.
                 MGLOG_E_ONCE("ProgramObject %u: buffered uniform write at location %u has no backing storage "
-                        "(offset=%u size=%u uboSize=%zu); dropping write",
-                        m_externalIndex, write.location, offset, write.byteSize, uboSize);
+                             "(offset=%u size=%u uboSize=%zu); dropping write",
+                             m_externalIndex, write.location, offset, write.byteSize, uboSize);
                 continue;
             }
             Uint8* const destination = scratch + offset + write.byteOffsetInUniform;
@@ -291,8 +362,8 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void ProgramObject::CancelLink() {
-        // Phase B first: it is chained behind phase A, so cancelling A would otherwise run A's
-        // continuation and post a node this call is about to abandon anyway. Cancelling it up
+        // Phase B first: it is chained behind phase A, so canceling A would otherwise run A's
+        // continuation and post a node this call is about to abandon anyway. Canceling it up
         // front makes that continuation a no-op.
         //
         // Cooperative and non-blocking, both of them. A node that no worker has picked up
@@ -388,9 +459,6 @@ namespace MobileGL::MG_State::GLState {
         artifacts.linkStatus = false;
     }
 
-
-
-
     bool ProgramObject::ShaderIsAttached(const SharedPtr<ShaderObject>& shader) {
         MGLOG_D("ProgramObject %u: ShaderIsAttached check for shader %p", m_externalIndex, shader.get());
         auto it = std::find_if(m_shaders.begin(), m_shaders.end(),
@@ -403,15 +471,23 @@ namespace MobileGL::MG_State::GLState {
     // NO CancelLink here, nor in DetachShader below. Both only edit the attach lists, which
     // a pending link does not read - it snapshotted (stage, source, compile node) per shader
     // at enqueue and is isolated from every later mutation. GL agrees: attaching or detaching
-    // takes effect at the NEXT link and leaves the current LINK_STATUS alone, so cancelling
+    // takes effect at the NEXT link and leaves the current LINK_STATUS alone, so canceling
     // would make `glLinkProgram; glAttachShader; glGetProgramiv(LINK_STATUS)` report FALSE
     // for a link that succeeded - and would break glCreateShaderProgramv outright, since that
     // is specified as link-then-detach and would discard its own link before anyone read it.
     bool ProgramObject::AttachShader(const SharedPtr<ShaderObject>& shader) {
         MGLOG_D("ProgramObject %u: AttachShader called for shader %p", m_externalIndex, shader.get());
-        if (ShaderIsAttached(shader)) {
+        if (ShaderIsAttachedGLVisible(shader)) {
             MGLOG_D("ProgramObject %u: AttachShader - shader already attached, skipping", m_externalIndex);
             return false;
+        }
+        if (ShaderIsAttached(shader)) {
+            // Detached since the last link, and attached again before the next one: GL sees it
+            // attached from here on, so the pending detach is withdrawn rather than the shader
+            // listed twice.
+            std::erase_if(m_detachedShaders,
+                          [&shader](const SharedPtr<ShaderObject>& s) { return s.get() == shader.get(); });
+            return true;
         }
         m_shaders.emplace_back(shader);
         MGLOG_D("ProgramObject %u: AttachShader - attached successfully, total shaders now %zu", m_externalIndex,
@@ -429,7 +505,9 @@ namespace MobileGL::MG_State::GLState {
 
     SizeT ProgramObject::DetachShader(const SharedPtr<ShaderObject>& shader) {
         MGLOG_D("DetachShader called for shader %p from ProgramObject %u", shader.get(), m_externalIndex);
-        if (!ShaderIsAttached(shader)) {
+        // GL-visible: a shader already detached (pending the next link) is not attached, and a
+        // second glDetachShader of it is INVALID_OPERATION like any other unattached shader.
+        if (!ShaderIsAttachedGLVisible(shader)) {
             MGLOG_D("Shader %p is not attached to ProgramObject %u, cannot detach.", shader.get(), m_externalIndex);
             return 0;
         }
@@ -471,7 +549,7 @@ namespace MobileGL::MG_State::GLState {
         auto status = defaultFS->GetCompileStatus();
         if (!status) {
             MGLOG_E_ONCE("ProgramObject %u: Failed to compile default fragment shader. InfoLog:\n%s", m_externalIndex,
-                    defaultFS->GetInfoLog().c_str());
+                         defaultFS->GetInfoLog().c_str());
             return;
         }
         m_shaders.push_back(defaultFS);
@@ -508,6 +586,8 @@ namespace MobileGL::MG_State::GLState {
             RemoveShader(detachedShader);
         }
         m_detachedShaders.clear();
+        m_linkedFromSpirv = std::any_of(m_shaders.begin(), m_shaders.end(),
+                                        [](const SharedPtr<ShaderObject>& shader) { return shader->HasSpirvBinary(); });
 
         if (addDefaultFSIfMissingForRenderingPipelineProgram) {
             AddDefaultFragmentShaderIfMissing();
@@ -535,6 +615,7 @@ namespace MobileGL::MG_State::GLState {
         task->in.externalIndex = m_externalIndex;
         task->in.env = MG_Util::ShaderTranspiler::GetCurrentCompileEnv();
         task->in.enableSpirvValidation = MG_Config::Features.EnableSpirvValidation;
+        task->in.separable = m_linkedSeparable;
         task->in.explicitAttribLocations = m_explicitAttribLocations;
         task->in.explicitFragDataLocation = m_explicitFragDataLocation;
         task->in.explicitFragDataIndex = m_explicitFragDataIndex;
@@ -550,12 +631,11 @@ namespace MobileGL::MG_State::GLState {
         // The capture stage is the LAST vertex-processing stage the program has, which is the same
         // rule ProgramLinkTask::ResolveTransformFeedbackVaryings resolves the names against. The
         // application's own request wins if it made one: that can only happen on a mixed program,
-        // which is not a shape ARB_gl_spirv defines, and honouring what the application explicitly
+        // which is not a shape ARB_gl_spirv defines, and honoring what the application explicitly
         // asked for is the safer of the two readings.
         if (task->in.requestedXfbVaryings.empty()) {
-            for (const ShaderStage captureStage:
-                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::TessControl,
-                  ShaderStage::Vertex}) {
+            for (const ShaderStage captureStage :
+                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::TessControl, ShaderStage::Vertex}) {
                 Bool stagePresent = false;
                 for (const auto& shader : m_shaders) {
                     if (!shader || shader->GetShaderStage() != captureStage) continue;
@@ -630,12 +710,20 @@ namespace MobileGL::MG_State::GLState {
         task->SubmitAfter(deps);
     }
 
-
     void ProgramObject::MarkAsDeleted() {
         MGLOG_D("ProgramObject %u: MarkAsDeleted called (was %s)", m_externalIndex,
                 m_deleteStatus ? "deleted" : "not deleted");
         m_deleteStatus = true;
         MGLOG_D("ProgramObject %u: MarkAsDeleted - now marked deleted", m_externalIndex);
+    }
+
+    Vector<SharedPtr<ShaderObject>> ProgramObject::GetGLVisibleAttachedShaders() const {
+        Vector<SharedPtr<ShaderObject>> visible;
+        visible.reserve(m_shaders.size());
+        for (const auto& shader : m_shaders) {
+            if (ShaderIsAttachedGLVisible(shader)) visible.push_back(shader);
+        }
+        return visible;
     }
 
     Vector<SharedPtr<ShaderObject>>& ProgramObject::GetAttachedShaders() {
@@ -647,7 +735,6 @@ namespace MobileGL::MG_State::GLState {
     const Vector<SharedPtr<ShaderObject>>& ProgramObject::GetAttachedShaders() const {
         return m_shaders;
     }
-
 
     void ProgramObject::SetExplicitVertexInLocation(Uint index, const char* name) {
         MGLOG_D("ProgramObject %u: SetExplicitVertexInLocation called name='%s' index=%u", m_externalIndex, name,
@@ -670,7 +757,6 @@ namespace MobileGL::MG_State::GLState {
         MGLOG_D("ProgramObject %u: SetExplicitFragmentOutIndex - stored color index for '%s' -> %u", m_externalIndex,
                 name, colorIndex);
     }
-
 
     Int ProgramObject::GetFragmentDataLocation(const char* name) {
         // Answered from the OWNED pipe-output snapshot, not from Artifacts().program. The live

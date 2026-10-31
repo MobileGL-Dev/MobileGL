@@ -15,6 +15,38 @@
 #endif
 
 extern "C" EGLDisplay eglGetPlatformDisplayEXT(EGLenum platform, void* native_display, const EGLint* attrib_list);
+extern "C" EGLImage eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+                                      const EGLint* attrib_list);
+extern "C" EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImage image);
+extern "C" EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface draw, const EGLint* rects, EGLint n_rects);
+extern "C" EGLBoolean eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface draw, const EGLint* rects, EGLint n_rects);
+extern "C" EGLBoolean eglSetDamageRegionKHR(EGLDisplay dpy, EGLSurface surface, EGLint* rects, EGLint n_rects);
+extern "C" EGLBoolean eglQueryDmaBufFormatsEXT(EGLDisplay dpy, EGLint max_formats, EGLint* formats,
+                                               EGLint* num_formats);
+extern "C" EGLBoolean eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, EGLint max_modifiers,
+                                                 khronos_uint64_t* modifiers, EGLBoolean* external_only,
+                                                 EGLint* num_modifiers);
+extern "C" void glEGLImageTargetTexture2DOES(GLenum target, GLeglImageOES image);
+// EGL_KHR_fence_sync / EGL_KHR_wait_sync / EGL_ANDROID_native_fence_sync (Definitions.cpp).
+extern "C" EGLSync eglCreateSyncKHR(EGLDisplay dpy, EGLenum type, const EGLint* attrib_list);
+extern "C" EGLBoolean eglDestroySyncKHR(EGLDisplay dpy, EGLSync sync);
+extern "C" EGLint eglClientWaitSyncKHR(EGLDisplay dpy, EGLSync sync, EGLint flags, EGLTime timeout);
+extern "C" EGLBoolean eglGetSyncAttribKHR(EGLDisplay dpy, EGLSync sync, EGLint attribute, EGLint* value);
+extern "C" EGLint eglWaitSyncKHR(EGLDisplay dpy, EGLSync sync, EGLint flags);
+extern "C" EGLint eglDupNativeFenceFDANDROID(EGLDisplay dpy, EGLSync sync);
+// KHR_robustness / EXT_robustness suffixed names (Definitions.cpp); the desktop headers declare
+// only the unsuffixed and ARB ones.
+extern "C" GLenum glGetGraphicsResetStatusKHR(void);
+extern "C" GLenum glGetGraphicsResetStatusEXT(void);
+extern "C" void glReadnPixelsKHR(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                 GLsizei bufSize, void* data);
+extern "C" void glReadnPixelsEXT(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                 GLsizei bufSize, void* data);
+extern "C" void glGetnUniformfvKHR(GLuint program, GLint location, GLsizei bufSize, GLfloat* params);
+extern "C" void glGetnUniformfvEXT(GLuint program, GLint location, GLsizei bufSize, GLfloat* params);
+extern "C" void glGetnUniformivKHR(GLuint program, GLint location, GLsizei bufSize, GLint* params);
+extern "C" void glGetnUniformivEXT(GLuint program, GLint location, GLsizei bufSize, GLint* params);
+extern "C" void glGetnUniformuivKHR(GLuint program, GLint location, GLsizei bufSize, GLuint* params);
 
 #define GETPROC(name, var)                                                                                             \
     if (strcmp(#name, var) == 0) {                                                                                     \
@@ -62,8 +94,21 @@ namespace MobileGL::MG_Impl {
         GETPROC(eglDestroySync, name);
         GETPROC(eglClientWaitSync, name);
         GETPROC(eglGetSyncAttrib, name);
+        GETPROC(eglCreateSyncKHR, name);
+        GETPROC(eglDestroySyncKHR, name);
+        GETPROC(eglClientWaitSyncKHR, name);
+        GETPROC(eglGetSyncAttribKHR, name);
+        GETPROC(eglWaitSyncKHR, name);
+        GETPROC(eglDupNativeFenceFDANDROID, name);
         GETPROC(eglCreateImage, name);
         GETPROC(eglDestroyImage, name);
+        GETPROC(eglCreateImageKHR, name);
+        GETPROC(eglDestroyImageKHR, name);
+        GETPROC(eglQueryDmaBufFormatsEXT, name);
+        GETPROC(eglSwapBuffersWithDamageKHR, name);
+        GETPROC(eglSwapBuffersWithDamageEXT, name);
+        GETPROC(eglSetDamageRegionKHR, name);
+        GETPROC(eglQueryDmaBufModifiersEXT, name);
         GETPROC(eglGetPlatformDisplay, name);
         GETPROC(eglGetPlatformDisplayEXT, name);
         GETPROC(eglCreatePlatformWindowSurface, name);
@@ -111,6 +156,7 @@ namespace MobileGL::MG_Impl {
         GETPROC(glTexParameteriv, name);
         GETPROC(glTexImage1D, name);
         GETPROC(glTexImage2D, name);
+        GETPROC(glEGLImageTargetTexture2DOES, name);
         GETPROC(glDrawBuffer, name);
         GETPROC(glClear, name);
         GETPROC(glClearColor, name);
@@ -198,6 +244,10 @@ namespace MobileGL::MG_Impl {
         GETPROC(glBufferSubData, name);
         GETPROC(glGetBufferSubData, name);
         GETPROC(glMapBuffer, name);
+        // GL_OES_mapbuffer (ES contexts): the same three calls under their OES names.
+        if (strcmp(name, "glMapBufferOES") == 0) return (void*)glMapBuffer;
+        if (strcmp(name, "glUnmapBufferOES") == 0) return (void*)glUnmapBuffer;
+        if (strcmp(name, "glGetBufferPointervOES") == 0) return (void*)glGetBufferPointerv;
         GETPROC(glUnmapBuffer, name);
         GETPROC(glGetBufferParameteriv, name);
         GETPROC(glGetBufferPointerv, name);
@@ -772,6 +822,93 @@ namespace MobileGL::MG_Impl {
         GETPROC(glMultiDrawArraysIndirectCount, name);
         GETPROC(glMultiDrawElementsIndirectCount, name);
         GETPROC(glPolygonOffsetClamp, name);
+        // GL_ARB_shader_objects (Definitions.cpp): advertised, so every entry point resolves.
+        GETPROC(glDeleteObjectARB, name);
+        GETPROC(glGetHandleARB, name);
+        GETPROC(glDetachObjectARB, name);
+        GETPROC(glCreateShaderObjectARB, name);
+        GETPROC(glShaderSourceARB, name);
+        GETPROC(glCompileShaderARB, name);
+        GETPROC(glCreateProgramObjectARB, name);
+        GETPROC(glAttachObjectARB, name);
+        GETPROC(glLinkProgramARB, name);
+        GETPROC(glUseProgramObjectARB, name);
+        GETPROC(glValidateProgramARB, name);
+        GETPROC(glUniform1fARB, name);
+        GETPROC(glUniform2fARB, name);
+        GETPROC(glUniform3fARB, name);
+        GETPROC(glUniform4fARB, name);
+        GETPROC(glUniform1iARB, name);
+        GETPROC(glUniform2iARB, name);
+        GETPROC(glUniform3iARB, name);
+        GETPROC(glUniform4iARB, name);
+        GETPROC(glUniform1fvARB, name);
+        GETPROC(glUniform2fvARB, name);
+        GETPROC(glUniform3fvARB, name);
+        GETPROC(glUniform4fvARB, name);
+        GETPROC(glUniform1ivARB, name);
+        GETPROC(glUniform2ivARB, name);
+        GETPROC(glUniform3ivARB, name);
+        GETPROC(glUniform4ivARB, name);
+        GETPROC(glUniformMatrix2fvARB, name);
+        GETPROC(glUniformMatrix3fvARB, name);
+        GETPROC(glUniformMatrix4fvARB, name);
+        GETPROC(glGetObjectParameterfvARB, name);
+        GETPROC(glGetObjectParameterivARB, name);
+        GETPROC(glGetInfoLogARB, name);
+        GETPROC(glGetAttachedObjectsARB, name);
+        GETPROC(glGetUniformLocationARB, name);
+        GETPROC(glGetActiveUniformARB, name);
+        GETPROC(glGetUniformfvARB, name);
+        GETPROC(glGetUniformivARB, name);
+        GETPROC(glGetShaderSourceARB, name);
+        // GL_ARB_vertex_shader (Definitions.cpp): advertised, so every entry point resolves.
+        GETPROC(glVertexAttrib1sARB, name);
+        GETPROC(glVertexAttrib1svARB, name);
+        GETPROC(glVertexAttrib1fARB, name);
+        GETPROC(glVertexAttrib1fvARB, name);
+        GETPROC(glVertexAttrib1dARB, name);
+        GETPROC(glVertexAttrib1dvARB, name);
+        GETPROC(glVertexAttrib2sARB, name);
+        GETPROC(glVertexAttrib2svARB, name);
+        GETPROC(glVertexAttrib2fARB, name);
+        GETPROC(glVertexAttrib2fvARB, name);
+        GETPROC(glVertexAttrib2dARB, name);
+        GETPROC(glVertexAttrib2dvARB, name);
+        GETPROC(glVertexAttrib3sARB, name);
+        GETPROC(glVertexAttrib3svARB, name);
+        GETPROC(glVertexAttrib3fARB, name);
+        GETPROC(glVertexAttrib3fvARB, name);
+        GETPROC(glVertexAttrib3dARB, name);
+        GETPROC(glVertexAttrib3dvARB, name);
+        GETPROC(glVertexAttrib4sARB, name);
+        GETPROC(glVertexAttrib4svARB, name);
+        GETPROC(glVertexAttrib4fARB, name);
+        GETPROC(glVertexAttrib4fvARB, name);
+        GETPROC(glVertexAttrib4dARB, name);
+        GETPROC(glVertexAttrib4dvARB, name);
+        GETPROC(glVertexAttrib4NubARB, name);
+        GETPROC(glVertexAttrib4bvARB, name);
+        GETPROC(glVertexAttrib4ivARB, name);
+        GETPROC(glVertexAttrib4ubvARB, name);
+        GETPROC(glVertexAttrib4usvARB, name);
+        GETPROC(glVertexAttrib4uivARB, name);
+        GETPROC(glVertexAttrib4NbvARB, name);
+        GETPROC(glVertexAttrib4NsvARB, name);
+        GETPROC(glVertexAttrib4NivARB, name);
+        GETPROC(glVertexAttrib4NubvARB, name);
+        GETPROC(glVertexAttrib4NusvARB, name);
+        GETPROC(glVertexAttrib4NuivARB, name);
+        GETPROC(glVertexAttribPointerARB, name);
+        GETPROC(glEnableVertexAttribArrayARB, name);
+        GETPROC(glDisableVertexAttribArrayARB, name);
+        GETPROC(glGetVertexAttribdvARB, name);
+        GETPROC(glGetVertexAttribfvARB, name);
+        GETPROC(glGetVertexAttribivARB, name);
+        GETPROC(glGetVertexAttribPointervARB, name);
+        GETPROC(glBindAttribLocationARB, name);
+        GETPROC(glGetActiveAttribARB, name);
+        GETPROC(glGetAttribLocationARB, name);
         GETPROC(glPrimitiveBoundingBoxARB, name);
         GETPROC(glGetTextureHandleARB, name);
         GETPROC(glGetTextureSamplerHandleARB, name);
@@ -854,6 +991,15 @@ namespace MobileGL::MG_Impl {
         GETPROC(glGetnUniformivARB, name);
         GETPROC(glGetnUniformuivARB, name);
         GETPROC(glGetnUniformdvARB, name);
+        GETPROC(glGetGraphicsResetStatusKHR, name);
+        GETPROC(glGetGraphicsResetStatusEXT, name);
+        GETPROC(glReadnPixelsKHR, name);
+        GETPROC(glReadnPixelsEXT, name);
+        GETPROC(glGetnUniformfvKHR, name);
+        GETPROC(glGetnUniformfvEXT, name);
+        GETPROC(glGetnUniformivKHR, name);
+        GETPROC(glGetnUniformivEXT, name);
+        GETPROC(glGetnUniformuivKHR, name);
         GETPROC(glFramebufferSampleLocationsfvARB, name);
         GETPROC(glNamedFramebufferSampleLocationsfvARB, name);
         GETPROC(glEvaluateDepthValuesARB, name);
@@ -1150,9 +1296,9 @@ namespace MobileGL::MG_Impl {
         GETPROC(glVertexArrayVertexAttribDivisorEXT, name);
         GETPROC(glDrawArraysInstancedEXT, name);
         GETPROC(glDrawElementsInstancedEXT, name);
-        // GETPROC(glGetFragmentShadingRatesEXT, name);
-        // GETPROC(glShadingRateEXT, name);
-        // GETPROC(glShadingRateCombinerOpsEXT, name);
+        GETPROC(glGetFragmentShadingRatesEXT, name);
+        GETPROC(glShadingRateEXT, name);
+        GETPROC(glShadingRateCombinerOpsEXT, name);
         // GETPROC(glFramebufferShadingRateEXT, name);
         // GETPROC(glDrawMeshTasksEXT, name);
         // GETPROC(glDrawMeshTasksIndirectEXT, name);

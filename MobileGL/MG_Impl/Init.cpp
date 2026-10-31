@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include <Includes.h>
+#include <Init.h>
 
 #include "GLImpl/Texture/ProxyTexture.h"
 #include "GLImpl/Framebuffer/GL_Framebuffer.h"
@@ -22,7 +23,13 @@ namespace MobileGL::MG_Impl {
     void Init() {
         MGLOG_D("Initializing MobileGL Implementation...");
         GLImpl::TextureImpl::pProxyTextureManager = MakeUnique<GLImpl::TextureImpl::ProxyTextureManager>();
+        BuildDefaultFramebuffer();
+#if defined(__APPLE__) && !defined(MOBILEGL_IOS)
+        NSOpenGLImpl::InstallHooks();
+#endif
+    }
 
+    void BuildDefaultFramebuffer() {
         // TODO: get real info in EGL
         auto& fbo0 = MG_State::pGLContext->CreateFramebufferObject(0);
         auto colorTex = MakeShared<MG_State::GLState::TextureObject2D>(0);
@@ -48,8 +55,9 @@ namespace MobileGL::MG_Impl {
             MakeUnique<GLImpl::FramebufferImpl::DefaultFramebufferInfo>(fbo0, colorTex, depthTex, stencilTex);
         MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).Bind(fbo0);
         MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).Bind(fbo0);
-#if defined(__APPLE__) && !defined(MOBILEGL_IOS)
-        NSOpenGLImpl::InstallHooks();
-#endif
+        // P14 S3: every GLContext a later eglCreateContext builds starts with this same default
+        // framebuffer, so a context the application creates after this one is not left with an
+        // unbound framebuffer 0.
+        MG_State::SetDefaultFramebuffer(fbo0);
     }
 } // namespace MobileGL::MG_Impl

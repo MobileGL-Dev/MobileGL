@@ -1,0 +1,233 @@
+// MobileGL - MobileGL/MG_Remote/Transport/EventRing.h
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// SEG_EVENT: the server-to-client reverse channel for MGPipeCallbacks events; the overflow rules
+// (eventRingFull, eventDropped) are ARCHITECTURE.md §11.7. It has its own RingControl page,
+// driven with the Cmd cursor set by the same producer/consumer code in the opposite direction,
+// because a third cursor set would grow RingControl past its fixed 4 KiB page. The two event
+// flags stay in the SEG_CMD page, where Ring.h declares them. Nothing under Transport/ may
+// include MobileGL/Includes.h, so the payloads below are fixed-width mirrors of MGPipeHandle,
+// MGPRange and MGPSurfaceInfo, converted by the sessions where the frontend types are legal.
+
+#pragma once
+
+#include "Doorbell.h"
+#include "Ring.h"
+
+#include <cstdint>
+#include <cstring>
+
+namespace MobileGL::MG_Remote::Transport {
+
+    // Record kinds on SEG_EVENT. 0 is kRingPadRecordKind and can never be an
+    // event, which is why the list starts at 1. APPEND-ONLY, for the same reason
+    // the opcode space is (CONTRACT-P5C §7.7): kEventGlError is the first addition.
+    enum EventKind : std::uint16_t {
+        kEventNone = 0,
+        kEventBufferWriteback = 1, // MGPipeCallbacks::OnBufferWriteback
+        kEventGpuWritten = 2,      // MGPipeCallbacks::OnGpuWritten
+        kEventSurfaceChanged = 3,  // MGPipeCallbacks::OnSurfaceChanged
+        kEventGlError = 4,         // PipeInputs::RecordError, posted by the server session
+        kEventFenceSignaled = 5,   // P10: a client fence the server saw signaled (CONTRACT-P10 §1)
+    };
+
+    // The 8-byte {slot, gen} pair, mirrored (MGPipeHandle in MGPipeHandles.h).
+    struct EventHandle {
+        std::uint32_t Slot;
+        std::uint32_t Gen;
+    };
+    static_assert(sizeof(EventHandle) == 8, "the handle is the 8-byte {slot, gen} pair");
+
+    // MGPRange, mirrored (MGPipeTypes.h).
+    struct EventRange {
+        std::uint64_t Offset;
+        std::uint64_t Size;
+    };
+    static_assert(sizeof(EventRange) == 16, "MGPRange is 16 bytes on the wire");
+
+    // OnBufferWriteback(res, offset, MGPBlobRef bytes). The bytes follow this
+    // head INSIDE THE RECORD: the blobref the client hands the frontend names
+    // SEG_EVENT and the in-segment offset of those inline bytes, which is what
+    // makes "the destination is the client's shadow" (contract table 1 row 22)
+    // reachable without a second segment. `Size` is therefore the record's own
+    // tail length and is cross-checked against it.
+    //
+    // `ProducedAtSeq` is the SEG_CMD seq of the record whose apply posted the
+    // writeback (the record count the server had applied, when it was posted
+    // between records). Writebacks a client did not ask for - a transform
+    // feedback capture closing - drain whenever the client next waits, which
+    // can be after it has marked the same buffer written by a later record; the
+    // seq is what lets it tell an old writeback from the answer to its own.
+    struct EventBufferWritebackHead {
+        EventHandle Resource;
+        std::uint64_t Offset;        // destination offset inside the resource
+        std::uint64_t Size;          // inline byte count that follows
+        std::uint64_t ProducedAtSeq; // SEG_CMD seq the bytes are current as of
+    };
+    static_assert(sizeof(EventBufferWritebackHead) == 32, "wire shape");
+
+    // OnGpuWritten(res, rangeCount, ranges). EventRange[RangeCount] follows.
+    struct EventGpuWrittenHead {
+        EventHandle Resource;
+        std::uint32_t RangeCount;
+        std::uint32_t Pad0;
+    };
+    static_assert(sizeof(EventGpuWrittenHead) == 16, "wire shape");
+
+    // OnSurfaceChanged(const MGPSurfaceInfo*), mirrored (MGPipeTypes.h).
+    struct EventSurfaceChangedHead {
+        std::uint32_t Width;
+        std::uint32_t Height;
+        std::uint32_t InternalFormat;
+        std::uint16_t Samples;
+        std::uint16_t Layers;
+        std::uint8_t IsDefault;
+        std::uint8_t Pad0[7];
+    };
+    static_assert(sizeof(EventSurfaceChangedHead) == 24, "MGPSurfaceInfo is 24 bytes on the wire");
+
+    // PipeInputs::RecordError(code, info) (CONTRACT-P5C §1). The NUL-terminated
+    // message follows this head INSIDE THE RECORD: MessageBytes = strlen + 1 and
+    // the NUL travels, so MessageBytes == 0 is the corrupt shape, never "no
+    // message". A longer message is TRUNCATED AT THE PRODUCER to the cap; the cap
+    // is a static_assert here, not a runtime check, because it is part of the
+    // wire's shape rather than a policy a peer may disagree about.
+    struct EventGlErrorHead {
+        std::uint32_t Code;         // the frontend ErrorCode, widened
+        std::uint32_t MessageBytes; // strlen + 1, the NUL included
+    };
+    static_assert(sizeof(EventGlErrorHead) == 8, "wire shape");
+    // P10 (CONTRACT-P10.md §1): the fence the server's apply thread found signaled, once per
+    // fence. The client keeps the answer and gives it to every later glClientWaitSync /
+    // glGetSynciv(GL_SYNC_STATUS) on that fence without a round trip.
+    struct EventFenceSignaledHead {
+        EventHandle Fence;
+    };
+    static_assert(sizeof(EventFenceSignaledHead) == 8, "wire shape");
+
+    inline constexpr std::uint32_t kEventGlErrorMaxMessageBytes = 1024;
+    static_assert(kEventGlErrorMaxMessageBytes == 1024,
+                  "CONTRACT-P5C §1 caps an inline GL-error message at 1024 bytes, NUL included");
+
+    // The server's end. One producer: the apply thread, by construction.
+    class EventRingProducer {
+    public:
+        EventRingProducer() = default;
+
+        // `eventControl` is SEG_EVENT's own control page; `cmdControl` is the
+        // SEG_CMD page, because Ring.h declares eventRingFull / eventDropped
+        // there and the client's waits already look at it.
+        EventRingProducer(RingControl* eventControl, RingControl* cmdControl, void* base, std::uint64_t capacityBytes)
+            : m_cmdControl(cmdControl), m_producer(eventControl, base, capacityBytes, RingCursorSet::Cmd) {}
+
+        bool Valid() const { return m_producer.Valid() && m_cmdControl != nullptr; }
+
+        // Reserves one event record. nullptr means the ring is full: the caller
+        // decides, and the two flags are how it says which decision it took.
+        // THIS FUNCTION DOES NOT DECIDE - that is P9's.
+        void* Reserve(EventKind kind, std::uint64_t payloadBytes) {
+            void* slot = m_producer.Reserve(static_cast<std::uint16_t>(kind), kRecNone, payloadBytes);
+            if (slot == nullptr && m_cmdControl != nullptr) {
+                // "SEG_EVENT full, server stopped applying" - RingControl::eventRingFull in Ring.h. Latched
+                // here, cleared by the consumer once it has drained.
+                m_cmdControl->eventRingFull.store(1, std::memory_order_release);
+            }
+            return slot;
+        }
+
+        // For a LOSSY event the caller could not place. Lossless events must
+        // never call this; they wait for the client to drain instead.
+        void CountDrop() {
+            if (m_cmdControl != nullptr) {
+                m_cmdControl->eventDropped.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+
+        // Publish, THEN ring - the same order as the forward direction, and for
+        // the same reason (NotifyIfParked's PRECONDITION: the fence only orders what
+        // precedes it, so ringing first reopens the lost-wakeup window).
+        void PublishAndNotify(Doorbell& clientBell, std::atomic<std::uint32_t>& producerParked) {
+            m_producer.Publish();
+            NotifyIfParked(clientBell, producerParked);
+        }
+
+        RingProducer& Ring() { return m_producer; }
+
+    private:
+        RingControl* m_cmdControl = nullptr;
+        RingProducer m_producer;
+    };
+
+    // The client's end. One consumer: the GL thread, which drains between verbs.
+    class EventRingConsumer {
+    public:
+        EventRingConsumer() = default;
+
+        EventRingConsumer(RingControl* eventControl, RingControl* cmdControl, void* base, std::uint64_t capacityBytes,
+                          const void* segmentBase)
+            : m_cmdControl(cmdControl), m_consumer(eventControl, base, capacityBytes, RingCursorSet::Cmd),
+              m_segmentBase(static_cast<const std::uint8_t*>(segmentBase)) {}
+
+        bool Valid() const { return m_consumer.Valid() && m_cmdControl != nullptr; }
+
+        bool Pop(RingRecordView& out, bool* outCorrupt = nullptr) { return m_consumer.Pop(out, outCorrupt); }
+
+        // Release the bytes and clear the full latch. Only after the caller has
+        // finished with every payload pointer it popped: a writeback's bytes live
+        // in the ring itself, so retiring early is the R-11 violation one level
+        // down.
+        void SetLink(ILink* link) { m_link = link; }
+        void Drained() {
+            m_consumer.PublishRetired();
+            if (m_cmdControl != nullptr) {
+                // P5e (ra, CONTRACT-P5E §2.6): CLEARING THE LATCH IS ONLY HALF OF IT. Under
+                // flow control the server is PARKED on this flag - either inside a producer
+                // that could not Reserve, or at a record boundary refusing to start the next
+                // record - and a cleared flag with no bell is a wakeup lost exactly the way
+                // the forward direction's publish-then-ring order exists to prevent. The
+                // exchange is what makes the ring one-shot: only the drain that actually found
+                // the flag up rings, so a steady stream of drains costs one relaxed RMW.
+                const bool wasFull = m_cmdControl->eventRingFull.exchange(0, std::memory_order_acq_rel) != 0;
+                if (wasFull && m_serverBell != nullptr) {
+                    NotifyIfParked(*m_serverBell, m_cmdControl->consumerParked);
+                }
+            }
+            if (m_link) m_link->Flush();
+        }
+
+        // The bell the SERVER parks on, lent by the session so that Drained() can ring it.
+        // Null in every fixture that consumes a ring without a server behind it, and the
+        // ring's clear then behaves exactly as it did before P5e.
+        void SetServerDoorbell(Doorbell* bell) { m_serverBell = bell; }
+
+        // Byte offset of `payload` inside SEG_EVENT, which is what an
+        // OnBufferWriteback MGPBlobRef must carry (Seg = kSegEvent, Offset =
+        // this, Size = the head's Size). Never a host address - R-2's rule B.
+        std::uint64_t OffsetInSegment(const void* payload) const {
+            return static_cast<std::uint64_t>(static_cast<const std::uint8_t*>(payload) - m_segmentBase);
+        }
+
+        std::uint64_t DroppedEvents() const {
+            return m_cmdControl == nullptr ? 0 : m_cmdControl->eventDropped.load(std::memory_order_relaxed);
+        }
+        bool RingIsFull() const {
+            return m_cmdControl != nullptr && m_cmdControl->eventRingFull.load(std::memory_order_acquire) != 0;
+        }
+
+        RingConsumer& Ring() { return m_consumer; }
+
+    private:
+        RingControl* m_cmdControl = nullptr;
+        ILink* m_link = nullptr;
+        RingConsumer m_consumer;
+        const std::uint8_t* m_segmentBase = nullptr;
+        // P5e (ra): the server's bell, rung by Drained() when it cleared a full latch.
+        Doorbell* m_serverBell = nullptr;
+    };
+
+} // namespace MobileGL::MG_Remote::Transport

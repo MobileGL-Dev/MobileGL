@@ -1,0 +1,235 @@
+// MobileGL - MobileGL/MG_Pipe/DirtySurface.def
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// Dirty-surface map: what publishes each frontend mutation a backend can observe, checked by
+// scripts/gen_pipe_dirty_surface.py --check (ARCHITECTURE.md §5.2.1). An answer joins with '|'
+// the publishers that fire on every path that mutates. NEW_*: a Tracker.h bit the next verb
+// publishes. kImmediate: the same body reaches the backend. kReverseChannel: a backend write into
+// the frontend. kNoBackendRead: no backend reads it. kExplicitDestroy / kUnpublishedDestroy: a
+// death with / without a wire handle. kPulledEveryVerb: no bit; the residual fill copies the field
+// at every verb. kPulledPartialShutter|NEW_*: the same pull; the bits move on some paths only.
+// clang-format off
+
+// X(Mutator, Answer)
+#define MGP_DIRTY_SURFACE_LIST(X)                                                               \
+    /* ---- the reverse channel: 836 of the 926 calls, 90% of the surface ---- */               \
+    X(RecordError,                        kReverseChannel)                                      \
+    /* ---- immediate publish points: the same body reaches the backend ---- */                 \
+    X(SetActiveTextureUnit,               kImmediate)                                           \
+    X(BeginTransformFeedback,             kImmediate)                                           \
+    X(EndTransformFeedback,               kImmediate)                                           \
+    X(SetTransformFeedbackPaused,         kImmediate)                                           \
+    X(MarkTransformFeedbackObjectForDeletion, kImmediate)                                       \
+    /* ---- the render state. Derived from RenderState.cpp and gated by --check:  */            \
+    /* a setter that calls BumpVersions() on every path publishes BOTH counters;  */            \
+    /* one that also has a bare ++m_version path publishes only NEW_RENDER_STATE. */            \
+    X(SetBlendEquation,                   NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetBlendEquationIndexed,            NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetBlendFunc,                       NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetBlendFuncIndexed,                NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    /* SetCapability's ClipDistance0..7 arms write ClipDistanceEnabledMask (dynamic */          \
+    /* chunk D7) and deliberately do NOT BumpVersions, so NEW_PIPELINE_STATE does   */          \
+    /* not fire at all for glEnable(GL_CLIP_DISTANCE0): set_dynamic_state publishes  */         \
+    /* it, and NEW_RENDER_STATE is the only answer that holds on every arm.         */          \
+    X(SetCapability,                      NEW_RENDER_STATE)                                     \
+    X(SetCapabilityIndexed,               NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetColorMask,                       NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetColorMaskIndexed,                NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetCullFaceMode,                    NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetDepthFunc,                       NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetDepthMask,                       NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetFrontFaceMode,                   NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetLogicOp,                         NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetMinSampleShadingValue,           NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetPolygonMode,                     NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetProvokingVertexMode,             NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetSampleCoverage,                  NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetSampleMaskValue,                 NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetShadingRate,                     NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetShadingRateCombinerOps,          NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    /* SetStencilFunc writes Func (pipeline chunk P2/P3) AND Ref/ValueMask (dynamic */          \
+    /* D3/D4), and ++m_pipelineStateVersion is CONDITIONAL on Func moving - which is */         \
+    /* what keeps a glStencilFunc that moves only the reference from evicting a     */          \
+    /* cached pipeline, and is why only NEW_RENDER_STATE fires on every call.       */          \
+    /* SetStencilOp is wholly pipeline, SetStencilMask wholly dynamic.              */          \
+    X(SetStencilFunc,                     NEW_RENDER_STATE)                                     \
+    X(SetStencilOp,                       NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetStencilMask,                     NEW_RENDER_STATE)                                     \
+    X(SetBlendColor,                      NEW_RENDER_STATE)                                     \
+    X(SetClampReadColor,                  NEW_RENDER_STATE)                                     \
+    X(SetClearColor,                      NEW_RENDER_STATE)                                     \
+    X(SetClearDepth,                      NEW_RENDER_STATE)                                     \
+    X(SetClearStencil,                    NEW_RENDER_STATE)                                     \
+    X(SetClipControl,                     NEW_RENDER_STATE)                                     \
+    X(SetDepthRange,                      NEW_RENDER_STATE)                                     \
+    X(SetDepthRangeIndexed,               NEW_RENDER_STATE)                                     \
+    X(SetHint,                            NEW_RENDER_STATE)                                     \
+    X(SetLineWidth,                       NEW_RENDER_STATE)                                     \
+    X(SetPointFadeThresholdSize,          NEW_RENDER_STATE)                                     \
+    X(SetPointSize,                       NEW_RENDER_STATE)                                     \
+    X(SetPointSpriteCoordOrigin,          NEW_RENDER_STATE)                                     \
+    X(SetPolygonOffset,                   NEW_RENDER_STATE)                                     \
+    X(SetPolygonOffsetClamped,            NEW_RENDER_STATE)                                     \
+    X(SetPrimitiveRestartIndex,           NEW_RENDER_STATE)                                     \
+    X(SetScissorBox,                      NEW_RENDER_STATE)                                     \
+    X(SetScissorBoxIndexed,               NEW_RENDER_STATE)                                     \
+    X(SetViewport,                        NEW_RENDER_STATE)                                     \
+    X(SetViewportIndexed,                 NEW_RENDER_STATE)                                     \
+    /* ---- the other value-class bits ---- */                                                  \
+    /* kPulledPartialShutter, NOT kPulledEveryVerb, and NOT a bare NEW_PIXEL_PACK:          */  \
+    /* RenderState::SetPixelStoreParam writes BOTH halves - eight Pack arms and eight       */  \
+    /* Unpack arms - while the tracker's bit 2 is a byte compare of the PACK half alone     */  \
+    /* (Tracker.h), because set_pixel_pack_state deliberately has no unpack counterpart     */  \
+    /* (ARCHITECTURE.md 4.6). So glPixelStorei(GL_PACK_ALIGNMENT, 8) DOES move bit 2 and    */  \
+    /* glPixelStorei(GL_UNPACK_ALIGNMENT, 8) moves nothing at all, and a shutter narrowed   */  \
+    /* to bit 2 would under-fire for eight of the sixteen arms. What is true on every path  */  \
+    /* is the pull: GetPixelStoreParameters is one of the two Coverage.def rows an emitted  */  \
+    /* call does not supply completely (PipeFill.cpp), so the residual fill copies both     */  \
+    /* halves at every verb of the class. The bit is named anyway because P2 already EMITS  */  \
+    /* set_pixel_pack_state off it: a row that said "no shutter exists" about the only      */  \
+    /* mutator behind a shipped call would be a false answer to the one question D16 hands  */  \
+    /* P3a. Splitting this setter into a pack half and an unpack half is what would let the */  \
+    /* pack half answer NEW_PIXEL_PACK outright; that is P3's move, not P2's.               */  \
+    X(SetPixelStoreParam,                 kPulledPartialShutter|NEW_PIXEL_PACK)                 \
+    X(SetPatchDefaultInnerLevel,          NEW_PATCH_STATE|NEW_RENDER_STATE|NEW_PIPELINE_STATE)  \
+    X(SetPatchDefaultOuterLevel,          NEW_PATCH_STATE|NEW_RENDER_STATE|NEW_PIPELINE_STATE)  \
+    /* Also an immediate publish point, but it has a real bit and the bit is   */               \
+    /* the more useful answer: set_patch_state carries it whatever the caller  */               \
+    /* does next.                                                              */               \
+    X(SetPatchVertices,                   NEW_PATCH_STATE|NEW_RENDER_STATE|NEW_PIPELINE_STATE)  \
+    X(SetCurrentVertexAttributeFloat,     NEW_VERTEX_ATTRIB_DEFAULTS)                           \
+    X(SetCurrentVertexAttributeInt,       NEW_VERTEX_ATTRIB_DEFAULTS)                           \
+    X(SetCurrentVertexAttributeUint,      NEW_VERTEX_ATTRIB_DEFAULTS)                           \
+    /* ---- object class ---- */                                                                \
+    X(BumpTextureBindGeneration,          NEW_SAMPLER_VIEWS)                                    \
+    /* P3a, FOUND BY THE WIDENED SCAN ROOT and not by anything before it: every caller of  */   \
+    /* this one is inside MG_State/GLState (SamplerObject::BumpVersion for any sampler     */   \
+    /* parameter, TextureObjectBase's shape bump), which the scan did not read, so it had  */   \
+    /* no row at all while its sibling above did. NEW_SAMPLERS is the bit whose shutter    */   \
+    /* mixes the texture-params aggregate with exactly this generation, and the bump is    */   \
+    /* unconditional on every path that reaches it - the early-outs are in the setters     */   \
+    /* above it, which is the redundant-write guard this file's rule explicitly allows.    */   \
+    X(BumpSamplingResolutionGeneration,   NEW_SAMPLERS)                                         \
+    /* P3a, and the reason the scan now reads MGP_NOTE_MUTATION as a publish mechanism of  */   \
+    /* its own: this function is not a pGLContext-> mutator at all - every texture and     */   \
+    /* sampler bind entry point routes THROUGH it - and it moves two pushed PipeInputs     */   \
+    /* fields with two different answers.                                                   */  \
+    /*   GetTextureBindGeneration moves only on the bindingChanged arm, so NEW_SAMPLER_    */   \
+    /*     VIEWS fires on SOME of the paths that mutate and not all: a redundant re-bind   */   \
+    /*     of the object a unit already holds advances the high-water mark alone. That is  */   \
+    /*     precisely what kPulledPartialShutter is for.                                     */  \
+    /*   GetMaxTouchedTextureUnit has no shutter at all; it is in its verb class's may-read */  \
+    /*     mask and the residual fill copies it at every verb.                              */  \
+    /* Both are ALSO published inline by MGP_NOTE_MUTATION when the write happens inside a */   \
+    /* verb already in flight - a backend binding its own synthesised fallback texture -    */  \
+    /* which is the window no shutter and no pull can cover, and the reason those sites     */  \
+    /* had to come inside this gate rather than stay a recorded blind spot.                 */  \
+    X(NoteUnitTouched,                    kPulledPartialShutter|NEW_SAMPLER_VIEWS)              \
+    /* P5e (sb) REWRITES THIS ROW, AND THE OLD ONE ENDED WITH ITS OWN CONDITION: "narrowing */  \
+    /* it is P3b's, when it takes the subsystem over and the binding points get a           */  \
+    /* generation of their own". They have one now (BufferState::NoteBindPointChanged), bit */  \
+    /* 17's shutter reads it, and this function bumps it - so the paragraph that said       */  \
+    /* NEW_SO_TARGETS was "false on EVERY path" is withdrawn, because what made it false    */  \
+    /* was that the bit mixed the buffer-CONTENT aggregate, which no binding has ever moved.*/  \
+    /*                                                                                       */ \
+    /* kPulledPartialShutter AND NOT A BARE BIT, because the function has two arms: with     */ \
+    /* `index == m_boundTransformFeedback` it binds a real BufferState binding point and     */ \
+    /* bumps, and otherwise it writes the NAMED object's saved-bindings entry, which is not  */ \
+    /* a binding point at all and deliberately bumps nothing. So the bit fires on some of    */ \
+    /* the paths that mutate and not all, which is exactly what this answer is for; what     */ \
+    /* holds on every mutating path is still the pull through GetBufferBindingPoint.         */ \
+    X(SetNamedTransformFeedbackBinding,   kPulledPartialShutter|NEW_SO_TARGETS)                 \
+    /* Called by BindBufferBase_State / BindBufferRange_State (GL_Buffer.cpp), this mutator */  \
+    /* moves the per-target high-water mark that bounds every indexed binding-point walk.   */  \
+    /* No shutter reads it: GetTouchedBufferBindingPointCount is in the kDraw, kDispatch    */  \
+    /* and kXfbSpan may-read masks, and set_context_values carries it. Both call sites bump */  \
+    /* the target's bind-point generation, which fires that target's NEW_CONST_BUFFERS,     */  \
+    /* NEW_SHADER_BUFFERS or NEW_SO_TARGETS through a different member, so this row must    */  \
+    /* not name them.                                                                       */  \
+    X(TouchBufferBindingPoint,            kPulledEveryVerb)                                     \
+    /* ---- P4a, THE FOUR THE WIDENED PREFIX SET SURFACES. Every one of them moves a field */  \
+    /* P3a or P4a pushes and none of them was visible to the scan before, because none     */  \
+    /* begins with one of the ten words the pattern matched.                                */ \
+    /*   UseProgram is bit 6's whole subject: the shutter is                                */ \
+    /*     Mix(GetCurrentProgram()->GetLifetimeId(), GetLinkVersion()) and glUseProgram is  */  \
+    /*     what moves the object it reads through. Two call sites. AND SINCE THE FABLE     */  \
+    /*     SEAM ROUND (F-1 / F-2) IT IS BITS 12 AND 14's TOO: set_sampler_views is         */  \
+    /*     resolved for the program in use and set_shader_images' window is the highest    */  \
+    /*     image unit the program in use names, so both shutters mix the same identity     */  \
+    /*     bit 6 reads, and a glUseProgram alone moves all three. Undecided for the same    */  \
+    /*     reason as bit 6 (the taint below), marked the same way.                          */  \
+    /*   BindVertexArray is bit 5's, for the same reason one level down: the shutter mixes  */  \
+    /*     the bound VAO's identity with its configuration version, and this is the bind.   */  \
+    /*     Three call sites.                                                                */ \
+    X(UseProgram,                         NEW_SHADER|NEW_SAMPLER_VIEWS|NEW_SHADER_IMAGES)      \
+    X(BindVertexArray,                    NEW_VERTEX_ELEMENTS)                                 \
+    /* NOT NEW_SHADER, and the derivation refutes it outright rather than leaving it a      */  \
+    /* judgment: this mutator writes m_boundProgramPipeline (plus the pipeline name table) */  \
+    /* and bit 6's shutter reads m_currentProgram's lifetime id and link version - disjoint */  \
+    /* sets, on every path. That is not an oversight in the shutter either: it reads        */  \
+    /* GetCurrentProgram() and DELIBERATELY NOT GetProgramForDraw(), because the tracker    */  \
+    /* must not force a compile just to answer "did the shader move", and flattening a      */  \
+    /* pipeline into its composite is exactly the compile it would force. What a bind moves */  \
+    /* is which program the validate point will flatten, and that field -                   */  \
+    /* GetProgramForDraw - is in the may-read mask of every class that draws and is copied  */  \
+    /* by the residual fill at every verb of those classes, EMITTED-AND-STILL-PULLED like   */  \
+    /* GetBoundVertexArray. So the pull is what holds on every path, and it is the answer.  */ \
+    X(BindProgramPipelineObject,          kPulledEveryVerb)                                    \
+    /* No shutter at all, and none is needed: the transform-feedback binding reaches the    */  \
+    /* backend through GetBoundTransformFeedbackLifetimeId and its siblings, which are in   */  \
+    /* the kDraw and kXfbSpan may-read masks, so the residual fill copies them at every     */  \
+    /* verb of those classes. Narrowing it is P4b's, with set_stream_output_targets.        */ \
+    X(BindTransformFeedbackObject,        kPulledEveryVerb)                                    \
+    /* ---- an object's death: no generation, since no object is left to carry one.         */  \
+    /* kExplicitDestroy: the destructor (last reference, not glDelete*) runs the kind's     */  \
+    /* MGPipeEmit*DestroyAndFree (PipeMutation.h): the wire delete if the kind has one      */  \
+    /* (framebuffers do not), then the backend notice, then the slot free. Buffers send     */  \
+    /* resource_destroy, VAOs delete_vertex_elements, programs and pipeline composites      */  \
+    /* delete_shader_state. kUnpublishedDestroy: program pipelines and shaders have no      */  \
+    /* lifetime id and never cross the boundary, so no record names their death.            */  \
+    X(MarkBufferObjectForDeletion,        kExplicitDestroy)                                     \
+    X(MarkFramebufferObjectForDeletion,   kExplicitDestroy)                                     \
+    X(MarkProgramForDeletion,             kExplicitDestroy)                                     \
+    X(MarkProgramPipelineForDeletion,     kUnpublishedDestroy)                                  \
+    X(MarkRenderbufferObjectForDeletion,  kExplicitDestroy)                                     \
+    X(MarkSamplerObjectForDeletion,       kExplicitDestroy)                                     \
+    X(MarkShaderForDeletion,              kUnpublishedDestroy)                                  \
+    X(MarkTextureObjectForDeletion,       kExplicitDestroy)                                     \
+    X(MarkVertexArrayForDeletion,         kExplicitDestroy)                                     \
+    /* ---- no backend read point observes these at all ---- */                                 \
+    /* GL_ANY_SAMPLES_PASSED conditional rendering is resolved wholly in the   */               \
+    /* frontend: IsConditionalRenderActive / GetConditionalRenderQuery have no */               \
+    /* reader under MG_Backend and no Coverage.def row.                        */               \
+    X(BeginConditionalRender,             kNoBackendRead)                                       \
+    X(EndConditionalRender,               kNoBackendRead)                                       \
+    /* ---- pulled at every verb of the class, so the next verb publishes them */               \
+    /* unconditionally. The transform-feedback accounting counters reach the   */               \
+    /* backend through GetTransformFeedbackCapturedVertices and friends, which */               \
+    /* are in the kDraw and kXfbSpan may-read masks.                           */               \
+    X(AddTransformFeedbackAccountedCaptureDraw, kPulledEveryVerb)                               \
+    X(AddTransformFeedbackCapturedVertices, kPulledEveryVerb)                                   \
+    X(AddTransformFeedbackGeometryCaptureDraw, kPulledEveryVerb)                                \
+    X(AddTransformFeedbackInputPrimitives, kPulledEveryVerb)                                    \
+    X(AddTransformFeedbackPausedPrimitives, kPulledEveryVerb)                                   \
+    X(AddTransformFeedbackPrimitives,     kPulledEveryVerb)
+
+// X(Mutator, Bit): bit answers above that gen_pipe_dirty_surface.py cannot decide. --check
+// fails on an undecided pair missing here and on a listed pair it can now decide. Each answer
+// is true, but its mutator reaches by name a body with a write the analysis cannot root in a
+// member: UseProgram via DestroyProgramSlot() (`attachedShaders`), BindVertexArray via
+// ImageTextureBinding::Bind (`Access`), SetNamedTransformFeedbackBinding via
+// MGPipeSlots().Acquire() (reference parameter `buffer`). Marking keeps the taint rule strict;
+// for SetNamedTransformFeedbackBinding only the bit after kPulledPartialShutter is suspended.
+#define MGP_DIRTY_SURFACE_UNDECIDED_LIST(X)                                                     \
+    X(UseProgram,      NEW_SHADER)                                                              \
+    X(UseProgram,      NEW_SAMPLER_VIEWS)                                                       \
+    X(UseProgram,      NEW_SHADER_IMAGES)                                                       \
+    X(BindVertexArray, NEW_VERTEX_ELEMENTS)                                                     \
+    X(SetNamedTransformFeedbackBinding, NEW_SO_TARGETS)
+
+// clang-format on

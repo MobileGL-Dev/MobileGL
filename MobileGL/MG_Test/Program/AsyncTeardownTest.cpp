@@ -110,7 +110,7 @@ TEST(AsyncTeardown, DestroyWithCompilesAndLinksInFlight) {
     MobileGL::Destroy();
 
     // Back up again. The pool stays stopped for the rest of the process (a one-way latch), so
-    // this second life is synchronous - which is exactly the documented behaviour, and it has
+    // this second life is synchronous - which is exactly the documented behavior, and it has
     // to still be a WORKING one.
     MobileGL::Initialize();
     const GLuint vs2 = MakeShader(GL_VERTEX_SHADER, kVs);

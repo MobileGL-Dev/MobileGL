@@ -12,6 +12,7 @@
 #include <MG_Backend/DirectGLES/DirectGLES.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/Utils.h>
+#include <MG_Backend/DirectGLES/SubgroupPolicy.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Classifiers/TextureEnumClassifier.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
@@ -30,6 +31,60 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool IsReleaseCurrentRequest(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
             (void)dpy;
             return draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
+        }
+
+        // ID-54 / ID-67 (v1, under ID-52/ID-59's grant for this file). Which VIRTUAL (dpy, draw,
+        // read, ctx) the process's one native ES context is currently bound FOR, on the apply
+        // thread. DirectGLES has one native context and one native surface (g_Context, g_Surface)
+        // whatever virtual handles the client uses, so "is a native eglMakeCurrent needed" is never
+        // "is the native triple different" - it is "did the VIRTUAL context change":
+        // DirectGLES::MakeCurrent is also where the seven caches that describe the frontend context
+        // are invalidated, and a different virtual context needs them invalidated even though the
+        // driver binds the same triple. ID-67: a make-current with a DIFFERENT tuple is a real
+        // native bind (and a caps republish, ServerLoop's half); an IDENTICAL one is neither.
+        //
+        // Three states. NotBound: the next bind is native. FreshFromSurfaceCreation: the surface's
+        // own creation (InitPbufferSurface / InitWindowSurface) bound natively and invalidated, and
+        // no virtual tuple has claimed that bind yet - the first tuple adopts it, which is the
+        // "2 -> 1 native binds per process" of round 3. BoundForTuple: bound and invalidated for
+        // the recorded tuple; only that exact tuple may skip. Process-wide like the native state it
+        // mirrors; under split exactly one DirectGLES object exists (the server's), and only the
+        // apply thread reaches these.
+        enum class NativeBindState : Uint8 {
+            NotBound,
+            FreshFromSurfaceCreation,
+            BoundForTuple
+        };
+        NativeBindState g_nativeBindState = NativeBindState::NotBound;
+        EGLDisplay g_nativeBoundDpy = EGL_NO_DISPLAY;
+        EGLSurface g_nativeBoundDraw = EGL_NO_SURFACE;
+        EGLSurface g_nativeBoundRead = EGL_NO_SURFACE;
+        EGLContext g_nativeBoundCtx = EGL_NO_CONTEXT;
+
+        void NoteNativeContextGone() {
+            g_nativeBindState = NativeBindState::NotBound;
+        }
+        void NoteNativeContextFreshFromSurfaceCreation() {
+            g_nativeBindState = NativeBindState::FreshFromSurfaceCreation;
+        }
+        void NoteNativeBoundFor(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
+            g_nativeBindState = NativeBindState::BoundForTuple;
+            g_nativeBoundDpy = dpy;
+            g_nativeBoundDraw = draw;
+            g_nativeBoundRead = read;
+            g_nativeBoundCtx = ctx;
+        }
+        Bool NativeBindCanBeSkippedFor(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
+            switch (g_nativeBindState) {
+            case NativeBindState::NotBound:
+                return false;
+            case NativeBindState::FreshFromSurfaceCreation:
+                return true;
+            case NativeBindState::BoundForTuple:
+                return g_nativeBoundDpy == dpy && g_nativeBoundDraw == draw && g_nativeBoundRead == read &&
+                       g_nativeBoundCtx == ctx;
+            }
+            return false;
         }
 
         void ClearGLErrors(const MG_External::GLESFunctionsTable& gl) {
@@ -211,7 +266,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 reasons.push_back("GL_DEPTH_COMPONENT32 native probe failed on OpenGL ES");
             }
             if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
-                reasons.push_back("no colour-renderable three-channel format on OpenGL ES");
+                reasons.push_back("no color-renderable three-channel format on OpenGL ES");
             }
             // A format is either 8- or 16-bit signed normalized, so at most one of the two ever
             // survives GetApplicablePixelFormatNormalizeOptions and the reason is not duplicated.
@@ -314,11 +369,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // did - is not merely untidy: the two texture pnames are ES 3.1 state, so on an ES 3.0
         // context the loader's rejected-probe clamp leaves them at 1 (see the multisample clamps
         // in the GLES loader) and the walk below would never run past one sample, recording {1}
-        // for EVERY colour format while GL_MAX_SAMPLES - ES 3.0 core, so genuinely answered -
+        // for EVERY color format while GL_MAX_SAMPLES - ES 3.0 core, so genuinely answered -
         // reports 4. Once the frontend validates against this list, that would reject every
         // multisample renderbuffer on such a context.
-        Int GetGLESRenderbufferFormatMaxSamples(const MG_External::GLESCapabilities& capabilities,
-                                                GLenum imageFormat) {
+        Int GetGLESRenderbufferFormatMaxSamples(const MG_External::GLESCapabilities& capabilities, GLenum imageFormat) {
             const Bool isInteger = imageFormat == GL_RED_INTEGER || imageFormat == GL_RG_INTEGER ||
                                    imageFormat == GL_RGB_INTEGER || imageFormat == GL_RGBA_INTEGER;
             return isInteger ? capabilities.MaxIntegerSamples : capabilities.MaxSamples;
@@ -405,6 +459,58 @@ namespace MobileGL::MG_Backend::DirectGLES {
             gl.glDeleteFramebuffers(1, &framebuffer);
             gl.glDeleteRenderbuffers(2, renderbuffers);
             return supported;
+        }
+
+        // GL_SAMPLE_POSITION is a property of the multisample framebuffer the driver builds, so it
+        // is asked once per power-of-two sample count, of a throwaway RGBA8 renderbuffer framebuffer,
+        // through the driver's own glGetMultisamplefv (ES 3.1 core). A count the driver rounds up
+        // reports the first positions of the pattern it really uses - the samples gl_SampleID
+        // 0..count-1 address in a shader. Counts that cannot be built are left unset.
+        void ProbeSamplePositions(const MG_External::GLESFunctionsTable& gl,
+                                  const MG_External::GLESCapabilities& capabilities,
+                                  DynamicBackendParameters& dynamicParameters) {
+            const auto& version = capabilities.GLESVersion;
+            if (version.Major < 3 || (version.Major == 3 && version.Minor < 1)) return;
+            if (!gl.glGetMultisamplefv || !gl.glGenFramebuffers || !gl.glBindFramebuffer ||
+                !gl.glFramebufferRenderbuffer || !gl.glCheckFramebufferStatus || !gl.glDeleteFramebuffers ||
+                !gl.glGenRenderbuffers || !gl.glBindRenderbuffer || !gl.glRenderbufferStorageMultisample ||
+                !gl.glDeleteRenderbuffers || !gl.glGetIntegerv) {
+                return;
+            }
+
+            GLint prevFramebuffer = 0, prevRenderbuffer = 0;
+            gl.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFramebuffer);
+            gl.glGetIntegerv(GL_RENDERBUFFER_BINDING, &prevRenderbuffer);
+            for (Int samples = 2;
+                 samples <= DynamicBackendParameters::kMaxSamplePositionCount && samples <= capabilities.MaxSamples;
+                 samples *= 2) {
+                GLuint framebuffer = 0, renderbuffer = 0;
+                gl.glGenFramebuffers(1, &framebuffer);
+                gl.glGenRenderbuffers(1, &renderbuffer);
+                gl.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+                gl.glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_RGBA8, 4, 4);
+                gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+                gl.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
+                GLint actualSamples = 0;
+                if (gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+                    gl.glGetIntegerv(GL_SAMPLES, &actualSamples);
+                }
+                if (actualSamples >= samples) {
+                    Float positions[2 * DynamicBackendParameters::kMaxSamplePositionCount] = {};
+                    for (Int index = 0; index < samples; ++index) {
+                        gl.glGetMultisamplefv(GL_SAMPLE_POSITION, static_cast<GLuint>(index), &positions[2 * index]);
+                    }
+                    dynamicParameters.SetSamplePositions(samples, positions);
+                }
+                gl.glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFramebuffer));
+                gl.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(prevRenderbuffer));
+                gl.glDeleteFramebuffers(1, &framebuffer);
+                gl.glDeleteRenderbuffers(1, &renderbuffer);
+            }
+            // A count the driver refused leaves its error behind; it must not reach the application.
+            if (gl.glGetError) {
+                for (Int drained = 0; drained < 16 && gl.glGetError() != GL_NO_ERROR; ++drained) {}
+            }
         }
 
         Bool ProbeFramebufferCompletenessForRenderbuffer(const MG_External::GLESFunctionsTable& gl, GLuint renderbuffer,
@@ -601,7 +707,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 for (SizeT targetIndex = 0; targetIndex < kFormatCapabilityTextureTargetCount; ++targetIndex) {
                     const auto target = static_cast<TextureTarget>(targetIndex);
-                    // Colour-attachable targets need a colour-renderable fallback; the ordinary
+                    // Color-attachable targets need a color-renderable fallback; the ordinary
                     // fallback for a three-channel format is another three-channel one, which ES
                     // accepts as a texture but never as an attachment. Recompute the fallback per
                     // target so those formats get widened where the target demands it.
@@ -628,12 +734,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         const Flags<PixelFormatNormalizeOptionBit> forcedProbeOptions =
                             (outerHasForcedFallback || widenUnconditionally) ? forcedOptions | renderTargetOptions
                                                                              : forcedOptions;
-                        hasForcedFallback =
-                            BuildFallbackProbeFormatInfo(requestedInternalFormat, forcedProbeOptions, true,
-                                                         fallbackInfo);
+                        hasForcedFallback = BuildFallbackProbeFormatInfo(requestedInternalFormat, forcedProbeOptions,
+                                                                         true, fallbackInfo);
                         if (!hasForcedFallback) {
-                            BuildFallbackProbeFormatInfo(requestedInternalFormat,
-                                                         driverOptions | renderTargetOptions, false, fallbackInfo);
+                            BuildFallbackProbeFormatInfo(requestedInternalFormat, driverOptions | renderTargetOptions,
+                                                         false, fallbackInfo);
                         }
                         // HONEST STATUS OF THE FORCED PATH. A forced fallback is only ever built
                         // for ANGLE (GetForcedPixelFormatNormalizeOptions returns nothing for any
@@ -709,7 +814,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 const SizeT renderbufferTargetIndex = GetRenderbufferFormatCapabilityTargetIndex();
                 // A renderbuffer exists only to be attached, so it needs the same three-channel
-                // widening the colour-attachable texture targets get - and on the same terms: the
+                // widening the color-attachable texture targets get - and on the same terms: the
                 // native storage is probed first, so a driver that renders to it keeps it.
                 const Flags<PixelFormatNormalizeOptionBit> renderbufferOptions =
                     TextureImpl::GetRenderTargetNormalizeOptions(capabilities, renderbufferTargetIndex);
@@ -795,7 +900,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 AreTimerQueriesSupported(), capabilities.SupportsTextureFilterAnisotropy,
                 capabilities.SupportsDrawIndirect,
                 capabilities.SupportsDrawIndirect && capabilities.SupportsBaseInstance,
-                capabilities.SupportsTextureView, capabilities.SupportsTextureCubeMapArray);
+                capabilities.SupportsTextureView, capabilities.SupportsTextureCubeMapArray,
+                AdvertisedFeatureSupport{.TessellationShader = capabilities.SupportsTessellationShader,
+                                         .CullDistance = capabilities.MaxCullDistances > 0,
+                                         .ClipControl = capabilities.SupportsClipControl});
+            // Exactly what InitCapabilities forwards into the dynamic parameters: the base
+            // extension and _primitive when the driver has them, _attachment not yet.
+            auto& extensions = MutableRendererInfo().RendererGLInfo.Extensions;
+            if (capabilities.SupportsFragmentShadingRate) {
+                extensions.push_back(E_GL_EXT_fragment_shading_rate);
+                if (capabilities.SupportsFragmentShadingRatePrimitive) {
+                    extensions.push_back(E_GL_EXT_fragment_shading_rate_primitive);
+                }
+            }
+            // Native where the ES driver has subgroups, emulated in the compute stage where it
+            // has none (SubgroupPolicy.h); the dynamic parameters below say which.
+            if (ResolveEsprytSubgroupImplementation(capabilities) != SubgroupImplementation::None) {
+                extensions.push_back(E_GL_KHR_shader_subgroup);
+            }
         }
     } // namespace
 
@@ -812,11 +934,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Int maxSamples = 0;
         const SizeT formatIndex = static_cast<SizeT>(logicalFormat);
-        if (pActiveBackendObject && targetIndex < kFormatCapabilityTargetCount &&
+        // C6 / ID-52: read the ROLE's own cache. Under split that is the server's private backend
+        // (ActiveBackendFormatCaps), not pActiveBackendObject, which holds the client's mirror.
+        const FormatCapabilityCache* activeCaps = ActiveBackendFormatCaps();
+        if (activeCaps != nullptr && targetIndex < kFormatCapabilityTargetCount &&
             formatIndex < kFormatCapabilityFormatCount) {
             // Descending, so the head is the largest count this device actually allocated.
-            const Vector<Int>& probedCounts =
-                pActiveBackendObject->GetFormatCapabilities().SampleCounts[targetIndex][formatIndex];
+            const Vector<Int>& probedCounts = activeCaps->SampleCounts[targetIndex][formatIndex];
             if (!probedCounts.empty()) {
                 maxSamples = probedCounts.front();
             }
@@ -829,16 +953,78 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     BackendObject_DirectGLES::~BackendObject_DirectGLES() {
         DestroyEGLContext();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        NoteNativeContextGone();
+        // P12: under a transport this object is the SERVER's backend and its destruction is the
+        // end of a session (ServerLoop's apply thread, after the final drain). The in-process
+        // display server runs the next session in this same process, so the twins this one built
+        // - naming ids of the context just destroyed - must not answer for the next client's
+        // handles (Managers.h, DropEveryTwinForEndedServerSession). Monolith keeps its twins.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            DropEveryTwinForEndedServerSession();
+            // Review fix: and the swap interval it asked for (DirectGLES.h).
+            ForgetRequestedSwapInterval();
+        }
+#endif
+    }
+
+    Bool BackendObject_DirectGLES::RebindNativeSurfaceFor(EGLSurface surface) {
+        const auto it = m_nativeSurfaces.find(surface);
+        if (it == m_nativeSurfaces.end()) return false;
+        if (DirectGLES::BindSessionSurface(it->second)) return true;
+        // The session no longer owns it (destroyed with a window loss): forget and recreate.
+        m_nativeSurfaces.erase(it);
+        return false;
+    }
+
+    void BackendObject_DirectGLES::RestoreSurfaceAfterCreation(EGLSurface previousNativeDraw) {
+        // The ACTIVE CONTEXT's own surface, exactly: the creation's bind attached the new surface to
+        // whichever context the session had bound (often another window's thread), and putting back
+        // "the surface activated last" instead re-attached THAT context to a third window's surface -
+        // a desktop drawing into and reading back from the panel's pbuffer.
+        if (previousNativeDraw == EGL_NO_SURFACE) return;
+        if (!DirectGLES::BindSessionSurface(previousNativeDraw)) return;
+        for (const auto& [client, native] : m_nativeSurfaces) {
+            if (native != previousNativeDraw) continue;
+            (void)EGLRegistry().AdoptActiveSurface(client);
+            break;
+        }
     }
 
     Bool BackendObject_DirectGLES::InitWindowSurface() {
+        const EGLSurface activating = EGLRegistry().ActivatingSurface();
+        if (RebindNativeSurfaceFor(activating)) return true;
+        // A suspended surface whose placeholder went: another placeholder - never the window, which
+        // is gone.
+        if (std::find(m_suspendedWindowSurfaces.begin(), m_suspendedWindowSurfaces.end(), activating) !=
+            m_suspendedWindowSurfaces.end()) {
+            const EGLSurface placeholder = DirectGLES::CreateSessionPbuffer(1, 1);
+            if (placeholder == EGL_NO_SURFACE || !DirectGLES::BindSessionSurface(placeholder)) {
+                MGLOG_E("DirectGLES: no placeholder for the suspended window surface %p",
+                        reinterpret_cast<void*>(activating));
+                return false;
+            }
+            m_nativeSurfaces[activating] = placeholder;
+            return true;
+        }
         // Only use EGL for now
-        auto nativeWindow = reinterpret_cast<NativeWindowType>(m_windowHandle.Handle);
+        auto nativeWindow = reinterpret_cast<NativeWindowType>(EGLRegistry().CurrentWindowHandle().Handle);
         if (!DirectGLES::InitWindowSurface(nativeWindow)) {
             MGLOG_E("Failed to initialize window surface for DirectGLES backend");
             return false;
         }
+        if (activating != EGL_NO_SURFACE) {
+            m_nativeSurfaces[activating] = DirectGLES::CurrentSessionDrawSurface();
+        }
         return true;
+    }
+
+    Bool BackendObject_DirectGLES::LatchIfGpuFaulted() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return LatchIfGuiltyBeforeApply();
+#else
+        return false;
+#endif
     }
 
     void BackendObject_DirectGLES::Initialize() {
@@ -867,6 +1053,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // built).
         UpdateAdvertisedCapabilityExtensions(m_GLESCapabilities);
         UpdateDynamicBackendParameters();
+        // The color-attachment cap the framebuffer family checks is known from here on.
+        DirectGLES::ResolveRecordArmFamilies();
         PopulateFormatCapabilities(m_GLESFunctions, m_GLESCapabilities, MutableFormatCapabilities());
         PrintFormatCapabilities(GetFormatCapabilities());
         return true;
@@ -881,7 +1069,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     Bool BackendObject_DirectGLES::CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (!m_initialized) {
             MGLOG_E("DirectGLES backend not initialized");
             return false;
@@ -894,50 +1082,125 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
-        const Bool sameHandle = m_eglSurfaceInitialized && m_eglSurface == surface &&
-                                m_eglSurfaceKind == SurfaceKind::Window && m_windowHandle.Backend == handle.Backend &&
-                                m_windowHandle.Handle == handle.Handle;
+        EGLSurfaceRegistry& egl = EGLRegistry();
+        const WindowHandle activeWindow = egl.CurrentWindowHandle();
+        const Bool sameHandle = egl.HasActiveSurface() && egl.ActiveSurface() == surface &&
+                                egl.ActiveSurfaceKind() == EGLSurfaceRegistry::SurfaceKind::Window &&
+                                activeWindow.Backend == handle.Backend && activeWindow.Handle == handle.Handle;
         if (sameHandle) {
             return true;
         }
 
-        if (m_eglSurfaceInitialized) {
-            DestroyEGLContext();
-            ResetEGLRuntimeState();
+        // ---- P14 S4: A SECOND SURFACE NO LONGER TEARS THE CONTEXT DOWN. ----
+        //
+        // This used to be `DestroyEGLContext(); ResetEGLRuntimeState();` whenever a surface was
+        // created while another was active, i.e. every pbuffer -> window -> pbuffer switch destroyed
+        // the native context - and with it every buffer, texture and program the application had
+        // built. The native context now belongs to the (session, context token) tuple the backend
+        // resolves, and creating a surface for it only adds a surface: the tuple keeps its context
+        // and its objects. ResetRuntimeState still runs because the registry's per-surface
+        // bookkeeping (which surface is active, which threads made it current) does describe the
+        // surface that is being replaced.
+        const EGLSurface previous = egl.HasActiveSurface() ? egl.ActiveSurface() : EGL_NO_SURFACE;
+        const EGLSurface previousNativeDraw = DirectGLES::CurrentContextDrawSurface();
+        if (egl.HasActiveSurface()) {
+            egl.ResetRuntimeState();
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ID-54 / ID-67: the surface's creation bound natively (InitWindowSurface -> MakeCurrent);
+        // the first virtual tuple adopts that bind. On failure nothing is known to be bound. The
+        // pull arm below is the original statement, byte for byte (G1).
+        const Bool created = BackendObject::CreateEGLWindowSurface(surface, handle);
+        if (created && previous != EGL_NO_SURFACE && previous != surface) {
+            // Another surface was current: the creation must not leave the context that held it
+            // drawing to the new one (P14 multi-window clients).
+            RestoreSurfaceAfterCreation(previousNativeDraw);
+            NoteNativeContextGone();
+        } else if (created) {
+            NoteNativeContextFreshFromSurfaceCreation();
+        } else {
+            NoteNativeContextGone();
+        }
+        return created;
+#else
         return BackendObject::CreateEGLWindowSurface(surface, handle);
+#endif
     }
 
     Bool BackendObject_DirectGLES::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (!m_initialized) {
             MGLOG_E("DirectGLES backend not initialized");
             return false;
         }
 
-        if (m_eglSurfaceInitialized && m_eglSurface == surface && m_eglSurfaceKind == SurfaceKind::Pbuffer) {
+        EGLSurfaceRegistry& egl = EGLRegistry();
+        if (egl.HasActiveSurface() && egl.ActiveSurface() == surface &&
+            egl.ActiveSurfaceKind() == EGLSurfaceRegistry::SurfaceKind::Pbuffer) {
             return true;
         }
 
-        if (m_eglSurfaceInitialized) {
-            DestroyEGLContext();
-            ResetEGLRuntimeState();
+        // P14 S4: as for the window surface above - the native context is the (session, context
+        // token) tuple's and survives a surface switch. This used to be DestroyEGLContext().
+        const EGLSurface previous = egl.HasActiveSurface() ? egl.ActiveSurface() : EGL_NO_SURFACE;
+        const EGLSurface previousNativeDraw = DirectGLES::CurrentContextDrawSurface();
+        if (egl.HasActiveSurface()) {
+            egl.ResetRuntimeState();
         }
 
-        return BackendObject::CreateEGLPbufferSurface(surface, width, height);
+        // ID-54 / ID-67: as for the window surface - InitPbufferSurface bound natively. The pull
+        // arm below is the original statement, byte for byte (G1).
+        const Bool created = BackendObject::CreateEGLPbufferSurface(surface, width, height);
+        if (created && previous != EGL_NO_SURFACE && previous != surface) {
+            RestoreSurfaceAfterCreation(previousNativeDraw);
+            NoteNativeContextGone();
+        } else if (created) {
+            NoteNativeContextFreshFromSurfaceCreation();
+        } else {
+            NoteNativeContextGone();
+        }
+        return created;
+    }
+
+    Bool BackendObject_DirectGLES::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
+        const auto lock = EGLRegistry().Lock();
+        const auto record = EGLRegistry().Find(surface);
+        const auto native = m_nativeSurfaces.find(surface);
+        if (!record || record->Kind != EGLSurfaceRegistry::SurfaceKind::Pbuffer || native == m_nativeSurfaces.end()) {
+            return BackendObject::ResizeEGLWindowSurface(surface, width, height);
+        }
+        // A pbuffer has no resize: the client surface gets a new native pbuffer at the new size,
+        // and every context that drew to the old one draws to the new one.
+        const EGLint w = static_cast<EGLint>(std::max<Uint32>(width, 1));
+        const EGLint h = static_cast<EGLint>(std::max<Uint32>(height, 1));
+        const EGLSurface replacement = DirectGLES::CreateSessionPbuffer(w, h);
+        if (replacement == EGL_NO_SURFACE) {
+            MGLOG_E("ResizeEGLWindowSurface: no %dx%d pbuffer could replace the old drawable", w, h);
+            return false;
+        }
+        DirectGLES::ReplaceSessionSurface(native->second, replacement);
+        native->second = replacement;
+        return BackendObject::ResizeEGLWindowSurface(surface, width, height);
     }
 
     Bool BackendObject_DirectGLES::InitPbufferSurface(EGLint width, EGLint height) {
-        return DirectGLES::InitPbufferSurface(width, height);
+        const EGLSurface activating = EGLRegistry().ActivatingSurface();
+        if (RebindNativeSurfaceFor(activating)) return true;
+        if (!DirectGLES::InitPbufferSurface(width, height)) return false;
+        if (activating != EGL_NO_SURFACE) {
+            m_nativeSurfaces[activating] = DirectGLES::CurrentSessionDrawSurface();
+        }
+        return true;
     }
 
     Bool BackendObject_DirectGLES::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (IsReleaseCurrentRequest(dpy, draw, read, ctx)) {
             if (!DirectGLES::ReleaseCurrent()) {
                 return false;
             }
+            NoteNativeContextGone();
             return BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
         }
 
@@ -945,11 +1208,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E("DirectGLES backend not initialized");
             return false;
         }
-        if (!m_eglDisplayInitialized || m_eglDisplay != dpy) {
+        const EGLSurfaceRegistry& egl = EGLRegistry();
+        if (!egl.DisplayInitialized() || egl.Display() != dpy) {
             MGLOG_E("MakeEGLCurrent failed: EGL display mismatch or not initialized");
             return false;
         }
-        if (!m_eglSurfaceInitialized) {
+        if (!egl.HasActiveSurface()) {
             MGLOG_E("MakeEGLCurrent failed: EGL surface is not initialized");
             return false;
         }
@@ -958,15 +1222,95 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ID-54 / C7, the native half of "bind once per tuple" (v1, under ID-52/ID-59's grant for
+        // this file; #if-guarded so the pull build is byte-identical). Under an active transport
+        // this runs on the apply thread, which is the ONLY thread that ever binds the server's
+        // context, and the surface it is asked for was made natively current on this very thread
+        // by its own creation (InitPbufferSurface / InitWindowSurface -> DirectGLES::MakeCurrent).
+        // A second native eglMakeCurrent for the same surface is then a repeat: it rewrites the
+        // owner with the same thread, re-registers the same op table and invalidates seven caches
+        // that describe a context that did not change - the per-client-make-current storm the
+        // v2 review measured as "2 native binds per process, unchanged". So when the requested
+        // draw surface IS the active one and EGL itself says this thread holds the context
+        // (IsBackendContextCurrentOnThisThread re-verifies against eglGetCurrentContext), the
+        // native call is skipped and only the base class's bookkeeping below runs - which is
+        // still required: it is what InitCapabilities and SwapEGLBuffers' current-thread record
+        // hang off. Monolith transport in this build, and the pull build, bind exactly as before.
+        //
+        // AND ONLY FOR THE SAME VIRTUAL TUPLE (ID-67). The skip is keyed on NativeBindCanBeSkippedFor:
+        // the surface's own creation bind is adopted by the FIRST tuple, an identical tuple skips,
+        // and a DIFFERENT tuple - a second MobileGL context onto the same surface - runs the native
+        // call again even though the driver's triple is the same, because MakeCurrent's seven
+        // invalidations describe the frontend context that is changing. Red once, two ways:
+        // make this arm unconditional (ServerLoopTest's C7 control reads 2 native binds at the EGL
+        // function table instead of 1), or make NativeBindCanBeSkippedFor answer true for any tuple
+        // (the ID-67 control's different tuple stays at 1 native bind where 2 are required).
+        const Bool nativelyCurrentAlready = MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                                            egl.HasActiveSurface() && egl.ActiveSurface() == draw &&
+                                            DirectGLES::IsBackendContextCurrentOnThisThread() &&
+                                            NativeBindCanBeSkippedFor(dpy, draw, read, ctx);
+        // The draw surface's own native surface (P14 multi-window): a known one is re-bound, so the
+        // bind goes to it and not to whichever surface the session drew to last.
+        // The real bind still runs whenever the skip above says so (ID-67: a different tuple onto
+        // the same surface needs MakeCurrent's invalidations even though the driver triple is equal).
+        const auto nativeDraw = m_nativeSurfaces.find(draw);
+        if (!nativelyCurrentAlready && nativeDraw != m_nativeSurfaces.end()) {
+            (void)DirectGLES::SelectSessionSurface(nativeDraw->second);
+        }
+        const Bool bound = nativelyCurrentAlready || DirectGLES::MakeCurrent();
+        if (!bound) {
+            NoteNativeContextGone();
+            return false;
+        }
+        NoteNativeBoundFor(dpy, draw, read, ctx);
+#else
         if (!DirectGLES::MakeCurrent()) {
             return false;
         }
+#endif
 
         if (!BackendObject::MakeEGLCurrent(dpy, draw, read, ctx)) {
             (void)DirectGLES::ReleaseCurrent();
+            NoteNativeContextGone();
             return false;
         }
         return true;
+    }
+
+    Bool BackendObject_DirectGLES::BlitDefaultFramebufferToSharedImage(const SharedImageView& image,
+                                                                       const MG_Util::Damage::Region& region) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return DirectGLES::SharedImageImpl::BlitDefaultFramebufferTo(image, region);
+#else
+        (void)image, (void)region;
+        return false;
+#endif
+    }
+
+    Int32 BackendObject_DirectGLES::QueryCurrentBufferAge(Bool damageRegionFollows) {
+        return DirectGLES::CurrentDrawBufferAge(damageRegionFollows);
+    }
+
+    Bool BackendObject_DirectGLES::SetCurrentDamageRegion(const MG_Util::Damage::Region& region) {
+        return DirectGLES::SetCurrentDrawDamageRegion(region);
+    }
+
+    Bool BackendObject_DirectGLES::PublishSharedImageAccesses() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return DirectGLES::SharedImageImpl::PublishPendingAccesses();
+#else
+        return true;
+#endif
+    }
+
+    Bool BackendObject_DirectGLES::ExportNativeFence(int* fence) {
+        *fence = -1;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return DirectGLES::SharedImageImpl::ExportNativeFence(fence);
+#else
+        return true;
+#endif
     }
 
     Bool BackendObject_DirectGLES::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
@@ -974,19 +1318,106 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void BackendObject_DirectGLES::ReleaseEGLSurface(EGLSurface surface) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         BackendObject::ReleaseEGLSurface(surface);
     }
 
     void BackendObject_DirectGLES::ReleaseEGLResources() {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         DestroyEGLContext();
+        NoteNativeContextGone();
+        m_suspendedWindowSurfaces.clear();
         BackendObject::ReleaseEGLResources();
     }
 
+    Bool BackendObject_DirectGLES::SuspendServerWindow(void* window) {
+        const auto lock = EGLRegistry().Lock();
+        if (window == nullptr) return false;
+        Vector<EGLSurface> onWindow;
+        for (const EGLSurface client : EGLRegistry().WindowSurfacesOn(window)) {
+            if (std::find(m_suspendedWindowSurfaces.begin(), m_suspendedWindowSurfaces.end(), client) !=
+                m_suspendedWindowSurfaces.end())
+                continue;
+            onWindow.push_back(client);
+        }
+        for (const EGLSurface client : onWindow) {
+            // A surface never activated has no native surface: only its record names the window.
+            const auto native = m_nativeSurfaces.find(client);
+            if (native != m_nativeSurfaces.end()) {
+                const EGLSurface placeholder = DirectGLES::SuspendSessionWindowSurface(native->second);
+                if (placeholder == EGL_NO_SURFACE) return false;
+                native->second = placeholder;
+            }
+            m_suspendedWindowSurfaces.push_back(client);
+        }
+        // The native binding moved onto the placeholder: the next make-current binds for real.
+        NoteNativeContextGone();
+        MGLOG_I("DirectGLES: %zu window surface(s) on server window %p now draw into placeholder pbuffers; the "
+                "contexts and their objects stay",
+                onWindow.size(), window);
+        return true;
+    }
+
+    Bool BackendObject_DirectGLES::ResumeServerWindow(void* window, Uint32 width, Uint32 height) {
+        const auto lock = EGLRegistry().Lock();
+        if (window == nullptr) return false;
+        Vector<EGLSurface> suspended;
+        suspended.swap(m_suspendedWindowSurfaces);
+        for (const EGLSurface client : suspended) {
+            if (!EGLRegistry().SetWindowSurfaceExtent(client, width, height, window))
+                continue; // released while suspended
+            // Never activated: its first activation creates it on the new window.
+            const auto native = m_nativeSurfaces.find(client);
+            if (native == m_nativeSurfaces.end()) continue;
+            const EGLSurface surface =
+                DirectGLES::ResumeSessionWindowSurface(native->second, reinterpret_cast<NativeWindowType>(window));
+            if (surface == EGL_NO_SURFACE) return false;
+            native->second = surface;
+        }
+        NoteNativeContextGone();
+        MGLOG_I("DirectGLES: %zu suspended window surface(s) rebuilt on server window %p (%ux%u)", suspended.size(),
+                window, width, height);
+        return true;
+    }
+
+    Bool BackendObject_DirectGLES::ServerWindowResized(void* window, Uint32 width, Uint32 height) {
+        const auto lock = EGLRegistry().Lock();
+        if (window == nullptr) return false;
+        Bool published = false;
+        for (const EGLSurface client : EGLRegistry().WindowSurfacesOn(window)) {
+            if (std::find(m_suspendedWindowSurfaces.begin(), m_suspendedWindowSurfaces.end(), client) !=
+                m_suspendedWindowSurfaces.end())
+                continue;
+            (void)EGLRegistry().SetWindowSurfaceExtent(client, width, height);
+            // The window surface's buffers follow the window by themselves (from the next one the
+            // driver dequeues); only the client has to be told.
+            const auto native = m_nativeSurfaces.find(client);
+            if (native == m_nativeSurfaces.end()) continue;
+            published =
+                DirectGLES::RepublishWindowSurfaceShape(native->second, reinterpret_cast<NativeWindowType>(window)) ||
+                published;
+        }
+        return published;
+    }
+
     void BackendObject_DirectGLES::OnEGLSurfaceReleased(EGLSurface surface) {
+        // P14: releasing a surface releases THAT SURFACE (OnEGLSurfaceForgotten), never the
+        // contexts. This used to be DestroyEGLContext() - every native context of the session, with
+        // every object the client had built - which a multi-window client hit on its first closed
+        // popup.
         (void)surface;
-        DestroyEGLContext();
+        NoteNativeContextGone();
+    }
+
+    void BackendObject_DirectGLES::OnEGLSurfaceForgotten(EGLSurface surface) {
+        m_suspendedWindowSurfaces.erase(
+            std::remove(m_suspendedWindowSurfaces.begin(), m_suspendedWindowSurfaces.end(), surface),
+            m_suspendedWindowSurfaces.end());
+        const auto it = m_nativeSurfaces.find(surface);
+        if (it == m_nativeSurfaces.end()) return;
+        const EGLSurface native = it->second;
+        m_nativeSurfaces.erase(it);
+        DirectGLES::DestroySessionSurface(native);
     }
 
     const RendererInfo& BackendObject_DirectGLES::GetRendererInfo() const {
@@ -1007,24 +1438,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported,
-                                                  Bool drawIndirectSupported,
-                                                  Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool textureViewSupported, Bool cubeMapArraySupported) {
+                                                  Bool drawIndirectSupported, Bool nonZeroIndirectBaseInstanceSupported,
+                                                  Bool textureViewSupported, Bool cubeMapArraySupported,
+                                                  const AdvertisedFeatureSupport& features) {
         Vector<GLExtension> extensions = {
             // The version tokens have to reach the version the backend actually claims:
             // TargetGLVersion is {4,6,0}, and a list that stopped at OpenGL40 told an
             // application feature-detecting off these tokens the opposite of what
             // GL_MAJOR_VERSION / GL_MINOR_VERSION told it.
-            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, V_OpenGL41, V_OpenGL42, V_OpenGL43,
-            V_OpenGL44, V_OpenGL45, V_OpenGL46,
-            E_GL_ARB_draw_buffers_blend,
-            E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
-            E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_EXT_framebuffer_object,
-            E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage, E_GL_ARB_texture_storage,
-            E_GL_ARB_texture_storage_multisample, E_GL_ARB_clear_texture, E_GL_ARB_direct_state_access,
-            E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters, E_GL_ARB_shader_draw_parameters,
-            E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind, E_GL_ARB_shading_language_420pack,
-            E_GL_ARB_vertex_attrib_binding,
+            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, V_OpenGL41, V_OpenGL42, V_OpenGL43, V_OpenGL44,
+            V_OpenGL45, V_OpenGL46, E_GL_ARB_draw_buffers_blend,
+            // The GLSL 1.00/1.10-era ARB trio plus NPOT textures: all core since GL 2.0 and
+            // trivially true for every context this backend claims (4.6). KWin 6's
+            // EglContext::checkSupported() gates desktop-GL compositing on exactly these four
+            // strings, so withholding them fails its renderer bring-up on an otherwise capable
+            // implementation.
+            E_GL_ARB_shader_objects, E_GL_ARB_vertex_shader, E_GL_ARB_fragment_shader,
+            E_GL_ARB_texture_non_power_of_two, E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object,
+            E_GL_ARB_shader_image_load_store, E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query,
+            E_GL_ARB_framebuffer_object, E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
+            E_GL_ARB_texture_storage, E_GL_ARB_texture_storage_multisample, E_GL_ARB_clear_texture,
+            E_GL_ARB_direct_state_access, E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
+            E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind,
+            E_GL_ARB_shading_language_420pack, E_GL_ARB_vertex_attrib_binding,
             // Both are core from GL 3.2/3.3 on and implemented here for
             // every advertised version, but an app targeting 3.0/3.1
             // only reaches them through the extension string - the CTS
@@ -1104,7 +1540,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             E_GL_ARB_texture_rg,
             // GL_DEPTH_COMPONENT32F and GL_DEPTH32F_STENCIL8.
             E_GL_ARB_depth_buffer_float,
-            // The floating-point colour formats. Unlike the rest of this block this string DOES
+            // The floating-point color formats. Unlike the rest of this block this string DOES
             // gate CTS cases - KHR-GL4*.internalformat.texture2d.*{16f,32f} is keyed on it with no
             // core-version fallback, so eight cases per version list were NotSupported on formats
             // the backend has always had.
@@ -1113,10 +1549,42 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // glDepthRangeArrayv / glDepthRangeIndexed / glGetFloati_v / glGetDoublei_v, over the
             // 16 viewports GL_MAX_VIEWPORTS reports and the per-viewport routing emulation.
             E_GL_ARB_viewport_array,
+            // Core in the 4.x versions this backend already claims, and named so a context of an
+            // older requested version reaches the same, already-implemented surface (the conformance
+            // suite gates its GL 3.x runs of these on the string alone):
+            //  - transform feedback objects, pause/resume and glDrawTransformFeedback (4.0);
+            E_GL_ARB_transform_feedback2,
+            //  - multiple capture buffers per stream, gl_SkipComponents / gl_NextBuffer, the
+            //    indexed queries and glDrawTransformFeedbackStream (4.0);
+            E_GL_ARB_transform_feedback3,
+            //  - GL_RGB10_A2UI (3.3), GL_RGB9_E5 (3.0) and the integer color formats (3.0);
+            E_GL_ARB_texture_rgb10_a2ui, E_GL_EXT_texture_shared_exponent, E_GL_EXT_texture_integer,
+            //  - the eleven pipeline-statistics query targets (4.6). Accepted by glBeginQuery and
+            //    answered with GL_QUERY_COUNTER_BITS = 0, the spec's own "this counter is not
+            //    instrumented" signal (see IsPipelineStatisticsQueryTarget in GL_Query.cpp);
+            E_GL_ARB_pipeline_statistics_query,
+            //  - mix() over integer and boolean vectors in GLSL below 4.50. The frontend compiles it
+            //    to OpSelect, which the backend prints back as a core boolean mix.
+            E_GL_EXT_shader_integer_mix,
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
             E_GL_ARB_get_program_binary};
+        // Tessellation is core from GL 4.0, but on the host it is ES 3.2 or
+        // GL_EXT_tessellation_shader, so the string follows the driver. GL_Query also reads it to
+        // open the two tessellation pipeline-statistics targets.
+        if (features.TessellationShader) {
+            extensions.push_back(E_GL_ARB_tessellation_shader);
+        }
+        // gl_CullDistance goes through GL_EXT_clip_cull_distance, whose cull half the loader only
+        // reports where the driver answers a non-zero GL_MAX_CULL_DISTANCES.
+        if (features.CullDistance) {
+            extensions.push_back(E_GL_ARB_cull_distance);
+        }
+        // glClipControl is forwarded to the driver's glClipControlEXT.
+        if (features.ClipControl) {
+            extensions.push_back(E_GL_ARB_clip_control);
+        }
         // Minecraft 26.3 checks this prerequisite before it even considers
         // GL_ARB_multi_draw_indirect. ES 3.1 supplies both single-draw entry points; the loader
         // folds the version and pointer checks into SupportsDrawIndirect.
@@ -1141,7 +1609,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // recorded trace can never cover: Iris and Sodium change their SUBMISSION SCHEDULE
         // the moment they see it - they enqueue whole pipeline batches and poll
         // GL_COMPLETION_STATUS_KHR instead of compiling one program at a time - so
-        // MOBILEGL_ASYNC_SHADER_COMPILE=0 has to withdraw the application-visible behaviour
+        // MOBILEGL_ASYNC_SHADER_COMPILE=0 has to withdraw the application-visible behavior
         // change as well as the threading, or the kill switch would only be half a switch.
         if (MG_Util::Async::AsyncShaderCompileEnabled()) {
             extensions.push_back(E_GL_KHR_parallel_shader_compile);
@@ -1151,7 +1619,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // reaches this backend - so an application that simply uses doubles needs nothing
         // advertised. What the extension additionally promises is 64-bit PRECISION, which no
         // mobile GPU has and the narrowing cannot fake, so advertising it by default would
-        // make an application that checks the string take a path MobileGL cannot honour.
+        // make an application that checks the string take a path MobileGL cannot honor.
         if (MG_Config::Features.AdvertiseFp64) {
             extensions.push_back(E_GL_ARB_gpu_shader_fp64);
         }
@@ -1182,7 +1650,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // DEPTH_STENCIL_TEXTURE_MODE = STENCIL_INDEX and through a view with DEPTH_COMPONENT, in
         // a single shading pass). A copy-based fallback satisfies neither half, and fails
         // silently; withholding the string and answering glTextureView with INVALID_OPERATION is
-        // the only behaviour that cannot be mistaken for success.
+        // the only behavior that cannot be mistaken for success.
         //
         // The host extension is necessary and NOT sufficient, which is why this second gate
         // exists. Adreno 830 has EXT_texture_view, and on it the whole functional half of
@@ -1233,7 +1701,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             funcsTable.GL.DrawElements = DrawElements;
             funcsTable.GL.DrawElementsBaseVertex = DrawElementsBaseVertex;
             funcsTable.GL.MultiDrawArrays = MultiDrawArrays;
-            funcsTable.GL.MultiDrawElements = MultiDrawElements;
             funcsTable.GL.MultiDrawElementsBaseVertex = MultiDrawElementsBaseVertex;
             funcsTable.GL.MultiDrawElementsIndirect = MultiDrawElementsIndirect;
             funcsTable.GL.MultiDrawElementsIndirectCount = MultiDrawElementsIndirectCount;
@@ -1255,26 +1722,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             funcsTable.GL.MemoryBarrierByRegion = MemoryBarrierByRegion;
             funcsTable.GL.BindImageTexture = BindImageTexture;
             funcsTable.GL.GetIntegeri_v = GetIntegeri_v;
-            funcsTable.GL.GetInteger64i_v = GetInteger64i_v;
-            funcsTable.GL.GetProgramiv = GetProgramiv;
             funcsTable.GL.ShaderStorageBlockBinding = ShaderStorageBlockBinding;
             funcsTable.GL.Clear = Clear;
             funcsTable.GL.ClearBufferfi = ClearBufferfi;
             funcsTable.GL.ClearBufferfv = ClearBufferfv;
             funcsTable.GL.ClearBufferuiv = ClearBufferuiv;
             funcsTable.GL.ClearBufferiv = ClearBufferiv;
-            funcsTable.GL.ClearNamedFramebufferfv = ClearNamedFramebufferfv;
-            funcsTable.GL.ClearNamedFramebufferiv = ClearNamedFramebufferiv;
-            funcsTable.GL.ClearNamedFramebufferuiv = ClearNamedFramebufferuiv;
-            funcsTable.GL.ClearNamedFramebufferfi = ClearNamedFramebufferfi;
             funcsTable.GL.BlitFramebuffer = BlitFramebuffer;
-            funcsTable.GL.BlitNamedFramebuffer = BlitNamedFramebuffer;
             funcsTable.GL.CopyTexImage2D = CopyTexImage2D;
             funcsTable.GL.CopyTexSubImage2D = CopyTexSubImage2D;
             funcsTable.GL.CopyImageSubData = CopyImageSubData;
             funcsTable.GL.GenerateMipmap = GenerateMipmap;
             funcsTable.GL.ReadPixels = ReadPixels;
-            funcsTable.GL.GetTexImage = GetTexImage;
             funcsTable.GL.FenceSync = FenceSync;
             funcsTable.GL.ClientWaitSync = ClientWaitSync;
             funcsTable.GL.WaitSync = WaitSync;
@@ -1341,8 +1800,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void BackendObject_DirectGLES::UpdateDynamicBackendParameters() {
         m_dynamicParameters.UniformBufferOffsetAlignment = m_GLESCapabilities.UniformBufferOffsetAlignment;
-        m_dynamicParameters.ShaderStorageBufferOffsetAlignment =
-            m_GLESCapabilities.ShaderStorageBufferOffsetAlignment;
+        m_dynamicParameters.ShaderStorageBufferOffsetAlignment = m_GLESCapabilities.ShaderStorageBufferOffsetAlignment;
         m_dynamicParameters.MaxTextureMaxAnisotropy = m_GLESCapabilities.MaxTextureMaxAnisotropy;
         m_dynamicParameters.AliasedLineWidthRangeMin = m_GLESCapabilities.AliasedLineWidthRangeMin;
         m_dynamicParameters.AliasedLineWidthRangeMax = m_GLESCapabilities.AliasedLineWidthRangeMax;
@@ -1374,8 +1832,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // GL_MAX_TEXTURE_IMAGE_UNITS must never exceed host-side fixed arrays sized off it (e.g.
         // Minecraft's 128-entry Blaze3D GlStateManager.TEXTURES[], iterated by Iris), and the combined
         // limit must stay within our texture-unit state array capacity.
+        //
+        // The fragment limit is raised to the desktop value (32) even where the ES driver counts 16
+        // per stage: Iris sizes its WHOLE-PROGRAM unit budget off this query (vertex and fragment
+        // samplers share it, and it refuses the next sampler as soon as the budget is full), so 16
+        // leaves shader packs such as iterationT without a pipeline at all. Unit NUMBERS up to the
+        // driver's combined limit are legal in every stage, and a stage that really samples more
+        // textures than the driver allows still fails at link with the driver's own log.
         m_dynamicParameters.MaxTextureImageUnits =
-            std::min(m_GLESCapabilities.MaxTextureImageUnits,
+            std::min(std::max(m_GLESCapabilities.MaxTextureImageUnits, m_GLESCapabilities.MaxCombinedTextureImageUnits),
                      static_cast<Int>(MG_State::GLState::TextureState::MAX_PER_STAGE_TEXTURE_IMAGE_UNITS));
         m_dynamicParameters.MaxVertexTextureImageUnits =
             std::min(m_GLESCapabilities.MaxVertexTextureImageUnits,
@@ -1417,9 +1882,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             clampStageStorageBlocks(m_GLESCapabilities.MaxFragmentShaderStorageBlocks);
         m_dynamicParameters.MaxComputeUniformBlocks = m_GLESCapabilities.MaxComputeUniformBlocks;
         m_dynamicParameters.MaxComputeWorkGroupInvocations = m_GLESCapabilities.MaxComputeWorkGroupInvocations;
+        // The six per-axis compute limits: the driver's raw glGetIntegeri_v answers, the same
+        // numbers GLFunctionsTable::GetIntegeri_v forwards live. Carried here so that MGPCaps has
+        // them once the table entry retires (plan B section 4.4.1); GL_Getter floors them.
+        for (SizeT axis = 0; axis < 3; ++axis) {
+            m_dynamicParameters.MaxComputeWorkGroupCount[axis] = m_GLESCapabilities.MaxComputeWorkGroupCount[axis];
+            m_dynamicParameters.MaxComputeWorkGroupSize[axis] = m_GLESCapabilities.MaxComputeWorkGroupSize[axis];
+        }
         // (MaxShaderStorageBufferBindings is assigned above, before the per-stage clamp reads it.)
         // This is the number glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE) hands the application, and
-        // on a host without buffer textures it is knowingly a floor MobileGL cannot honour rather
+        // on a host without buffer textures it is knowingly a floor MobileGL cannot honor rather
         // than a driver answer (m_GLESCapabilities.MaxTextureBufferSizeIsDriverReported says
         // which). Reporting 0 instead was considered and rejected: MobileGL advertises an OpenGL
         // 4.x context, where buffer textures are core and the limit has a spec minimum of 65536,
@@ -1441,6 +1913,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              m_dynamicParameters.MaxCombinedImageUniforms});
         };
         m_dynamicParameters.MaxVertexImageUniforms = clampStageImageUniforms(m_GLESCapabilities.MaxVertexImageUniforms);
+        m_dynamicParameters.MaxTessControlImageUniforms =
+            clampStageImageUniforms(m_GLESCapabilities.MaxTessControlImageUniforms);
+        m_dynamicParameters.MaxTessEvaluationImageUniforms =
+            clampStageImageUniforms(m_GLESCapabilities.MaxTessEvaluationImageUniforms);
         m_dynamicParameters.MaxGeometryImageUniforms =
             clampStageImageUniforms(m_GLESCapabilities.MaxGeometryImageUniforms);
         m_dynamicParameters.MaxFragmentImageUniforms =
@@ -1449,6 +1925,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             clampStageImageUniforms(m_GLESCapabilities.MaxComputeImageUniforms);
         m_dynamicParameters.SupportsDistinctDepthStencilAttachments =
             ProbeDistinctDepthStencilAttachments(DirectGLES::g_GLESFuncs);
+        ProbeSamplePositions(DirectGLES::g_GLESFuncs, m_GLESCapabilities, m_dynamicParameters);
         // SyncAttachmentObject routes a layered upload target to glFramebufferTextureLayer with the
         // attachment's layer passed through, so this backend really does render to the layer it was
         // given - provided the driver resolved the entry point at all.
@@ -1476,6 +1953,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // mathematically mandatory here, on every device, forever - which is why this stays false
         // regardless of what the driver underneath happens to support.
         m_dynamicParameters.SupportsShaderFloat64 = false;
+        {
+            const EsprytSubgroupParameters subgroups = ResolveEsprytSubgroupParameters(m_GLESCapabilities);
+            m_dynamicParameters.SubgroupSize = subgroups.size;
+            m_dynamicParameters.SubgroupSupportedStages = subgroups.stages;
+            m_dynamicParameters.SubgroupSupportedFeatures = subgroups.features;
+            m_dynamicParameters.SubgroupQuadOperationsInAllStages = subgroups.quadInAllStages;
+            MGLOG_I("DirectGLES: GL_KHR_shader_subgroup %s (size %u, stages 0x%x, features 0x%x)",
+                    SubgroupImplementationName(ResolveEsprytSubgroupImplementation(m_GLESCapabilities)), subgroups.size,
+                    subgroups.stages, subgroups.features);
+        }
         // Follows the line above, and must: OpenGL ES has no double-precision vertex format and no
         // fp64 type to consume one with, so a 64-bit vertex attribute has nowhere to land here.
         m_dynamicParameters.SupportsFloat64VertexAttributes = false;
@@ -1488,11 +1975,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // exercised on a healthy driver (the pinned integration lane); =0 restores the
         // detected answer's declines.
         m_dynamicParameters.SupportsTessellationPointSize =
-            m_GLESCapabilities.TessellationPointSizeSupport !=
-            MG_External::GLESCapabilities::PointSizeTier::None;
+            m_GLESCapabilities.TessellationPointSizeSupport != MG_External::GLESCapabilities::PointSizeTier::None;
         m_dynamicParameters.SupportsGeometryPointSize =
-            m_GLESCapabilities.GeometryPointSizeSupport !=
-            MG_External::GLESCapabilities::PointSizeTier::None;
+            m_GLESCapabilities.GeometryPointSizeSupport != MG_External::GLESCapabilities::PointSizeTier::None;
         switch (MG_Config::Features.PointSizeDemotion) {
         case MG_Config::QuirkOverride::ForceOn:
             MGLOG_I("DirectGLES: MOBILEGL_POINT_SIZE_DEMOTION=1 - treating tessellation/geometry "
@@ -1522,9 +2007,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // for gl_ViewportIndex on every driver without GL_OES_viewport_array - which is both test
         // devices. That is not a shortfall being hidden: without the extension only viewport 0 is
         // ever rasterized, so no vertex "selects" a viewport index and naming a convention would
-        // describe behaviour this backend does not implement.
+        // describe behavior this backend does not implement.
         m_dynamicParameters.LayerProvokingVertex = m_GLESCapabilities.LayerProvokingVertex;
         m_dynamicParameters.ViewportIndexProvokingVertex = m_GLESCapabilities.ViewportIndexProvokingVertex;
+        // GL_EXT_fragment_shading_rate is a straight pass-through: the pipeline rate and the
+        // combiner ops are forwarded per draw (SyncRenderState), gl_ShadingRateEXT and
+        // gl_PrimitiveShadingRateEXT are emitted into the ESSL as the driver's own built-ins, and
+        // the device answers every query. The attachment is not forwarded yet, so it is not
+        // claimed, whatever the driver offers.
+        m_dynamicParameters.SupportsFragmentShadingRate = m_GLESCapabilities.SupportsFragmentShadingRate;
+        m_dynamicParameters.SupportsPrimitiveFragmentShadingRate =
+            m_GLESCapabilities.SupportsFragmentShadingRatePrimitive;
+        m_dynamicParameters.SupportsAttachmentFragmentShadingRate = false;
+        m_dynamicParameters.FragmentShadingRateNonTrivialCombiners =
+            m_GLESCapabilities.FragmentShadingRateNonTrivialCombiners;
+        m_dynamicParameters.FragmentShadingRateWithShaderDepthStencilWrites =
+            m_GLESCapabilities.FragmentShadingRateWithShaderDepthStencilWrites;
+        m_dynamicParameters.FragmentShadingRateWithSampleMask = m_GLESCapabilities.FragmentShadingRateWithSampleMask;
+        m_dynamicParameters.FragmentShadingRatePrimitiveWithMultiViewport =
+            m_GLESCapabilities.FragmentShadingRatePrimitiveWithMultiViewport;
+        for (SizeT i = 0; i < std::size(m_dynamicParameters.FragmentShadingRateMasks); ++i) {
+            m_dynamicParameters.FragmentShadingRateMasks[i] = m_GLESCapabilities.FragmentShadingRateMasks[i];
+        }
         m_dynamicParameters.MaxViewportWidth = m_GLESCapabilities.MaxViewportWidth;
         m_dynamicParameters.MaxViewportHeight = m_GLESCapabilities.MaxViewportHeight;
         m_dynamicParameters.ViewportBoundsRangeMin = m_GLESCapabilities.ViewportBoundsRangeMin;

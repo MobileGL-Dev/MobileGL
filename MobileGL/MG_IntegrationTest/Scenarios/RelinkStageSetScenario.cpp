@@ -17,7 +17,7 @@
 // DirectGLES rebuilds its driver program in place - same GL name, new executable - and the
 // per-draw bind dedupes on that name, so a relink that changed the stage set installed
 // nothing and the following draws rendered NOTHING at all: no GL error, LINK_STATUS true,
-// and a framebuffer that kept its clear colour. See the note at the glLinkProgram in
+// and a framebuffer that kept its clear color. See the note at the glLinkProgram in
 // BackendProgramObjectImpl::SyncToBackend for what the driver does with such a relink.
 //
 // PostLinkAttachScenario pins the other half of the same rule - that the executable does
@@ -70,7 +70,7 @@ void main()
 }
 )";
 
-        // Halves the triangle instead of passing it through: the centre pixel stays covered
+        // Halves the triangle instead of passing it through: the center pixel stays covered
         // and all four corners fall outside, so the frame alone says whether this stage ran.
         const char* const kGeometrySource = R"(#version 420 core
 layout(triangles) in;
@@ -114,7 +114,7 @@ void main()
                 glGenVertexArrays(1, &m_vao);
                 glBindVertexArray(m_vao);
                 m_target = MakeColorFbo(kFboWidth, kFboHeight);
-                ASSERT_NE(m_target.fbo, 0u) << "could not create the scenario's colour target";
+                ASSERT_NE(m_target.fbo, 0u) << "could not create the scenario's color target";
                 BindFbo(m_target);
                 DrainErrors();
             }
@@ -122,9 +122,11 @@ void main()
             void TearDown() override {
                 if (!Ready()) return;
                 glUseProgram(0);
-                for (const GLuint program : m_programs) glDeleteProgram(program);
+                for (const GLuint program : m_programs)
+                    glDeleteProgram(program);
                 m_programs.clear();
-                for (const GLuint shader : m_shaders) glDeleteShader(shader);
+                for (const GLuint shader : m_shaders)
+                    glDeleteShader(shader);
                 m_shaders.clear();
                 BindDefaultFramebuffer();
                 DestroyColorFbo(m_target);
@@ -135,8 +137,7 @@ void main()
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             // The same real-backend probes the other stage-gated scenarios use: 0 on a
@@ -203,7 +204,7 @@ void main()
                 return true;
             }
 
-            // Clears to red and draws. Red is the clear colour deliberately: nothing here ever
+            // Clears to red and draws. Red is the clear color deliberately: nothing here ever
             // paints red inside the triangle, so a frame that is red where it should be green
             // says "this draw did not execute" while a frame that is green where it should be
             // red says "it executed against the wrong executable" - two failures worth telling
@@ -221,7 +222,7 @@ void main()
             // The vertex stage's triangle covers the whole target, corners included.
             static void ExpectFullTriangle(const Image& frame, const char* what) {
                 ASSERT_FALSE(frame.Empty()) << what << ": nothing was read back";
-                ExpectPixel(frame, kFboWidth / 2, kFboHeight / 2, kGreen, what, "centre");
+                ExpectPixel(frame, kFboWidth / 2, kFboHeight / 2, kGreen, what, "center");
                 for (const int y : {0, kFboHeight - 1}) {
                     for (const int x : {0, kFboWidth - 1}) {
                         ExpectPixel(frame, x, y, kGreen, what, "corner");
@@ -233,7 +234,7 @@ void main()
             // them, which is what makes the shape readable as "that stage ran".
             static void ExpectHalvedTriangle(const Image& frame, const char* what) {
                 ASSERT_FALSE(frame.Empty()) << what << ": nothing was read back";
-                ExpectPixel(frame, kFboWidth / 2, kFboHeight / 2, kGreen, what, "centre");
+                ExpectPixel(frame, kFboWidth / 2, kFboHeight / 2, kGreen, what, "center");
                 for (const int y : {0, kFboHeight - 1}) {
                     for (const int x : {0, kFboWidth - 1}) {
                         ExpectPixel(frame, x, y, kRed, what, "corner");
