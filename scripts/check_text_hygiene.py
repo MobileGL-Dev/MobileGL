@@ -50,6 +50,8 @@ _spec.loader.exec_module(HEADERS)
 TYPES = {"Feat", "Fix", "Perf", "Refactor", "Test", "Docs", "Build", "CI", "Chore", "Tools"}
 MERGE_TYPE = "Merge"
 CONTENT_MAX = 72
+# A commit that touches more scopes than this may write the scope as `(...)`.
+SCOPE_ABBREVIATE_OVER = 3
 CONTINUATION_MAX = 2
 COMMENT_BLOCK_MAX = 15
 BASE_BRANCH = os.environ.get("TEXT_HYGIENE_BASE_BRANCH", "feat/disaggregated")
@@ -176,7 +178,8 @@ def check_message(message, changed_paths, added_paths, submodules, is_merge=Fals
         if changed_paths:
             listed = [s.strip() for s in m.group("scopes").split(",")]
             expected = scopes_for(changed_paths, submodules)
-            if sorted(listed, key=str.lower) != expected:
+            abbreviated = listed == ["..."] and len(expected) > SCOPE_ABBREVIATE_OVER
+            if not abbreviated and sorted(listed, key=str.lower) != expected:
                 problems.append("scope should be (%s), not (%s)" % (", ".join(expected), m.group("scopes")))
 
     content = m.group("content")
@@ -704,6 +707,12 @@ def self_test():
     }
     for name, msg in cases.items():
         expect("message rejects " + name, check_message(msg, paths, [], subs) != [])
+    wide = ["MobileGL/MG_Backend/DirectGLES/a.cpp", "MobileGL/MG_Test/Wire/b.cpp",
+            "MobileGL/MG_Impl/GLImpl/c.cpp", "MobileGL/MG_Remote/Client/d.cpp"]
+    expect("message: wide scope abbreviated",
+           check_message("[Chore] (...): touch four layers\n", wide, [], subs) == [])
+    expect("message: narrow scope not abbreviated",
+           check_message("[Chore] (...): touch two layers\n", paths, [], subs) != [])
     expect("message rejects new notes",
            check_message("[Docs] (docs/Disaggregated): add a review\n", ["docs/Disaggregated/notes/p9/r.md"],
                          ["docs/Disaggregated/notes/p9/r.md"], subs) != [])

@@ -29,7 +29,7 @@ Commands below use `python3`. On Windows, run `python` instead.
 - **Scope** is each changed path without a leading `MobileGL/`, cut to its first two parts: `MG_Backend/DirectGLES`, `MG_Test/Wire`, `scripts/ci`, `docs/Disaggregated`.
   - A shorter path is used whole: `MG_Backend` for a file directly in a subsystem, `scripts` for a file directly in `scripts/`, and the file name for a file at the repository root (`CMakeLists.txt`).
   - A file directly in `MobileGL/` uses `MobileGL`, and a submodule uses its path (`3rdparty/glslang`).
-  - List every scope the commit touches, comma-separated: `(MG_Backend/DirectGLES, MG_Test/Wire)`.
+  - List every scope the commit touches, comma-separated: `(MG_Backend/DirectGLES, MG_Test/Wire)`. A commit that touches more than three scopes may write `(...)` instead.
   - `python3 scripts/check_text_hygiene.py scope` prints the scope for the staged changes.
 - **No** planning ids (phase or decision codes such as `P13` or `ID-54`), local paths, external project names or non-English text anywhere in the message.
 - **Merges** use `[Merge] (area): what the merge takes`. The scope is free text there. Write the subject yourself, since git's default merge message fails the check. The commits a merge brings in are not checked again.
