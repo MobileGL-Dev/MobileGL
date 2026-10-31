@@ -18,9 +18,9 @@ MobileGL/MG_Remote/          only with MOBILEGL_BUILD_DISAGGREGATED: CONTRACT-*.
               SurfaceControlFrame, ServerDisplay, InProcessServer, DisplayServerJni
 ```
 
-- `MOBILEGL_BUILD_DISAGGREGATED` (default OFF) adds `MG_Remote/**`; when OFF, `MG_Config::Transport` is a `constexpr Monolith`. `MOBILEGL_BUILD_DISAGGREGATED_INPROC` implies the former and adds role isolation: the two roles are separated by the apply thread and the control mailbox, rather than by adding TLS to the 1494 `pGLContext->` read points.
+- `MOBILEGL_BUILD_DISAGGREGATED` (default ON) adds `MG_Remote/**`; when OFF, `MG_Config::Transport` is a `constexpr Monolith`. `MOBILEGL_BUILD_DISAGGREGATED_INPROC` implies the former and adds role isolation: the two roles are separated by the apply thread and the control mailbox, rather than by adding TLS to the 1494 `pGLContext->` read points.
 - `MOBILEGL_TRANSPORT = monolith | inproc | spawn` is the **topology** (G1-relevant); the control plane and data plane are selected by the two variables in §11.9. **A split build with `MOBILEGL_TRANSPORT` unset is the monolith control arm**.
-- Three build flavors (since P13): default (the monolith record arm, with `MG_Remote` not compiled, the shipping shape), verify, and split; Android has two APK flavors (monolith / split). The pull build and the `MOBILEGL_PIPE_PUSH` CMake option are deleted in P13.
+- Three build flavors (since P13): default (the split shape, `MG_Remote` compiled, the in-process shims), verify, and monolith (the shipping shape: configure with `-DMOBILEGL_BUILD_DISAGGREGATED=OFF`, `MG_Remote` not compiled); Android has two APK flavors (monolith / split). The pull build and the `MOBILEGL_PIPE_PUSH` CMake option are deleted in P13.
 - Modules (P13 W7): `SOURCE_FILES` is split into seven OBJECT libraries according to the link ratchet's PARTITION, and `MobileGL` / `MobileGL_s` are assembled from them; in a split build `MobileGL_server_linkcheck` links only the SERVER and SHARED modules with `--no-undefined`, so a frontend reference outside the baseline fails at build time (`scripts/ci/server_link_check.py`). The record arm's server-side code is in `MG_Backend/Record/` (`RecordVerbSink`, `StagedShadow`, `StagedTextureStore`), and client verb emission is in `MG_Impl/Pipe/Verb/`, no longer depending on `MG_Remote`.
 - Test wiring: the ctest `ENVIRONMENT` is built with `mgl_itest_join_environment(...)`; every split / spawn / tcp entry has its own log path, and logs are split per role (`<base>.client.log` / `<base>.server.log`); the spawn and tcp lanes match the split name set (`scripts/ci/spawn_lane_parity.py`), and each entry records its arm proof.
 - CI (`.github/workflows/test.yml`, `apk.yml`): `pipe-gates` (G1–G8, the generator self-test, the symbol report, dirty-surface, field ownership, G5, the documentation-reference lint), `flatc-check`, the include closure, the build / integration / retrace lanes of each flavor, APK + AVD. The `feat/disaggregated` triggers in both workflows are temporary and are removed before merging into `dev`.
@@ -40,7 +40,7 @@ Every lane in `MG_IntegrationTest/CMakeLists.txt` must be able to go red for the
 
 ## Appendix A: switches
 
-CMake: `MOBILEGL_BUILD_DISAGGREGATED` (OFF), `MOBILEGL_BUILD_DISAGGREGATED_INPROC` (OFF, implies the former), `MOBILEGL_PIPE_VERIFY` (OFF, never ships), `MOBILEGL_BUILD_SERVER_SPIKE` (Android spike only), `MOBILEGL_FLATC_EXECUTABLE` (serves `flatc-check` only). `MOBILEGL_PIPE_PUSH` and `MOBILEGL_PIPE_LEGACY_MEMOS` are deleted in P13 (an OFF in an old cache only warns and is ignored).
+CMake: `MOBILEGL_BUILD_DISAGGREGATED` (ON), `MOBILEGL_BUILD_DISAGGREGATED_INPROC` (ON, implies the former), `MOBILEGL_PIPE_VERIFY` (OFF, never ships), `MOBILEGL_BUILD_SERVER_SPIKE` (Android spike only), `MOBILEGL_FLATC_EXECUTABLE` (serves `flatc-check` only). `MOBILEGL_PIPE_PUSH` and `MOBILEGL_PIPE_LEGACY_MEMOS` are deleted in P13 (an OFF in an old cache only warns and is ignored).
 
 At runtime, MGPipe (`MobileGL/Config.h`, `ConfigLoader.cpp`):
 

@@ -14,20 +14,20 @@ option(MOBILEGL_ENABLE_TRACY      "Enable tracy for profiling"                  
 option(MOBILEGL_BUILD_TRACE_REPLAY "Build desktop apitrace replay runner"            OFF)
 option(MOBILEGL_TRACE_ANGLE_VARIANTS "Enable signed trace-APK ANGLE variant loading" OFF)
 option(MOBILEGL_IOS               "Build MobileGL for iOS instead of macOS when APPLE is set" OFF)
-# The disaggregated (two-process) shape. OFF is the shipping default and OFF
-# must stay byte-comparable to a tree without MG_Remote at all: nothing under
-# MobileGL/MG_Remote/ is compiled, no include path is added, and no library is
-# linked, so `nm --defined-only libMobileGL.so | grep -i MG_Remote` is empty.
-# That emptiness is one of the two byte-level equalities the plan's validation
-# gates keep (section 10.3).
-option(MOBILEGL_BUILD_DISAGGREGATED "Build the MG_Remote transport layer (two-process shape)" OFF)
-# The CI / debugging shape (ARCHITECTURE.md §16): both roles in ONE process, talking over the
-# same SEG_CMD ring and the same G3 codec a spawned server would use. It IMPLIES
-# MOBILEGL_BUILD_DISAGGREGATED (below) and additionally admits the role-isolation shims that
-# only make sense when the two roles share an address space. It is a SUPERSET, never a
-# substitute: MOBILEGL_TRANSPORT=inproc is what selects the shape at run time, and this option
-# only decides whether the shims are compiled in.
-option(MOBILEGL_BUILD_DISAGGREGATED_INPROC "Compile the in-process (one-process, two-role) split shims; implies MOBILEGL_BUILD_DISAGGREGATED" OFF)
+# The disaggregated (two-process) shape, ON by default: the split is the development default and
+# the shipping library configures with -DMOBILEGL_BUILD_DISAGGREGATED=OFF. That OFF build must
+# stay byte-comparable to a tree without MG_Remote at all: nothing under MobileGL/MG_Remote/ is
+# compiled, no include path is added, and no library is linked, so
+# `nm --defined-only libMobileGL.so | grep -i MG_Remote` is empty. That emptiness is one of the
+# two byte-level equalities the plan's validation gates keep (section 10.3).
+option(MOBILEGL_BUILD_DISAGGREGATED "Build the MG_Remote transport layer (two-process shape)" ON)
+# The in-process split shape (ARCHITECTURE.md §16), ON by default with the option above: both
+# roles in ONE process, talking over the same SEG_CMD ring and the same G3 codec a spawned server
+# would use. It IMPLIES MOBILEGL_BUILD_DISAGGREGATED (below) and additionally admits the
+# role-isolation shims that only make sense when the two roles share an address space. It is a
+# SUPERSET, never a substitute: MOBILEGL_TRANSPORT=inproc is what selects the shape at run time,
+# and this option only decides whether the shims are compiled in.
+option(MOBILEGL_BUILD_DISAGGREGATED_INPROC "Compile the in-process (one-process, two-role) split shims; implies MOBILEGL_BUILD_DISAGGREGATED" ON)
 option(MOBILEGL_BUILD_SERVER_SPIKE "Build the P0 spike-A MobileGLServer delivery-chain executable (Android only)" OFF)
 option(MOBILEGL_BUILD_EXTMEM_PROBE "Package tools/spikes/extmem_probe as libMobileGLExtmemProbe.so for the trace APK's exec hook (P11 A3, Android only)" OFF)
 option(MOBILEGL_EXTMEM_PROBE_AS_SERVER "Spike only (P11 B2 step 1): also package the probe as libMobileGLServer.so, the real server as libMobileGLServerReal.so" OFF)
