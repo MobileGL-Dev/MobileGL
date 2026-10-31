@@ -50,7 +50,7 @@ _spec.loader.exec_module(HEADERS)
 TYPES = {"Feat", "Fix", "Perf", "Refactor", "Test", "Docs", "Build", "CI", "Chore", "Tools"}
 MERGE_TYPE = "Merge"
 CONTENT_MAX = 72
-# A commit that touches more scopes than this may write the scope as `(...)`.
+# A commit that touches more scopes than this has its scope left to the author.
 SCOPE_ABBREVIATE_OVER = 3
 CONTINUATION_MAX = 2
 COMMENT_BLOCK_MAX = 15
@@ -176,11 +176,11 @@ def check_message(message, changed_paths, added_paths, submodules, is_merge=Fals
         if bad:
             problems.append("unknown type %s; use %s" % (", ".join(bad), ", ".join(sorted(TYPES))))
         if changed_paths:
-            listed = [s.strip() for s in m.group("scopes").split(",")]
             expected = scopes_for(changed_paths, submodules)
-            abbreviated = listed == ["..."] and len(expected) > SCOPE_ABBREVIATE_OVER
-            if not abbreviated and sorted(listed, key=str.lower) != expected:
-                problems.append("scope should be (%s), not (%s)" % (", ".join(expected), m.group("scopes")))
+            if len(expected) <= SCOPE_ABBREVIATE_OVER:
+                listed = [s.strip() for s in m.group("scopes").split(",")]
+                if sorted(listed, key=str.lower) != expected:
+                    problems.append("scope should be (%s), not (%s)" % (", ".join(expected), m.group("scopes")))
 
     content = m.group("content")
     if len(content) > CONTENT_MAX:
@@ -709,9 +709,9 @@ def self_test():
         expect("message rejects " + name, check_message(msg, paths, [], subs) != [])
     wide = ["MobileGL/MG_Backend/DirectGLES/a.cpp", "MobileGL/MG_Test/Wire/b.cpp",
             "MobileGL/MG_Impl/GLImpl/c.cpp", "MobileGL/MG_Remote/Client/d.cpp"]
-    expect("message: wide scope abbreviated",
-           check_message("[Chore] (...): touch four layers\n", wide, [], subs) == [])
-    expect("message: narrow scope not abbreviated",
+    expect("message: wide scope unchecked",
+           check_message("[Chore] (backend and tests): touch four layers\n", wide, [], subs) == [])
+    expect("message: narrow scope checked",
            check_message("[Chore] (...): touch two layers\n", paths, [], subs) != [])
     expect("message rejects new notes",
            check_message("[Docs] (docs/Disaggregated): add a review\n", ["docs/Disaggregated/notes/p9/r.md"],
