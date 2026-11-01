@@ -132,6 +132,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         private:
             VkTextureManager& m_manager;
         };
+        // True inside a PendingClearHold: the image being resolved is an attachment of the pass
+        // being prepared, which takes pending clears as its load op.
+        Bool PendingClearsHeld() const { return m_pendingClearHold != 0; }
         // A whole-subresource clear that was recorded but has not run yet (VulkanRenderer::DeferWireClear).
         struct WirePendingClear {
             Uint32 level = 0, layer = 0, layers = 1;

@@ -620,7 +620,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 level = 0, layer = 0, layers = 1;
         };
         Vector<WireFoldClear> m_wireFoldClears;
+        // Attachments of the pass being prepared whose content is undefined: a default-framebuffer
+        // image first used since its present. Their load op becomes DONT_CARE (WireClearVariant).
+        Vector<Uint32> m_wireDiscardLoads;
         static Bool WireImageCanDeferClear(const WireImage& image);
+        // A whole-image clear of the default framebuffer, held for the next pass that draws into
+        // the window (its load op) the way WirePendingClear holds a texture's. Any other use of the
+        // window images, and the present, run it first (MaterializeDefaultWirePendingClear).
+        struct DefaultWirePendingClear {
+            VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+            Uint32 swapchainImageIndex = 0;
+            Bool color = false;
+            VkImageAspectFlags depthStencil = 0;
+            ClearAttachmentPayload colorPayload{};
+            ClearAttachmentPayload depthStencilPayload{};
+            Bool Pending() const { return color || depthStencil != 0; }
+        };
+        DefaultWirePendingClear m_defaultWirePendingClear;
+        GLbitfield DeferDefaultWireClear(const MG_Pipe::MGPFramebufferState& fbo, const ClearAttachmentPayload& payload,
+                                         GLint drawbuffer);
+        void MaterializeDefaultWirePendingClear();
+        void FoldDefaultWirePendingClear(RenderPassEntry& begun, Uint64& variantKey, VkClearValue* merged);
+        // Records a clear of `area` of one wire image in a single-attachment pass of its own.
+        void RecordWireImageClear(WireImage& image, VkImageAspectFlags aspect, const ClearAttachmentPayload& payload,
+                                  const VkRect2D& area, Bool textureSurface);
         static void NoteWirePendingClear(const WireImage& image, VkImageAspectFlags aspects, const VkClearValue& value);
         VkRenderPass WireClearVariant(RenderPassEntry& begun, Uint64 variantKey);
         Bool BeginWireDrawPassFolding(FrameContext::FrameData& frame, RenderPassEntry& begun, Uint64 variantKey,

@@ -658,6 +658,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         WireImage out{};
         out.aspect = aspect;
         if (fbo.IsDefault) {
+            // Only an attachment of the pass being prepared takes a pending window clear as its
+            // load op; every other use runs it first.
+            if (m_defaultWirePendingClear.Pending() && !m_textureManager->PendingClearsHeld())
+                MaterializeDefaultWirePendingClear();
             out.isDefault = true;
             out.extent = m_swapchainObject.GetExtent();
             out.swapchainImageIndex =
@@ -1109,6 +1113,87 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return remaining & ~handled;
     }
 
+    void VulkanRenderer::RecordWireImageClear(WireImage& image, VkImageAspectFlags aspect,
+                                              const ClearAttachmentPayload& payload, const VkRect2D& area,
+                                              Bool textureSurface) {
+        const Bool color = aspect == VK_IMAGE_ASPECT_COLOR_BIT;
+        const auto layout =
+            color ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        TransitionWireImage(image, layout);
+        VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        viewInfo.image = image.image;
+        viewInfo.viewType = image.viewType;
+        viewInfo.format = image.format;
+        viewInfo.subresourceRange = {
+            color ? VK_IMAGE_ASPECT_COLOR_BIT
+                  : (image.format == VK_FORMAT_D24_UNORM_S8_UINT || image.format == VK_FORMAT_D32_SFLOAT_S8_UINT
+                         ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+                         : image.aspect),
+            image.level, 1, image.layer, image.layers};
+        VkImageView view = VK_NULL_HANDLE;
+        VK_VERIFY(vkCreateImageView(m_device, &viewInfo, nullptr, &view));
+        VkAttachmentDescription attachment{};
+        attachment.format = image.format;
+        attachment.samples = image.samples;
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.initialLayout = layout;
+        attachment.finalLayout = layout;
+        VkAttachmentReference ref{0, layout};
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = color ? 1 : 0;
+        subpass.pColorAttachments = color ? &ref : nullptr;
+        subpass.pDepthStencilAttachment = color ? nullptr : &ref;
+        VkRenderPassCreateInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        passInfo.attachmentCount = 1;
+        passInfo.pAttachments = &attachment;
+        passInfo.subpassCount = 1;
+        passInfo.pSubpasses = &subpass;
+        VkRenderPass pass = VK_NULL_HANDLE;
+        VK_VERIFY(vkCreateRenderPass(m_device, &passInfo, nullptr, &pass));
+        VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+        fbInfo.renderPass = pass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments = &view;
+        fbInfo.width = image.extent.width;
+        fbInfo.height = image.extent.height;
+        fbInfo.layers = image.layers;
+        VkFramebuffer fb = VK_NULL_HANDLE;
+        VK_VERIFY(vkCreateFramebuffer(m_device, &fbInfo, nullptr, &fb));
+        VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+        begin.renderPass = pass;
+        begin.framebuffer = fb;
+        begin.renderArea = area;
+        auto clearPayload = payload;
+        if (color) PreCompensateSrgbClearColor(clearPayload, image.format);
+        VkClearAttachment clear{};
+        clear.aspectMask = aspect;
+        clear.clearValue.color = MakeVkClearColorValue(clearPayload, false);
+        if (!color) clear.clearValue.depthStencil = {payload.depth, payload.stencil};
+        VkClearRect rect{area, 0, image.layers};
+        auto& frame = m_frameContext.GetCurrent();
+        EndActiveRenderPassOn(frame.commandBuffer);
+        vkCmdBeginRenderPass(frame.commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdClearAttachments(frame.commandBuffer, 1, &clear, 1, &rect);
+        vkCmdEndRenderPass(frame.commandBuffer);
+        WireRetiredObjects retired{};
+        retired.framebuffers.push_back(fb);
+        retired.renderPasses.push_back(pass);
+        retired.imageViews.push_back(view);
+        RetireWireObjects(Move(retired));
+        if (!image.isDefault && textureSurface)
+            m_textureManager->MarkWireTextureGpuWritten(image.storage, image.level, image.layer, image.layers);
+        if (image.isDefault) {
+            if (color)
+                m_swapchainObject.SetImageContentDefined(image.swapchainImageIndex, true);
+            else
+                m_swapchainObject.SetDepthStencilContentDefined(image.swapchainImageIndex, true);
+        }
+    }
+
     void VulkanRenderer::ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
                                               const ClearAttachmentPayload& clearRequest, GLint drawbuffer) {
         if (MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
@@ -1126,6 +1211,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             payload.mask = ClearWireFramebufferInPass(fbo, payload, drawbuffer);
         if (payload.mask) payload.mask = ClearWireAttachmentsOfOpenPass(fbo, payload, drawbuffer);
         if (payload.mask) payload.mask = DeferWireClear(fbo, payload, drawbuffer);
+        if (payload.mask) payload.mask = DeferDefaultWireClear(fbo, payload, drawbuffer);
         if (payload.mask) payload.mask = ClearWireFramebufferInPass(fbo, payload, drawbuffer);
         if (!payload.mask) return;
         RetireWireDrawPass();
@@ -1177,82 +1263,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                        m_swapchainObject.GetPreTransform(), &area.offset, &area.extent))
                     MagmaWireFatal("clear-surface-transform");
             }
-            const Bool color = aspect == VK_IMAGE_ASPECT_COLOR_BIT;
-            const auto layout =
-                color ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            TransitionWireImage(image, layout);
-            VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-            viewInfo.image = image.image;
-            viewInfo.viewType = image.viewType;
-            viewInfo.format = image.format;
-            viewInfo.subresourceRange = {
-                color ? VK_IMAGE_ASPECT_COLOR_BIT
-                      : (image.format == VK_FORMAT_D24_UNORM_S8_UINT || image.format == VK_FORMAT_D32_SFLOAT_S8_UINT
-                             ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
-                             : image.aspect),
-                image.level, 1, image.layer, image.layers};
-            VkImageView view = VK_NULL_HANDLE;
-            VK_VERIFY(vkCreateImageView(m_device, &viewInfo, nullptr, &view));
-            VkAttachmentDescription attachment{};
-            attachment.format = image.format;
-            attachment.samples = image.samples;
-            attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-            attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-            attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-            attachment.initialLayout = layout;
-            attachment.finalLayout = layout;
-            VkAttachmentReference ref{0, layout};
-            VkSubpassDescription subpass{};
-            subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-            subpass.colorAttachmentCount = color ? 1 : 0;
-            subpass.pColorAttachments = color ? &ref : nullptr;
-            subpass.pDepthStencilAttachment = color ? nullptr : &ref;
-            VkRenderPassCreateInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-            passInfo.attachmentCount = 1;
-            passInfo.pAttachments = &attachment;
-            passInfo.subpassCount = 1;
-            passInfo.pSubpasses = &subpass;
-            VkRenderPass pass = VK_NULL_HANDLE;
-            VK_VERIFY(vkCreateRenderPass(m_device, &passInfo, nullptr, &pass));
-            VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            fbInfo.renderPass = pass;
-            fbInfo.attachmentCount = 1;
-            fbInfo.pAttachments = &view;
-            fbInfo.width = image.extent.width;
-            fbInfo.height = image.extent.height;
-            fbInfo.layers = image.layers;
-            VkFramebuffer fb = VK_NULL_HANDLE;
-            VK_VERIFY(vkCreateFramebuffer(m_device, &fbInfo, nullptr, &fb));
-            VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-            begin.renderPass = pass;
-            begin.framebuffer = fb;
-            begin.renderArea = area;
-            auto clearPayload = payload;
-            if (color) PreCompensateSrgbClearColor(clearPayload, image.format);
-            VkClearAttachment clear{};
-            clear.aspectMask = aspect;
-            clear.clearValue.color = MakeVkClearColorValue(clearPayload, false);
-            if (!color) clear.clearValue.depthStencil = {payload.depth, payload.stencil};
-            VkClearRect rect{area, 0, image.layers};
-            auto& frame = m_frameContext.GetCurrent();
-            EndActiveRenderPassOn(frame.commandBuffer);
-            vkCmdBeginRenderPass(frame.commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
-            vkCmdClearAttachments(frame.commandBuffer, 1, &clear, 1, &rect);
-            vkCmdEndRenderPass(frame.commandBuffer);
-            WireRetiredObjects retired{};
-            retired.framebuffers.push_back(fb);
-            retired.renderPasses.push_back(pass);
-            retired.imageViews.push_back(view);
-            RetireWireObjects(Move(retired));
-            if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
-                m_textureManager->MarkWireTextureGpuWritten(image.storage, image.level, image.layer, image.layers);
-            if (image.isDefault) {
-                if (color)
-                    m_swapchainObject.SetImageContentDefined(image.swapchainImageIndex, true);
-                else
-                    m_swapchainObject.SetDepthStencilContentDefined(image.swapchainImageIndex, true);
-            }
+            RecordWireImageClear(image, aspect, payload, area, surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture);
         };
         if (payload.mask & GL_COLOR_BUFFER_BIT) {
             for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {

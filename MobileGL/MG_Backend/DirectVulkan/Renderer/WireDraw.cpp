@@ -9,6 +9,14 @@
 #include "VulkanRendererInternal.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
+    namespace {
+        // A wire pass variant key holds two clear bits per attachment from bit 0 and, from this
+        // bit on, one bit per attachment whose content is undefined (WireClearVariant).
+        constexpr Uint32 kWireDiscardBit = 32;
+        static_assert(2 * (MG_Pipe::kMGPipeMaxColorAttachments + 1) <= kWireDiscardBit,
+                      "the clear bits of a wire pass variant key overlap its discard bits");
+    } // namespace
+
     // GL_EXT_fragment_shading_rate's pipeline rate and combiner ops for the draw about to be
     // recorded. The packed rate is log2(width) << 2 | log2(height), which is exactly the extent
     // VK_KHR_fragment_shading_rate takes, and the combiner op indices follow
@@ -445,6 +453,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                              WireDrawScratch& scratch, Bool passContinues, Bool& continuing) {
         continuing = true;
         m_wireFoldClears.clear();
+        m_wireDiscardLoads.clear();
         if (passContinues) {
             auto& store = MG_Record::ServerStagedTexture();
             if (!m_wirePassMarksValid || m_wirePassMarksClearGeneration != store.GpuDirtyClearGeneration()) {
@@ -536,6 +545,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
                     scratch.gpuWriteMarks.push_back({image.storage, image.level, image.layer, image.layers});
                 if (image.isDefault) {
+                    // A present leaves the default framebuffer undefined (VulkanRenderer::Present):
+                    // the first pass after it has nothing to load.
+                    const Bool defined =
+                        aspect == VK_IMAGE_ASPECT_COLOR_BIT
+                            ? m_swapchainObject.IsImageContentDefined(image.swapchainImageIndex)
+                            : m_swapchainObject.IsDepthStencilContentDefined(image.swapchainImageIndex);
+                    if (!defined) m_wireDiscardLoads.push_back(static_cast<Uint32>(attachments.size() - 1));
                     if (aspect == VK_IMAGE_ASPECT_COLOR_BIT)
                         m_swapchainObject.SetImageContentDefined(image.swapchainImageIndex, true);
                     else
@@ -1361,9 +1377,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (entry.first == variantKey) return entry.second;
         const Uint32 attachmentCount = static_cast<Uint32>(begun.wireAttachments.size());
         auto descriptions = begun.wireAttachments;
+        // Bits 2a and 2a+1 clear attachment a (color or depth, and stencil); bit kWireDiscardBit + a
+        // marks its content undefined, so whatever is not cleared is not loaded either.
         for (Uint32 a = 0; a < attachmentCount; ++a) {
-            if (variantKey >> (2 * a) & 1) descriptions[a].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-            if (variantKey >> (2 * a + 1) & 1) descriptions[a].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            const Bool discard = variantKey >> (kWireDiscardBit + a) & 1;
+            if (variantKey >> (2 * a) & 1)
+                descriptions[a].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            else if (discard)
+                descriptions[a].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            if (variantKey >> (2 * a + 1) & 1)
+                descriptions[a].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            else if (discard)
+                descriptions[a].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         }
         VkSubpassDescription subpass{};
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -1380,6 +1405,138 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VK_VERIFY(vkCreateRenderPass(m_device, &info, nullptr, &variant));
         begun.clearVariants.push_back({variantKey, variant});
         return variant;
+    }
+
+    // The default framebuffer's half of the deferred clears: a whole-window glClear with no pass
+    // open on the window waits for the next pass that draws into it, which loads it with
+    // LOAD_OP_CLEAR (BeginWireDrawPassFolding) instead of storing a cleared window and loading it
+    // back. Returns the buffers it did not take.
+    GLbitfield VulkanRenderer::DeferDefaultWireClear(const MG_Pipe::MGPFramebufferState& fbo,
+                                                     const ClearAttachmentPayload& payload, GLint drawbuffer) {
+        GLbitfield remaining = payload.mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        if (!remaining || !fbo.IsDefault || drawbuffer >= 0 || m_wirePreparationDepth != 0) return remaining;
+        if (GLScissorTestClips()) return remaining;
+        // A pass open on the window takes the clear itself (ClearWireAttachmentsOfOpenPass).
+        if (VkRenderPassManager::GetActiveRenderPass() != nullptr && m_wireDrawPass && m_wireDrawPassKey.isDefault)
+            return remaining;
+        GLbitfield handled = 0;
+        Bool color = false;
+        VkImageAspectFlags depthStencil = 0;
+        if (remaining & GL_COLOR_BUFFER_BIT) {
+            const Int32 slot = fbo.DrawBuffers[0];
+            const auto mask = MG_Pipe::gPipeInputs->GetColorMaskIndexed(0);
+            const Bool none = slot < 0 || (!mask.r() && !mask.g() && !mask.b() && !mask.a());
+            if (none)
+                handled |= GL_COLOR_BUFFER_BIT;
+            else if (mask.r() && mask.g() && mask.b() && mask.a() &&
+                     payload.colorEncoding == ClearColorEncoding::Float) {
+                handled |= GL_COLOR_BUFFER_BIT;
+                color = true;
+            }
+        }
+        // A window without a depth/stencil buffer clears nothing there.
+        const VkFormat depthStencilFormat = m_swapchainObject.GetDepthStencilFormat();
+        const Bool hasDepth = depthStencilFormat != VK_FORMAT_UNDEFINED;
+        const Bool packed = vkuFormatIsDepthAndStencil(depthStencilFormat);
+        if (remaining & GL_DEPTH_BUFFER_BIT) {
+            handled |= GL_DEPTH_BUFFER_BIT;
+            if (hasDepth && MG_Pipe::gPipeInputs->GetDepthMask()) depthStencil |= VK_IMAGE_ASPECT_DEPTH_BIT;
+        }
+        if (remaining & GL_STENCIL_BUFFER_BIT) {
+            const Uint32 mask = MG_Pipe::gPipeInputs->GetStencilState(StencilFace::Front).WriteMask & 255u;
+            if (mask == 0 || !packed)
+                handled |= GL_STENCIL_BUFFER_BIT;
+            else if (mask == 255u) {
+                handled |= GL_STENCIL_BUFFER_BIT;
+                depthStencil |= VK_IMAGE_ASPECT_STENCIL_BIT;
+            }
+        }
+        if (!color && depthStencil == 0) return remaining & ~handled;
+        // The index the next drawing pass on the window will address (WireDraw.cpp's pass key).
+        const Uint32 index = DefaultFramebufferWriteIndex(true);
+        auto& pending = m_defaultWirePendingClear;
+        if (pending.Pending() &&
+            (pending.swapchain != m_swapchainObject.GetHandle() || pending.swapchainImageIndex != index))
+            MaterializeDefaultWirePendingClear();
+        pending.swapchain = m_swapchainObject.GetHandle();
+        pending.swapchainImageIndex = index;
+        if (color) {
+            pending.color = true;
+            pending.colorPayload = payload;
+            m_swapchainObject.SetImageContentDefined(index, true);
+        }
+        if (depthStencil & VK_IMAGE_ASPECT_DEPTH_BIT) pending.depthStencilPayload.depth = payload.depth;
+        if (depthStencil & VK_IMAGE_ASPECT_STENCIL_BIT) pending.depthStencilPayload.stencil = payload.stencil;
+        if (depthStencil) {
+            pending.depthStencil |= depthStencil;
+            m_swapchainObject.SetDepthStencilContentDefined(index, true);
+        }
+        return remaining & ~handled;
+    }
+
+    void VulkanRenderer::MaterializeDefaultWirePendingClear() {
+        if (!m_defaultWirePendingClear.Pending()) return;
+        const DefaultWirePendingClear pending = m_defaultWirePendingClear;
+        m_defaultWirePendingClear = {};
+        // A recreated swapchain took the images the clear was for.
+        if (pending.swapchain != m_swapchainObject.GetHandle() ||
+            pending.swapchainImageIndex >= m_swapchainObject.GetImageCount())
+            return;
+        const VkExtent2D extent = m_swapchainObject.GetExtent();
+        const VkRect2D area{{0, 0}, extent};
+        WireImage image{};
+        image.isDefault = true;
+        image.extent = extent;
+        image.swapchainImageIndex = pending.swapchainImageIndex;
+        if (pending.color) {
+            image.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            image.image = m_swapchainObject.GetImage(pending.swapchainImageIndex);
+            image.format = m_swapchainObject.GetSurfaceFormat().format;
+            image.layout = m_swapchainObject.GetImageLayout(pending.swapchainImageIndex);
+            RecordWireImageClear(image, VK_IMAGE_ASPECT_COLOR_BIT, pending.colorPayload, area, false);
+        }
+        if (pending.depthStencil && m_swapchainObject.GetDepthStencilImage(pending.swapchainImageIndex)) {
+            image.aspect = pending.depthStencil;
+            image.image = m_swapchainObject.GetDepthStencilImage(pending.swapchainImageIndex);
+            image.format = m_swapchainObject.GetDepthStencilFormat();
+            image.layout = m_swapchainObject.GetDepthStencilImageLayout(pending.swapchainImageIndex);
+            RecordWireImageClear(image, pending.depthStencil, pending.depthStencilPayload, area, false);
+        }
+    }
+
+    // A pending window clear (DeferDefaultWireClear) becomes the load op of the window pass that
+    // begins: its attachments are matched by image, since a continued pass key is not walked again.
+    // A clear the caller already put in `variantKey` is newer and wins.
+    void VulkanRenderer::FoldDefaultWirePendingClear(RenderPassEntry& begun, Uint64& variantKey, VkClearValue* merged) {
+        auto& pending = m_defaultWirePendingClear;
+        if (!pending.Pending() || !m_wireDrawPassKey.isDefault || m_wireDrawPassKey.swapchain != pending.swapchain ||
+            m_wireDrawPassKey.swapchainImageIndex != pending.swapchainImageIndex)
+            return;
+        const Uint32 attachmentCount =
+            static_cast<Uint32>(std::min<SizeT>(begun.wireAttachments.size(), m_wireDrawPassKey.attachments.size()));
+        const VkImage colorImage = m_swapchainObject.GetImage(pending.swapchainImageIndex);
+        const VkImage depthStencilImage = m_swapchainObject.GetDepthStencilImage(pending.swapchainImageIndex);
+        for (Uint32 a = 0; a < attachmentCount && a < MG_Pipe::kMGPipeMaxColorAttachments + 1; ++a) {
+            const auto& attachment = m_wireDrawPassKey.attachments[a];
+            if (pending.color && attachment.image == colorImage) {
+                if (!(variantKey >> (2 * a) & 1)) {
+                    variantKey |= 1ull << (2 * a);
+                    merged[a].color = MakeVkClearColorValue(pending.colorPayload, false);
+                }
+                pending.color = false;
+            } else if (pending.depthStencil && attachment.image == depthStencilImage) {
+                if ((pending.depthStencil & VK_IMAGE_ASPECT_DEPTH_BIT) && !(variantKey >> (2 * a) & 1)) {
+                    variantKey |= 1ull << (2 * a);
+                    merged[a].depthStencil.depth = pending.depthStencilPayload.depth;
+                }
+                if ((pending.depthStencil & VK_IMAGE_ASPECT_STENCIL_BIT) && !(variantKey >> (2 * a + 1) & 1)) {
+                    variantKey |= 1ull << (2 * a + 1);
+                    merged[a].depthStencil.stencil = pending.depthStencilPayload.stencil;
+                }
+                pending.depthStencil = 0;
+            }
+        }
+        // An aspect the pass does not attach stays pending: none of its draws write it.
     }
 
     // P15: EVERY DRAW PASS BEGINS HERE. The pending clears of its attachments
@@ -1426,6 +1583,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         m_wireFoldClears.clear();
+        FoldDefaultWirePendingClear(begun, variantKey, merged);
+        for (const Uint32 a : m_wireDiscardLoads)
+            if (a < attachmentCount) variantKey |= 1ull << (kWireDiscardBit + a);
+        m_wireDiscardLoads.clear();
         if (variantKey == 0) return VkRenderPassManager::BeginRenderPass(frame.commandBuffer, begun);
         return VkRenderPassManager::BeginRenderPass(frame.commandBuffer, begun, WireClearVariant(begun, variantKey),
                                                     merged, attachmentCount);
