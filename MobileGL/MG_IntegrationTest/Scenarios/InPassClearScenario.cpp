@@ -357,4 +357,35 @@ void main() { o0 = texture(uPalette, vec2(0.5, 0.5)); }
         glDeleteProgram(paletteProgram);
     }
 
+    // A depth clear of the DEFAULT framebuffer while a pass is open on it (a game clearing depth
+    // before its hand or GUI): the in-pass clear does not take the window, so the clear ends the
+    // pass and becomes the load op of the next one, which the farther draw must see.
+    TEST_F(InPassClearScenario, ADefaultFramebufferDepthClearBetweenTestedDrawsDecidesTheSecondDraw) {
+        if (!Ready()) return;
+        HeadlessGL& gl = Gl();
+        const int width = gl.Width(), height = gl.Height();
+        Build();
+        for (int frame = 0; frame < 2; ++frame) {
+            BindDefaultFramebuffer();
+            glViewport(0, 0, width, height);
+            glDisable(GL_SCISSOR_TEST);
+            glDisable(GL_BLEND);
+            glDepthMask(GL_TRUE);
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glClearDepth(1.0);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LESS);
+            Quad(1.0f, 0.0f, 0.0f, 1.0f, -0.5f);
+            glClear(GL_DEPTH_BUFFER_BIT);
+            Quad(0.0f, 1.0f, 0.0f, 1.0f, 0.0f);
+            glDisable(GL_DEPTH_TEST);
+            EXPECT_EQ(FirstGLError(), 0u);
+            const Image image = ReadPixels(width, height);
+            EXPECT_TRUE(Near(image.At(width / 2, height / 2), 0, 255, 0, 255))
+                << "frame " << frame << ": the depth clear between the draws let the farther draw pass";
+            gl.EndFrame();
+        }
+    }
+
 } // namespace MGITest

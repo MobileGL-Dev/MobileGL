@@ -16,12 +16,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Present has its own submit path. Tag its last wire pass before that
         // submission, rather than retaining it until a draw in the next frame.
         RetireWireDrawPass();
-        // A window clear no pass drew after still has to reach the presented image; a frame that
-        // cannot be presented drops it with the rest of the frame.
-        if (m_swapchainObject.GetHandle() == VK_NULL_HANDLE || m_presentSuspended)
+        // A window color clear no pass drew after still has to reach the presented image. Its
+        // depth/stencil half is dropped: a swap leaves those undefined (see the content flags
+        // reset below). A frame that cannot be presented drops the whole clear.
+        if (m_swapchainObject.GetHandle() == VK_NULL_HANDLE || m_presentSuspended) {
             m_defaultWirePendingClear = {};
-        else
+        } else {
+            m_defaultWirePendingClear.depthStencil = 0;
             MaterializeDefaultWirePendingClear();
+        }
 #endif
         if (m_swapchainObject.GetHandle() == VK_NULL_HANDLE || m_presentSuspended) {
             // No usable swapchain: the window was zero-area at initialization, or

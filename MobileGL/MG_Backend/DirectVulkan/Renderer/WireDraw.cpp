@@ -1407,18 +1407,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return variant;
     }
 
-    // The default framebuffer's half of the deferred clears: a whole-window glClear with no pass
-    // open on the window waits for the next pass that draws into it, which loads it with
-    // LOAD_OP_CLEAR (BeginWireDrawPassFolding) instead of storing a cleared window and loading it
-    // back. Returns the buffers it did not take.
+    // The default framebuffer's half of the deferred clears: a whole-window glClear waits for the
+    // next pass that draws into the window, which loads it with LOAD_OP_CLEAR
+    // (BeginWireDrawPassFolding) instead of storing a cleared window and loading it back. A pass
+    // open on the window ends first, since the in-pass clear does not take the window
+    // (MagmaInPassClearDefault); a present drops the depth/stencil half (Present). Returns the
+    // buffers it did not take.
     GLbitfield VulkanRenderer::DeferDefaultWireClear(const MG_Pipe::MGPFramebufferState& fbo,
                                                      const ClearAttachmentPayload& payload, GLint drawbuffer) {
         GLbitfield remaining = payload.mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
         if (!remaining || !fbo.IsDefault || drawbuffer >= 0 || m_wirePreparationDepth != 0) return remaining;
         if (GLScissorTestClips()) return remaining;
-        // A pass open on the window takes the clear itself (ClearWireAttachmentsOfOpenPass).
-        if (VkRenderPassManager::GetActiveRenderPass() != nullptr && m_wireDrawPass && m_wireDrawPassKey.isDefault)
-            return remaining;
         GLbitfield handled = 0;
         Bool color = false;
         VkImageAspectFlags depthStencil = 0;
@@ -1452,6 +1451,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         if (!color && depthStencil == 0) return remaining & ~handled;
+        if (VkRenderPassManager::GetActiveRenderPass() != nullptr && m_wireDrawPass && m_wireDrawPassKey.isDefault)
+            RetireWireDrawPass();
         // The index the next drawing pass on the window will address (WireDraw.cpp's pass key).
         const Uint32 index = DefaultFramebufferWriteIndex(true);
         auto& pending = m_defaultWirePendingClear;
