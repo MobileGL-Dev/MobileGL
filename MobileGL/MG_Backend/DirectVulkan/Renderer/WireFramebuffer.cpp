@@ -1115,7 +1115,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VulkanRenderer::RecordWireImageClear(WireImage& image, VkImageAspectFlags aspect,
                                               const ClearAttachmentPayload& payload, const VkRect2D& area,
-                                              Bool textureSurface) {
+                                              Bool textureSurface, Bool colorPreCompensated) {
         const Bool color = aspect == VK_IMAGE_ASPECT_COLOR_BIT;
         const auto layout =
             color ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -1168,7 +1168,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         begin.framebuffer = fb;
         begin.renderArea = area;
         auto clearPayload = payload;
-        if (color) PreCompensateSrgbClearColor(clearPayload, image.format);
+        if (color && !colorPreCompensated) PreCompensateSrgbClearColor(clearPayload, image.format);
         VkClearAttachment clear{};
         clear.aspectMask = aspect;
         clear.clearValue.color = MakeVkClearColorValue(clearPayload, false);

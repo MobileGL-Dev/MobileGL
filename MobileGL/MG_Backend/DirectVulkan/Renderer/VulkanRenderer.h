@@ -633,6 +633,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Bool color = false;
             VkImageAspectFlags depthStencil = 0;
             ClearAttachmentPayload colorPayload{};
+            // colorPayload against the window format and GL_FRAMEBUFFER_SRGB as they were at the
+            // glClear (PreCompensateSrgbClearColor): the standalone clear a present or another
+            // use of the window records later must not read that state again, after the verb.
+            ClearAttachmentPayload colorPayloadCompensated{};
             ClearAttachmentPayload depthStencilPayload{};
             Bool Pending() const { return color || depthStencil != 0; }
         };
@@ -642,8 +646,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void MaterializeDefaultWirePendingClear();
         void FoldDefaultWirePendingClear(RenderPassEntry& begun, Uint64& variantKey, VkClearValue* merged);
         // Records a clear of `area` of one wire image in a single-attachment pass of its own.
+        // `colorPreCompensated`: the payload already went through PreCompensateSrgbClearColor.
         void RecordWireImageClear(WireImage& image, VkImageAspectFlags aspect, const ClearAttachmentPayload& payload,
-                                  const VkRect2D& area, Bool textureSurface);
+                                  const VkRect2D& area, Bool textureSurface, Bool colorPreCompensated = false);
         static void NoteWirePendingClear(const WireImage& image, VkImageAspectFlags aspects, const VkClearValue& value);
         VkRenderPass WireClearVariant(RenderPassEntry& begun, Uint64 variantKey);
         Bool BeginWireDrawPassFolding(FrameContext::FrameData& frame, RenderPassEntry& begun, Uint64 variantKey,

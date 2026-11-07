@@ -1464,6 +1464,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (color) {
             pending.color = true;
             pending.colorPayload = payload;
+            pending.colorPayloadCompensated = payload;
+            PreCompensateSrgbClearColor(pending.colorPayloadCompensated, m_swapchainObject.GetSurfaceFormat().format);
             m_swapchainObject.SetImageContentDefined(index, true);
         }
         if (depthStencil & VK_IMAGE_ASPECT_DEPTH_BIT) pending.depthStencilPayload.depth = payload.depth;
@@ -1494,7 +1496,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             image.image = m_swapchainObject.GetImage(pending.swapchainImageIndex);
             image.format = m_swapchainObject.GetSurfaceFormat().format;
             image.layout = m_swapchainObject.GetImageLayout(pending.swapchainImageIndex);
-            RecordWireImageClear(image, VK_IMAGE_ASPECT_COLOR_BIT, pending.colorPayload, area, false);
+            RecordWireImageClear(image, VK_IMAGE_ASPECT_COLOR_BIT, pending.colorPayloadCompensated, area, false,
+                                 /*colorPreCompensated=*/true);
         }
         if (pending.depthStencil && m_swapchainObject.GetDepthStencilImage(pending.swapchainImageIndex)) {
             image.aspect = pending.depthStencil;
