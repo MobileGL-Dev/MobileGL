@@ -169,6 +169,12 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // (BackendCaps::EmulatesClipDistance). Part of the frontend fingerprint, not a separate
         // L1 bit: it changes the parsed source (the reserved enables uniform), not only phase B.
         Bool EmulatesClipDistance() const { return HasBackend() && params.EmulatesClipDistance; }
+        // BackendCaps::MasksNativeClipDistances, same fingerprint reasoning.
+        Bool MasksNativeClipDistances() const {
+            return HasBackend() && params.MasksNativeClipDistances && !params.EmulatesClipDistance;
+        }
+        // Either way the program needs the reserved enables uniform.
+        Bool NeedsClipDistanceEnables() const { return EmulatesClipDistance() || MasksNativeClipDistances(); }
         // Matches the historical rule exactly: with no active backend every extension counts
         // as advertised, because the frontend then has nothing to gate against.
         Bool IsExtensionAdvertised(GLExtension extension) const {

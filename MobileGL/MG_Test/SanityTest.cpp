@@ -715,10 +715,14 @@ TEST(DirectVulkanSanity, GatesClipDistancesOnTheShaderClipDistanceFeature) {
     EXPECT_TRUE(backend.GetDynamicParameters().EmulatesClipDistance);
     EXPECT_EQ(backend.GetDynamicParameters().MaxClipDistances, 8);
 
+    EXPECT_FALSE(backend.GetDynamicParameters().MasksNativeClipDistances);
+
     caps.SupportsShaderClipDistance = true;
     caps.MaxClipDistances = 8;
     backend.ApplyVulkanCapabilitiesForTesting(caps);
     EXPECT_FALSE(backend.GetDynamicParameters().EmulatesClipDistance);
+    // Vulkan has no per-distance enable state, so the native path masks in the shader.
+    EXPECT_TRUE(backend.GetDynamicParameters().MasksNativeClipDistances);
     EXPECT_EQ(backend.GetDynamicParameters().MaxClipDistances, 8);
 }
 

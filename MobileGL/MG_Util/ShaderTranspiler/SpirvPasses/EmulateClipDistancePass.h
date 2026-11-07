@@ -58,6 +58,10 @@ namespace MobileGL {
             // member index, whole-gl_PerVertex loads/stores/copies, and a pointer into the
             // built-in that escapes into an opcode the pass cannot retype (a function argument).
             //
+            // NATIVE MASKING (EmulateClipDistanceOptions::nativeBuiltin) is the same producer
+            // rewrite for a backend that hosts the built-in but cannot switch distances off: the
+            // masked values go back into gl_ClipDistance instead of into carriers.
+            //
             // One module per run; the program-wide contract (one shared location, which stage
             // is the producer, every stage rewritten or none) is owned by
             // ShaderCompiler::EmulateClipDistanceForProgram, the only caller.
@@ -79,6 +83,14 @@ namespace MobileGL {
                 // Producer only: the default-block uniform member holding the enable bits. When
                 // the module has no such member every distance counts as enabled.
                 String enablesMemberName;
+                // Producer only: the backend HOSTS the built-in (a Vulkan device with
+                // shaderClipDistance) but has no per-distance enable state - Vulkan clips by
+                // every distance a shader writes. Instead of carriers, the producer writes
+                // `enabled(i) ? d[i] : 1.0` back into gl_ClipDistance itself at the same flush
+                // points, so hardware clipping stays and a disabled distance clips nothing. The
+                // capability is kept, nothing else in the program is touched, and gl_in /
+                // fragment-stage reads stay native.
+                Bool nativeBuiltin = false;
             };
 
             struct EmulateClipDistanceReport {

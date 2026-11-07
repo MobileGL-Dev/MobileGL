@@ -339,6 +339,69 @@ void main() {
     EXPECT_TRUE(Contains(Disassemble(modules[0]), "mg_ClipDistanceEnables"));
 }
 
+// Native masking (Vulkan with shaderClipDistance): the producer keeps the built-in and the
+// capability, writes `enabled(i) ? d[i] : 1.0` back into it, and nothing else changes - no
+// carriers, no discard, the fragment stage byte-identical.
+TEST(EmulateClipDistance, NativeMaskingWritesTheMaskedDistancesBackIntoTheBuiltIn) {
+    Vector<GLenum> types;
+    auto modules = CompileProgramToSpirv({{GL_VERTEX_SHADER, kEightPlaneVertex}, {GL_FRAGMENT_SHADER, kPlainFragment}},
+                                         types);
+    ASSERT_EQ(modules.size(), 2u);
+    const auto fragmentBefore = modules[1];
+    ShaderCompiler::ClipDistanceEmulationOutcome outcome;
+    ASSERT_TRUE(ShaderCompiler::EmulateClipDistanceForProgram(modules, types, false, kBudget, outcome, true, true,
+                                                              /*nativeMask=*/true));
+    EXPECT_TRUE(outcome.emulated) << outcome.declineDetail;
+    EXPECT_EQ(outcome.distanceCount, 8u);
+    EXPECT_TRUE(outcome.enablesFound);
+    EXPECT_EQ(modules[1], fragmentBefore);
+    const String vertexRaw = Disassemble(modules[0]);
+    EXPECT_TRUE(Contains(vertexRaw, "OpCapability ClipDistance"));
+    EXPECT_TRUE(Contains(vertexRaw, "OpBitwiseAnd"));
+    EXPECT_FALSE(Contains(vertexRaw, "mg_ClipDistanceEmu0"));
+    SanitizeAll(modules);
+    for (const auto& module : modules)
+        EXPECT_TRUE(Validates(module));
+    EXPECT_FALSE(Contains(Disassemble(modules[1]), "OpKill"));
+}
+
+// Native masking leaves gl_in[] reads native: a geometry stage that reads the vertex stage's
+// distances and re-emits them is the producer, and the vertex stage is untouched.
+TEST(EmulateClipDistance, NativeMaskingKeepsGlInReadsAndMasksOnlyTheProducer) {
+    const char* vertex = R"(#version 330 core
+void main() {
+    gl_Position = vec4(float(gl_VertexID), 0.0, 0.0, 1.0);
+    gl_ClipDistance[0] = gl_Position.x;
+}
+)";
+    const char* geometry = R"(#version 330 core
+uniform uint mg_ClipDistanceEnables;
+layout(triangles) in;
+layout(triangle_strip, max_vertices = 3) out;
+void main() {
+    for (int i = 0; i < 3; ++i) {
+        gl_Position = gl_in[i].gl_Position;
+        gl_ClipDistance[0] = gl_in[i].gl_ClipDistance[0];
+        EmitVertex();
+    }
+}
+)";
+    Vector<GLenum> types;
+    auto modules = CompileProgramToSpirv(
+        {{GL_VERTEX_SHADER, vertex}, {GL_GEOMETRY_SHADER, geometry}, {GL_FRAGMENT_SHADER, kPlainFragment}}, types);
+    ASSERT_EQ(modules.size(), 3u);
+    const auto vertexBefore = modules[0];
+    ShaderCompiler::ClipDistanceEmulationOutcome outcome;
+    ASSERT_TRUE(ShaderCompiler::EmulateClipDistanceForProgram(modules, types, false, kBudget, outcome, true, true,
+                                                              /*nativeMask=*/true));
+    EXPECT_TRUE(outcome.emulated) << outcome.declineDetail;
+    EXPECT_TRUE(outcome.enablesFound);
+    EXPECT_EQ(modules[0], vertexBefore);
+    SanitizeAll(modules);
+    for (const auto& module : modules)
+        EXPECT_TRUE(Validates(module));
+}
+
 TEST(EmulateClipDistance, TheEnablesShimArmsOnlyOnAnEmulatingBackendAndOnlyWhereItIsNamed) {
     CompileEnv emulating{};
     emulating.backend = BackendType::DirectGLES;
@@ -365,4 +428,12 @@ TEST(EmulateClipDistance, TheEnablesShimArmsOnlyOnAnEmulatingBackendAndOnlyWhere
     source = nonClipping;
     MG_Util::ShaderTranspiler::PreprocessShaderSource(ShaderStage::Vertex, source, emulating);
     EXPECT_FALSE(Contains(source, MG_Util::ShaderTranspiler::CLIP_DISTANCE_ENABLES_UNIFORM_NAME)) << source;
+
+    // A native backend that masks in the shader (Magma) needs the uniform too.
+    CompileEnv masking = native;
+    masking.backend = BackendType::DirectVulkan;
+    masking.params.MasksNativeClipDistances = true;
+    source = vertex;
+    MG_Util::ShaderTranspiler::PreprocessShaderSource(ShaderStage::Vertex, source, masking);
+    EXPECT_TRUE(Contains(source, MG_Util::ShaderTranspiler::CLIP_DISTANCE_ENABLES_UNIFORM_NAME)) << source;
 }

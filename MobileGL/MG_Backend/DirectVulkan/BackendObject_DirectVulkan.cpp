@@ -1366,11 +1366,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             break;
         }
         m_dynamicParameters.EmulatesClipDistance = emulateClipDistance;
+        // Hosted natively, but Vulkan has no per-distance enable state: apply GL_CLIP_DISTANCEi
+        // in the producing stage instead (EmulateClipDistanceOptions::nativeBuiltin).
+        m_dynamicParameters.MasksNativeClipDistances = !emulateClipDistance && m_vulkanCaps.SupportsShaderClipDistance;
         m_dynamicParameters.MaxClipDistances =
             emulateClipDistance ? 8
                                 : (m_vulkanCaps.SupportsShaderClipDistance ? std::max(m_vulkanCaps.MaxClipDistances, 0) : 0);
         MGLOG_I("DirectVulkan: gl_ClipDistance %s (GL_MAX_CLIP_DISTANCES = %d)",
-                emulateClipDistance ? "EMULATED (varyings + fragment discard)" : "native", m_dynamicParameters.MaxClipDistances);
+                emulateClipDistance ? "EMULATED (varyings + fragment discard)"
+                                    : (m_dynamicParameters.MasksNativeClipDistances
+                                           ? "native, GL_CLIP_DISTANCEi applied in the shader"
+                                           : "unsupported"),
+                m_dynamicParameters.MaxClipDistances);
         // The cull pair, gated on its own feature. shaderCullDistance is separate from
         // shaderClipDistance and VulkanRenderer enables it independently, so it gets its own
         // gate rather than riding on the clip one.

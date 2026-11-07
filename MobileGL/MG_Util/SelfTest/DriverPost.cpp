@@ -2845,8 +2845,9 @@ namespace MobileGL::MG_Util::SelfTest {
             if (MG_Config::Features.ClipDistanceEmulation == MG_Config::QuirkOverride::ForceOff) emulate = false;
             if (!emulate && hasFeature) {
                 builder.Pass("shaderClipDistance",
-                             format("native ({} distances); GL_CLIP_DISTANCEi enables are not applied on this backend "
-                                    "yet, so every distance a shader writes clips",
+                             format("native ({} distances); Vulkan has no per-distance enable state, so MobileGL "
+                                    "applies GL_CLIP_DISTANCEi in the last pre-rasterization stage (a disabled "
+                                    "distance is written as +1)",
                                     properties.limits.maxClipDistances));
             } else if (emulate) {
                 builder.Warn("shaderClipDistance",

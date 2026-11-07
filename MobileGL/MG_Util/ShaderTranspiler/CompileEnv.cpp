@@ -79,6 +79,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // source pipeline declares the reserved enables uniform in every pre-rasterization
         // stage that names gl_ClipDistance, so glslang parses a different source.
         HashValue(state, env.params.EmulatesClipDistance);
+        HashValue(state, env.params.MasksNativeClipDistances);
         // The cull-distance pair, added when the GL 4.6 API-surface wave made them env-derived:
         // they were bare literals (8/8) in BuildTBuiltInResource while no backend had ever been
         // asked whether it can host a cull distance. Exactly the MaxClipDistances class - glslang

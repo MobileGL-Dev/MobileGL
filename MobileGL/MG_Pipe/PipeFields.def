@@ -389,7 +389,7 @@
     F(FragmentInterpolationOffsetBits) F(SupportsWideLines) \
     F(SupportsDistinctDepthStencilAttachments) F(PerLayerFramebufferAttachmentTargets) \
     F(SupportsShaderFloat64) F(SupportsFloat64VertexAttributes) F(SupportsTessellationPointSize) \
-    F(SupportsGeometryPointSize) F(EmulatesClipDistance) F(MaxShaderStorageBlockSize) F(SubgroupSize) \
+    F(SupportsGeometryPointSize) F(EmulatesClipDistance) F(MasksNativeClipDistances) F(MaxShaderStorageBlockSize) F(SubgroupSize) \
     F(SubgroupSupportedStages) F(SubgroupSupportedFeatures) F(SamplePositions) \
     F(SamplePositionCountMask) F(SubgroupQuadOperationsInAllStages) \
     F(GpuVendor) F(SupportsFragmentShadingRate) F(SupportsPrimitiveFragmentShadingRate) \

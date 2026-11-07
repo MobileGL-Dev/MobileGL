@@ -162,8 +162,11 @@ namespace MobileGL::MG_State::GLState {
             m_phaseA->in.env != nullptr && m_phaseA->in.env->DemotesGeometryPointSize();
         // Part of the frontend fingerprint (CompileEnv), so the L1 key already separates the two.
         const Bool emulateClipDistance = m_phaseA->in.env != nullptr && m_phaseA->in.env->EmulatesClipDistance();
+        const Bool maskNativeClipDistance =
+            m_phaseA->in.env != nullptr && m_phaseA->in.env->MasksNativeClipDistances();
         GenerateSpirv(handoff, externalIndex, deferOutputValidationForDirectVulkan, enableSpirvValidation,
-                      nativeFloat64, demoteTessellationPointSize, demoteGeometryPointSize, emulateClipDistance);
+                      nativeFloat64, demoteTessellationPointSize, demoteGeometryPointSize, emulateClipDistance,
+                      maskNativeClipDistance);
         // GlslangToSpv was the only consumer of the parsed ASTs; everything after this point
         // works on the SPIR-V and on the TProgram's own self-contained reflection pool. Drop
         // them here rather than at the end of the body, which is ~87% of this node's runtime
@@ -223,7 +226,7 @@ namespace MobileGL::MG_State::GLState {
                                          const Bool deferOutputValidationForDirectVulkan,
                                          const Bool enableSpirvValidation, const Bool nativeFloat64,
                                          const Bool demoteTessellationPointSize, const Bool demoteGeometryPointSize,
-                                         const Bool emulateClipDistance) {
+                                         const Bool emulateClipDistance, const Bool maskNativeClipDistance) {
         /* As we passed first stage compilation/linking,
          * we'll assume all the operations here should
          * pass. We may be able to employ some optimizations
@@ -285,16 +288,25 @@ namespace MobileGL::MG_State::GLState {
         // to clipping by every distance. Running first adds the read that keeps it alive. The
         // point-size demotion below places its carrier past these carriers.
         artifacts.clipDistanceEmulated = false;
-        if (emulateClipDistance) {
+        if (emulateClipDistance || maskNativeClipDistance) {
             ShaderCompiler::ClipDistanceEmulationOutcome outcome;
             if (!ShaderCompiler::EmulateClipDistanceForProgram(
                     artifacts.generatedSpirv, handoff.shaderTypes, handoff.captureRequestsClipDistance,
                     kClipDistanceCarrierLocationBudget, outcome, !deferOutputValidationForDirectVulkan,
-                    enableSpirvValidation)) {
+                    enableSpirvValidation, maskNativeClipDistance)) {
                 DeferLog(std::format("ProgramObject {}: clip-distance emulation failed in the optimizer; the "
                                      "program keeps gl_ClipDistance, which this backend cannot host",
                                      externalIndex),
                          FirstTimeWarnLevel(g_clipDistanceOptimizerFailureReported));
+            } else if (outcome.emulated && maskNativeClipDistance) {
+                // Native masking: the built-in is still hosted, only the enables are applied in
+                // the shader. Not "emulated" for the artifact (nothing reads it differently).
+                const Bool first = !g_clipDistanceEmulationReported.test_and_set(std::memory_order_relaxed);
+                DeferLog(std::format("ProgramObject {}: GL_CLIP_DISTANCEi enables applied in the shader to {} "
+                                     "native gl_ClipDistance output(s){}",
+                                     externalIndex, outcome.distanceCount,
+                                     outcome.enablesFound ? "" : "; no enables uniform, every distance clips"),
+                         first ? MOBILEGL_LOG_LEVEL_INFO : MOBILEGL_LOG_LEVEL_DEBUG);
             } else if (outcome.emulated) {
                 artifacts.clipDistanceEmulated = true;
                 // THE ARMING SIGNAL, INFO and latched: the integration lane that pins

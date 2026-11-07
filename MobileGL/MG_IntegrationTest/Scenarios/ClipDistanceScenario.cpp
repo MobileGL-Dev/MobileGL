@@ -31,9 +31,9 @@
 // that lane Espryt EMULATES clip distances (EmulateClipDistancePass: varyings, a fragment
 // discard and a per-draw enables uniform), and the per-distance cases below run and pass
 // there. That is the emulation every Mali device takes. lavapipe hosts shaderClipDistance, so
-// Magma clips natively, Vulkan has no per-distance enable state, and the two per-distance cases
-// still skip on that lane (MOBILEGL_CLIP_DISTANCE_EMULATION=1 runs them green through the
-// emulation). The native ES path - Adreno, which honors GL_CLIP_DISTANCEi_EXT - is pinned on
+// Magma clips natively; Vulkan has no per-distance enable state, so Magma applies GL_CLIP_DISTANCEi in
+// the producing stage (BackendCaps::MasksNativeClipDistances) and the per-distance cases run
+// green there too. The native ES path - Adreno, which honors GL_CLIP_DISTANCEi_EXT - is pinned on
 // the device, through KHR-GLxx.clip_distance.functional.
 //
 // Every case disables all eight distances on entry rather than assuming they start off:
@@ -200,9 +200,10 @@ void main() {
             // EmulateClipDistancePass gives those semantics to every backend that EMULATES clip
             // distances (the disabled slots are forced to +1 from a per-draw uniform, so nothing
             // joins the pipeline key), and the DirectGLES loader arms that emulation on a driver
-            // whose native clip distances ignore the enables. Magma's native path does not apply
-            // the enables yet. The cases that need the real semantics gate on this probe and say
-            // so when they skip, rather than being deleted or silently weakened.
+            // whose native clip distances ignore the enables. Magma's native path applies them in
+            // the producing stage (MasksNativeClipDistances). The cases that need the real
+            // semantics still gate on this probe and say so if a stack ever skips, rather than
+            // being deleted or silently weakened.
             bool DriverHonorsPerDistanceEnables(GLuint program, GLuint vao) const {
                 for (int i = 0; i < 8; ++i) {
                     glDisable(static_cast<GLenum>(GL_CLIP_DISTANCE0 + i));

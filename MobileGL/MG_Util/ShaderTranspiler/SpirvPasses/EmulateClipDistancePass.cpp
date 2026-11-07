@@ -318,12 +318,18 @@ namespace MobileGL {
                 if (m_options.role == Role::Producer && model == spv::ExecutionModel::TessellationControl) {
                     return decline("a control stage cannot be the last pre-rasterization stage");
                 }
+                const bool native = m_options.nativeBuiltin;
+                if (native && m_options.role != Role::Producer) return decline("native masking outside the producer");
 
                 const ClipSites sites = FindClipSites(ctx);
 
                 // ---- Phase 1: ANALYSIS ONLY. A decline leaves the module byte-identical. ----
                 std::vector<Instruction*> memberChains;    // [clipMember, rest...] on a non-arrayed block
                 std::vector<Instruction*> standaloneVars;  // standalone ClipDistance variables
+                // Native masking: where the masked values are written back to.
+                Instruction* nativeBlockVar = nullptr;
+                uint32_t nativeBlockMember = 0;
+                Instruction* nativeStandaloneVar = nullptr;
                 uint32_t shadowTypeId = 0;
                 String reason;
                 const auto noteShadowType = [&](uint32_t typeId) {
@@ -338,9 +344,12 @@ namespace MobileGL {
                     if (inst.opcode() != spv::Op::OpVariable) continue;
                     const auto storage = static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0));
                     if (storage != spv::StorageClass::Input && storage != spv::StorageClass::Output) continue;
+                    // Native masking leaves every INPUT alone: gl_in[] reads are hosted natively.
+                    if (native && storage == spv::StorageClass::Input) continue;
                     const uint32_t pointeeId = PointeeOf(ctx, inst.type_id());
 
                     if (sites.standaloneVars.count(inst.result_id()) != 0) {
+                        if (native) nativeStandaloneVar = &inst;
                         if (FloatArrayLength(ctx, pointeeId) == 0) {
                             return decline("a standalone gl_ClipDistance that is not a sized float array");
                         }
@@ -370,6 +379,10 @@ namespace MobileGL {
                     }
                     const uint32_t memberTypeId = pointee->GetSingleWordInOperand(clipMember);
                     const uint32_t memberOperand = arrayed ? 2u : 1u; // [vertex,] member, ...
+                    if (native && !arrayed && storage == spv::StorageClass::Output) {
+                        nativeBlockVar = &inst;
+                        nativeBlockMember = clipMember;
+                    }
                     bool declined = false;
                     defUse->ForEachUser(&inst, [&](Instruction* user) {
                         if (declined) return;
@@ -511,6 +524,9 @@ namespace MobileGL {
                 if (!hasAccesses && sites.capability == nullptr && producedCount == 0 && consumedCount == 0) {
                     return Status::SuccessWithoutChange;
                 }
+                if (native && producedCount > 0 && nativeBlockVar == nullptr && nativeStandaloneVar == nullptr) {
+                    return decline("no gl_ClipDistance output to write the masked distances back into");
+                }
 
                 // ---- Phase 2: MUTATION. Nothing below may decline. ----
                 const bool interfaceListsAllGlobals = ctx->module()->version() >= 0x00010400u;
@@ -540,13 +556,22 @@ namespace MobileGL {
                 }
                 for (Instruction* var : standaloneVars) {
                     const uint32_t varId = var->result_id();
+                    if (native) {
+                        // The variable stays the built-in the flush writes; only the shader's
+                        // own accesses move to the shadow.
+                        ctx->ReplaceAllUsesWithPredicate(varId, shadowId, [](Instruction* user) {
+                            return user->opcode() != spv::Op::OpDecorate && user->opcode() != spv::Op::OpName &&
+                                   user->opcode() != spv::Op::OpEntryPoint;
+                        });
+                        continue;
+                    }
                     ctx->KillNamesAndDecorates(varId);
                     RemoveFromInterface(entryPoint, varId);
                     ctx->ReplaceAllUsesWith(varId, shadowId);
                     ctx->KillInst(var);
                 }
                 if (shadowId != 0) RetypeChainUsers(ctx, defUse->GetDef(shadowId));
-                if (sites.capability != nullptr) ctx->KillInst(sites.capability);
+                if (sites.capability != nullptr && !native) ctx->KillInst(sites.capability);
 
                 analysis::Float floatTy(32);
                 const uint32_t floatTypeId = typeMgr->GetTypeInstruction(&floatTy);
@@ -561,8 +586,11 @@ namespace MobileGL {
 
                 // ---- producer: write the carriers ----
                 if (producedCount > 0) {
-                    const Uint32 carrierCount = (producedCount + 3) / 4;
+                    const Uint32 carrierCount = native ? 0 : (producedCount + 3) / 4;
                     uint32_t carriers[kMaxCarriers] = {0, 0};
+                    const uint32_t ptrOutputFloat = typeMgr->FindPointerToType(floatTypeId, spv::StorageClass::Output);
+                    const uint32_t nativeMemberConst =
+                        nativeBlockVar != nullptr ? constMgr->GetSIntConstId(static_cast<int32_t>(nativeBlockMember)) : 0;
                     for (Uint32 k = 0; k < carrierCount; ++k) {
                         carriers[k] = AddGlobalVariable(ctx, vec4TypeId, spv::StorageClass::Output, CarrierName(k));
                         AddLocationDecoration(ctx, carriers[k], m_options.location + k);
@@ -621,6 +649,17 @@ namespace MobileGL {
                                 value = b.AddSelect(floatTypeId, on, value, oneId)->result_id();
                             }
                             values.push_back(value);
+                        }
+                        if (native) {
+                            for (Uint32 i = 0; i < producedCount; ++i) {
+                                const uint32_t index = constMgr->GetUIntConstId(i);
+                                Instruction* ptr =
+                                    nativeBlockVar != nullptr
+                                        ? b.AddAccessChain(ptrOutputFloat, nativeBlockVar->result_id(),
+                                                           {nativeMemberConst, index})
+                                        : b.AddAccessChain(ptrOutputFloat, nativeStandaloneVar->result_id(), {index});
+                                b.AddStore(ptr->result_id(), values[i]);
+                            }
                         }
                         while (values.size() % 4 != 0) values.push_back(oneId);
                         for (Uint32 k = 0; k < carrierCount; ++k) {

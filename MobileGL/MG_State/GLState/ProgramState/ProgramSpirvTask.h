@@ -68,7 +68,7 @@ namespace MobileGL::MG_State::GLState {
         void GenerateSpirv(const ProgramLinkTask::SpirvHandoff& handoff, Uint externalIndex,
                            Bool deferOutputValidationForDirectVulkan, Bool enableSpirvValidation, Bool nativeFloat64,
                            Bool demoteTessellationPointSize, Bool demoteGeometryPointSize,
-                           Bool emulateClipDistance);
+                           Bool emulateClipDistance, Bool maskNativeClipDistance);
         void BuildGlobalUboRouting(const ProgramLinkTask::SpirvHandoff& handoff, Uint externalIndex);
 
         // Worker-side MGLOG replacement, replayed by the join on the GL thread. Same reason as

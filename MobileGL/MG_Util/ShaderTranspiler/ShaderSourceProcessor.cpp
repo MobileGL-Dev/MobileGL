@@ -2041,7 +2041,7 @@ namespace MobileGL {
                 ModernizeLegacyGLSL(stage, source, afterVersion);
                 InjectDepthRangeBuiltinShim(stage, source, afterVersion);
                 InjectNumSamplesBuiltinShim(stage, originalLanguage, source, afterVersion);
-                if (env.EmulatesClipDistance()) InjectClipDistanceEnablesShim(stage, source, afterVersion);
+                if (env.NeedsClipDistanceEnables()) InjectClipDistanceEnablesShim(stage, source, afterVersion);
             }
 
             Vector<String> ExternalSamplerUniformNames(const String& preprocessedSource) {

@@ -676,12 +676,17 @@ namespace MobileGL {
                 // `captureRequestsClipDistance` declines (a capture would need the unmasked
                 // value at a varying the pass does not create); `maxVaryingLocations` is the
                 // carrier budget. Returns false only when the optimizer itself failed.
+                //
+                // `nativeMask`: the backend HOSTS gl_ClipDistance but has no per-distance enable
+                // state (Vulkan). Only the producing stage is rewritten - it writes the masked
+                // values back into the built-in (EmulateClipDistanceOptions::nativeBuiltin) - and
+                // no carrier, location or fragment discard is involved.
                 static Bool EmulateClipDistanceForProgram(Vector<Vector<Uint32>>& modules,
                                                           const Vector<GLenum>& shaderTypes,
                                                           Bool captureRequestsClipDistance, Uint32 maxVaryingLocations,
                                                           ClipDistanceEmulationOutcome& outcome,
                                                           bool validateOutput = true,
-                                                          bool enableSpirvValidation = false);
+                                                          bool enableSpirvValidation = false, bool nativeMask = false);
 
                 // True when the module still declares a 64-bit float type. After
                 // SanitizeAndOptimizeBinary that can only mean DemoteFloat64Pass declined the

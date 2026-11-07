@@ -1222,7 +1222,7 @@ namespace MobileGL {
                                                                const Uint32 maxVaryingLocations,
                                                                ClipDistanceEmulationOutcome& outcome,
                                                                const bool validateOutput,
-                                                               const bool enableSpirvValidation) {
+                                                               const bool enableSpirvValidation, const bool nativeMask) {
                 outcome = {};
                 // Pipeline order: VS, TCS, TES, GS, FS.
                 Int stageIndex[5] = {-1, -1, -1, -1, -1};
@@ -1275,7 +1275,7 @@ namespace MobileGL {
                                                         distanceCount);
                     return true;
                 }
-                const Uint32 carrierCount = (distanceCount + 3) / 4;
+                const Uint32 carrierCount = nativeMask ? 0 : (distanceCount + 3) / 4;
                 if (carrierCount > 0 && carrierLocation + carrierCount > maxVaryingLocations) {
                     outcome.declineDetail = std::format(
                         "the program's varyings already reach location {}, leaving no room for {} clip carrier(s) "
@@ -1292,6 +1292,10 @@ namespace MobileGL {
                     if (moduleIndex < 0) continue;
                     EmulateClipDistanceOptions options;
                     options.location = carrierLocation;
+                    // Native masking touches the producer alone: every other stage hosts the
+                    // built-in, and only the producer's values reach the clipper.
+                    if (nativeMask && !(stage == producer && distanceCount > 0)) continue;
+                    options.nativeBuiltin = nativeMask;
                     if (stage == 4) {
                         options.role = EmulateClipDistanceOptions::Role::Consumer;
                         options.distanceCount = distanceCount;

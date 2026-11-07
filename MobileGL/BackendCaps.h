@@ -358,6 +358,14 @@ namespace MobileGL {
             // overrides the detection in either direction at backend init. Defaults FALSE: true
             // ARMS a rewrite, so the no-backend answer is the one that leaves modules untouched.
             Bool EmulatesClipDistance = false;
+            // The backend HOSTS gl_ClipDistance but has no per-distance enable state: Vulkan
+            // clips by every distance a shader writes, so GL_CLIP_DISTANCEi would mean nothing.
+            // The producing stage then writes `enabled(i) ? d[i] : 1.0` back into the built-in
+            // (EmulateClipDistanceOptions::nativeBuiltin) from the same reserved enables uniform
+            // the emulation uses. DirectVulkan sets it whenever it clips natively; DirectGLES
+            // never does - ES drivers it keeps native passed the POST probe, which checks the
+            // driver honors GL_CLIP_DISTANCEi_EXT itself. Exclusive with EmulatesClipDistance.
+            Bool MasksNativeClipDistances = false;
             Uint64 MaxShaderStorageBlockSize = 128 * 1024 * 1024;
             Uint32 SubgroupSize = 0;
             Uint32 SubgroupSupportedStages = 0;
