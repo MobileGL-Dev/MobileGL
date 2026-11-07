@@ -88,7 +88,9 @@ namespace {
         return ok;
     }
 
-    Bool Contains(const String& haystack, const char* needle) { return haystack.find(needle) != String::npos; }
+    Bool Contains(const String& haystack, const char* needle) {
+        return haystack.find(needle) != String::npos;
+    }
 
     // The shape from the field report (Mali-G615, Espryt): a #version 330 core vertex stage
     // writing all eight distances from uniform planes. The enables uniform is what
@@ -123,8 +125,8 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
 
 TEST(EmulateClipDistance, TheReportedEightPlaneVertexStageClipsByDiscard) {
     Vector<GLenum> types;
-    auto modules = CompileProgramToSpirv({{GL_VERTEX_SHADER, kEightPlaneVertex}, {GL_FRAGMENT_SHADER, kPlainFragment}},
-                                         types);
+    auto modules =
+        CompileProgramToSpirv({{GL_VERTEX_SHADER, kEightPlaneVertex}, {GL_FRAGMENT_SHADER, kPlainFragment}}, types);
     ASSERT_EQ(modules.size(), 2u);
     ASSERT_TRUE(Contains(Disassemble(modules[0]), "OpCapability ClipDistance"));
 
@@ -291,8 +293,8 @@ void main() {
 
 TEST(EmulateClipDistance, ACaptureOfGlClipDistanceDeclines) {
     Vector<GLenum> types;
-    auto modules = CompileProgramToSpirv({{GL_VERTEX_SHADER, kEightPlaneVertex}, {GL_FRAGMENT_SHADER, kPlainFragment}},
-                                         types);
+    auto modules =
+        CompileProgramToSpirv({{GL_VERTEX_SHADER, kEightPlaneVertex}, {GL_FRAGMENT_SHADER, kPlainFragment}}, types);
     ASSERT_EQ(modules.size(), 2u);
     const auto before = modules;
     ShaderCompiler::ClipDistanceEmulationOutcome outcome;
@@ -344,8 +346,8 @@ void main() {
 // carriers, no discard, the fragment stage byte-identical.
 TEST(EmulateClipDistance, NativeMaskingWritesTheMaskedDistancesBackIntoTheBuiltIn) {
     Vector<GLenum> types;
-    auto modules = CompileProgramToSpirv({{GL_VERTEX_SHADER, kEightPlaneVertex}, {GL_FRAGMENT_SHADER, kPlainFragment}},
-                                         types);
+    auto modules =
+        CompileProgramToSpirv({{GL_VERTEX_SHADER, kEightPlaneVertex}, {GL_FRAGMENT_SHADER, kPlainFragment}}, types);
     ASSERT_EQ(modules.size(), 2u);
     const auto fragmentBefore = modules[1];
     ShaderCompiler::ClipDistanceEmulationOutcome outcome;

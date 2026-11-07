@@ -2098,12 +2098,15 @@ namespace MobileGL::MG_Util::SelfTest {
             "    gl_ClipDistance[0] = 1.0;\n"
             "    gl_ClipDistance[1] = 1.0;\n"
             "}\n";
-        const char* const kClipDistanceProbeFragmentSource = "#version 300 es\n"
-                                                             "precision mediump float;\n"
-                                                             "layout(location = 0) out vec4 mg_probeColor;\n"
-                                                             "void main() { mg_probeColor = vec4(0.0, 1.0, 0.0, 1.0); }\n";
+        const char* const kClipDistanceProbeFragmentSource =
+            "#version 300 es\n"
+            "precision mediump float;\n"
+            "layout(location = 0) out vec4 mg_probeColor;\n"
+            "void main() { mg_probeColor = vec4(0.0, 1.0, 0.0, 1.0); }\n";
 
-        Bool IsProbeGreen(const GLubyte* pixel) { return pixel[0] < 64 && pixel[1] > 192; }
+        Bool IsProbeGreen(const GLubyte* pixel) {
+            return pixel[0] < 64 && pixel[1] > 192;
+        }
 
         // One draw into the bound 4x1 target, cleared red first. Returns false when the draw or
         // the read-back raised an error (inconclusive).

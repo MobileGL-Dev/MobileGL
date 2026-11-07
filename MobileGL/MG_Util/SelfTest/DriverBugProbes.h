@@ -116,8 +116,8 @@ namespace MobileGL::MG_Util::SelfTest {
     // must paint whatever the driver does with enables, or the extension's draw itself is broken
     // and the probe has nothing to say. Then the SUBJECT, writing gl_ClipDistance[0] = x: with
     // distance 0 enabled the left half must vanish, and with it disabled nothing may vanish
-    // (Mesa's llvmpipe ES driver clips by every written distance regardless of the enables, a
-    // wrong answer GL applications see).
+    // (the llvmpipe ES driver clips by every written distance regardless of the enables, a wrong
+    // answer GL applications see).
     //
     // Requires the extension; the caller only runs it where the extension string names it.
     // Restores every piece of GL state it touches and leaves both distances disabled - the

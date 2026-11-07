@@ -252,6 +252,260 @@ namespace MobileGL {
                     }
                     return false;
                 }
+
+                // Every redirected access must agree on one gl_ClipDistance array type.
+                bool NoteShadowType(uint32_t& shadowTypeId, uint32_t typeId) {
+                    if (shadowTypeId == 0) {
+                        shadowTypeId = typeId;
+                        return true;
+                    }
+                    return shadowTypeId == typeId;
+                }
+
+                // A chain that stops short of the gl_PerVertex member (a whole block or gl_in[i]
+                // pointer) is harmless unless something then reaches the clip member through it or
+                // copies the whole struct.
+                bool ShortChainTouchesClipMember(IRContext* ctx, Instruction* chain, uint32_t clipMember) {
+                    bool touches = false;
+                    ctx->get_def_use_mgr()->ForEachUser(chain, [&](Instruction* next) {
+                        if (next->opcode() == spv::Op::OpAccessChain ||
+                            next->opcode() == spv::Op::OpInBoundsAccessChain) {
+                            uint32_t member = 0;
+                            if (next->NumInOperands() < 2 ||
+                                !PlainConstantValue(ctx, next->GetSingleWordInOperand(1), member) ||
+                                member == clipMember) {
+                                touches = true;
+                            }
+                        } else if (next->opcode() != spv::Op::OpName) {
+                            touches = true; // whole-struct load/store/copy
+                        }
+                    });
+                    return touches;
+                }
+
+                struct BlockVariable {
+                    Instruction* var = nullptr;
+                    spv::StorageClass storage = spv::StorageClass::Output;
+                    bool arrayed = false;
+                    uint32_t clipMember = 0;
+                    uint32_t memberTypeId = 0;
+                };
+
+                // Classifies every use of a gl_PerVertex block variable: chains onto the clip member
+                // of a non-arrayed block are collected, anything else that reaches it declines.
+                bool CollectBlockClipChains(IRContext* ctx, const BlockVariable& block, uint32_t& shadowTypeId,
+                                            std::vector<Instruction*>& memberChains, String& reason) {
+                    const uint32_t memberOperand = block.arrayed ? 2u : 1u; // [vertex,] member, ...
+                    bool declined = false;
+                    ctx->get_def_use_mgr()->ForEachUser(block.var, [&](Instruction* user) {
+                        if (declined) return;
+                        switch (user->opcode()) {
+                        case spv::Op::OpEntryPoint:
+                        case spv::Op::OpName:
+                        case spv::Op::OpDecorate:
+                            return;
+                        case spv::Op::OpAccessChain:
+                        case spv::Op::OpInBoundsAccessChain: {
+                            if (user->NumInOperands() <= memberOperand) {
+                                if (ShortChainTouchesClipMember(ctx, user, block.clipMember)) {
+                                    declined = true;
+                                    reason = "a split access chain or whole-gl_PerVertex copy reaching gl_ClipDistance";
+                                }
+                                return;
+                            }
+                            uint32_t member = 0;
+                            if (!PlainConstantValue(ctx, user->GetSingleWordInOperand(memberOperand), member)) {
+                                declined = true;
+                                reason = "a non-constant gl_PerVertex member index";
+                                return;
+                            }
+                            if (member != block.clipMember) return; // another member
+                            if (block.arrayed) {
+                                declined = true;
+                                reason = block.storage == spv::StorageClass::Input ? "a gl_in[].gl_ClipDistance read"
+                                                                                   : "a gl_out[].gl_ClipDistance write";
+                                return;
+                            }
+                            if (!NoteShadowType(shadowTypeId, block.memberTypeId)) {
+                                declined = true;
+                                reason = "two differently sized gl_ClipDistance arrays";
+                                return;
+                            }
+                            if (!PointerUsesAreRetypable(ctx, user, reason)) {
+                                declined = true;
+                                return;
+                            }
+                            memberChains.push_back(user);
+                            return;
+                        }
+                        case spv::Op::OpLoad:
+                        case spv::Op::OpStore:
+                        case spv::Op::OpCopyMemory:
+                            declined = true;
+                            reason = "a whole-aggregate load/store/copy of the gl_PerVertex interface";
+                            return;
+                        default:
+                            declined = true;
+                            reason = std::format("SPIR-V opcode {} reaching the gl_PerVertex interface",
+                                                 static_cast<uint32_t>(user->opcode()));
+                            return;
+                        }
+                    });
+                    return !declined;
+                }
+
+                // The clip member type of the stage's gl_PerVertex OUTPUT block, or 0. A producer with
+                // nothing redirected may still have declared the length the driver planned with.
+                uint32_t DeclaredOutputClipType(IRContext* ctx, const ClipSites& sites) {
+                    for (Instruction& inst : ctx->module()->types_values()) {
+                        if (inst.opcode() != spv::Op::OpVariable ||
+                            static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0)) !=
+                                spv::StorageClass::Output) {
+                            continue;
+                        }
+                        Instruction* type = ctx->get_def_use_mgr()->GetDef(PointeeOf(ctx, inst.type_id()));
+                        uint32_t member = 0;
+                        if (type != nullptr && type->opcode() == spv::Op::OpTypeStruct &&
+                            ClipMemberOf(sites, type->result_id(), member)) {
+                            return type->GetSingleWordInOperand(member);
+                        }
+                    }
+                    return 0;
+                }
+
+                struct EnablesUniform {
+                    uint32_t varId = 0;
+                    uint32_t memberIndex = 0;
+                    uint32_t typeId = 0;
+                };
+
+                // The producer's enables uniform: a 32-bit integer member, by name, of a
+                // Uniform-storage struct.
+                EnablesUniform FindEnablesUniform(IRContext* ctx, const String& memberName) {
+                    EnablesUniform found;
+                    for (Instruction& debug : ctx->module()->debugs2()) {
+                        if (debug.opcode() != spv::Op::OpMemberName || debug.NumInOperands() < 3) continue;
+                        if (debug.GetOperand(2).AsString() != memberName) continue;
+                        const uint32_t structId = debug.GetSingleWordInOperand(0);
+                        const uint32_t member = debug.GetSingleWordInOperand(1);
+                        Instruction* structType = ctx->get_def_use_mgr()->GetDef(structId);
+                        if (structType == nullptr || structType->opcode() != spv::Op::OpTypeStruct ||
+                            member >= structType->NumInOperands()) {
+                            continue;
+                        }
+                        const uint32_t memberType = structType->GetSingleWordInOperand(member);
+                        if (!IsInt32Type(ctx, memberType)) continue;
+                        for (Instruction& var : ctx->module()->types_values()) {
+                            if (var.opcode() == spv::Op::OpVariable &&
+                                static_cast<spv::StorageClass>(var.GetSingleWordInOperand(0)) ==
+                                    spv::StorageClass::Uniform &&
+                                PointeeOf(ctx, var.type_id()) == structId) {
+                                return {var.result_id(), member, memberType};
+                            }
+                        }
+                    }
+                    return found;
+                }
+
+                // Where the producer writes its distances out: before each vertex a geometry stage
+                // emits, else at the entry function's returns.
+                std::vector<Instruction*> FlushSites(IRContext* ctx, Instruction* entryPoint, bool isGeometry) {
+                    std::vector<Instruction*> sites;
+                    if (isGeometry) {
+                        for (auto& function : *ctx->module()) {
+                            function.ForEachInst([&](Instruction* inst) {
+                                if (inst->opcode() == spv::Op::OpEmitVertex ||
+                                    inst->opcode() == spv::Op::OpEmitStreamVertex) {
+                                    sites.push_back(inst);
+                                }
+                            });
+                        }
+                    } else if (Function* entry = EntryFunction(ctx, entryPoint)) {
+                        entry->ForEachInst([&](Instruction* inst) {
+                            if (inst->opcode() == spv::Op::OpReturn || inst->opcode() == spv::Op::OpReturnValue) {
+                                sites.push_back(inst);
+                            }
+                        });
+                    }
+                    return sites;
+                }
+
+                struct ScalarIds {
+                    uint32_t floatType = 0;
+                    uint32_t vec4Type = 0;
+                    uint32_t boolType = 0;
+                    uint32_t one = 0;
+                    uint32_t zero = 0;
+                    uint32_t ptrPrivateFloat = 0;
+                };
+
+                ScalarIds MakeScalarIds(IRContext* ctx) {
+                    auto* typeMgr = ctx->get_type_mgr();
+                    ScalarIds ids;
+                    analysis::Float floatTy(32);
+                    ids.floatType = typeMgr->GetTypeInstruction(&floatTy);
+                    analysis::Vector vec4Ty(typeMgr->GetRegisteredType(&floatTy), 4);
+                    ids.vec4Type = typeMgr->GetTypeInstruction(&vec4Ty);
+                    analysis::Bool boolTy;
+                    ids.boolType = typeMgr->GetTypeInstruction(&boolTy);
+                    ids.one = ctx->get_constant_mgr()->GetFloatConstId(1.0f);
+                    ids.zero = ctx->get_constant_mgr()->GetFloatConstId(0.0f);
+                    ids.ptrPrivateFloat = typeMgr->FindPointerToType(ids.floatType, spv::StorageClass::Private);
+                    return ids;
+                }
+
+                // Fragment stage: load the carriers at the top of the entry function, serve the
+                // shadow's gl_ClipDistance reads from them, and kill on any negative distance.
+                void EmitCarrierDiscard(IRContext* ctx, Instruction* entryPoint, const ScalarIds& ids,
+                                        Uint32 consumedCount, Uint32 location, uint32_t shadowId,
+                                        uint32_t shadowLength) {
+                    Function* entry = EntryFunction(ctx, entryPoint);
+                    if (entry == nullptr || entry->begin() == entry->end()) return;
+                    auto* constMgr = ctx->get_constant_mgr();
+                    const Uint32 carrierCount = (consumedCount + 3) / 4;
+                    uint32_t carriers[EmulateClipDistancePass::kMaxCarriers] = {0, 0};
+                    for (Uint32 k = 0; k < carrierCount; ++k) {
+                        carriers[k] = AddGlobalVariable(ctx, ids.vec4Type, spv::StorageClass::Input,
+                                                        EmulateClipDistancePass::CarrierName(k));
+                        AddLocationDecoration(ctx, carriers[k], location + k);
+                        entryPoint->AddOperand({SPV_OPERAND_TYPE_ID, {carriers[k]}});
+                    }
+                    BasicBlock* head = &*entry->begin();
+                    auto split = head->begin();
+                    while (split != head->end() && split->opcode() == spv::Op::OpVariable)
+                        ++split;
+                    BasicBlock* rest = head->SplitBasicBlock(ctx, ctx->TakeNextId(), split);
+
+                    InstructionBuilder b(ctx, head, kBuilderAnalyses);
+                    uint32_t loaded[EmulateClipDistancePass::kMaxCarriers] = {0, 0};
+                    for (Uint32 k = 0; k < carrierCount; ++k) {
+                        loaded[k] = b.AddLoad(ids.vec4Type, carriers[k])->result_id();
+                    }
+                    uint32_t anyNegative = 0;
+                    for (Uint32 i = 0; i < consumedCount; ++i) {
+                        const uint32_t component =
+                            b.AddCompositeExtract(ids.floatType, loaded[i / 4], {i % 4})->result_id();
+                        if (shadowId != 0 && i < shadowLength) {
+                            Instruction* ptr =
+                                b.AddAccessChain(ids.ptrPrivateFloat, shadowId, {constMgr->GetUIntConstId(i)});
+                            b.AddStore(ptr->result_id(), component);
+                        }
+                        const uint32_t negative =
+                            b.AddBinaryOp(ids.boolType, spv::Op::OpFOrdLessThan, component, ids.zero)->result_id();
+                        anyNegative =
+                            anyNegative == 0
+                                ? negative
+                                : b.AddBinaryOp(ids.boolType, spv::Op::OpLogicalOr, anyNegative, negative)->result_id();
+                    }
+                    const uint32_t killLabel = ctx->TakeNextId();
+                    b.AddConditionalBranch(anyNegative, killLabel, rest->id(), rest->id());
+
+                    auto killBlock = spvtools::MakeUnique<BasicBlock>(spvtools::MakeUnique<Instruction>(
+                        ctx, spv::Op::OpLabel, 0, killLabel, std::initializer_list<Operand>{}));
+                    killBlock->AddInstruction(spvtools::MakeUnique<Instruction>(ctx, spv::Op::OpKill, 0, 0,
+                                                                                std::initializer_list<Operand>{}));
+                    entry->InsertBasicBlockAfter(std::move(killBlock), head);
+                }
             } // namespace
 
             ClipDistanceModuleProbe EmulateClipDistancePass::ProbeModule(const Vector<Uint32>& spirv) {
@@ -311,7 +565,8 @@ namespace MobileGL {
                     }
                     return Status::SuccessWithoutChange;
                 };
-                if (m_options.role == Role::Consumer && !isFragment) return decline("consumer role on a non-fragment stage");
+                if (m_options.role == Role::Consumer && !isFragment)
+                    return decline("consumer role on a non-fragment stage");
                 if (m_options.role != Role::Consumer && !isPreRaster) {
                     return decline("producer/redirect role on a non-pre-rasterization stage");
                 }
@@ -324,21 +579,14 @@ namespace MobileGL {
                 const ClipSites sites = FindClipSites(ctx);
 
                 // ---- Phase 1: ANALYSIS ONLY. A decline leaves the module byte-identical. ----
-                std::vector<Instruction*> memberChains;    // [clipMember, rest...] on a non-arrayed block
-                std::vector<Instruction*> standaloneVars;  // standalone ClipDistance variables
+                std::vector<Instruction*> memberChains;   // [clipMember, rest...] on a non-arrayed block
+                std::vector<Instruction*> standaloneVars; // standalone ClipDistance variables
                 // Native masking: where the masked values are written back to.
                 Instruction* nativeBlockVar = nullptr;
                 uint32_t nativeBlockMember = 0;
                 Instruction* nativeStandaloneVar = nullptr;
                 uint32_t shadowTypeId = 0;
                 String reason;
-                const auto noteShadowType = [&](uint32_t typeId) {
-                    if (shadowTypeId == 0) {
-                        shadowTypeId = typeId;
-                        return true;
-                    }
-                    return shadowTypeId == typeId;
-                };
 
                 for (Instruction& inst : ctx->module()->types_values()) {
                     if (inst.opcode() != spv::Op::OpVariable) continue;
@@ -359,7 +607,9 @@ namespace MobileGL {
                         if (storage == spv::StorageClass::Input && !isFragment) {
                             return decline("a standalone gl_ClipDistance input outside the fragment stage");
                         }
-                        if (!noteShadowType(pointeeId)) return decline("two differently sized gl_ClipDistance arrays");
+                        if (!NoteShadowType(shadowTypeId, pointeeId)) {
+                            return decline("two differently sized gl_ClipDistance arrays");
+                        }
                         if (!PointerUsesAreRetypable(ctx, &inst, reason)) return decline(Move(reason));
                         standaloneVars.push_back(&inst);
                         continue;
@@ -373,112 +623,28 @@ namespace MobileGL {
                         pointee = defUse->GetDef(pointee->GetSingleWordInOperand(0));
                         if (pointee == nullptr) continue;
                     }
-                    uint32_t clipMember = 0;
-                    if (pointee->opcode() != spv::Op::OpTypeStruct || !ClipMemberOf(sites, pointee->result_id(), clipMember)) {
+                    BlockVariable block{&inst, storage, arrayed, 0, 0};
+                    if (pointee->opcode() != spv::Op::OpTypeStruct ||
+                        !ClipMemberOf(sites, pointee->result_id(), block.clipMember)) {
                         continue;
                     }
-                    const uint32_t memberTypeId = pointee->GetSingleWordInOperand(clipMember);
-                    const uint32_t memberOperand = arrayed ? 2u : 1u; // [vertex,] member, ...
+                    block.memberTypeId = pointee->GetSingleWordInOperand(block.clipMember);
                     if (native && !arrayed && storage == spv::StorageClass::Output) {
                         nativeBlockVar = &inst;
-                        nativeBlockMember = clipMember;
+                        nativeBlockMember = block.clipMember;
                     }
-                    bool declined = false;
-                    defUse->ForEachUser(&inst, [&](Instruction* user) {
-                        if (declined) return;
-                        switch (user->opcode()) {
-                        case spv::Op::OpEntryPoint:
-                        case spv::Op::OpName:
-                        case spv::Op::OpDecorate:
-                            return;
-                        case spv::Op::OpAccessChain:
-                        case spv::Op::OpInBoundsAccessChain: {
-                            if (user->NumInOperands() <= memberOperand) {
-                                // Stops short of the member: a whole block (or gl_in[i])
-                                // pointer. Harmless unless something then reaches the clip
-                                // member through it or copies the whole struct.
-                                bool touches = false;
-                                defUse->ForEachUser(user, [&](Instruction* next) {
-                                    if (next->opcode() == spv::Op::OpAccessChain ||
-                                        next->opcode() == spv::Op::OpInBoundsAccessChain) {
-                                        uint32_t member = 0;
-                                        if (next->NumInOperands() < 2 ||
-                                            !PlainConstantValue(ctx, next->GetSingleWordInOperand(1), member) ||
-                                            member == clipMember) {
-                                            touches = true;
-                                        }
-                                    } else if (next->opcode() != spv::Op::OpName) {
-                                        touches = true; // whole-struct load/store/copy
-                                    }
-                                });
-                                if (touches) {
-                                    declined = true;
-                                    reason = "a split access chain or whole-gl_PerVertex copy reaching gl_ClipDistance";
-                                }
-                                return;
-                            }
-                            uint32_t member = 0;
-                            if (!PlainConstantValue(ctx, user->GetSingleWordInOperand(memberOperand), member)) {
-                                declined = true;
-                                reason = "a non-constant gl_PerVertex member index";
-                                return;
-                            }
-                            if (member != clipMember) return; // another member
-                            if (arrayed) {
-                                declined = true;
-                                reason = storage == spv::StorageClass::Input
-                                             ? "a gl_in[].gl_ClipDistance read"
-                                             : "a gl_out[].gl_ClipDistance write";
-                                return;
-                            }
-                            if (!noteShadowType(memberTypeId)) {
-                                declined = true;
-                                reason = "two differently sized gl_ClipDistance arrays";
-                                return;
-                            }
-                            if (!PointerUsesAreRetypable(ctx, user, reason)) {
-                                declined = true;
-                                return;
-                            }
-                            memberChains.push_back(user);
-                            return;
-                        }
-                        case spv::Op::OpLoad:
-                        case spv::Op::OpStore:
-                        case spv::Op::OpCopyMemory:
-                            declined = true;
-                            reason = "a whole-aggregate load/store/copy of the gl_PerVertex interface";
-                            return;
-                        default:
-                            declined = true;
-                            reason = std::format("SPIR-V opcode {} reaching the gl_PerVertex interface",
-                                                 static_cast<uint32_t>(user->opcode()));
-                            return;
-                        }
-                    });
-                    if (declined) return decline(Move(reason));
+                    if (!CollectBlockClipChains(ctx, block, shadowTypeId, memberChains, reason)) {
+                        return decline(Move(reason));
+                    }
                 }
 
                 const bool hasAccesses = !memberChains.empty() || !standaloneVars.empty();
                 if (shadowTypeId == 0 && m_options.role == Role::Producer) {
-                    // A producer with nothing redirected may still have declared the carrier
-                    // length the driver planned with; take it from its Output declaration.
-                    for (Instruction& inst : ctx->module()->types_values()) {
-                        if (inst.opcode() != spv::Op::OpVariable ||
-                            static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0)) != spv::StorageClass::Output) {
-                            continue;
-                        }
-                        Instruction* type = defUse->GetDef(PointeeOf(ctx, inst.type_id()));
-                        uint32_t member = 0;
-                        if (type != nullptr && type->opcode() == spv::Op::OpTypeStruct &&
-                            ClipMemberOf(sites, type->result_id(), member)) {
-                            shadowTypeId = type->GetSingleWordInOperand(member);
-                            break;
-                        }
-                    }
+                    shadowTypeId = DeclaredOutputClipType(ctx, sites);
                 }
                 const uint32_t shadowLength = shadowTypeId != 0 ? FloatArrayLength(ctx, shadowTypeId) : 0;
-                if (shadowTypeId != 0 && shadowLength == 0) return decline("gl_ClipDistance is not a sized float array");
+                if (shadowTypeId != 0 && shadowLength == 0)
+                    return decline("gl_ClipDistance is not a sized float array");
 
                 Uint32 producedCount = 0;
                 if (m_options.role == Role::Producer) {
@@ -488,38 +654,11 @@ namespace MobileGL {
                 const Uint32 consumedCount =
                     m_options.role == Role::Consumer ? std::min<Uint32>(m_options.distanceCount, kMaxCarriers * 4) : 0;
 
-                // The producer's enables uniform: a member of a Uniform-storage struct, by name.
-                uint32_t enablesVarId = 0;
-                uint32_t enablesMemberIndex = 0;
-                uint32_t enablesTypeId = 0;
-                if (producedCount > 0 && !m_options.enablesMemberName.empty()) {
-                    for (Instruction& debug : ctx->module()->debugs2()) {
-                        if (enablesVarId != 0) break;
-                        if (debug.opcode() != spv::Op::OpMemberName || debug.NumInOperands() < 3) continue;
-                        if (debug.GetOperand(2).AsString() != m_options.enablesMemberName) continue;
-                        const uint32_t structId = debug.GetSingleWordInOperand(0);
-                        const uint32_t member = debug.GetSingleWordInOperand(1);
-                        Instruction* structType = defUse->GetDef(structId);
-                        if (structType == nullptr || structType->opcode() != spv::Op::OpTypeStruct ||
-                            member >= structType->NumInOperands()) {
-                            continue;
-                        }
-                        const uint32_t memberType = structType->GetSingleWordInOperand(member);
-                        if (!IsInt32Type(ctx, memberType)) continue;
-                        for (Instruction& var : ctx->module()->types_values()) {
-                            if (var.opcode() != spv::Op::OpVariable ||
-                                static_cast<spv::StorageClass>(var.GetSingleWordInOperand(0)) !=
-                                    spv::StorageClass::Uniform ||
-                                PointeeOf(ctx, var.type_id()) != structId) {
-                                continue;
-                            }
-                            enablesVarId = var.result_id();
-                            enablesMemberIndex = member;
-                            enablesTypeId = memberType;
-                            break;
-                        }
-                    }
-                }
+                const EnablesUniform enables = producedCount > 0 && !m_options.enablesMemberName.empty()
+                                                   ? FindEnablesUniform(ctx, m_options.enablesMemberName)
+                                                   : EnablesUniform{};
+                const uint32_t enablesVarId = enables.varId;
+                const uint32_t enablesTypeId = enables.typeId;
 
                 if (!hasAccesses && sites.capability == nullptr && producedCount == 0 && consumedCount == 0) {
                     return Status::SuccessWithoutChange;
@@ -573,16 +712,11 @@ namespace MobileGL {
                 if (shadowId != 0) RetypeChainUsers(ctx, defUse->GetDef(shadowId));
                 if (sites.capability != nullptr && !native) ctx->KillInst(sites.capability);
 
-                analysis::Float floatTy(32);
-                const uint32_t floatTypeId = typeMgr->GetTypeInstruction(&floatTy);
-                const analysis::Type* floatReg = typeMgr->GetRegisteredType(&floatTy);
-                analysis::Vector vec4Ty(floatReg, 4);
-                const uint32_t vec4TypeId = typeMgr->GetTypeInstruction(&vec4Ty);
-                analysis::Bool boolTy;
-                const uint32_t boolTypeId = typeMgr->GetTypeInstruction(&boolTy);
-                const uint32_t oneId = constMgr->GetFloatConstId(1.0f);
-                const uint32_t zeroId = constMgr->GetFloatConstId(0.0f);
-                const uint32_t ptrPrivateFloat = typeMgr->FindPointerToType(floatTypeId, spv::StorageClass::Private);
+                const ScalarIds ids = MakeScalarIds(ctx);
+                const uint32_t floatTypeId = ids.floatType;
+                const uint32_t vec4TypeId = ids.vec4Type;
+                const uint32_t boolTypeId = ids.boolType;
+                const uint32_t oneId = ids.one;
 
                 // ---- producer: write the carriers ----
                 if (producedCount > 0) {
@@ -590,7 +724,8 @@ namespace MobileGL {
                     uint32_t carriers[kMaxCarriers] = {0, 0};
                     const uint32_t ptrOutputFloat = typeMgr->FindPointerToType(floatTypeId, spv::StorageClass::Output);
                     const uint32_t nativeMemberConst =
-                        nativeBlockVar != nullptr ? constMgr->GetSIntConstId(static_cast<int32_t>(nativeBlockMember)) : 0;
+                        nativeBlockVar != nullptr ? constMgr->GetSIntConstId(static_cast<int32_t>(nativeBlockMember))
+                                                  : 0;
                     for (Uint32 k = 0; k < carrierCount; ++k) {
                         carriers[k] = AddGlobalVariable(ctx, vec4TypeId, spv::StorageClass::Output, CarrierName(k));
                         AddLocationDecoration(ctx, carriers[k], m_options.location + k);
@@ -600,7 +735,7 @@ namespace MobileGL {
                     uint32_t enablesMemberConst = 0;
                     if (enablesVarId != 0) {
                         ptrUniformEnables = typeMgr->FindPointerToType(enablesTypeId, spv::StorageClass::Uniform);
-                        enablesMemberConst = constMgr->GetSIntConstId(static_cast<int32_t>(enablesMemberIndex));
+                        enablesMemberConst = constMgr->GetSIntConstId(static_cast<int32_t>(enables.memberIndex));
                         if (interfaceListsAllGlobals) {
                             bool listed = false;
                             for (uint32_t i = 3; i < entryPoint->NumInOperands(); ++i) {
@@ -610,24 +745,7 @@ namespace MobileGL {
                         }
                     }
 
-                    std::vector<Instruction*> flushSites;
-                    if (isGeometry) {
-                        for (auto& function : *ctx->module()) {
-                            function.ForEachInst([&](Instruction* inst) {
-                                if (inst->opcode() == spv::Op::OpEmitVertex ||
-                                    inst->opcode() == spv::Op::OpEmitStreamVertex) {
-                                    flushSites.push_back(inst);
-                                }
-                            });
-                        }
-                    } else if (Function* entry = EntryFunction(ctx, entryPoint)) {
-                        entry->ForEachInst([&](Instruction* inst) {
-                            if (inst->opcode() == spv::Op::OpReturn || inst->opcode() == spv::Op::OpReturnValue) {
-                                flushSites.push_back(inst);
-                            }
-                        });
-                    }
-                    for (Instruction* site : flushSites) {
+                    for (Instruction* site : FlushSites(ctx, entryPoint, isGeometry)) {
                         InstructionBuilder b(ctx, site, kBuilderAnalyses);
                         uint32_t maskId = 0;
                         if (enablesVarId != 0) {
@@ -636,13 +754,13 @@ namespace MobileGL {
                         }
                         std::vector<uint32_t> values;
                         for (Uint32 i = 0; i < producedCount; ++i) {
-                            Instruction* ptr = b.AddAccessChain(ptrPrivateFloat, shadowId, {constMgr->GetUIntConstId(i)});
+                            Instruction* ptr =
+                                b.AddAccessChain(ids.ptrPrivateFloat, shadowId, {constMgr->GetUIntConstId(i)});
                             uint32_t value = b.AddLoad(floatTypeId, ptr->result_id())->result_id();
                             if (maskId != 0) {
-                                const uint32_t bit =
-                                    b.AddBinaryOp(enablesTypeId, spv::Op::OpBitwiseAnd, maskId,
-                                                  IntConstantOfType(ctx, enablesTypeId, 1u << i))
-                                        ->result_id();
+                                const uint32_t bit = b.AddBinaryOp(enablesTypeId, spv::Op::OpBitwiseAnd, maskId,
+                                                                   IntConstantOfType(ctx, enablesTypeId, 1u << i))
+                                                         ->result_id();
                                 const uint32_t on = b.AddBinaryOp(boolTypeId, spv::Op::OpINotEqual, bit,
                                                                   IntConstantOfType(ctx, enablesTypeId, 0u))
                                                         ->result_id();
@@ -661,11 +779,12 @@ namespace MobileGL {
                                 b.AddStore(ptr->result_id(), values[i]);
                             }
                         }
-                        while (values.size() % 4 != 0) values.push_back(oneId);
+                        while (values.size() % 4 != 0)
+                            values.push_back(oneId);
                         for (Uint32 k = 0; k < carrierCount; ++k) {
                             const uint32_t composite =
-                                b.AddCompositeConstruct(vec4TypeId, {values[k * 4], values[k * 4 + 1], values[k * 4 + 2],
-                                                                     values[k * 4 + 3]})
+                                b.AddCompositeConstruct(vec4TypeId, {values[k * 4], values[k * 4 + 1],
+                                                                     values[k * 4 + 2], values[k * 4 + 3]})
                                     ->result_id();
                             b.AddStore(carriers[k], composite);
                         }
@@ -678,50 +797,7 @@ namespace MobileGL {
 
                 // ---- consumer: read the carriers, discard, serve gl_ClipDistance reads ----
                 if (m_options.role == Role::Consumer && consumedCount > 0) {
-                    Function* entry = EntryFunction(ctx, entryPoint);
-                    if (entry != nullptr && entry->begin() != entry->end()) {
-                        const Uint32 carrierCount = (consumedCount + 3) / 4;
-                        uint32_t carriers[kMaxCarriers] = {0, 0};
-                        for (Uint32 k = 0; k < carrierCount; ++k) {
-                            carriers[k] = AddGlobalVariable(ctx, vec4TypeId, spv::StorageClass::Input, CarrierName(k));
-                            AddLocationDecoration(ctx, carriers[k], m_options.location + k);
-                            entryPoint->AddOperand({SPV_OPERAND_TYPE_ID, {carriers[k]}});
-                        }
-                        BasicBlock* head = &*entry->begin();
-                        auto split = head->begin();
-                        while (split != head->end() && split->opcode() == spv::Op::OpVariable) ++split;
-                        BasicBlock* rest = head->SplitBasicBlock(ctx, ctx->TakeNextId(), split);
-
-                        InstructionBuilder b(ctx, head, kBuilderAnalyses);
-                        uint32_t loaded[kMaxCarriers] = {0, 0};
-                        for (Uint32 k = 0; k < carrierCount; ++k) {
-                            loaded[k] = b.AddLoad(vec4TypeId, carriers[k])->result_id();
-                        }
-                        uint32_t anyNegative = 0;
-                        for (Uint32 i = 0; i < consumedCount; ++i) {
-                            const uint32_t component =
-                                b.AddCompositeExtract(floatTypeId, loaded[i / 4], {i % 4})->result_id();
-                            if (shadowId != 0 && i < shadowLength) {
-                                Instruction* ptr =
-                                    b.AddAccessChain(ptrPrivateFloat, shadowId, {constMgr->GetUIntConstId(i)});
-                                b.AddStore(ptr->result_id(), component);
-                            }
-                            const uint32_t negative =
-                                b.AddBinaryOp(boolTypeId, spv::Op::OpFOrdLessThan, component, zeroId)->result_id();
-                            anyNegative = anyNegative == 0
-                                              ? negative
-                                              : b.AddBinaryOp(boolTypeId, spv::Op::OpLogicalOr, anyNegative, negative)
-                                                    ->result_id();
-                        }
-                        const uint32_t killLabel = ctx->TakeNextId();
-                        b.AddConditionalBranch(anyNegative, killLabel, rest->id(), rest->id());
-
-                        auto killBlock = spvtools::MakeUnique<BasicBlock>(spvtools::MakeUnique<Instruction>(
-                            ctx, spv::Op::OpLabel, 0, killLabel, std::initializer_list<Operand>{}));
-                        killBlock->AddInstruction(spvtools::MakeUnique<Instruction>(
-                            ctx, spv::Op::OpKill, 0, 0, std::initializer_list<Operand>{}));
-                        entry->InsertBasicBlockAfter(std::move(killBlock), head);
-                    }
+                    EmitCarrierDiscard(ctx, entryPoint, ids, consumedCount, m_options.location, shadowId, shadowLength);
                 }
 
                 if (m_report != nullptr) m_report->rewrote = true;

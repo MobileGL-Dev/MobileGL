@@ -1216,24 +1216,33 @@ namespace MobileGL {
                 return true;
             }
 
-            Bool ShaderCompiler::EmulateClipDistanceForProgram(Vector<Vector<Uint32>>& modules,
-                                                               const Vector<GLenum>& shaderTypes,
-                                                               const Bool captureRequestsClipDistance,
-                                                               const Uint32 maxVaryingLocations,
-                                                               ClipDistanceEmulationOutcome& outcome,
-                                                               const bool validateOutput,
-                                                               const bool enableSpirvValidation, const bool nativeMask) {
+            Bool ShaderCompiler::EmulateClipDistanceForProgram(
+                Vector<Vector<Uint32>>& modules, const Vector<GLenum>& shaderTypes,
+                const Bool captureRequestsClipDistance, const Uint32 maxVaryingLocations,
+                ClipDistanceEmulationOutcome& outcome, const bool validateOutput, const bool enableSpirvValidation,
+                const bool nativeMask) {
                 outcome = {};
                 // Pipeline order: VS, TCS, TES, GS, FS.
                 Int stageIndex[5] = {-1, -1, -1, -1, -1};
                 for (SizeT i = 0; i < shaderTypes.size() && i < modules.size(); ++i) {
                     switch (shaderTypes[i]) {
-                    case GL_VERTEX_SHADER: stageIndex[0] = static_cast<Int>(i); break;
-                    case GL_TESS_CONTROL_SHADER: stageIndex[1] = static_cast<Int>(i); break;
-                    case GL_TESS_EVALUATION_SHADER: stageIndex[2] = static_cast<Int>(i); break;
-                    case GL_GEOMETRY_SHADER: stageIndex[3] = static_cast<Int>(i); break;
-                    case GL_FRAGMENT_SHADER: stageIndex[4] = static_cast<Int>(i); break;
-                    default: break;
+                    case GL_VERTEX_SHADER:
+                        stageIndex[0] = static_cast<Int>(i);
+                        break;
+                    case GL_TESS_CONTROL_SHADER:
+                        stageIndex[1] = static_cast<Int>(i);
+                        break;
+                    case GL_TESS_EVALUATION_SHADER:
+                        stageIndex[2] = static_cast<Int>(i);
+                        break;
+                    case GL_GEOMETRY_SHADER:
+                        stageIndex[3] = static_cast<Int>(i);
+                        break;
+                    case GL_FRAGMENT_SHADER:
+                        stageIndex[4] = static_cast<Int>(i);
+                        break;
+                    default:
+                        break;
                     }
                 }
 
@@ -1271,8 +1280,8 @@ namespace MobileGL {
                     distanceCount = probes[producer].outputDistanceCount;
                 }
                 if (distanceCount > EmulateClipDistancePass::kMaxCarriers * 4) {
-                    outcome.declineDetail = std::format("{} clip distances, more than the eight the carriers hold",
-                                                        distanceCount);
+                    outcome.declineDetail =
+                        std::format("{} clip distances, more than the eight the carriers hold", distanceCount);
                     return true;
                 }
                 const Uint32 carrierCount = nativeMask ? 0 : (distanceCount + 3) / 4;
@@ -1321,9 +1330,9 @@ namespace MobileGL {
                     }
                     if (options.role == EmulateClipDistanceOptions::Role::Producer) {
                         if (report.distanceCount != distanceCount) {
-                            outcome.declineDetail = std::format(
-                                "the producing stage carries {} clip distances where {} were planned",
-                                report.distanceCount, distanceCount);
+                            outcome.declineDetail =
+                                std::format("the producing stage carries {} clip distances where {} were planned",
+                                            report.distanceCount, distanceCount);
                             return true;
                         }
                         enablesFound = report.enablesFound;

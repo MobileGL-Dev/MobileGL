@@ -45,6 +45,7 @@ enable_testing()
 add_executable(
   SanityTest
   SanityTest.cpp
+  SanityClipDistanceTest.cpp
 )
 target_link_libraries(
   SanityTest

@@ -128,8 +128,8 @@ namespace MobileGL {
 
                 static ClipDistanceModuleProbe ProbeModule(const Vector<Uint32>& spirv);
 
-                static spvtools::Optimizer::PassToken CreateEmulateClipDistancePass(
-                    EmulateClipDistanceOptions options, EmulateClipDistanceReport* report);
+                static spvtools::Optimizer::PassToken CreateEmulateClipDistancePass(EmulateClipDistanceOptions options,
+                                                                                    EmulateClipDistanceReport* report);
 
             private:
                 EmulateClipDistanceOptions m_options;

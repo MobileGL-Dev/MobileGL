@@ -1117,6 +1117,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+    // Without the shaderClipDistance feature the built-in is emulated instead
+    // (EmulateClipDistancePass: varyings plus a fragment discard, which needs nothing from the
+    // device), so the frontend can still answer the GL 3.0+ minimum of eight. Every Mali device
+    // measured so far reports shaderClipDistance = VK_FALSE. MOBILEGL_CLIP_DISTANCE_EMULATION=1
+    // arms it on a device that has the feature (the pinned integration lane); =0 restores the
+    // plain zero.
+    static Bool DecideClipDistanceEmulation(const Bool deviceHasClipDistance) {
+        switch (MG_Config::Features.ClipDistanceEmulation) {
+        case MG_Config::QuirkOverride::ForceOn:
+            MGLOG_I("DirectVulkan: MOBILEGL_CLIP_DISTANCE_EMULATION=1 - emulating gl_ClipDistance even though "
+                    "the device %s shaderClipDistance",
+                    deviceHasClipDistance ? "has" : "lacks");
+            return true;
+        case MG_Config::QuirkOverride::ForceOff:
+            MGLOG_I("DirectVulkan: MOBILEGL_CLIP_DISTANCE_EMULATION=0 - no gl_ClipDistance emulation");
+            return false;
+        case MG_Config::QuirkOverride::Auto:
+        default:
+            return !deviceHasClipDistance;
+        }
+    }
+
     void BackendObject_DirectVulkan::UpdateDynamicBackendParameters() {
         const auto mapShaderStages = [](Uint32 vkStages) {
             Uint32 glStages = 0;
@@ -1343,40 +1365,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // by every device, but declaring ClipDistance in a module needs the shaderClipDistance
         // FEATURE, which VulkanRenderer enables exactly where the physical device has it. Without
         // it the limit describes a capacity no shader may use, so report none.
-        //
-        // Without the feature the built-in is emulated instead (EmulateClipDistancePass: varyings
-        // plus a fragment discard, which needs nothing from the device), so the frontend can
-        // still answer the GL 3.0+ minimum of eight. Every Mali device measured so far reports
-        // shaderClipDistance = VK_FALSE. MOBILEGL_CLIP_DISTANCE_EMULATION=1 arms it on a device
-        // that has the feature (the pinned integration lane); =0 restores the plain zero.
-        Bool emulateClipDistance = !m_vulkanCaps.SupportsShaderClipDistance;
-        switch (MG_Config::Features.ClipDistanceEmulation) {
-        case MG_Config::QuirkOverride::ForceOn:
-            emulateClipDistance = true;
-            MGLOG_I("DirectVulkan: MOBILEGL_CLIP_DISTANCE_EMULATION=1 - emulating gl_ClipDistance even though "
-                    "the device %s shaderClipDistance",
-                    m_vulkanCaps.SupportsShaderClipDistance ? "has" : "lacks");
-            break;
-        case MG_Config::QuirkOverride::ForceOff:
-            emulateClipDistance = false;
-            MGLOG_I("DirectVulkan: MOBILEGL_CLIP_DISTANCE_EMULATION=0 - no gl_ClipDistance emulation");
-            break;
-        case MG_Config::QuirkOverride::Auto:
-        default:
-            break;
-        }
+        const Bool emulateClipDistance = DecideClipDistanceEmulation(m_vulkanCaps.SupportsShaderClipDistance);
         m_dynamicParameters.EmulatesClipDistance = emulateClipDistance;
         // Hosted natively, but Vulkan has no per-distance enable state: apply GL_CLIP_DISTANCEi
         // in the producing stage instead (EmulateClipDistanceOptions::nativeBuiltin).
         m_dynamicParameters.MasksNativeClipDistances = !emulateClipDistance && m_vulkanCaps.SupportsShaderClipDistance;
         m_dynamicParameters.MaxClipDistances =
-            emulateClipDistance ? 8
-                                : (m_vulkanCaps.SupportsShaderClipDistance ? std::max(m_vulkanCaps.MaxClipDistances, 0) : 0);
+            emulateClipDistance
+                ? 8
+                : (m_vulkanCaps.SupportsShaderClipDistance ? std::max(m_vulkanCaps.MaxClipDistances, 0) : 0);
         MGLOG_I("DirectVulkan: gl_ClipDistance %s (GL_MAX_CLIP_DISTANCES = %d)",
-                emulateClipDistance ? "EMULATED (varyings + fragment discard)"
-                                    : (m_dynamicParameters.MasksNativeClipDistances
-                                           ? "native, GL_CLIP_DISTANCEi applied in the shader"
-                                           : "unsupported"),
+                emulateClipDistance
+                    ? "EMULATED (varyings + fragment discard)"
+                    : (m_dynamicParameters.MasksNativeClipDistances ? "native, GL_CLIP_DISTANCEi applied in the shader"
+                                                                    : "unsupported"),
                 m_dynamicParameters.MaxClipDistances);
         // The cull pair, gated on its own feature. shaderCullDistance is separate from
         // shaderClipDistance and VulkanRenderer enables it independently, so it gets its own

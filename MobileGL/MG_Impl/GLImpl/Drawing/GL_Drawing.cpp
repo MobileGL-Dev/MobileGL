@@ -116,8 +116,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!program || !program->UsesReservedClipDistanceEnables()) return;
         Uint32 enables = 0;
         for (Uint i = 0; i < 8; ++i) {
-            const auto cap =
-                static_cast<CapabilityInput>(static_cast<Uint>(CapabilityInput::ClipDistance0) + i);
+            const auto cap = static_cast<CapabilityInput>(static_cast<Uint>(CapabilityInput::ClipDistance0) + i);
             if (MG_State::pGLContext->IsCapabilityEnabled(cap)) enables |= 1u << i;
         }
         program->WriteReservedClipDistanceEnables(enables);

@@ -1059,6 +1059,43 @@ namespace MobileGL::MG_Util::BackendLoader {
                 caps.MaxFragmentShadingRateAttachmentTexelHeight);
     }
 
+    // Native clip distances or MobileGL's emulation. Native only where the driver both advertises
+    // GL_EXT_clip_cull_distance AND passes the probe (its own control first): an extension that is
+    // listed but does not clip, or clips by disabled distances, is a wrong answer the application
+    // sees, and the emulation answers it correctly. The probe is skipped entirely without the
+    // extension - there is nothing to measure.
+    static void DecideClipDistanceEmulation(MG_External::GLESCapabilities& caps,
+                                            const MG_External::GLESFunctionsTable& glesFuncs) {
+        if (caps.SupportsClipDistance && caps.MaxClipDistances > 0) {
+            const SelfTest::NativeClipDistanceMeasurement& clip = SelfTest::NativeClipDistance(glesFuncs);
+            caps.NativeClipDistanceClips = clip.ran && clip.clips;
+            caps.NativeClipDistanceHonorsEnables = clip.ran && clip.honorsEnables;
+            const String verdict = !clip.ran             ? "inconclusive (" + clip.failure + ")"
+                                   : !clip.clips         ? "an enabled negative distance did NOT clip"
+                                   : !clip.honorsEnables ? "clips, but by DISABLED distances too"
+                                                         : "clips, and honors the per-distance enables";
+            MGLOG_I("    Native gl_ClipDistance probe: %s", verdict.c_str());
+        }
+        caps.EmulatesClipDistance = !(caps.SupportsClipDistance && caps.MaxClipDistances > 0 &&
+                                      caps.NativeClipDistanceClips && caps.NativeClipDistanceHonorsEnables);
+        switch (MG_Config::Features.ClipDistanceEmulation) {
+        case MG_Config::QuirkOverride::ForceOn:
+            caps.EmulatesClipDistance = true;
+            MGLOG_I("    gl_ClipDistance: emulation forced ON by MOBILEGL_CLIP_DISTANCE_EMULATION");
+            break;
+        case MG_Config::QuirkOverride::ForceOff:
+            caps.EmulatesClipDistance = false;
+            MGLOG_I("    gl_ClipDistance: emulation forced OFF by MOBILEGL_CLIP_DISTANCE_EMULATION");
+            break;
+        case MG_Config::QuirkOverride::Auto:
+        default:
+            break;
+        }
+        MGLOG_I("    gl_ClipDistance: %s", caps.EmulatesClipDistance
+                                               ? "EMULATED (varyings + fragment discard; 8 distances advertised)"
+                                               : "native (GL_EXT_clip_cull_distance)");
+    }
+
     Bool FillInGLESCapabilities(MG_External::GLESCapabilities& caps, const MG_External::GLESFunctionsTable& glesFuncs) {
         if (!glesFuncs.glGetString || !glesFuncs.glGetIntegerv) {
             MGLOG_E("Required GLES functions are not loaded, cannot query capabilities");
@@ -1997,39 +2034,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    GL_MAX_COMPUTE_IMAGE_UNIFORMS: %d", caps.MaxComputeImageUniforms);
         MGLOG_I("    GL_MAX_DRAW_BUFFERS: %d", caps.MaxDrawBuffers);
         MGLOG_I("    GL_MAX_COLOR_ATTACHMENTS: %d", caps.MaxColorAttachments);
-        // Native clip distances or MobileGL's emulation. Native only where the driver both
-        // advertises GL_EXT_clip_cull_distance AND passes the probe (its own control first):
-        // an extension that is listed but does not clip, or clips by disabled distances, is a
-        // wrong answer the application sees, and the emulation answers it correctly. The probe
-        // is skipped entirely without the extension - there is nothing to measure.
-        if (caps.SupportsClipDistance && caps.MaxClipDistances > 0) {
-            const SelfTest::NativeClipDistanceMeasurement& clip = SelfTest::NativeClipDistance(glesFuncs);
-            caps.NativeClipDistanceClips = clip.ran && clip.clips;
-            caps.NativeClipDistanceHonorsEnables = clip.ran && clip.honorsEnables;
-            MGLOG_I("    Native gl_ClipDistance probe: %s",
-                    !clip.ran ? ("inconclusive (" + clip.failure + ")").c_str()
-                    : !clip.clips ? "an enabled negative distance did NOT clip"
-                    : !clip.honorsEnables ? "clips, but by DISABLED distances too"
-                                          : "clips, and honors the per-distance enables");
-        }
-        caps.EmulatesClipDistance = !(caps.SupportsClipDistance && caps.MaxClipDistances > 0 &&
-                                      caps.NativeClipDistanceClips && caps.NativeClipDistanceHonorsEnables);
-        switch (MG_Config::Features.ClipDistanceEmulation) {
-        case MG_Config::QuirkOverride::ForceOn:
-            caps.EmulatesClipDistance = true;
-            MGLOG_I("    gl_ClipDistance: emulation forced ON by MOBILEGL_CLIP_DISTANCE_EMULATION");
-            break;
-        case MG_Config::QuirkOverride::ForceOff:
-            caps.EmulatesClipDistance = false;
-            MGLOG_I("    gl_ClipDistance: emulation forced OFF by MOBILEGL_CLIP_DISTANCE_EMULATION");
-            break;
-        case MG_Config::QuirkOverride::Auto:
-        default:
-            break;
-        }
-        MGLOG_I("    gl_ClipDistance: %s", caps.EmulatesClipDistance
-                                               ? "EMULATED (varyings + fragment discard; 8 distances advertised)"
-                                               : "native (GL_EXT_clip_cull_distance)");
+        DecideClipDistanceEmulation(caps, glesFuncs);
         // Worth spelling the reason out for the same reason the per-stage storage block counts
         // are: a zero here is what stops an application's gl_ClipDistance from ever clipping, and
         // reading it back from an artifact is the difference between "MobileGL dropped my draw"

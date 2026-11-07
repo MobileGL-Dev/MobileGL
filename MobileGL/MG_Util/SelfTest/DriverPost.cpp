@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "DriverPost.h"
+#include "DriverPostClipDistance.h"
 #include "DriverPostIterationRPWitness.h"
 #include "DriverPostIterationRPWitnessSpv.h"
 #include "PrimitivesGeneratedNoXfbProbe.h"
@@ -340,62 +341,19 @@ namespace MobileGL::MG_Util::SelfTest {
             }
         }
 
-        // What the emulation still cannot do, shared by both backends' WARN rows.
-        constexpr const char* kClipDistanceEmulationResidue =
-            "MobileGL emulates 8 distances: gl_ClipDistance becomes two ordinary varyings and the "
-            "fragment stage discards where a distance is negative, honoring GL_CLIP_DISTANCEi. It costs "
-            "two varying locations and early depth/stencil for programs that clip; transform-feedback "
-            "capture of gl_ClipDistance and gl_in[].gl_ClipDistance reads are not emulated";
-
-        // GL_MAX_CLIP_DISTANCES >= 8 is a GL 3.0 requirement, so a backend that neither hosts nor
-        // emulates the built-in fails a capability every GL 3.x+ application may lean on.
-        void EvaluateGlesClipDistanceRows(ReportBuilder& builder, const MG_External::GLESCapabilities& caps,
-                                          const MG_External::GLESFunctionsTable& glesFuncs) {
-            // Only meaningful where the loader ran it (extension present); cached per process.
-            String probeFailure;
-            if (caps.SupportsClipDistance && caps.MaxClipDistances > 0) {
-                const NativeClipDistanceMeasurement& probe = NativeClipDistance(glesFuncs);
-                if (!probe.ran) probeFailure = probe.failure;
-            }
-            const Bool native = caps.SupportsClipDistance && caps.MaxClipDistances > 0 &&
-                                caps.NativeClipDistanceClips && caps.NativeClipDistanceHonorsEnables;
-            if (!caps.EmulatesClipDistance && native) {
-                builder.Pass("Clip distances",
-                             format("native via GL_EXT_clip_cull_distance ({} distances); probe: an enabled distance "
-                                    "clips and a disabled one does not",
-                                    caps.MaxClipDistances));
-            } else if (caps.EmulatesClipDistance) {
-                const String reason =
-                    !caps.SupportsClipDistance ? String("no GL_EXT_clip_cull_distance")
-                    : caps.MaxClipDistances <= 0
-                        ? String("GL_EXT_clip_cull_distance reports no distances")
-                    : !probeFailure.empty()
-                        ? "GL_EXT_clip_cull_distance is listed, but the native probe was inconclusive (" +
-                              probeFailure + ")"
-                    : !caps.NativeClipDistanceClips
-                        ? String("GL_EXT_clip_cull_distance is listed, but in the probe an enabled negative "
-                                 "distance did not clip")
-                    : !caps.NativeClipDistanceHonorsEnables
-                        ? String("the driver clips by DISABLED distances too (probe)")
-                        : String("forced by MOBILEGL_CLIP_DISTANCE_EMULATION=1");
-                builder.Warn("Clip distances", format("{}; {}", reason, kClipDistanceEmulationResidue));
-            } else {
-                builder.FailOptional("Clip distances",
-                                     caps.SupportsClipDistance
-                                         ? "GL_EXT_clip_cull_distance is listed but misbehaves in the probe, and the "
-                                           "emulation is disabled (MOBILEGL_CLIP_DISTANCE_EMULATION=0)"
-                                         : "no GL_EXT_clip_cull_distance and the emulation is disabled "
-                                           "(MOBILEGL_CLIP_DISTANCE_EMULATION=0): GL_MAX_CLIP_DISTANCES = 0, so a "
-                                           "gl_ClipDistance shader fails to compile");
-            }
-            if (caps.SupportsClipDistance && caps.MaxCullDistances > 0) {
-                builder.Pass("Cull distances",
-                             format("native via GL_EXT_clip_cull_distance ({} distances)", caps.MaxCullDistances));
-            } else {
-                builder.FailOptional("Cull distances",
-                                     "no GL_EXT_clip_cull_distance: GL_MAX_CULL_DISTANCES = 0. Culling is per "
-                                     "primitive, which a per-fragment discard cannot reproduce, so a "
-                                     "gl_CullDistance shader fails to compile");
+        void EmitClipDistanceRows(ReportBuilder& builder, Vector<ClipDistancePostRow> rows) {
+            for (ClipDistancePostRow& row : rows) {
+                switch (row.verdict) {
+                case ClipDistancePostRow::Verdict::Pass:
+                    builder.Pass(Move(row.name), Move(row.detail));
+                    break;
+                case ClipDistancePostRow::Verdict::Warn:
+                    builder.Warn(Move(row.name), Move(row.detail));
+                    break;
+                case ClipDistancePostRow::Verdict::FailOptional:
+                    builder.FailOptional(Move(row.name), Move(row.detail));
+                    break;
+                }
             }
         }
 
@@ -447,7 +405,7 @@ namespace MobileGL::MG_Util::SelfTest {
                                      "hard-fails, and a second fragment output cannot be produced any other "
                                      "way");
             }
-            EvaluateGlesClipDistanceRows(builder, caps, glesFuncs);
+            EmitClipDistanceRows(builder, GlesClipDistancePostRows(caps, glesFuncs));
 
             if (es31) {
                 GLint maxVertexSsboBlocks = 0;
@@ -2836,39 +2794,10 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.FailOptional("dualSrcBlend", "unsupported; a draw using a GL_SRC1_* blend factor hard-fails, and a "
                                                  "second fragment output cannot be produced any other way");
         }
-        // Mirrors BackendObject_DirectVulkan's decision: emulate exactly when the feature is
-        // absent, unless MOBILEGL_CLIP_DISTANCE_EMULATION says otherwise.
-        {
-            const Bool hasFeature = features.shaderClipDistance == VK_TRUE;
-            Bool emulate = !hasFeature;
-            if (MG_Config::Features.ClipDistanceEmulation == MG_Config::QuirkOverride::ForceOn) emulate = true;
-            if (MG_Config::Features.ClipDistanceEmulation == MG_Config::QuirkOverride::ForceOff) emulate = false;
-            if (!emulate && hasFeature) {
-                builder.Pass("shaderClipDistance",
-                             format("native ({} distances); Vulkan has no per-distance enable state, so MobileGL "
-                                    "applies GL_CLIP_DISTANCEi in the last pre-rasterization stage (a disabled "
-                                    "distance is written as +1)",
-                                    properties.limits.maxClipDistances));
-            } else if (emulate) {
-                builder.Warn("shaderClipDistance",
-                             format("{}; {}",
-                                    hasFeature ? "forced by MOBILEGL_CLIP_DISTANCE_EMULATION=1"
-                                               : "unsupported by the device",
-                                    kClipDistanceEmulationResidue));
-            } else {
-                builder.FailOptional("shaderClipDistance",
-                                     "unsupported, and the emulation is disabled (MOBILEGL_CLIP_DISTANCE_EMULATION=0): "
-                                     "GL_MAX_CLIP_DISTANCES = 0, so a gl_ClipDistance shader fails to compile");
-            }
-            if (features.shaderCullDistance == VK_TRUE) {
-                builder.Pass("shaderCullDistance", format("native ({} distances)", properties.limits.maxCullDistances));
-            } else {
-                builder.FailOptional("shaderCullDistance",
-                                     "unsupported: GL_MAX_CULL_DISTANCES = 0. Culling is per primitive, which a "
-                                     "per-fragment discard cannot reproduce, so a gl_CullDistance shader fails to "
-                                     "compile");
-            }
-        }
+        EmitClipDistanceRows(builder, VulkanClipDistancePostRows(features.shaderClipDistance == VK_TRUE,
+                                                                 features.shaderCullDistance == VK_TRUE,
+                                                                 properties.limits.maxClipDistances,
+                                                                 properties.limits.maxCullDistances));
         // The Magma counterpart of the GLES "Buffer textures" row, so the two sections can be
         // read side by side. Vulkan has no optional-feature bit here: a uniform texel buffer is
         // core, and maxTexelBufferElements has a spec floor of 65536 - exactly the GL 3.1 floor

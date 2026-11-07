@@ -162,8 +162,7 @@ namespace MobileGL::MG_State::GLState {
             m_phaseA->in.env != nullptr && m_phaseA->in.env->DemotesGeometryPointSize();
         // Part of the frontend fingerprint (CompileEnv), so the L1 key already separates the two.
         const Bool emulateClipDistance = m_phaseA->in.env != nullptr && m_phaseA->in.env->EmulatesClipDistance();
-        const Bool maskNativeClipDistance =
-            m_phaseA->in.env != nullptr && m_phaseA->in.env->MasksNativeClipDistances();
+        const Bool maskNativeClipDistance = m_phaseA->in.env != nullptr && m_phaseA->in.env->MasksNativeClipDistances();
         GenerateSpirv(handoff, externalIndex, deferOutputValidationForDirectVulkan, enableSpirvValidation,
                       nativeFloat64, demoteTessellationPointSize, demoteGeometryPointSize, emulateClipDistance,
                       maskNativeClipDistance);

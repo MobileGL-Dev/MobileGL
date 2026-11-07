@@ -1895,7 +1895,8 @@ namespace {
         if (source.find("gl_ClipDistance") == MobileGL::String::npos) return;
         const MobileGL::String masked = MaskCommentsAndQuotedText(source);
         if (!MaskedSourceHasIdentifier(masked, "gl_ClipDistance")) return;
-        if (MaskedSourceHasIdentifier(masked, MobileGL::MG_Util::ShaderTranspiler::CLIP_DISTANCE_ENABLES_UNIFORM_NAME)) {
+        if (MaskedSourceHasIdentifier(masked,
+                                      MobileGL::MG_Util::ShaderTranspiler::CLIP_DISTANCE_ENABLES_UNIFORM_NAME)) {
             return;
         }
         source.insert(afterVersion.Get(source), "uniform uint mg_ClipDistanceEnables;\n");

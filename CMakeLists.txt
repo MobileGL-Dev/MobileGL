@@ -452,6 +452,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/SelfTest/DriverBugProbes.cpp
     MobileGL/MG_Util/SelfTest/PersistentBufferOrderingProbe.cpp
     MobileGL/MG_Util/SelfTest/DriverPost.cpp
+    MobileGL/MG_Util/SelfTest/DriverPostClipDistance.cpp
     MobileGL/MG_Util/SelfTest/DriverPostIterationRPWitness.cpp
     MobileGL/MG_Util/SelfTest/PrimitivesGeneratedNoXfbProbe.cpp
 
