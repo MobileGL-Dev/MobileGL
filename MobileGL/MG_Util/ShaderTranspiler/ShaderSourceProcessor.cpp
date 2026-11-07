@@ -1880,6 +1880,27 @@ namespace {
         source.insert(afterVersion.Get(source), shim);
     }
 
+    // On a backend that emulates gl_ClipDistance, the stage that ends up producing the clip
+    // carriers needs GL's per-distance enables, and the only thing a module can read per draw
+    // without a pipeline key is a uniform. Declared in every pre-rasterization stage that names
+    // the built-in, because which of them is LAST is a link-time fact this per-shader pass cannot
+    // know; the stages that are not the producer simply never read it, and glslang folds the one
+    // name into the shared MGL_GLOBAL_UBO for every stage of the program alike.
+    void InjectClipDistanceEnablesShim(MobileGL::ShaderStage stage, MobileGL::String& source,
+                                       AfterVersionAnchor& afterVersion) {
+        if (stage != MobileGL::ShaderStage::Vertex && stage != MobileGL::ShaderStage::TessControl &&
+            stage != MobileGL::ShaderStage::TessEval && stage != MobileGL::ShaderStage::Geometry) {
+            return;
+        }
+        if (source.find("gl_ClipDistance") == MobileGL::String::npos) return;
+        const MobileGL::String masked = MaskCommentsAndQuotedText(source);
+        if (!MaskedSourceHasIdentifier(masked, "gl_ClipDistance")) return;
+        if (MaskedSourceHasIdentifier(masked, MobileGL::MG_Util::ShaderTranspiler::CLIP_DISTANCE_ENABLES_UNIFORM_NAME)) {
+            return;
+        }
+        source.insert(afterVersion.Get(source), "uniform uint mg_ClipDistanceEnables;\n");
+    }
+
     // The uniforms `text` declares with the external sampler type, and (into `others`) the names it
     // declares with any other type - the same name can be both in a source whose #if branches pick
     // one (a compositor's shader generator does exactly that).
@@ -2020,6 +2041,7 @@ namespace MobileGL {
                 ModernizeLegacyGLSL(stage, source, afterVersion);
                 InjectDepthRangeBuiltinShim(stage, source, afterVersion);
                 InjectNumSamplesBuiltinShim(stage, originalLanguage, source, afterVersion);
+                if (env.EmulatesClipDistance()) InjectClipDistanceEnablesShim(stage, source, afterVersion);
             }
 
             Vector<String> ExternalSamplerUniformNames(const String& preprocessedSource) {

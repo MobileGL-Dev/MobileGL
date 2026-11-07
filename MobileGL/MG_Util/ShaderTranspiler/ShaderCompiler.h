@@ -650,6 +650,39 @@ namespace MobileGL {
                     Bool demoteGeometry, Bool captureRequestsPointSize, PointSizeDemotionOutcome& outcome,
                     bool validateOutput = true, bool enableSpirvValidation = false);
 
+                // What the program-scoped clip-distance emulation left behind. `emulated` false
+                // with an empty detail means the program never touches gl_ClipDistance; false
+                // WITH a detail is a shape the pass cannot express (modules byte-identical, so the
+                // program keeps the built-in and the backend's own refusal of it).
+                struct ClipDistanceEmulationOutcome {
+                    Bool emulated = false;
+                    // How many distances the producing stage carries to the fragment stage.
+                    Uint32 distanceCount = 0;
+                    // False: the producer had no enables uniform, so every distance clips.
+                    Bool enablesFound = false;
+                    String declineDetail;
+                };
+
+                // Emulates gl_ClipDistance across a WHOLE program on a backend that cannot clip
+                // natively (BackendCaps::EmulatesClipDistance): every stage's accesses move onto
+                // a Private shadow, the last pre-rasterization stage carries
+                // `enabled(i) ? d[i] : 1.0` to the fragment stage in ceil(N/4) vec4 varyings
+                // placed past every location the program uses, and the fragment stage discards
+                // where a carried distance is negative. See EmulateClipDistancePass for the
+                // per-module rewrite. Runs BEFORE the sanitize chain (ProgramSpirvTask): the
+                // reserved enables uniform is unread until this pass reads it, and ADCE would
+                // otherwise delete a global UBO that holds nothing else. Atomic: every stage is
+                // rewritten or none is.
+                // `captureRequestsClipDistance` declines (a capture would need the unmasked
+                // value at a varying the pass does not create); `maxVaryingLocations` is the
+                // carrier budget. Returns false only when the optimizer itself failed.
+                static Bool EmulateClipDistanceForProgram(Vector<Vector<Uint32>>& modules,
+                                                          const Vector<GLenum>& shaderTypes,
+                                                          Bool captureRequestsClipDistance, Uint32 maxVaryingLocations,
+                                                          ClipDistanceEmulationOutcome& outcome,
+                                                          bool validateOutput = true,
+                                                          bool enableSpirvValidation = false);
+
                 // True when the module still declares a 64-bit float type. After
                 // SanitizeAndOptimizeBinary that can only mean DemoteFloat64Pass declined the
                 // module (see its header for the two operations that make it decline), which is

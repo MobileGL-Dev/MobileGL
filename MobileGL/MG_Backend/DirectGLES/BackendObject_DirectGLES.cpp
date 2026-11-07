@@ -1996,12 +1996,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         m_dynamicParameters.MaxDrawBuffers = m_GLESCapabilities.MaxDrawBuffers;
         m_dynamicParameters.MaxColorAttachments = m_GLESCapabilities.MaxColorAttachments;
-        m_dynamicParameters.MaxClipDistances = m_GLESCapabilities.MaxClipDistances;
+        // Eight when emulated - the GL 3.0+ minimum, and what EmulateClipDistancePass carries -
+        // else the driver's own number (0 without the extension and with the emulation forced
+        // off: the native-or-nothing answer).
+        m_dynamicParameters.EmulatesClipDistance = m_GLESCapabilities.EmulatesClipDistance;
+        m_dynamicParameters.MaxClipDistances =
+            m_GLESCapabilities.EmulatesClipDistance ? 8 : m_GLESCapabilities.MaxClipDistances;
         // The loader already gated both on GL_EXT_clip_cull_distance and left 0 without it, which
         // is the answer that keeps glslang from accepting a gl_CullDistance the ESSL compiler
         // would reject.
         m_dynamicParameters.MaxCullDistances = m_GLESCapabilities.MaxCullDistances;
-        m_dynamicParameters.MaxCombinedClipAndCullDistances = m_GLESCapabilities.MaxCombinedClipAndCullDistances;
+        m_dynamicParameters.MaxCombinedClipAndCullDistances =
+            std::max(m_GLESCapabilities.MaxCombinedClipAndCullDistances, m_dynamicParameters.MaxClipDistances);
         m_dynamicParameters.MaxViewports = m_GLESCapabilities.MaxViewports;
         // Whatever the driver said about which vertex supplies gl_Layer, and GL_UNDEFINED_VERTEX
         // for gl_ViewportIndex on every driver without GL_OES_viewport_array - which is both test

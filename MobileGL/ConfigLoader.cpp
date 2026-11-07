@@ -402,6 +402,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.EsprytAtomicSubgroupScratch = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_ATOMIC_SUBGROUP_SCRATCH");
         features.EsprytInvalidImagePlaceholder = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_INVALID_IMAGE_PLACEHOLDER");
         features.PointSizeDemotion = QueryEnvQuirkOverride("MOBILEGL_POINT_SIZE_DEMOTION");
+        features.ClipDistanceEmulation = QueryEnvQuirkOverride("MOBILEGL_CLIP_DISTANCE_EMULATION");
         features.CoherentAsFlush = QueryEnvFlag("MOBILEGL_COHERENT_AS_FLUSH");
         features.EsprytDisableUboRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UBO_RING");
         features.EsprytDisableUnpackRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UNPACK_RING");

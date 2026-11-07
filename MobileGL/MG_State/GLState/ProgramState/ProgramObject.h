@@ -799,6 +799,27 @@ namespace MobileGL::MG_State::GLState {
             MarkUBOContentDirtyRange(offset, static_cast<Uint>(sizeof(Int)));
             return true;
         }
+        // ---- the reserved clip-distance enables (ShaderTranspiler::CLIP_DISTANCE_ENABLES_UNIFORM_NAME) ----
+        //
+        // Same contract as the gl_NumSamples pair above: phase-A gate, value-identical writes
+        // dropped without a content-version bump, false when there is nowhere to put it.
+        Bool UsesReservedClipDistanceEnables() const { return Artifacts().usesReservedClipDistanceEnables; }
+        Bool WriteReservedClipDistanceEnables(Uint32 enables) {
+            if (!UsesReservedClipDistanceEnables()) return false;
+            SpirvArtifacts& spirv = Spirv();
+            const Uint offset = spirv.reservedClipDistanceEnablesOffset;
+            if (offset == kInvalidUniformOffset) return false;
+            if (static_cast<SizeT>(offset) + sizeof(Uint32) > spirv.globalUboScratch.size()) return false;
+
+            Uint8* const slot = spirv.globalUboScratch.data() + offset;
+            Uint32 current = 0;
+            Memcpy(&current, slot, sizeof(Uint32));
+            if (current == enables) return true;
+            Memcpy(slot, &enables, sizeof(Uint32));
+            MarkUBOContentDirtyRange(offset, static_cast<Uint>(sizeof(Uint32)));
+            return true;
+        }
+        Bool ClipDistanceEmulated() const { return Spirv().clipDistanceEmulated; }
         // ---- glUniform* inside the phase-A -> phase-B window ----
         //
         // True while the program is fully linked and fully queryable but its uniform shadow's

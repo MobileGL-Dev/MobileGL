@@ -108,6 +108,21 @@ namespace MobileGL::MG_Impl::GLImpl {
         program->WriteReservedNumSamples(static_cast<Int>(std::max<GLint>(ResolveDrawFramebufferSampleCount(), 1)));
     }
 
+    // The GL_CLIP_DISTANCE0..7 enables, for a program whose clip distances are emulated (see
+    // EmulateClipDistancePass): the producing stage selects 1.0 for every disabled distance, so
+    // the mask is a property of the render state at THIS draw, not of the program. Same cost
+    // model as the sample count above.
+    static void PublishClipDistanceEnables(const SharedPtr<MG_State::GLState::ProgramObject>& program) {
+        if (!program || !program->UsesReservedClipDistanceEnables()) return;
+        Uint32 enables = 0;
+        for (Uint i = 0; i < 8; ++i) {
+            const auto cap =
+                static_cast<CapabilityInput>(static_cast<Uint>(CapabilityInput::ClipDistance0) + i);
+            if (MG_State::pGLContext->IsCapabilityEnabled(cap)) enables |= 1u << i;
+        }
+        program->WriteReservedClipDistanceEnables(enables);
+    }
+
     // The one funnel every drawing command passes through. Order is load-bearing: validate first
     // (a rejected draw must leave state alone), then publish the sample count - which reads the
     // DRAW FRAMEBUFFER binding, so it has to run after the caller's framebuffer state is settled
@@ -133,6 +148,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         if (!ValidateResolvedProgramForDraw(currentProgram, functionName)) return false;
         PublishDrawFramebufferSampleCount(currentProgram);
+        PublishClipDistanceEnables(currentProgram);
         return true;
     }
 

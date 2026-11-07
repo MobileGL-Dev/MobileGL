@@ -95,6 +95,38 @@ namespace MobileGL::MG_Util::SelfTest {
     // ProbeLocatedIoBlocksLosePayload(), evaluated at most once per process.
     const LocatedIoBlockMeasurement& LocatedIoBlocksLosePayload(const MG_External::GLESFunctionsTable& gl);
 
+    // What the native clip-distance probe measured. Not a driver-bug finding by itself: the
+    // loader turns it into the DirectGLES choice between the driver's gl_ClipDistance and
+    // MobileGL's emulation (EmulateClipDistancePass), and the POST "Clip distances" row reports
+    // that choice.
+    struct NativeClipDistanceMeasurement {
+        // The probe built its program and drew it; every field below is meaningless otherwise.
+        Bool ran = false;
+        // GL_CLIP_DISTANCE0_EXT enabled, distance negative on the left half: the left half was
+        // removed and the right half painted.
+        Bool clips = false;
+        // GL_CLIP_DISTANCE0_EXT disabled, same distances: nothing was removed.
+        Bool honorsEnables = false;
+        // The driver's first info-log line (or a short reason) when the probe could not run.
+        String failure;
+    };
+
+    // Draws full-viewport triangles under GL_EXT_clip_cull_distance. THE CONTROL first: a
+    // program whose gl_ClipDistance[0] is +1 everywhere, with distance 0 enabled - both halves
+    // must paint whatever the driver does with enables, or the extension's draw itself is broken
+    // and the probe has nothing to say. Then the SUBJECT, writing gl_ClipDistance[0] = x: with
+    // distance 0 enabled the left half must vanish, and with it disabled nothing may vanish
+    // (Mesa's llvmpipe ES driver clips by every written distance regardless of the enables, a
+    // wrong answer GL applications see).
+    //
+    // Requires the extension; the caller only runs it where the extension string names it.
+    // Restores every piece of GL state it touches and leaves both distances disabled - the
+    // state DirectGLES's enable forwarding assumes a fresh context is in.
+    NativeClipDistanceMeasurement ProbeNativeClipDistance(const MG_External::GLESFunctionsTable& gl);
+
+    // ProbeNativeClipDistance(), evaluated at most once per process.
+    const NativeClipDistanceMeasurement& NativeClipDistance(const MG_External::GLESFunctionsTable& gl);
+
     // Blits one layer of an RGBA8 2D array onto another array's layer 1 and reports whether the
     // copy landed where it was asked to. Returns true only when the destination layer is ignored
     // while the control lands correctly.

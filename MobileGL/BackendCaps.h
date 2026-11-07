@@ -214,16 +214,16 @@ namespace MobileGL {
             Int MaxComputeImageUniforms = 8;
             Int MaxDrawBuffers = 8;
             Int MaxColorAttachments = 8;
-            // GL_MAX_CLIP_DISTANCES. Zero is a legal answer here, not a placeholder, and a
-            // backend that cannot host a clip distance MUST report it: advertising eight the
-            // backend will refuse does not make gl_ClipDistance work, it only moves the failure
-            // from an honest "unsupported" at query time to a backend shader-compile error the
-            // frontend never surfaces, after which every draw with that program silently renders
-            // nothing. DirectGLES fills it from GL_EXT_clip_cull_distance, DirectVulkan from the
-            // shaderClipDistance device feature. The DEFAULT stays at the GL 4.3 core minimum
-            // because it describes the no-backend case (standalone shader compiles, unit tests),
-            // where there is no device to be honest about and BuildTBuiltInResource still has to
-            // hand glslang a workable gl_MaxClipDistances.
+            // GL_MAX_CLIP_DISTANCES. What the backend can actually CLIP with, natively or through
+            // EmulatesClipDistance below - never a number the backend would then refuse:
+            // advertising eight that no stage can honor only moves the failure from query time to
+            // a backend shader-compile error the frontend never surfaces. DirectGLES fills it from
+            // GL_EXT_clip_cull_distance, DirectVulkan from the shaderClipDistance device feature,
+            // and both answer 8 when they emulate. Zero stays a legal answer for a backend that
+            // neither hosts nor emulates the built-in (MOBILEGL_CLIP_DISTANCE_EMULATION=0 on such
+            // a device). The DEFAULT is the GL 4.3 core minimum because it describes the
+            // no-backend case (standalone shader compiles, unit tests), where
+            // BuildTBuiltInResource still has to hand glslang a workable gl_MaxClipDistances.
             Int MaxClipDistances = 8;
             // GL_MAX_CULL_DISTANCES and GL_MAX_COMBINED_CLIP_AND_CULL_DISTANCES, under exactly
             // the contract stated for MaxClipDistances above: ZERO IS A LEGAL ANSWER and a
@@ -349,6 +349,15 @@ namespace MobileGL {
             Bool SupportsTessellationPointSize = true;
             // The geometry-stage twin (OpCapability GeometryPointSize).
             Bool SupportsGeometryPointSize = true;
+            // The backend cannot clip with gl_ClipDistance natively - no
+            // GL_EXT_clip_cull_distance, an extension the POST clip probe caught not clipping or
+            // not honoring the per-distance enables, or shaderClipDistance == VK_FALSE - so
+            // ProgramSpirvTask lowers the built-in to varyings plus a fragment discard
+            // (ShaderCompiler::EmulateClipDistanceForProgram) and the source pipeline declares the
+            // reserved enables uniform the draw path feeds. MOBILEGL_CLIP_DISTANCE_EMULATION
+            // overrides the detection in either direction at backend init. Defaults FALSE: true
+            // ARMS a rewrite, so the no-backend answer is the one that leaves modules untouched.
+            Bool EmulatesClipDistance = false;
             Uint64 MaxShaderStorageBlockSize = 128 * 1024 * 1024;
             Uint32 SubgroupSize = 0;
             Uint32 SubgroupSupportedStages = 0;

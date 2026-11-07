@@ -2067,6 +2067,165 @@ namespace MobileGL::MG_Util::SelfTest {
     }
 
     namespace {
+        // ===================== NATIVE CLIP DISTANCE =====================
+
+        constexpr const char* kClipDistanceProbeName = "clip distance";
+        // Four pixels across: pixel 0 is centred at NDC x = -0.75, pixel 3 at +0.75, so the
+        // distance gl_ClipDistance[0] = x is clearly negative on one and positive on the other.
+        constexpr GLsizei kClipDistanceProbeWidth = 4;
+        // GL_CLIP_DISTANCE0_EXT / 1_EXT: the desktop values, absent from the ES headers.
+        constexpr GLenum kClipDistance0 = 0x3000;
+        constexpr GLenum kClipDistance1 = 0x3001;
+
+        const char* const kClipDistanceProbeVertexSource =
+            "#version 300 es\n"
+            "#extension GL_EXT_clip_cull_distance : require\n"
+            "precision highp float;\n"
+            "void main() {\n"
+            "    vec2 mg_p = vec2((gl_VertexID == 1) ? 3.0 : -1.0, (gl_VertexID == 2) ? 3.0 : -1.0);\n"
+            "    gl_Position = vec4(mg_p, 0.0, 1.0);\n"
+            "    gl_ClipDistance[0] = mg_p.x;\n"
+            "    gl_ClipDistance[1] = 1.0;\n"
+            "}\n";
+        // The control: the same stage with a distance that is positive everywhere.
+        const char* const kClipDistanceProbeControlVertexSource =
+            "#version 300 es\n"
+            "#extension GL_EXT_clip_cull_distance : require\n"
+            "precision highp float;\n"
+            "void main() {\n"
+            "    vec2 mg_p = vec2((gl_VertexID == 1) ? 3.0 : -1.0, (gl_VertexID == 2) ? 3.0 : -1.0);\n"
+            "    gl_Position = vec4(mg_p, 0.0, 1.0);\n"
+            "    gl_ClipDistance[0] = 1.0;\n"
+            "    gl_ClipDistance[1] = 1.0;\n"
+            "}\n";
+        const char* const kClipDistanceProbeFragmentSource = "#version 300 es\n"
+                                                             "precision mediump float;\n"
+                                                             "layout(location = 0) out vec4 mg_probeColor;\n"
+                                                             "void main() { mg_probeColor = vec4(0.0, 1.0, 0.0, 1.0); }\n";
+
+        Bool IsProbeGreen(const GLubyte* pixel) { return pixel[0] < 64 && pixel[1] > 192; }
+
+        // One draw into the bound 4x1 target, cleared red first. Returns false when the draw or
+        // the read-back raised an error (inconclusive).
+        Bool DrawClipDistanceProbe(const GLESFunctionsTable& gl, Bool enableDistance0, Bool& leftPainted,
+                                   Bool& rightPainted) {
+            if (enableDistance0) {
+                gl.glEnable(kClipDistance0);
+            } else {
+                gl.glDisable(kClipDistance0);
+            }
+            gl.glDisable(kClipDistance1);
+            gl.glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+            gl.glClear(GL_COLOR_BUFFER_BIT);
+            Drain(gl);
+            gl.glDrawArrays(GL_TRIANGLES, 0, 3);
+            if (gl.glGetError() != GL_NO_ERROR) return false;
+            GLubyte row[kClipDistanceProbeWidth * 4] = {};
+            gl.glReadPixels(0, 0, kClipDistanceProbeWidth, 1, GL_RGBA, GL_UNSIGNED_BYTE, row);
+            if (gl.glGetError() != GL_NO_ERROR) return false;
+            leftPainted = IsProbeGreen(row);
+            rightPainted = IsProbeGreen(row + (kClipDistanceProbeWidth - 1) * 4);
+            return true;
+        }
+    } // namespace
+
+    NativeClipDistanceMeasurement ProbeNativeClipDistance(const GLESFunctionsTable& gl) {
+        NativeClipDistanceMeasurement measurement;
+        if (!HasIoBlockProbeEntryPoints(gl)) {
+            measurement.failure = "a probe entry point is missing";
+            return measurement;
+        }
+
+        SavedState saved;
+        Save(gl, saved);
+        GLboolean savedColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+        const Bool canMaskColor = gl.glColorMask != nullptr && gl.glGetBooleanv != nullptr;
+        if (canMaskColor) {
+            gl.glGetBooleanv(GL_COLOR_WRITEMASK, savedColorMask);
+            gl.glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        }
+        GLuint vao = 0;
+        gl.glGenVertexArrays(1, &vao);
+        gl.glBindVertexArray(vao);
+        PrepareForProbeDraw(gl);
+
+        Vector<StageSource> stages;
+        stages.push_back({GL_VERTEX_SHADER, kClipDistanceProbeVertexSource, "vertex"});
+        stages.push_back({GL_FRAGMENT_SHADER, kClipDistanceProbeFragmentSource, "fragment"});
+        const ProgramBuild build = BuildProgram(gl, stages, kClipDistanceProbeName);
+        Vector<StageSource> controlStages;
+        controlStages.push_back({GL_VERTEX_SHADER, kClipDistanceProbeControlVertexSource, "control vertex"});
+        controlStages.push_back({GL_FRAGMENT_SHADER, kClipDistanceProbeFragmentSource, "fragment"});
+        const ProgramBuild control = BuildProgram(gl, controlStages, kClipDistanceProbeName);
+        if (!build.compiled || !control.compiled) {
+            measurement.failure = "the probe's gl_ClipDistance vertex stage did not compile";
+        } else if (!build.linked || !control.linked) {
+            measurement.failure =
+                "the probe program did not link: " + FirstLine(!build.linked ? build.infoLog : control.infoLog);
+        } else {
+            GLuint renderbuffer = 0;
+            GLuint framebuffer = 0;
+            gl.glGenRenderbuffers(1, &renderbuffer);
+            gl.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+            gl.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, kClipDistanceProbeWidth, 1);
+            gl.glGenFramebuffers(1, &framebuffer);
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+            gl.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
+            if (gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                measurement.failure = "the probe framebuffer is incomplete";
+            } else {
+                gl.glViewport(0, 0, kClipDistanceProbeWidth, 1);
+                Bool left = false;
+                Bool right = false;
+                // THE CONTROL first: a positive distance, enabled, so both halves must paint.
+                gl.glUseProgram(control.program);
+                const Bool controlRan = DrawClipDistanceProbe(gl, true, left, right);
+                gl.glUseProgram(build.program);
+                if (!controlRan || !left || !right) {
+                    measurement.failure = "the control draw (a positive distance, enabled) did not paint the target";
+                } else if (!DrawClipDistanceProbe(gl, true, left, right) || !right) {
+                    measurement.failure = "the clipped draw raised an error or lost its kept half";
+                } else {
+                    measurement.clips = !left;
+                    Bool leftAfter = false;
+                    Bool rightAfter = false;
+                    if (DrawClipDistanceProbe(gl, false, leftAfter, rightAfter) && rightAfter) {
+                        measurement.ran = true;
+                        measurement.honorsEnables = leftAfter;
+                    } else {
+                        measurement.failure = "the re-disabled draw raised an error or lost its kept half";
+                    }
+                }
+            }
+            gl.glDisable(kClipDistance0);
+            gl.glDisable(kClipDistance1);
+            if (framebuffer != 0) gl.glDeleteFramebuffers(1, &framebuffer);
+            if (renderbuffer != 0) gl.glDeleteRenderbuffers(1, &renderbuffer);
+        }
+        if (build.program != 0) gl.glDeleteProgram(build.program);
+        if (control.program != 0) gl.glDeleteProgram(control.program);
+
+        if (vao != 0) {
+            gl.glBindVertexArray(0);
+            gl.glDeleteVertexArrays(1, &vao);
+        }
+        if (canMaskColor) {
+            gl.glColorMask(savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3]);
+        }
+        Restore(gl, saved);
+        Drain(gl);
+        if (!measurement.failure.empty()) {
+            MGLOG_I("[driver-bug] %s probe: %s", kClipDistanceProbeName, measurement.failure.c_str());
+        }
+        return measurement;
+    }
+
+    const NativeClipDistanceMeasurement& NativeClipDistance(const GLESFunctionsTable& gl) {
+        static const NativeClipDistanceMeasurement measurement = ProbeNativeClipDistance(gl);
+        return measurement;
+    }
+
+    namespace {
         // ===================== PACKED16 COPY-IMAGE FIELD ORDER =====================
 
         constexpr const char* kPacked16CopyProbeName = "packed16 copy-image field order";

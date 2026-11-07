@@ -237,6 +237,14 @@ namespace MobileGL::MG_Config {
         // negative control). Cross-backend by design: the demotion runs in the shared
         // phase-B chain, so one switch covers both. See DemotePointSizePass.
         QuirkOverride PointSizeDemotion = QuirkOverride::Auto;
+        // MOBILEGL_CLIP_DISTANCE_EMULATION: lower gl_ClipDistance to ordinary varyings plus a
+        // fragment discard (ShaderCompiler::EmulateClipDistanceForProgram) on a backend that
+        // cannot clip natively - no GL_EXT_clip_cull_distance or a driver the POST clip probe
+        // caught misbehaving (DirectGLES), shaderClipDistance == VK_FALSE (DirectVulkan).
+        // Auto arms it exactly there. ForceOn exercises it on a healthy driver (the pinned
+        // integration lane); ForceOff restores the native-or-nothing answer, which reports
+        // GL_MAX_CLIP_DISTANCES = 0 on a device without native support.
+        QuirkOverride ClipDistanceEmulation = QuirkOverride::Auto;
         // MOBILEGL_COHERENT_AS_FLUSH: app-compat for engines (e.g. Flywheel) that write
         // GPU-read data through persistent GL_MAP_FLUSH_EXPLICIT_BIT maps they never
         // flush. Persistent FLUSH_EXPLICIT map requests are rewritten to coherent

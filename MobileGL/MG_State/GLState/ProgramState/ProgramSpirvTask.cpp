@@ -33,6 +33,12 @@ namespace MobileGL::MG_State::GLState {
         }
         std::atomic_flag g_pointSizeDeclineReported;
         std::atomic_flag g_pointSizeOptimizerFailureReported;
+        std::atomic_flag g_clipDistanceDeclineReported;
+        std::atomic_flag g_clipDistanceOptimizerFailureReported;
+        std::atomic_flag g_clipDistanceEmulationReported;
+        // Varying locations the clip carriers may reach. 32 vec4s is what both backends' target
+        // drivers expose (128 output components); a program past it keeps the decline.
+        constexpr Uint32 kClipDistanceCarrierLocationBudget = 32;
     } // namespace
 
     void ProgramSpirvTask::DeferLog(String line, const Int level) {
@@ -154,8 +160,10 @@ namespace MobileGL::MG_State::GLState {
             m_phaseA->in.env != nullptr && m_phaseA->in.env->DemotesTessellationPointSize();
         const Bool demoteGeometryPointSize =
             m_phaseA->in.env != nullptr && m_phaseA->in.env->DemotesGeometryPointSize();
+        // Part of the frontend fingerprint (CompileEnv), so the L1 key already separates the two.
+        const Bool emulateClipDistance = m_phaseA->in.env != nullptr && m_phaseA->in.env->EmulatesClipDistance();
         GenerateSpirv(handoff, externalIndex, deferOutputValidationForDirectVulkan, enableSpirvValidation,
-                      nativeFloat64, demoteTessellationPointSize, demoteGeometryPointSize);
+                      nativeFloat64, demoteTessellationPointSize, demoteGeometryPointSize, emulateClipDistance);
         // GlslangToSpv was the only consumer of the parsed ASTs; everything after this point
         // works on the SPIR-V and on the TProgram's own self-contained reflection pool. Drop
         // them here rather than at the end of the body, which is ~87% of this node's runtime
@@ -214,7 +222,8 @@ namespace MobileGL::MG_State::GLState {
     void ProgramSpirvTask::GenerateSpirv(const ProgramLinkTask::SpirvHandoff& handoff, const Uint externalIndex,
                                          const Bool deferOutputValidationForDirectVulkan,
                                          const Bool enableSpirvValidation, const Bool nativeFloat64,
-                                         const Bool demoteTessellationPointSize, const Bool demoteGeometryPointSize) {
+                                         const Bool demoteTessellationPointSize, const Bool demoteGeometryPointSize,
+                                         const Bool emulateClipDistance) {
         /* As we passed first stage compilation/linking,
          * we'll assume all the operations here should
          * pass. We may be able to employ some optimizations
@@ -268,6 +277,42 @@ namespace MobileGL::MG_State::GLState {
             }
         }
         artifacts.nativeFloat64 = keepFloat64;
+
+        // The clip-distance emulation, program-wide and BEFORE the sanitize chain, on glslang's
+        // raw output. It cannot run after it: a stage whose only default-block uniform is the
+        // reserved enables member (nothing in the application reads it - only this pass does)
+        // has its whole MGL_GLOBAL_UBO deleted by ADCE, and the producer would then fall back
+        // to clipping by every distance. Running first adds the read that keeps it alive. The
+        // point-size demotion below places its carrier past these carriers.
+        artifacts.clipDistanceEmulated = false;
+        if (emulateClipDistance) {
+            ShaderCompiler::ClipDistanceEmulationOutcome outcome;
+            if (!ShaderCompiler::EmulateClipDistanceForProgram(
+                    artifacts.generatedSpirv, handoff.shaderTypes, handoff.captureRequestsClipDistance,
+                    kClipDistanceCarrierLocationBudget, outcome, !deferOutputValidationForDirectVulkan,
+                    enableSpirvValidation)) {
+                DeferLog(std::format("ProgramObject {}: clip-distance emulation failed in the optimizer; the "
+                                     "program keeps gl_ClipDistance, which this backend cannot host",
+                                     externalIndex),
+                         FirstTimeWarnLevel(g_clipDistanceOptimizerFailureReported));
+            } else if (outcome.emulated) {
+                artifacts.clipDistanceEmulated = true;
+                // THE ARMING SIGNAL, INFO and latched: the integration lane that pins
+                // MOBILEGL_CLIP_DISTANCE_EMULATION=1 asserts on this line, because a healthy
+                // driver renders the same pixels whether the emulation ran or not.
+                const Bool first = !g_clipDistanceEmulationReported.test_and_set(std::memory_order_relaxed);
+                DeferLog(std::format("ProgramObject {}: gl_ClipDistance emulated ({} distance(s) carried to the "
+                                     "fragment stage as varyings and clipped by discard{})",
+                                     externalIndex, outcome.distanceCount,
+                                     outcome.enablesFound ? "" : "; no enables uniform, every distance clips"),
+                         first ? MOBILEGL_LOG_LEVEL_INFO : MOBILEGL_LOG_LEVEL_DEBUG);
+            } else if (!outcome.declineDetail.empty()) {
+                DeferLog(std::format("ProgramObject {}: clip-distance emulation declined ({}); the program keeps "
+                                     "gl_ClipDistance, which this backend cannot host",
+                                     externalIndex, outcome.declineDetail),
+                         FirstTimeWarnLevel(g_clipDistanceDeclineReported));
+            }
+        }
 
         // Linked SPIR-V generated, sanitize and optimize it
         Bool allOptimized = true;
@@ -348,6 +393,7 @@ namespace MobileGL::MG_State::GLState {
         artifacts.uniformOffsets.clear();
         artifacts.globalUboScratch.clear();
         artifacts.reservedNumSamplesOffset = ProgramObject::kInvalidUniformOffset;
+        artifacts.reservedClipDistanceEnablesOffset = ProgramObject::kInvalidUniformOffset;
         // kInvalidUniformOffset marks locations that end up without global-UBO backing
         // (e.g. the optimizer eliminated every use of the uniform); the fallback pass
         // below gives those locations tail storage so glUniform* always has a target.
@@ -386,6 +432,10 @@ namespace MobileGL::MG_State::GLState {
                     // precisely so no application can address it - so the lookup below would find
                     // nothing and log it as unbacked. Only the fragment stage declares it, and
                     // every stage's copy sits at the same offset in the one shared global UBO.
+                    if (name == CLIP_DISTANCE_ENABLES_UNIFORM_NAME) {
+                        artifacts.reservedClipDistanceEnablesOffset = offset;
+                        continue;
+                    }
                     if (name == NUM_SAMPLES_UNIFORM_NAME) {
                         artifacts.reservedNumSamplesOffset = offset;
                         MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - reserved gl_NumSamples stand-in '%s' "

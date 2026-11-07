@@ -660,6 +660,7 @@ inline constexpr WireLayoutMember kMGPipeWireLayoutMembers[] = {
     {"DynamicBackendParameters.SupportsFloat64VertexAttributes", offsetof(DynamicBackendParameters, SupportsFloat64VertexAttributes), sizeof(((DynamicBackendParameters*)nullptr)->SupportsFloat64VertexAttributes)},
     {"DynamicBackendParameters.SupportsTessellationPointSize", offsetof(DynamicBackendParameters, SupportsTessellationPointSize), sizeof(((DynamicBackendParameters*)nullptr)->SupportsTessellationPointSize)},
     {"DynamicBackendParameters.SupportsGeometryPointSize", offsetof(DynamicBackendParameters, SupportsGeometryPointSize), sizeof(((DynamicBackendParameters*)nullptr)->SupportsGeometryPointSize)},
+    {"DynamicBackendParameters.EmulatesClipDistance", offsetof(DynamicBackendParameters, EmulatesClipDistance), sizeof(((DynamicBackendParameters*)nullptr)->EmulatesClipDistance)},
     {"DynamicBackendParameters.MaxShaderStorageBlockSize", offsetof(DynamicBackendParameters, MaxShaderStorageBlockSize), sizeof(((DynamicBackendParameters*)nullptr)->MaxShaderStorageBlockSize)},
     {"DynamicBackendParameters.SubgroupSize", offsetof(DynamicBackendParameters, SubgroupSize), sizeof(((DynamicBackendParameters*)nullptr)->SubgroupSize)},
     {"DynamicBackendParameters.SubgroupSupportedStages", offsetof(DynamicBackendParameters, SubgroupSupportedStages), sizeof(((DynamicBackendParameters*)nullptr)->SubgroupSupportedStages)},

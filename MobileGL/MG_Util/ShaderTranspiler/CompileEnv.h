@@ -165,6 +165,10 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // fingerprint: glslang produces the same thing either way.
         Bool DemotesTessellationPointSize() const { return HasBackend() && !params.SupportsTessellationPointSize; }
         Bool DemotesGeometryPointSize() const { return HasBackend() && !params.SupportsGeometryPointSize; }
+        // The backend cannot clip with gl_ClipDistance natively and emulates it
+        // (BackendCaps::EmulatesClipDistance). Part of the frontend fingerprint, not a separate
+        // L1 bit: it changes the parsed source (the reserved enables uniform), not only phase B.
+        Bool EmulatesClipDistance() const { return HasBackend() && params.EmulatesClipDistance; }
         // Matches the historical rule exactly: with no active backend every extension counts
         // as advertised, because the frontend then has nothing to gate against.
         Bool IsExtensionAdvertised(GLExtension extension) const {

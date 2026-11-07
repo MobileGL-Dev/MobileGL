@@ -1274,6 +1274,19 @@ namespace MobileGL {
             // compile and the per-distance enables have nowhere to go - clipping silently never
             // happens, which is exactly what KHR-GLxx.clip_distance.functional catches.
             Bool SupportsClipDistance = false;
+            // What SelfTest::ProbeNativeClipDistance measured - only run where the extension is
+            // advertised: an enabled negative distance removes its fragments, and a disabled one
+            // removes nothing.
+            Bool NativeClipDistanceClips = false;
+            Bool NativeClipDistanceHonorsEnables = false;
+            // DirectGLES lowers gl_ClipDistance to varyings plus a fragment discard
+            // (ShaderCompiler::EmulateClipDistanceForProgram) instead of handing it to the
+            // driver: no extension, no distances behind it, or a probe that caught the driver
+            // not clipping or not honoring the enables. MOBILEGL_CLIP_DISTANCE_EMULATION
+            // overrides. While set, the CLIP_DISTANCEi enables are NOT forwarded to the driver -
+            // no emulated module writes the built-in, and an enabled distance nobody writes is
+            // undefined clipping.
+            Bool EmulatesClipDistance = false;
             // GL_OES_viewport_array is present: the driver knows gl_ViewportIndex in ESSL - and
             // only then. ESSL has no core spelling for it at ANY version, while SPIRV-Cross prints
             // the identifier bare and requests nothing for it (contrast gl_Layer, which it backs

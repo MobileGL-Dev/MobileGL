@@ -1135,7 +1135,9 @@ namespace MobileGL::MG_State::GLState {
         for (const ProgramObject::XfbVarying& varying : artifacts.xfbVaryings) {
             if (varying.name == "gl_PointSize") {
                 spirvHandoff.captureRequestsPointSize = true;
-                break;
+            }
+            if (varying.name.rfind("gl_ClipDistance", 0) == 0) {
+                spirvHandoff.captureRequestsClipDistance = true;
             }
         }
         // Phase B pairs this with its own SpirvArtifacts to insert the completed front end.
@@ -1501,6 +1503,21 @@ namespace MobileGL::MG_State::GLState {
         };
         for (Int i = 0; i < tProgramUniformCount; i++) {
             const auto& uniform = artifacts.program->getUniform(i);
+            // The clip-distance enables InjectClipDistanceEnablesShim declared: MobileGL's own
+            // per-draw input to the emulation, hidden from the GL surface on the same terms as
+            // the gl_NumSamples stand-in below. Checked BEFORE the dead-uniform filter on
+            // purpose: no application code reads it - only EmulateClipDistancePass does, after
+            // this reflection ran - so glslang reports it with stages == 0, and filtering it as
+            // dead would leave the draw path never writing it (every distance then selects 1.0
+            // and nothing clips, with no error anywhere).
+            if (isGlobalUboMember(uniform) &&
+                uniform.name == MG_Util::ShaderTranspiler::CLIP_DISTANCE_ENABLES_UNIFORM_NAME) {
+                artifacts.usesReservedClipDistanceEnables = true;
+                MGLOG_D("ProgramObject %u: Reflection - reserved clip-distance enables '%s' hidden from the GL "
+                        "uniform surface",
+                        in.externalIndex, uniform.name.c_str());
+                continue;
+            }
             if (isGlobalUboMember(uniform) && uniform.stages == 0) {
                 MGLOG_D("ProgramObject %u: Reflection - dead default-block uniform '%s' filtered from the GL "
                         "surface",

@@ -28,6 +28,14 @@ namespace MobileGL {
             // uses gl_NumSamples the link task will still hide its uniform. That is the same
             // bargain every mg_-prefixed rewrite in this pipeline strikes.
             inline const char* NUM_SAMPLES_UNIFORM_NAME = "mg_NumSamples";
+            // The default-block uniform InjectClipDistanceEnablesShim declares, on a backend that
+            // emulates gl_ClipDistance (BackendCaps::EmulatesClipDistance), in every
+            // pre-rasterization stage that names the built-in: bit i is GL_CLIP_DISTANCE0 + i's
+            // enable. EmulateClipDistancePass reads it where the producing stage writes its
+            // carriers; the draw path refreshes it from the render state before every draw, and
+            // the link task hides it from the GL uniform surface exactly as it hides
+            // NUM_SAMPLES_UNIFORM_NAME. Reserved on the same terms.
+            inline const char* CLIP_DISTANCE_ENABLES_UNIFORM_NAME = "mg_ClipDistanceEnables";
             // glslang's Vulkan-relaxed parse rewrites every atomic_uint into a member of a
             // synthesized storage block named "<this>_<GL atomic-counter binding>"
             // (ParseContextBase::growAtomicCounterBlock). That block IS the GL atomic counter

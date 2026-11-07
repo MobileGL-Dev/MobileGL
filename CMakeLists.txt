@@ -444,6 +444,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LegalizeResourceArrayIndexPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FlattenAtomicCounterBlockPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/DemotePointSizePass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/EmulateClipDistancePass.cpp
 
     MobileGL/MG_Util/BackendLoaders/OpenGL/Loader.cpp
     MobileGL/MG_Util/BackendLoaders/Vulkan/Loader.cpp

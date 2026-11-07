@@ -531,9 +531,9 @@ TEST(ProgramArtifactsCodec, TheTablesVisitEveryMemberExceptTheLiveProgram) {
     // P7 OQ-8: 59 members, 58 visited. The 59th is still the live TProgram; the 58th is
     // storageBlocks, which follows the record arm's guard (ProgramArtifacts.h). esOrigin then
     // made it 60 and 59.
-    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<LinkArtifacts>(), 59u);
+    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<LinkArtifacts>(), 60u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<StorageBlockReflection>(), 3u);
-    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<SpirvArtifacts>(), 8u);
+    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<SpirvArtifacts>(), 10u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<ResourceReflection>(), 14u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<XfbVarying>(), 11u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<TypeFacts>(), 20u);

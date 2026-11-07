@@ -31,6 +31,7 @@ add_executable(
         WidenImageFormatsTest.cpp
         GlslangCaptureTest.cpp
         DemotePointSizeTest.cpp
+        EmulateClipDistanceTest.cpp
         FragCoordYFlipTest.cpp
         PixelCenterIntegerTest.cpp
         ZeroLayerOutputTest.cpp

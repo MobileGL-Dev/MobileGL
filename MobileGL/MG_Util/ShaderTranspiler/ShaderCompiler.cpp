@@ -61,6 +61,7 @@
 #include "SpirvPasses/LegalizeResourceArrayIndexPass.h"
 #include "SpirvPasses/FlattenAtomicCounterBlockPass.h"
 #include "SpirvPasses/DemotePointSizePass.h"
+#include "SpirvPasses/EmulateClipDistancePass.h"
 #include "spirv-tools/libspirv.h"
 #include "spirv-tools/optimizer.hpp"
 #include "source/opt/build_module.h"
@@ -1212,6 +1213,127 @@ namespace MobileGL {
                     modules[stageIndex[stage]] = Move(rewritten[stageIndex[stage]]);
                 }
                 outcome.demoted = true;
+                return true;
+            }
+
+            Bool ShaderCompiler::EmulateClipDistanceForProgram(Vector<Vector<Uint32>>& modules,
+                                                               const Vector<GLenum>& shaderTypes,
+                                                               const Bool captureRequestsClipDistance,
+                                                               const Uint32 maxVaryingLocations,
+                                                               ClipDistanceEmulationOutcome& outcome,
+                                                               const bool validateOutput,
+                                                               const bool enableSpirvValidation) {
+                outcome = {};
+                // Pipeline order: VS, TCS, TES, GS, FS.
+                Int stageIndex[5] = {-1, -1, -1, -1, -1};
+                for (SizeT i = 0; i < shaderTypes.size() && i < modules.size(); ++i) {
+                    switch (shaderTypes[i]) {
+                    case GL_VERTEX_SHADER: stageIndex[0] = static_cast<Int>(i); break;
+                    case GL_TESS_CONTROL_SHADER: stageIndex[1] = static_cast<Int>(i); break;
+                    case GL_TESS_EVALUATION_SHADER: stageIndex[2] = static_cast<Int>(i); break;
+                    case GL_GEOMETRY_SHADER: stageIndex[3] = static_cast<Int>(i); break;
+                    case GL_FRAGMENT_SHADER: stageIndex[4] = static_cast<Int>(i); break;
+                    default: break;
+                    }
+                }
+
+                ClipDistanceModuleProbe probes[5];
+                Bool anyAccess = false;
+                Uint32 carrierLocation = 0;
+                for (Int stage = 0; stage < 5; ++stage) {
+                    if (stageIndex[stage] < 0) continue;
+                    const Vector<Uint32>& module = modules[stageIndex[stage]];
+                    probes[stage] = EmulateClipDistancePass::ProbeModule(module);
+                    if (!probes[stage].parsed) return true; // broken for other reasons; owns its failure
+                    anyAccess |= probes[stage].declaresClipDistanceCapability;
+                    const PointSizeModuleProbe locations = ProbePointSizeModule(module);
+                    carrierLocation = std::max(carrierLocation, locations.locationSlotEnd);
+                }
+                if (!anyAccess) return true;
+                if (captureRequestsClipDistance) {
+                    outcome.declineDetail = "transform feedback captures gl_ClipDistance";
+                    return true;
+                }
+
+                // The producer: the last pre-rasterization stage present, and only when it
+                // actually writes the built-in - an earlier stage's writes are dead in GL unless
+                // a later stage reads gl_in[].gl_ClipDistance, which the pass declines.
+                Int producer = -1;
+                for (Int stage = 3; stage >= 0; --stage) {
+                    if (stage == 1) continue; // a control stage is never last
+                    if (stageIndex[stage] >= 0) {
+                        producer = stage;
+                        break;
+                    }
+                }
+                Uint32 distanceCount = 0;
+                if (producer >= 0 && probes[producer].declaresClipDistanceCapability) {
+                    distanceCount = probes[producer].outputDistanceCount;
+                }
+                if (distanceCount > EmulateClipDistancePass::kMaxCarriers * 4) {
+                    outcome.declineDetail = std::format("{} clip distances, more than the eight the carriers hold",
+                                                        distanceCount);
+                    return true;
+                }
+                const Uint32 carrierCount = (distanceCount + 3) / 4;
+                if (carrierCount > 0 && carrierLocation + carrierCount > maxVaryingLocations) {
+                    outcome.declineDetail = std::format(
+                        "the program's varyings already reach location {}, leaving no room for {} clip carrier(s) "
+                        "under the {}-location budget",
+                        carrierLocation, carrierCount, maxVaryingLocations);
+                    return true;
+                }
+
+                Vector<Vector<Uint32>> rewritten(modules.size());
+                Bool rewrote[5] = {false, false, false, false, false};
+                Bool enablesFound = false;
+                for (Int stage = 0; stage < 5; ++stage) {
+                    const Int moduleIndex = stageIndex[stage];
+                    if (moduleIndex < 0) continue;
+                    EmulateClipDistanceOptions options;
+                    options.location = carrierLocation;
+                    if (stage == 4) {
+                        options.role = EmulateClipDistanceOptions::Role::Consumer;
+                        options.distanceCount = distanceCount;
+                        if (distanceCount == 0 && !probes[stage].declaresClipDistanceCapability) continue;
+                    } else if (stage == producer && distanceCount > 0) {
+                        options.role = EmulateClipDistanceOptions::Role::Producer;
+                        options.enablesMemberName = CLIP_DISTANCE_ENABLES_UNIFORM_NAME;
+                    } else {
+                        options.role = EmulateClipDistanceOptions::Role::Redirect;
+                        if (!probes[stage].declaresClipDistanceCapability) continue;
+                    }
+
+                    EmulateClipDistanceReport report;
+                    spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                    optimizer.RegisterPass(EmulateClipDistancePass::CreateEmulateClipDistancePass(options, &report));
+                    if (!RunOptimizerChecked("EmulateClipDistanceForProgram", optimizer, modules[moduleIndex],
+                                             rewritten[moduleIndex], validateOutput, enableSpirvValidation)) {
+                        return false; // modules untouched: nothing was committed
+                    }
+                    if (report.declined) {
+                        outcome.declineDetail = Move(report.declineReason);
+                        return true;
+                    }
+                    if (options.role == EmulateClipDistanceOptions::Role::Producer) {
+                        if (report.distanceCount != distanceCount) {
+                            outcome.declineDetail = std::format(
+                                "the producing stage carries {} clip distances where {} were planned",
+                                report.distanceCount, distanceCount);
+                            return true;
+                        }
+                        enablesFound = report.enablesFound;
+                    }
+                    rewrote[stage] = report.rewrote;
+                }
+
+                for (Int stage = 0; stage < 5; ++stage) {
+                    if (!rewrote[stage]) continue;
+                    modules[stageIndex[stage]] = Move(rewritten[stageIndex[stage]]);
+                }
+                outcome.emulated = true;
+                outcome.distanceCount = distanceCount;
+                outcome.enablesFound = enablesFound;
                 return true;
             }
 

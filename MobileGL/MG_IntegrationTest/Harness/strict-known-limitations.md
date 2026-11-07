@@ -7,9 +7,11 @@ Configuration-specific controls are selected separately and must pass without sk
 ## Unresolved behavior
 
 - `ClipDistanceScenario.ADisabledClipDistanceRemovesNothing` and
-  `TheEnablesAreIndependentPerDistance`: per-distance enable semantics are missing
-  on the tested GLES and Vulkan paths. Neither backend supplies a passing control
-  on local llvmpipe/lavapipe. The strict list names the GLES and Magma Fm entries.
+  `TheEnablesAreIndependentPerDistance`: Magma's NATIVE clip distances (lavapipe,
+  Adreno) still ignore the GL_CLIP_DISTANCEi enables - Vulkan has no such state.
+  Every emulating backend has them (EmulateClipDistancePass); Espryt on llvmpipe
+  now emulates, because its native probe catches llvmpipe clipping by disabled
+  distances, so the GLES entries pass wherever the emulation is armed.
 - `PartialUploadOverGpuContentScenario.OneDimensionalArraySubImageKeepsTheGpuClearedLayer`:
   the Vulkan path cannot attach the 1D array layer. GLES passes, which does not
   establish Vulkan coverage.

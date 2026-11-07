@@ -337,6 +337,12 @@ namespace MobileGL::MG_State::GLState {
         // gate has to be answerable without joining the SPIR-V job, or every draw of every
         // program would pay a join to discover it has nothing to write.
         Bool usesReservedNumSamples = false;
+        // A pre-rasterization stage of this program declared the reserved clip-distance enables
+        // uniform (ShaderTranspiler::CLIP_DISTANCE_ENABLES_UNIFORM_NAME), which the source
+        // pipeline does only on a backend that emulates gl_ClipDistance, so the draw path owes it
+        // the GL_CLIP_DISTANCE0..7 enables before every draw. Phase A for the reason
+        // usesReservedNumSamples is.
+        Bool usesReservedClipDistanceEnables = false;
         // A shader of this program declared an `es` #version (ShaderTranspiler::FindEsOrigin).
         // ESSL fixes an image uniform's unit at its binding qualifier, so glUniform* on one is
         // INVALID_OPERATION for such a program and legal for a desktop one.
@@ -415,6 +421,8 @@ namespace MobileGL::MG_State::GLState {
         // uniformOffsets, because the member has no GL location at all: the link task keeps
         // it out of the GL-visible uniform index space so no application can see or write it.
         Uint reservedNumSamplesOffset = kInvalidUniformOffset;
+        // The same, for the reserved clip-distance enables uniform.
+        Uint reservedClipDistanceEnablesOffset = kInvalidUniformOffset;
         // False for a program whose SPIR-V was never produced (phase B canceled at
         // teardown or by a relink) or whose optimizer run failed. GL has no way to
         // retract a LINK_STATUS it already reported true, so such a program stays
@@ -443,6 +451,11 @@ namespace MobileGL::MG_State::GLState {
         // deliberately keeps answering "gl_PointSize": demotion happens after phase A,
         // so every query keeps the truthful GL spelling.
         Bool pointSizeDemoted = false;
+        // Whether these modules had gl_ClipDistance lowered to varyings plus a fragment discard
+        // (ShaderCompiler::EmulateClipDistanceForProgram) because the backend cannot clip
+        // natively. Recorded for the same reason pointSizeDemoted is: the final bytes no longer
+        // declare the capability that armed it.
+        Bool clipDistanceEmulated = false;
     };
 
     // ---- the archive field tables (ARCHITECTURE.md §7): ONE table per type, serving both directions ----
@@ -579,6 +592,7 @@ namespace MobileGL::MG_State::GLState {
         v("uniformBlocksWithoutBinding", a.uniformBlocksWithoutBinding);
         v("activeUniformCount", a.activeUniformCount);
         v("usesReservedNumSamples", a.usesReservedNumSamples);
+        v("usesReservedClipDistanceEnables", a.usesReservedClipDistanceEnables);
         v("esOrigin", a.esOrigin);
         v("maxUniformLocation", a.maxUniformLocation);
         v("uniformNameMaxLength", a.uniformNameMaxLength);
@@ -614,10 +628,12 @@ namespace MobileGL::MG_State::GLState {
         v("uniformOffsets", a.uniformOffsets);
         v("globalUboScratch", a.globalUboScratch);
         v("reservedNumSamplesOffset", a.reservedNumSamplesOffset);
+        v("reservedClipDistanceEnablesOffset", a.reservedClipDistanceEnablesOffset);
         v("spirvStatus", a.spirvStatus);
         v("nativeFloat64", a.nativeFloat64);
         v("pointSizeDemoted", a.pointSizeDemoted);
-    } // 8 fields
+        v("clipDistanceEmulated", a.clipDistanceEmulated);
+    } // 10 fields
 
     // ---- trip wires ----
     // TypeFacts is a POD on every ABI: 13 Bool + 3 bytes of padding + 7 x 4-byte scalars.
@@ -635,7 +651,7 @@ namespace MobileGL::MG_State::GLState {
 // P7 OQ-8 added storageBlocks, one more Vector, in the disaggregated build ONLY. The pull
 // number below is the one G1 measures and it has not moved.
 #define MGL_LINKARTIFACTS_SIZE 1080
-#define MGL_SPIRVARTIFACTS_SIZE 88
+#define MGL_SPIRVARTIFACTS_SIZE 96
 #elif defined(_LIBCPP_VERSION) && (SIZE_MAX == UINT64_MAX) && defined(MGL_ARTIFACT_SIZES_LIBCXX_PINNED)
     // The integrator pins these from the NDK build (brief C.4); until then this branch is inert.
 #endif

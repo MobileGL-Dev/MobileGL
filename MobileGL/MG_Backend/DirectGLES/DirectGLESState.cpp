@@ -514,7 +514,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            if (tailSpanDirty && g_GLESCapabilities.SupportsClipDistance) {
+            if (tailSpanDirty && g_GLESCapabilities.SupportsClipDistance && !g_GLESCapabilities.EmulatesClipDistance) {
                 // gl_ClipDistance clipping is per-distance enable state in GL, and ES reaches it
                 // only through GL_EXT_clip_cull_distance. That extension reuses the desktop enum
                 // values for CLIP_DISTANCE0_EXT..7_EXT, but the token is absent from the ES

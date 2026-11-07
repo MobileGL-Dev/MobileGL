@@ -75,6 +75,10 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // and expands gl_MaxClipDistances from the same number, so it decides both whether a
         // shader compiles at all and what a module that reads the constant generates.
         HashValue(state, env.params.MaxClipDistances);
+        // Unlike the point-size demotion bits this IS frontend material: when it is set the
+        // source pipeline declares the reserved enables uniform in every pre-rasterization
+        // stage that names gl_ClipDistance, so glslang parses a different source.
+        HashValue(state, env.params.EmulatesClipDistance);
         // The cull-distance pair, added when the GL 4.6 API-surface wave made them env-derived:
         // they were bare literals (8/8) in BuildTBuiltInResource while no backend had ever been
         // asked whether it can host a cull distance. Exactly the MaxClipDistances class - glslang

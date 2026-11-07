@@ -131,6 +131,10 @@ namespace MobileGL::MG_State::GLState {
             // this bit. No new L1 key material: the key already covers
             // `requestedXfbVaryings`, of which this is a function.
             Bool captureRequestsPointSize = false;
+            // The same derived bit for gl_ClipDistance (any element): the clip-distance
+            // emulation declines such a program, since the capture wants the unmasked value at a
+            // varying the emulation never creates. Also a function of `requestedXfbVaryings`.
+            Bool captureRequestsClipDistance = false;
 
             // L1 shader-translation memo key for this program's SPIR-V (see
             // MG_Util/ShaderTranspiler/TranslationCache.h). Built HERE, at the tail of phase
