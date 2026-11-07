@@ -2602,8 +2602,20 @@ namespace MobileGL::MG_Pipe {
         // boundary reads unpack state, and the staged-repack upload path does not even issue
         // glPixelStorei (ARCHITECTURE.md 4.6 D5).
         Uint64 EmitPixelPackState(GLContext& ctx) {
-            MGPPixelPackState pack{};
-            pack.Pack = ctx.GetPixelStoreParameters(false);
+            // Field by field into zeroed bytes: the two bytes of padding after the Bools would
+            // otherwise carry whatever the context's heap block held, onto the wire and into the
+            // recorder's hash.
+            MGPPixelPackState pack;
+            std::memset(&pack, 0, sizeof(pack));
+            const PixelStoreParameters live = ctx.GetPixelStoreParameters(false);
+            pack.Pack.SwapBytes = live.SwapBytes;
+            pack.Pack.LSBFirst = live.LSBFirst;
+            pack.Pack.RowLength = live.RowLength;
+            pack.Pack.ImageHeight = live.ImageHeight;
+            pack.Pack.SkipPixels = live.SkipPixels;
+            pack.Pack.SkipRows = live.SkipRows;
+            pack.Pack.SkipImages = live.SkipImages;
+            pack.Pack.Alignment = live.Alignment;
             MGPipeRouteSetPixelPackState(pack);
             return sizeof(MGPPixelPackState);
         }
