@@ -698,10 +698,10 @@ TEST(DirectGLESSanity, PreservesHostPerStageImageUniformLimits) {
 
 // maxClipDistances is a LIMIT every Vulkan device reports; declaring ClipDistance in a module
 // needs the shaderClipDistance FEATURE, which is separate and which VulkanRenderer enables only
-// where the physical device has it. Forwarding the limit without the feature advertises eight
-// clip planes no shader may use - the same shape as the image-uniform limits above, and the same
-// shape as the GL_EXT_clip_cull_distance lie on DirectGLES. Not a blanket zero: a device WITH the
-// feature keeps its real number.
+// where the physical device has it. Without the feature the device's limit is never forwarded:
+// the backend EMULATES the built-in instead (EmulateClipDistancePass), which is what lets it
+// answer GL 3.0's minimum of eight on every Mali device. With the feature it keeps its real
+// number and the native path.
 TEST(DirectVulkanSanity, GatesClipDistancesOnTheShaderClipDistanceFeature) {
     using namespace MobileGL;
 
@@ -710,11 +710,15 @@ TEST(DirectVulkanSanity, GatesClipDistancesOnTheShaderClipDistanceFeature) {
     caps.MaxClipDistances = 8;
 
     caps.SupportsShaderClipDistance = false;
+    caps.MaxClipDistances = 0; // what a Mali device reports alongside the missing feature
     backend.ApplyVulkanCapabilitiesForTesting(caps);
-    EXPECT_EQ(backend.GetDynamicParameters().MaxClipDistances, 0);
+    EXPECT_TRUE(backend.GetDynamicParameters().EmulatesClipDistance);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxClipDistances, 8);
 
     caps.SupportsShaderClipDistance = true;
+    caps.MaxClipDistances = 8;
     backend.ApplyVulkanCapabilitiesForTesting(caps);
+    EXPECT_FALSE(backend.GetDynamicParameters().EmulatesClipDistance);
     EXPECT_EQ(backend.GetDynamicParameters().MaxClipDistances, 8);
 }
 
@@ -733,11 +737,13 @@ TEST(DirectVulkanSanity, GatesCullDistancesOnTheShaderCullDistanceFeature) {
     caps.MaxCullDistances = 8;
     caps.MaxCombinedClipAndCullDistances = 8;
 
+    // Neither feature: cull stays zero (a per-primitive cull has no per-fragment substitute),
+    // while clip is emulated, so the combined limit describes the emulated eight.
     caps.SupportsShaderClipDistance = false;
     caps.SupportsShaderCullDistance = false;
     backend.ApplyVulkanCapabilitiesForTesting(caps);
     EXPECT_EQ(backend.GetDynamicParameters().MaxCullDistances, 0);
-    EXPECT_EQ(backend.GetDynamicParameters().MaxCombinedClipAndCullDistances, 0);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxCombinedClipAndCullDistances, 8);
 
     // Clip only: cull stays zero, and the combined limit still describes the clip capacity.
     caps.SupportsShaderClipDistance = true;
@@ -771,6 +777,23 @@ TEST(DirectGLESSanity, ForwardsTheProbedClipAndCullDistanceLimits) {
     backend.ApplyGLESCapabilitiesForTesting(caps);
     EXPECT_EQ(backend.GetDynamicParameters().MaxClipDistances, 8);
     EXPECT_EQ(backend.GetDynamicParameters().MaxCullDistances, 8);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxCombinedClipAndCullDistances, 8);
+    EXPECT_FALSE(backend.GetDynamicParameters().EmulatesClipDistance);
+}
+
+// The loader's verdict that the driver cannot clip natively (no extension, or the POST clip probe
+// caught it misbehaving) turns the clip limit into the emulated eight - GL 3.0's minimum - while
+// cull keeps the driver's own answer: a per-primitive cull has no per-fragment substitute.
+TEST(DirectGLESSanity, AnEmulatingLoaderVerdictAdvertisesEightClipDistancesAndNoCull) {
+    using namespace MobileGL;
+
+    MG_Backend::DirectGLES::BackendObject_DirectGLES backend;
+    MG_External::GLESCapabilities caps; // no GL_EXT_clip_cull_distance, as on every Mali driver
+    caps.EmulatesClipDistance = true;
+    backend.ApplyGLESCapabilitiesForTesting(caps);
+    EXPECT_TRUE(backend.GetDynamicParameters().EmulatesClipDistance);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxClipDistances, 8);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxCullDistances, 0);
     EXPECT_EQ(backend.GetDynamicParameters().MaxCombinedClipAndCullDistances, 8);
 }
 
