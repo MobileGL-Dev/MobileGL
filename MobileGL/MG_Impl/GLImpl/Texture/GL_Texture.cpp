@@ -2197,7 +2197,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         // Allocate in TextureObject
         if (isProxy) {
-            MGLOG_D("%s: isProxy = true, not allocating", __func__);
+            TextureImpl::pProxyTextureManager->RecordProxyLevel(textureUploadTarget, level, {width, height, depth});
         } else {
             DiscardMipmapChainOnBaseRespecification(textureMipmapObject, textureUploadTarget, level);
             textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{width, height, depth}, internalBytes});
@@ -2345,7 +2345,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         // Allocate in TextureObject
         if (isProxy) {
-            MGLOG_D("%s: isProxy = true, not allocating", __func__);
+            TextureImpl::pProxyTextureManager->RecordProxyLevel(textureUploadTarget, level, {width, height, 1});
         } else {
             MGLOG_D("%s: Allocating %d bytes at mip %d", __func__, internalBytes, level);
             DiscardMipmapChainOnBaseRespecification(textureMipmapObject, textureUploadTarget, level);
@@ -2460,7 +2460,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         MOBILEGL_ASSERT(nullptr != static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get()),
                         "Texture object here should always be an object with mipmap");
         auto textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
-        if (!isProxy) {
+        if (isProxy) {
+            TextureImpl::pProxyTextureManager->RecordProxyLevel(textureUploadTarget, level, {width, 1, 1});
+        } else {
             DiscardMipmapChainOnBaseRespecification(textureMipmapObject, textureUploadTarget, level);
             textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{width, 1, 1}, internalBytes});
             // After AllocateStorage, which clears the tag. No block-compressed format has a 1D
@@ -2905,7 +2907,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_HEIGHT:
         case GL_TEXTURE_DEPTH: {
             const SizeT axis = pname == GL_TEXTURE_WIDTH ? 0 : (pname == GL_TEXTURE_HEIGHT ? 1 : 2);
-            if (storageType == TextureStorageType::Mipmap && mipmapObject != nullptr) {
+            // A proxy level never took storage; its size lives with the proxy manager.
+            const auto proxySize =
+                isProxy ? TextureImpl::pProxyTextureManager->GetProxyLevelTexelSize(uploadTarget, level) : std::nullopt;
+            if (proxySize) {
+                value = (*proxySize)[axis];
+            } else if (storageType == TextureStorageType::Mipmap && mipmapObject != nullptr) {
                 value = mipmapObject->GetMipmapTexelSize(uploadTarget, level)[axis];
             } else if (storageType == TextureStorageType::Buffer) {
                 // A buffer texture is one-dimensional.
@@ -3988,10 +3995,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
         textureObject->SetInternalFormat(textureInternalFormat);
 
-        // A proxy records the format and nothing else - it must never take storage, and it must never
-        // be tagged compressed, or GL_TEXTURE_COMPRESSED_IMAGE_SIZE on a proxy would stop being
-        // INVALID_OPERATION.
-        if (isProxy) return;
+        // A proxy records the format and the level size and nothing else - it must never take
+        // storage, and it must never be tagged compressed, or GL_TEXTURE_COMPRESSED_IMAGE_SIZE on a
+        // proxy would stop being INVALID_OPERATION.
+        if (isProxy) {
+            TextureImpl::pProxyTextureManager->RecordProxyLevel(textureUploadTarget, level, {width, height, depth});
+            return;
+        }
 
         const SizeT internalBpp =
             MG_Util::GetInternalBytesPerPixel(textureInternalFormat, TexturePixelDataType::UnsignedByte);
@@ -4072,10 +4082,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
         textureObject->SetInternalFormat(textureInternalFormat);
 
-        // A proxy records the format and nothing else - it must never take storage, and it must never
-        // be tagged compressed, or GL_TEXTURE_COMPRESSED_IMAGE_SIZE on a proxy would stop being
-        // INVALID_OPERATION.
-        if (isProxy) return;
+        // A proxy records the format and the level size and nothing else - it must never take
+        // storage, and it must never be tagged compressed, or GL_TEXTURE_COMPRESSED_IMAGE_SIZE on a
+        // proxy would stop being INVALID_OPERATION.
+        if (isProxy) {
+            TextureImpl::pProxyTextureManager->RecordProxyLevel(textureUploadTarget, level, {width, height, 1});
+            return;
+        }
 
         const SizeT internalBpp =
             MG_Util::GetInternalBytesPerPixel(textureInternalFormat, TexturePixelDataType::UnsignedByte);

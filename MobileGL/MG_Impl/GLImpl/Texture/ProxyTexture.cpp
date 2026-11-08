@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "ProxyTexture.h"
+#include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/TextureState/TextureObject1D.h>
 #include <MG_State/GLState/TextureState/TextureObject2D.h>
 #include <MG_State/GLState/TextureState/TextureObject2DCube.h>
@@ -86,5 +87,52 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         }
         static SharedPtr<MG_State::GLState::ITextureObject> nullTextureObject = nullptr;
         return nullTextureObject;
+    }
+
+    namespace {
+        // Whether the implementation can hold a level of this size on this proxy target. Every
+        // dimension of a mipmapped image shrinks with the level; array layers do not.
+        Bool ProxyLevelFits(TextureUploadTarget target, GLint level, IntVec3 size) {
+            MG_Backend::DynamicBackendParameters limits{};
+            if (MG_Backend::pActiveBackendObject) limits = MG_Backend::pActiveBackendObject->GetDynamicParameters();
+            const auto levelLimit = [level](Int limit) { return level < 31 ? std::max(limit >> level, 1) : 1; };
+            const Int planar = levelLimit(limits.MaxTextureSize);
+            const Int cube = levelLimit(limits.MaxCubeMapTextureSize);
+            const Int volume = levelLimit(limits.Max3DTextureSize);
+            const Int layers = limits.MaxArrayTextureLayers;
+            switch (target) {
+            case TextureUploadTarget::ProxyTexture1D:
+                return size.x() <= planar;
+            case TextureUploadTarget::ProxyTexture1DArray:
+                return size.x() <= planar && size.y() <= layers;
+            case TextureUploadTarget::ProxyTexture2DArray:
+                return size.x() <= planar && size.y() <= planar && size.z() <= layers;
+            case TextureUploadTarget::ProxyTexture3D:
+                return size.x() <= volume && size.y() <= volume && size.z() <= volume;
+            case TextureUploadTarget::ProxyCubeMap:
+                return size.x() <= cube && size.y() <= cube;
+            case TextureUploadTarget::ProxyCubeMapArray:
+                return size.x() <= cube && size.y() <= cube && size.z() <= layers;
+            case TextureUploadTarget::ProxyTextureRectangle:
+                return level == 0 && size.x() <= limits.MaxTextureSize && size.y() <= limits.MaxTextureSize;
+            default:
+                return size.x() <= planar && size.y() <= planar;
+            }
+        }
+    } // namespace
+
+    void ProxyTextureManager::RecordProxyLevel(TextureUploadTarget target, GLint level, IntVec3 size) {
+        if (level < 0) return;
+        auto& levels = m_proxyLevelSizes[target];
+        if (levels.size() <= static_cast<SizeT>(level)) levels.resize(static_cast<SizeT>(level) + 1);
+        levels[level] = ProxyLevelFits(target, level, size) ? size : IntVec3{0, 0, 0};
+    }
+
+    Optional<IntVec3> ProxyTextureManager::GetProxyLevelTexelSize(TextureUploadTarget target, GLint level) const {
+        auto it = m_proxyLevelSizes.find(target);
+        if (it == m_proxyLevelSizes.end() || level < 0 || it->second.size() <= static_cast<SizeT>(level)) {
+            return std::nullopt;
+        }
+        return it->second[level];
     }
 } // namespace MobileGL::MG_Impl::GLImpl::TextureImpl

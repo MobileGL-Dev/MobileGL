@@ -1204,16 +1204,56 @@ TEST_F(TextureTest, TextureParameterRejectsProxyTargetsThatGetTexLevelParameterS
     ExpectSingleGlError(GL_INVALID_ENUM);
 
     // The level query keeps its proxy support - that is the entire point of a proxy texture, and the
-    // predicate deliberately does not gate it. Only the ERROR is asserted, not the width: MobileGL
-    // does not currently report a proxy level's dimensions back (it answers 0), which is a separate
-    // pre-existing gap in GetTexLevelParameter and not something this predicate decides. What
-    // matters here is that the query is not turned into GL_INVALID_ENUM alongside the setters.
+    // predicate deliberately does not gate it: the query answers the size the proxy was given
+    // instead of turning into GL_INVALID_ENUM alongside the setters.
     GLint proxyWidth = -1;
     MG_Impl::GLImpl::GetTexLevelParameteriv(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &proxyWidth);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR)
         << "the proxy target must still be accepted by GetTexLevelParameter";
+    EXPECT_EQ(proxyWidth, 4) << "a proxy level reports the width it was given";
 
     DrainPendingGlErrors();
+}
+
+// GL 4.6 core 8.22: a proxy level reports the size it was given while the implementation can hold
+// it, and all zeros - with no error - once a dimension passes the limit at that level. Applications
+// probe GL_MAX_TEXTURE_SIZE this way, halving from the largest size until the width comes back.
+TEST_F(TextureTest, ProxyTextureLevelReportsRequestedSizeOrZerosPastTheLimit) {
+    GLint maxTextureSize = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+    ASSERT_GT(maxTextureSize, 1);
+    const auto levelSize = [](GLenum target, GLint level, GLenum pname) {
+        GLint value = -1;
+        MG_Impl::GLImpl::GetTexLevelParameteriv(target, level, pname, &value);
+        return value;
+    };
+
+    MG_Impl::GLImpl::TexImage2D(GL_PROXY_TEXTURE_2D, 0, GL_RGBA8, maxTextureSize, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                nullptr);
+    EXPECT_EQ(levelSize(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_WIDTH), maxTextureSize);
+    EXPECT_EQ(levelSize(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT), 16);
+
+    MG_Impl::GLImpl::TexImage2D(GL_PROXY_TEXTURE_2D, 0, GL_RGBA8, maxTextureSize * 2, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                nullptr);
+    EXPECT_EQ(levelSize(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_WIDTH), 0) << "past GL_MAX_TEXTURE_SIZE";
+    EXPECT_EQ(levelSize(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT), 0) << "every dimension is cleared";
+
+    // The limit halves with each level.
+    MG_Impl::GLImpl::TexImage2D(GL_PROXY_TEXTURE_2D, 1, GL_RGBA8, maxTextureSize, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                nullptr);
+    EXPECT_EQ(levelSize(GL_PROXY_TEXTURE_2D, 1, GL_TEXTURE_WIDTH), 0);
+    MG_Impl::GLImpl::TexImage2D(GL_PROXY_TEXTURE_2D, 1, GL_RGBA8, maxTextureSize / 2, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                nullptr);
+    EXPECT_EQ(levelSize(GL_PROXY_TEXTURE_2D, 1, GL_TEXTURE_WIDTH), maxTextureSize / 2);
+
+    MG_Impl::GLImpl::TexImage1D(GL_PROXY_TEXTURE_1D, 0, GL_RGBA8, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(levelSize(GL_PROXY_TEXTURE_1D, 0, GL_TEXTURE_WIDTH), 64);
+    MG_Impl::GLImpl::TexImage3D(GL_PROXY_TEXTURE_3D, 0, GL_RGBA8, 8, 4, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(levelSize(GL_PROXY_TEXTURE_3D, 0, GL_TEXTURE_WIDTH), 8);
+    EXPECT_EQ(levelSize(GL_PROXY_TEXTURE_3D, 0, GL_TEXTURE_HEIGHT), 4);
+    EXPECT_EQ(levelSize(GL_PROXY_TEXTURE_3D, 0, GL_TEXTURE_DEPTH), 2);
+
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "an unsupported proxy size is not an error";
 }
 
 TEST_F(TextureTest, GenThenBindCreatesObjectForUnsizedPackedBgraSubImageUpload) {

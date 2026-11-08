@@ -317,8 +317,12 @@ namespace MobileGL {
                 return GL_TEXTURE_1D;
             case TextureUploadTarget::Texture3D:
                 return GL_TEXTURE_3D;
+            case TextureUploadTarget::ProxyTexture1D:
+                return GL_PROXY_TEXTURE_1D;
             case TextureUploadTarget::ProxyTexture2D:
                 return GL_PROXY_TEXTURE_2D;
+            case TextureUploadTarget::ProxyTexture3D:
+                return GL_PROXY_TEXTURE_3D;
             case TextureUploadTarget::Texture1DArray:
                 return GL_TEXTURE_1D_ARRAY;
             case TextureUploadTarget::ProxyTexture1DArray:

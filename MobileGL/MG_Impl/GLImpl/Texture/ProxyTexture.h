@@ -19,8 +19,15 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
             TextureUploadTarget target);
         const SharedPtr<MG_State::GLState::ITextureObject>& GetProxyTextureObject(TextureUploadTarget target);
 
+        // The image a proxy glTexImage* or glCompressedTexImage* describes, kept here because a proxy
+        // never takes storage. A request past the implementation limits records all zeros (GL 4.6
+        // core 8.22), which is how glGetTexLevelParameter tells the application it cannot be had.
+        void RecordProxyLevel(TextureUploadTarget target, GLint level, IntVec3 size);
+        Optional<IntVec3> GetProxyLevelTexelSize(TextureUploadTarget target, GLint level) const;
+
     private:
         UnorderedMap<TextureUploadTarget, SharedPtr<MG_State::GLState::ITextureObject>> m_proxyTexturesMap;
+        UnorderedMap<TextureUploadTarget, Vector<Optional<IntVec3>>> m_proxyLevelSizes;
     };
 
     extern UniquePtr<ProxyTextureManager>& pProxyTextureManager;
