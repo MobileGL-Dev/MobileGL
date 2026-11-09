@@ -68,7 +68,7 @@ frame. It exists for sharing one GPU-owning server between processes, sandboxes 
 
 - `GL_RENDERER` starts with `Espryt (MobileGL Core)` or `Magma (MobileGL Core)`.
 - `GL_VENDOR` contains `MobileGL-Dev`.
-- `GL_VERSION` looks like `4.6 MobileGL 26.10.0-dev..., Direct (GLES) Backend, GIT@<hash>` (or
+- `GL_VERSION` looks like `4.6.0 MobileGL 26.11-dev, Direct (GLES) Backend, GIT@<hash>` (or
   `Direct (Vulkan)`).
 - In Minecraft, the F3 screen shows these strings.
 - The log says `Config: Active backend type set to DirectGLES` (or `DirectVulkan`). Logs go to
