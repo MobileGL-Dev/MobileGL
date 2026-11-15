@@ -42,7 +42,7 @@ jobs:
       CCACHE_MAXSIZE: 4G
       CCACHE_NOHASHDIR: "true"
       MOBILEGL_CMAKE_COMPILER_LAUNCHER: ccache
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
@@ -251,7 +251,7 @@ jobs:
     name: trace case matrix
     runs-on: ubuntu-26.04
     env:
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
     outputs:
       android: ${{ steps.trace-cases.outputs.android }}
       names: ${{ steps.trace-cases.outputs.names }}
@@ -729,7 +729,7 @@ jobs:
     needs: retrace
     if: ${{ !cancelled() }}
     env:
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
