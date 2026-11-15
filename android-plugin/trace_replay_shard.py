@@ -22,6 +22,10 @@ Layout under --result-root (the directory the workflow uploads):
   <case>-<backend>/first-attempt/   files of an attempt that was retried
   shard-status.json           every case of the shard with its verdict
   diagnostics/                emulator logs kept across restarts
+
+The job log repeats what those files say, since the workflow deletes them after a green run:
+what each case is run with, the transport lines of its library log, its phase timings and its
+record, and shard-status.json at the end.
 """
 
 import argparse
@@ -62,6 +66,18 @@ BOOT_TIMEOUT_SECONDS = 300
 # Seconds a case may take around its replays: the app reset, the failure diagnostics and the
 # cold boot that follows a case that did not pass.
 CASE_OVERHEAD_SECONDS = 180
+
+# What marks the lines of a library log that say which transport ran: the configuration load
+# every run logs, and what the --require-* checks of trace-replay-ci.sh read. The job log
+# quotes at most LIBRARY_LOG_LINE_LIMIT of them per case, cut to LIBRARY_LOG_LINE_LENGTH.
+LIBRARY_LOG_EVIDENCE = ("Config: Active backend type set to", "Config loaded", "MOBILEGL_TRANSPORT",
+                        "Config: IPC", "spawn ARMED", "Fatal{")
+LIBRARY_LOG_LINE_LIMIT = 12
+LIBRARY_LOG_LINE_LENGTH = 1000
+
+# What trace-replay-ci.sh reads from its environment and the runner does not set. A replay
+# inherits the runner's environment, so the job log names the value each one has there.
+INHERITED_REPLAY_SETTINGS = ("ADB", "PYTHON", "MOBILEGL_RETRACE_USE_PBUFFER", "MOBILEGL_TRACE_ENV")
 
 
 def say(message):
@@ -145,7 +161,7 @@ def transport_arguments(transport, hang_budget_ms):
         # required: a spawned server cannot be handed the client's window.
         return ["--env", f"MOBILEGL_TRANSPORT=spawn;{SPLIT_CLIENT_SETTINGS};{hang_budget}",
                 "--use-pbuffer", "--require-spawn"]
-    return ["--env", f"MOBILEGL_TRANSPORT=monolith;{hang_budget}"]
+    return ["--env", f"MOBILEGL_TRANSPORT=monolith;{hang_budget}", "--require-monolith"]
 
 
 def replay_arguments(options, case, hang_budget_ms):
@@ -250,6 +266,22 @@ class Shard:
         self.write_summary_inputs(case)
         write_json(self.result_dir(case) / "case-status.json", record)
         self.write_shard_status()
+
+    def plan(self, case):
+        """What a replay of the case is run with. --dry-run prints it; a run prints it and uses it."""
+        return {"case": case["name"],
+                "environment": replay_environment(self.options.backend, case["name"]),
+                "arguments": replay_arguments(self.options, case, self.hang_budget_ms),
+                "timeout": int(as_text(case["timeout_seconds"])) + REPLAY_GRACE_SECONDS}
+
+    def shared_environment(self):
+        """What every replay of the shard gets on top of its case's environment."""
+        # The shard installs the APK once per boot.
+        return {"MOBILEGL_TRACE_SKIP_INSTALL": "1", "MOBILEGL_TRACE_POLL_INTERVAL": self.poll_interval}
+
+    def say_shard_status(self):
+        status = read_json(self.result_root / "shard-status.json")
+        say(f"trace-replay-shard: shard-status: {json.dumps(status, sort_keys=True)}")
 
     def write_shard_status(self, complete=False):
         self.result_root.mkdir(parents=True, exist_ok=True)
@@ -477,20 +509,16 @@ class Shard:
         except OSError:
             return []
 
-    def run_attempt(self, case):
+    def run_attempt(self, plan):
         """Returns (exit status, seconds, how the shard deadline cut the attempt short or "")."""
-        case_budget = int(as_text(case["timeout_seconds"])) + REPLAY_GRACE_SECONDS
+        case_budget = plan["timeout"]
         budget = case_budget
         remaining = self.remaining_seconds()
         if remaining is not None and remaining < case_budget:
             budget = max(remaining, 1.0)
-        environment = replay_environment(self.options.backend, case["name"])
-        # The shard installs the APK once per boot.
-        environment["MOBILEGL_TRACE_SKIP_INSTALL"] = "1"
-        environment["MOBILEGL_TRACE_POLL_INTERVAL"] = self.poll_interval
         started = time.monotonic()
-        status, _ = self.run(self.replay_command + replay_arguments(self.options, case, self.hang_budget_ms),
-                             timeout=budget, extra_env=environment)
+        status, _ = self.run(self.replay_command + plan["arguments"], timeout=budget,
+                             extra_env={**plan["environment"], **self.shared_environment()})
         elapsed = round(time.monotonic() - started, 1)
         cut = ""
         if status == TIMEOUT_EXIT_CODE and budget < case_budget:
@@ -520,11 +548,10 @@ class Shard:
             result = read_json(directory / "result.json")
             if not isinstance(result, dict) or result.get("passed") is not True:
                 return FAILED, "the replay exited 0 without a passed result.json"
-            if self.options.transport != "monolith":
-                proof = read_json(directory / "transport-proof.json")
-                if not (isinstance(proof, dict) and proof.get("passed") is True and
-                        proof.get("required_transport") == self.options.transport):
-                    return FAILED, f"the replay exited 0 without a passed {self.options.transport} transport proof"
+            proof = read_json(directory / "transport-proof.json")
+            if not (isinstance(proof, dict) and proof.get("passed") is True and
+                    proof.get("required_transport") == self.options.transport):
+                return FAILED, f"the replay exited 0 without a passed {self.options.transport} transport proof"
             return PASSED, ""
         if status == INFRASTRUCTURE_FAILURE_EXIT_CODE:
             return FAILED, "the emulator infrastructure failed again on the retry"
@@ -547,7 +574,9 @@ class Shard:
             _, output = self.adb("logcat", "-d", "-t", "20000", timeout=30)
             logcat.write_text(output, encoding="utf-8", errors="replace")
             app_output = f"/data/user/0/{self.options.package}/files/trace-replay/output"
-            for name in ("retrace.log", "mobilegl.client.log", "mobilegl.server.log"):
+            # The two role logs of a split build, and the one log of a build without the split
+            # transports; the device has one kind or the other.
+            for name in ("retrace.log", "mobilegl.client.log", "mobilegl.server.log", "mobilegl.log"):
                 status, output = self.adb("exec-out", "run-as", self.options.package, "cat",
                                           f"{app_output}/{name}", timeout=30)
                 if status == 0 and output and not output.startswith("cat: "):
@@ -561,6 +590,50 @@ class Shard:
         _, dmesg = self.run(["sudo", "-n", "dmesg", "-T"], timeout=30, capture=True)
         (directory / "host-dmesg.txt").write_text("\n".join(dmesg.splitlines()[-300:]) + "\n", encoding="utf-8")
 
+    def say_library_log(self, case):
+        """Quote the lines of the case's pulled library log that say which transport ran."""
+        directory = self.result_dir(case)
+        label = f"trace-replay-shard: library-log {case['name']}:"
+        # mobilegl.log is what the proofs of trace-replay-ci.sh read: the client role's log and
+        # then the server role's, or the one log of a build without the split transports. A
+        # split build has only its role logs when the runner pulled them itself.
+        sources = [directory / "mobilegl.log"]
+        if not sources[0].is_file():
+            sources = [directory / "mobilegl.client.log", directory / "mobilegl.server.log"]
+        read = shown = matched = 0
+        for source in sources:
+            try:
+                lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            read += 1
+            for line in lines:
+                if any(mark in line for mark in LIBRARY_LOG_EVIDENCE):
+                    matched += 1
+                    if shown < LIBRARY_LOG_LINE_LIMIT:
+                        shown += 1
+                        # Escaped, so that no character of a device log can fail the job log's encoding.
+                        quoted = line[:LIBRARY_LOG_LINE_LENGTH].encode("ascii", "backslashreplace").decode("ascii")
+                        say(f"{label} {source.name}: {quoted}")
+        if not read:
+            say(f"{label} no library log was pulled")
+        elif not matched:
+            say(f"{label} the library log has none of the lines looked for")
+        elif matched > shown:
+            say(f"{label} {matched - shown} more such line(s) are not shown")
+
+    def say_phases(self, case):
+        """Seconds from each mark of the last attempt's phase-timings.txt to the next, named by the later."""
+        try:
+            text = (self.result_dir(case) / "phase-timings.txt").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        marks = [line.split() for line in text.splitlines()]
+        marks = [(mark[0], int(mark[1])) for mark in marks if len(mark) == 2 and mark[1].isdecimal()]
+        phases = {later[0]: round((later[1] - earlier[1]) / 1000, 1) for earlier, later in zip(marks, marks[1:])}
+        if phases:
+            say(f"trace-replay-shard: phases {case['name']}: {json.dumps(phases)}")
+
     def run_case(self, index, case):
         name = case["name"]
         notes = []
@@ -569,6 +642,8 @@ class Shard:
 
         if self.deadline_passed():
             return self.record_for(case, NOT_RUN, "the shard deadline passed before this case started")
+        plan = self.plan(case)
+        say(f"trace-replay-shard: run {name}: {json.dumps(plan, sort_keys=True)}")
 
         restarted_for = ""
         if self.restart_each_case and index > 0:
@@ -591,7 +666,7 @@ class Shard:
         reasons_before = len(self.reason_lines())
         exit_codes = []
         replay_seconds = []
-        status, elapsed, cut = self.run_attempt(case)
+        status, elapsed, cut = self.run_attempt(plan)
         exit_codes.append(status)
         replay_seconds.append(elapsed)
         surface_lost = 0
@@ -610,7 +685,7 @@ class Shard:
                 cut = "the shard deadline passed before the infrastructure retry could start"
             else:
                 notes += self.reset_app_state()
-                status, elapsed, cut = self.run_attempt(case)
+                status, elapsed, cut = self.run_attempt(plan)
                 exit_codes.append(status)
                 replay_seconds.append(elapsed)
         seconds["replay"] = replay_seconds
@@ -624,6 +699,8 @@ class Shard:
             verdict, reason = self.verdict(case, status)
         if verdict != PASSED:
             self.collect_failure_diagnostics(case)
+        self.say_library_log(case)
+        self.say_phases(case)
         if not self.aborted:
             self.remove_case_leftovers(case)
         seconds["finish"] = round(time.monotonic() - finish_started, 1)
@@ -643,6 +720,9 @@ class Shard:
         self.write_shard_status()
         say(f"trace-replay-shard: {len(self.cases)} case(s) on {self.options.backend} / "
             f"{self.options.transport} ({self.options.lane})")
+        say("trace-replay-shard: every run: " + json.dumps(
+            {"command": self.replay_command, "environment": self.shared_environment(),
+             "inherited": {name: self.environ.get(name) for name in INHERITED_REPLAY_SETTINGS}}, sort_keys=True))
         if not self.prepare_booted_device():
             if not self.restart_emulator("the trace APK did not install"):
                 self.aborted = "the trace APK could not be installed"
@@ -657,6 +737,8 @@ class Shard:
                     record = self.record_for(case, FAILED, f"the shard runner failed: {one_line(error)}")
             self.unclean_case = "" if record["status"] == PASSED else case["name"]
             self.save_record(case, record)
+            say(f"trace-replay-shard: record {case['name']}: {json.dumps(record, sort_keys=True)}")
+            say(f"trace-replay-shard: emulator boots after {case['name']}: {self.boots}")
             say(f"trace-replay-shard: {case['name']}: {record['status']}"
                 + (f" ({record['reason']})" if record["reason"] else ""))
             say("::endgroup::")
@@ -698,6 +780,7 @@ class Shard:
         if verdicts != len(self.cases):
             say(f"::error title=Android retrace shard incomplete ({label})::"
                 f"{verdicts} verdict(s) for {len(self.cases)} case(s)")
+        self.say_shard_status()
         say(f"trace-replay-shard: {len(self.cases) - len(failed)} passed, {len(failed)} not passed, "
             f"{verdicts} verdict(s) for {len(self.cases)} case(s)")
         return 0 if not failed and verdicts == len(self.cases) else 1
@@ -721,16 +804,12 @@ class Shard:
             self.install_seconds = previous.get("install_seconds", self.install_seconds)
         self.write_shard_status(
             complete=all(self.records[case["name"]]["status"] in (PASSED, FAILED) for case in self.cases))
+        self.say_shard_status()
         return 0
 
     def dry_run(self):
         for case in self.cases:
-            say(json.dumps({
-                "case": case["name"],
-                "environment": replay_environment(self.options.backend, case["name"]),
-                "arguments": replay_arguments(self.options, case, self.hang_budget_ms),
-                "timeout": int(as_text(case["timeout_seconds"])) + REPLAY_GRACE_SECONDS,
-            }, sort_keys=True))
+            say(json.dumps(self.plan(case), sort_keys=True))
         return 0
 
 

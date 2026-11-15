@@ -10,8 +10,11 @@
 """Drive the emulator shard runner with a fake adb, replay script and AVD script.
 
 No device is needed. The fakes record every call, so the tests pin what each case is run
-with, that every case ends with a verdict, and what a failure, an infrastructure retry, a
-timeout or a dead emulator does to the rest of the shard.
+with, that every case ends with a verdict, what the job log says about it, and what a
+failure, an infrastructure retry, a timeout or a dead emulator does to the rest of the shard.
+
+The last two classes run the transport proofs of trace-replay-ci.sh itself: the monolith
+check on log files, and the whole script against an adb that serves a host directory.
 """
 
 import contextlib
@@ -21,15 +24,19 @@ import json
 import os
 import pathlib
 import re
+import shlex
+import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import unittest
 from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent
+REPLAY_SCRIPT = HERE / "trace-replay-ci.sh"
 
 
 def load(name):
@@ -86,6 +93,12 @@ elif args[:3] == ["shell", "ps", "-A"]:
     print("root 1 init")
     if count("ps") < plan.get("ps_calls_with_leftover", 0):
         print("u0_a77 4242 libMobileGLServer.so")
+elif args[:2] == ["exec-out", "run-as"] and args[3:4] == ["cat"] and "device_files" in plan:
+    name = args[4].rsplit("/", 1)[-1]
+    if name not in plan["device_files"]:
+        print(f"cat: {args[4]}: No such file or directory")
+        sys.exit(1)
+    sys.stdout.write(plan["device_files"][name])
 '''
 
 FAKE_REPLAY = FAKE_COMMON + r'''
@@ -112,9 +125,11 @@ if code == 75:
 if step.get("result", code in (0, 1)):
     (directory / "result.json").write_text(json.dumps(
         {"passed": step.get("passed", code == 0), "ssim": 0.999, "message": step.get("message", "retrace completed")}))
-transport = "inproc" if "--require-inproc" in args else "spawn" if "--require-spawn" in args else ""
+transport = next((name for name in ("monolith", "inproc", "spawn") if f"--require-{name}" in args), "")
 if transport and code == 0 and step.get("proof", True):
     (directory / "transport-proof.json").write_text(json.dumps({"passed": True, "required_transport": transport}))
+for name, text in step.get("files", {}).items():
+    (directory / name).write_text(text, encoding="utf-8")
 sys.exit(code)
 '''
 
@@ -126,6 +141,46 @@ if args[:1] == ["start"]:
     index = count("avd-start")
     sys.exit(exits[index] if index < len(exits) else 0)
 '''
+
+# Library log lines as the emulator jobs write them.
+CLIENT = "[02:55:51] [Android MobileGLTraceRe/INFO]: "
+SERVER = "[02:55:51] [Android mgl-srv-apply/INFO]: "
+BACKEND_LINE = CLIENT + "Config: Active backend type set to DirectVulkan"
+LOADED_LINE = CLIENT + "Config loaded"
+INPROC_LINE = CLIENT + ("Config: MOBILEGL_TRANSPORT=inproc - the MGPipe record stream crosses a real ring to an "
+                        "apply thread")
+SPAWN_LINE = CLIENT + ("Config: MOBILEGL_TRANSPORT=spawn - the MGPipe record stream crosses a real ring to an "
+                       "apply thread in ANOTHER PROCESS")
+IPC_LINE = CLIENT + ("Config: IPC ring=8MiB stage=32MiB wire-deferred=64MiB spin=50us event-wait=2000ms "
+                     "create-window=10 pbo-readback-sync=0 poll-escalate=64 adopt-tier=unset(T0) allow-t0=1 "
+                     "run-ahead=1 present-credit=1 control-timeout=5000ms cold-start=20000ms strict=1 audit=0 "
+                     "role-split-state=1 affinity='auto' surface=offscreen")
+ARMED_LINE = CLIENT + ('MG_Remote client: spawn ARMED - the server role runs in pid 2252, reached at '
+                       '"@mgl-2134-124880560801840"')
+SERVER_LINE = SERVER + "MG_Remote server: mgl-srv-apply started."
+REST_OF_LOG = [CLIENT + "MobileGL Backend Info:", CLIENT + "  Renderer Name: Magma"]
+
+
+def log_text(*lines):
+    return "\n".join(lines) + "\n"
+
+
+def library_logs(transport):
+    """The files a replay on the transport leaves in the app's output directory, by name."""
+    start = [CLIENT + "Initializing MobileGL...", BACKEND_LINE]
+    if transport == "monolith":
+        return {"mobilegl.client.log": log_text(*start, LOADED_LINE, *REST_OF_LOG)}
+    if transport == "inproc":
+        return {"mobilegl.client.log": log_text(*start, INPROC_LINE, IPC_LINE, LOADED_LINE, *REST_OF_LOG),
+                "mobilegl.server.log": log_text(SERVER_LINE)}
+    return {"mobilegl.client.log": log_text(*start, SPAWN_LINE, IPC_LINE, LOADED_LINE, *REST_OF_LOG, ARMED_LINE),
+            "mobilegl.server.log": log_text(SERVER_LINE)}
+
+
+def said(output, kind, name):
+    """What the runner's `kind` lines say about the case."""
+    prefix = f"trace-replay-shard: {kind} {name}: "
+    return [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
 
 
 def case(name, **extra):
@@ -209,7 +264,7 @@ class ShardTest(unittest.TestCase):
                 "--crop-x", "0", "--crop-y", "0", "--crop-width", "0", "--crop-height", "0",
                 "--timeout-seconds", "900"]
         tails = {
-            "monolith": ["--env", "MOBILEGL_TRANSPORT=monolith;MOBILEGL_GPU_HANG_BUDGET_MS=0"],
+            "monolith": ["--env", "MOBILEGL_TRANSPORT=monolith;MOBILEGL_GPU_HANG_BUDGET_MS=0", "--require-monolith"],
             "inproc": ["--env", f"MOBILEGL_TRANSPORT=inproc;{SPLIT};MOBILEGL_GPU_HANG_BUDGET_MS=0", "--require-inproc"],
             "spawn": ["--env", f"MOBILEGL_TRANSPORT=spawn;{SPLIT};MOBILEGL_GPU_HANG_BUDGET_MS=0",
                       "--use-pbuffer", "--require-spawn"],
@@ -229,7 +284,8 @@ class ShardTest(unittest.TestCase):
         vulkan = {plan["case"]: plan for plan in self.planned(cases, "DirectVulkan", "monolith")}
 
         def flags(plan):
-            return [argument for argument in plan["arguments"][plan["arguments"].index("--env") + 2:]]
+            # What follows the transport's own arguments, which end with its proof.
+            return plan["arguments"][plan["arguments"].index("--require-monolith") + 1:]
 
         self.assertEqual(gles[BLISS]["environment"]["MOBILEGL_TRACE_ANGLE_VARIANT"], "90a62123d794")
         self.assertEqual(vulkan[BLISS]["environment"]["MOBILEGL_TRACE_ANGLE_VARIANT"], "90a62123d794")
@@ -323,6 +379,167 @@ class ShardTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("without a passed result.json", self.status("a")["reason"])
         self.assertIn("without a passed spawn transport proof", self.status("b")["reason"])
+
+    def test_the_monolith_lane_needs_its_proof_too(self):
+        status, _ = self.run_shard([case("a"), case("b")], scenario={"replay": {"a": [{"exit": 0, "proof": False}]}})
+        self.assertEqual(status, 1)
+        self.assertEqual(self.status("a")["reason"], "the replay exited 0 without a passed monolith transport proof")
+        self.assertEqual(self.status("b")["status"], "passed")
+
+    # ---- what the job log says ---------------------------------------------------------
+
+    def test_the_log_says_what_each_case_is_run_with(self):
+        cases = [case("a", coherent_as_flush=True), case(BLISS)]
+        shared = {"MOBILEGL_TRACE_SKIP_INSTALL": "1", "MOBILEGL_TRACE_POLL_INTERVAL": "0.5"}
+        planned = self.planned(cases, "DirectGLES", "spawn")
+        # The test decides what the runner inherits, not the job the test runs in.
+        with mock.patch.dict(os.environ, {"MOBILEGL_RETRACE_USE_PBUFFER": "1"}):
+            for name in ("PYTHON", "MOBILEGL_TRACE_ENV"):
+                os.environ.pop(name, None)
+            status, output = self.run_shard(cases, backend="DirectGLES", transport="spawn")
+        self.assertEqual(status, 0, output)
+        lines = output.splitlines()
+        for index, plan in enumerate(planned):
+            name = plan["case"]
+            run, = said(output, "run", name)
+            # The line is the case's --dry-run line, and it opens the case's group.
+            self.assertEqual(run, json.dumps(plan, sort_keys=True))
+            self.assertEqual(lines[lines.index(f"::group::{name} ({index + 1}/2)") + 1],
+                             f"trace-replay-shard: run {name}: {run}")
+            # It is also what the replay script was started with.
+            started = self.log("replay.log")[index]
+            self.assertEqual(started["arguments"], plan["arguments"])
+            self.assertEqual(started["environment"], {**plan["environment"], **shared})
+        every, = [line for line in lines if line.startswith("trace-replay-shard: every run: ")]
+        self.assertEqual(json.loads(every.split(": ", 2)[2]), {
+            "command": shlex.split(self.environment["MOBILEGL_SHARD_REPLAY_COMMAND"]), "environment": shared,
+            # What the replay script reads from the runner's own environment, set or not.
+            "inherited": {"ADB": self.environment["ADB"], "PYTHON": None, "MOBILEGL_RETRACE_USE_PBUFFER": "1",
+                          "MOBILEGL_TRACE_ENV": None}})
+
+    def test_the_log_names_every_setting_the_replay_script_reads(self):
+        # Each variable trace-replay-ci.sh takes from its environment is in the case's run line
+        # or in the every-run line. The two it assigns itself are not settings.
+        script = REPLAY_SCRIPT.read_text(encoding="utf-8")
+        read = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", script)) - {"IFS", "INFRASTRUCTURE_FAILURE_EXIT_CODE"}
+        plan, = self.planned([case("a")], "DirectVulkan", "monolith")
+        named = set(plan["environment"]) | {"MOBILEGL_TRACE_SKIP_INSTALL", "MOBILEGL_TRACE_POLL_INTERVAL"}
+        self.assertEqual(read - named, set(shard.INHERITED_REPLAY_SETTINGS))
+
+    def test_the_log_holds_every_record_and_the_shard_status(self):
+        phases = "script-started 1000\nfixture-pushed 3500\napk-installed 3500\napp-started 4700\nwait-ended 52700\n"
+        cases = [case("a"), case("b"), case("c")]
+        status, output = self.run_shard(cases, scenario={"replay": {
+            "a": [{"exit": 75}, {"files": {"phase-timings.txt": phases}}], "b": [{"exit": 1, "message": "ssim=0.5"}]}})
+        self.assertEqual(status, 1)
+        lines = output.splitlines()
+        # a was retried on a second boot, and c starts on a third because b did not pass.
+        verdicts = {"a": ("trace-replay-shard: a: passed", 2),
+                    "b": ("trace-replay-shard: b: failed (exit 1: ssim=0.5)", 2),
+                    "c": ("trace-replay-shard: c: passed", 3)}
+        for name, (verdict, boots) in verdicts.items():
+            record, = said(output, "record", name)
+            self.assertEqual(json.loads(record), self.status(name))
+            # The record and the boots come before the verdict line, which still ends the group.
+            at = lines.index(verdict)
+            self.assertEqual(lines[at - 2:at + 2], [
+                f"trace-replay-shard: record {name}: {record}",
+                f"trace-replay-shard: emulator boots after {name}: {boots}", verdict, "::endgroup::"])
+        self.assertEqual(json.loads(said(output, "record", "a")[0])["exit_codes"], [75, 0])
+        # The phases are those of the attempt that counts; a replay that left no timings has none.
+        self.assertEqual(said(output, "phases", "a"),
+                         ['{"fixture-pushed": 2.5, "apk-installed": 0.0, "app-started": 1.2, "wait-ended": 48.0}'])
+        self.assertEqual(said(output, "phases", "b"), [])
+        self.assertEqual(lines[-1], "trace-replay-shard: 2 passed, 1 not passed, 3 verdict(s) for 3 case(s)")
+        self.assertTrue(lines[-2].startswith("trace-replay-shard: shard-status: "), lines[-2])
+        self.assertEqual(json.loads(lines[-2].split(": ", 2)[2]), self.shard_status())
+        # The step that runs afterwards prints the file as it leaves it.
+        status, output = self.run_shard(cases, "--finalize")
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(output.splitlines()[-1].split(": ", 2)[2]), self.shard_status())
+
+    def test_the_log_quotes_the_transport_lines_of_each_library_log(self):
+        refusals = [CLIENT + f"MGPipe: Fatal{{Refused, {index}}}" for index in range(40)]
+        long_line = SERVER + "MGPipe: Fatal{" + "x" * 3000 + "}"
+        inproc_log = log_text(BACKEND_LINE, INPROC_LINE, IPC_LINE, LOADED_LINE, *REST_OF_LOG, SERVER_LINE)
+        status, output = self.run_shard([case(name) for name in "abcde"], transport="inproc", scenario={
+            "replay": {
+                "a": [{"files": {"mobilegl.log": inproc_log}}],
+                # A failed case is quoted too, and a log full of such lines does not flood the job log.
+                "b": [{"exit": 1, "files": {"mobilegl.log": log_text(BACKEND_LINE, LOADED_LINE, *refusals)}}],
+                # Only the role logs: what the runner pulls itself when the replay script was killed.
+                "c": [{"files": {"mobilegl.client.log": log_text(SPAWN_LINE, *REST_OF_LOG, ARMED_LINE),
+                                 "mobilegl.server.log": log_text(SERVER_LINE, long_line)}}],
+                # Outside ASCII: the quote is escaped, whatever the encoding of the job log.
+                "d": [{"files": {"mobilegl.log": log_text(CLIENT + "MGPipe: Fatal{Refused, \u00a72.3}")}}],
+                "e": [{"files": {"mobilegl.log": log_text(*REST_OF_LOG)}}]}})
+        self.assertEqual(status, 1)
+        self.assertEqual(said(output, "library-log", "a"),
+                         [f"mobilegl.log: {line}" for line in (BACKEND_LINE, INPROC_LINE, IPC_LINE, LOADED_LINE)])
+        quoted = said(output, "library-log", "b")
+        self.assertEqual(quoted[:-1], [f"mobilegl.log: {line}" for line in [BACKEND_LINE, LOADED_LINE] + refusals[:10]])
+        self.assertEqual(quoted[-1], "30 more such line(s) are not shown")
+        self.assertEqual(said(output, "library-log", "c"), [
+            f"mobilegl.client.log: {SPAWN_LINE}", f"mobilegl.client.log: {ARMED_LINE}",
+            f"mobilegl.server.log: {long_line[:1000]}"])
+        self.assertEqual(said(output, "library-log", "d"),
+                         [f"mobilegl.log: {CLIENT}MGPipe: Fatal{{Refused, \\xa72.3}}"])
+        self.assertEqual(said(output, "library-log", "e"), ["the library log has none of the lines looked for"])
+        # The lines are in the case's group, before its record.
+        lines = output.splitlines()
+        quoted = [f"trace-replay-shard: library-log a: mobilegl.log: {line}" for line in (BACKEND_LINE, LOADED_LINE)]
+        record = next(line for line in lines if line.startswith("trace-replay-shard: record a: "))
+        self.assertLess(lines.index("::group::a (1/5)"), lines.index(quoted[0]))
+        self.assertLess(lines.index(quoted[1]), lines.index(record))
+
+    def test_the_quoted_library_log_is_that_of_the_attempt_that_counts(self):
+        first = log_text(BACKEND_LINE, INPROC_LINE, IPC_LINE, LOADED_LINE)
+        status, output = self.run_shard([case("a"), case("b")], scenario={"replay": {
+            "a": [{"exit": 75, "files": {"mobilegl.log": first}},
+                  {"files": {"mobilegl.log": log_text(BACKEND_LINE, LOADED_LINE)}}],
+            "b": [{"exit": 75, "files": {"mobilegl.log": first}}, {}]}})
+        self.assertEqual(status, 0, output)
+        self.assertEqual(said(output, "library-log", "a"),
+                         [f"mobilegl.log: {line}" for line in (BACKEND_LINE, LOADED_LINE)])
+        # A retry that left no log is not quoted from the attempt it replaced.
+        self.assertEqual(said(output, "library-log", "b"), ["no library log was pulled"])
+        for name in "ab":
+            kept = self.results / f"{name}-DirectVulkan" / "first-attempt" / "mobilegl.log"
+            self.assertEqual(kept.read_text(), first)
+
+    def test_a_replay_that_pulled_nothing_is_quoted_from_what_the_runner_pulls(self):
+        # The replay script ended before its own pulls. A split build has its two role logs
+        # on the device; a build without the split transports has the one log.
+        devices = {
+            "a": ({"mobilegl.client.log": log_text(BACKEND_LINE, INPROC_LINE, LOADED_LINE),
+                   "mobilegl.server.log": log_text(SERVER_LINE)},
+                  [f"mobilegl.client.log: {BACKEND_LINE}", f"mobilegl.client.log: {INPROC_LINE}",
+                   f"mobilegl.client.log: {LOADED_LINE}"]),
+            "b": ({"mobilegl.log": log_text(BACKEND_LINE, LOADED_LINE)},
+                  [f"mobilegl.log: {BACKEND_LINE}", f"mobilegl.log: {LOADED_LINE}"])}
+        for name, (files, quoted) in devices.items():
+            with self.subTest(name):
+                status, output = self.run_shard([case(name)], scenario={
+                    "device_files": files, "replay": {name: [{"exit": 1, "result": False}]}})
+                self.assertEqual(status, 1)
+                self.assertEqual(said(output, "library-log", name), quoted)
+                pulled = sorted(path.name for path in (self.results / f"{name}-DirectVulkan").glob("mobilegl*"))
+                self.assertEqual(pulled, sorted(files))
+
+    def test_a_case_without_a_library_log_says_so(self):
+        status, output = self.run_shard([case("a")])
+        self.assertEqual(status, 0)
+        self.assertEqual(said(output, "library-log", "a"), ["no library log was pulled"])
+
+    def test_the_quoted_lines_are_the_ones_the_proofs_read(self):
+        # Every sentence a --require-* check of trace-replay-ci.sh looks for is one the runner quotes.
+        script = REPLAY_SCRIPT.read_text(encoding="utf-8")
+        for sentence in ("Config: MOBILEGL_TRANSPORT=inproc - the MGPipe record stream",
+                         "Config: MOBILEGL_TRANSPORT=spawn - the MGPipe record stream",
+                         "Config: MOBILEGL_TRANSPORT={transport} - the MGPipe record stream",
+                         "spawn ARMED - the server role runs in pid", "Config: IPC", "Fatal\\{", "Config loaded"):
+            self.assertIn(sentence, script)
+            self.assertTrue(any(mark in sentence.replace("\\", "") for mark in shard.LIBRARY_LOG_EVIDENCE), sentence)
 
     def test_an_infrastructure_failure_restarts_and_retries_once(self):
         status, output = self.run_shard([case("a"), case("b")], scenario={
@@ -581,6 +798,297 @@ class ShardTest(unittest.TestCase):
         self.assertTrue((self.results / "c-DirectVulkan" / "lane.json").is_file())
         self.assertFalse(self.shard_status()["complete"])
         self.assertEqual(self.shard_status()["expected_cases"], ["a", "b", "c"])
+
+
+MONOLITH_CONFIRMED = ("Android retrace: monolith confirmed: the library loaded its configuration and logged no "
+                      "inproc or spawn transport, no IPC configuration, no spawned server and no server role")
+NO_LOG = "the library log is missing or empty"
+NO_LOAD = "the library log does not show the configuration load"
+
+
+def monolith_not_confirmed(reason):
+    return (f"Android retrace: monolith not confirmed ({reason}): nothing a split transport writes was found, "
+            "so the run is not failed")
+
+
+class MonolithProofTest(unittest.TestCase):
+    """The --require-monolith check of trace-replay-ci.sh, run on the log files of a result directory."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = pathlib.Path(self.temporary.name)
+        script = REPLAY_SCRIPT.read_text(encoding="utf-8")
+        start = script.index("<<'PY'\n", script.index('if [ "${require_monolith}" -eq 1 ]; then\n    "${PYTHON}"'))
+        self.program = script[start + len("<<'PY'\n"):script.index("\nPY\n", start)]
+
+    def check(self, **logs):
+        """Returns (exit status, stdout, stderr, the proof) for a result directory holding the logs."""
+        for name, text in logs.items():
+            (self.directory / name.replace("_", ".")).write_text(text, encoding="utf-8")
+        proof = self.directory / "transport-proof.json"
+        done = subprocess.run([sys.executable, "-", str(self.directory / "mobilegl.log"), str(proof)],
+                              input=self.program, capture_output=True, text=True)
+        return done.returncode, done.stdout.strip(), done.stderr.strip(), json.loads(proof.read_text())
+
+    def test_a_monolith_log_passes(self):
+        # The split build names its only log after the client role; a build without the split
+        # transports writes the same lines. Either way mobilegl.log is what the check reads.
+        status, said_line, _, proof = self.check(mobilegl_log=library_logs("monolith")["mobilegl.client.log"])
+        self.assertEqual((status, said_line), (0, MONOLITH_CONFIRMED))
+        self.assertEqual({key: proof[key] for key in ("required_transport", "passed", "confirmed",
+                                                      "configuration_loaded", "split_transport_markers",
+                                                      "problems")},
+                         {"required_transport": "monolith", "passed": True, "confirmed": True,
+                          "configuration_loaded": True, "split_transport_markers": {"inproc": False, "spawn": False},
+                          "problems": []})
+
+    def test_anything_a_split_run_logs_fails_it(self):
+        monolith = library_logs("monolith")["mobilegl.client.log"]
+        inproc, spawn = (log_text(*library_logs(transport).values()) for transport in ("inproc", "spawn"))
+        server_role = "a server role wrote a log of its own"
+        failures = [
+            ("the library log has the inproc transport marker", {"mobilegl_log": inproc}),
+            ("the library log has the spawn transport marker", {"mobilegl_log": spawn}),
+            ("the library log names a spawned server process", {"mobilegl_log": monolith + ARMED_LINE + "\n"}),
+            ("the library log has an IPC configuration line", {"mobilegl_log": monolith + IPC_LINE + "\n"}),
+            # The three headers a server role's line can have: the apply thread of an inproc
+            # run, a thread of a spawned server, and a line a peer forwarded.
+            (server_role, {"mobilegl_log": monolith, "mobilegl_server_log": SERVER_LINE}),
+            (server_role, {"mobilegl_log": monolith, "mobilegl_server_log":
+                           "[08:25:29] [Android libMobileGLServ/ERROR]: MG_Remote server: pid=2252 listening\n"}),
+            (server_role, {"mobilegl_log": monolith, "mobilegl_server_log": "[peer/WARN]: refused\n"}),
+            # Without the client's log, where the transport sentence is.
+            (server_role, {"mobilegl_server_log": SERVER_LINE}),
+        ]
+        for problem, logs in failures:
+            with self.subTest(problem, logs=sorted(logs.items())):
+                for leftover in self.directory.iterdir():
+                    leftover.unlink()
+                status, said_line, error, proof = self.check(**logs)
+                self.assertEqual((status, said_line), (1, ""))
+                self.assertTrue(error.startswith("trace replay failed actual monolith/no-split-transport proof ("),
+                                error)
+                self.assertIn(problem, error)
+                self.assertIn(problem, proof["problems"])
+                self.assertEqual((proof["required_transport"], proof["passed"], proof["confirmed"]),
+                                 ("monolith", False, False))
+
+    def test_a_log_without_the_configuration_load_passes_as_not_confirmed(self):
+        # A lost or cut log says nothing about the transport, so it does not fail the run; the
+        # line and the proof say that monolith was not confirmed.
+        for reason, logs in ((NO_LOG, {}), (NO_LOG, {"mobilegl_log": "\n"}),
+                             (NO_LOAD, {"mobilegl_log": log_text(BACKEND_LINE)})):
+            with self.subTest(reason, logs=logs):
+                for leftover in self.directory.iterdir():
+                    leftover.unlink()
+                status, said_line, error, proof = self.check(**logs)
+                self.assertEqual((status, said_line, error), (0, monolith_not_confirmed(reason), ""))
+                self.assertEqual({key: proof[key] for key in ("required_transport", "passed", "confirmed",
+                                                              "not_confirmed_because", "problems")},
+                                 {"required_transport": "monolith", "passed": True, "confirmed": False,
+                                  "not_confirmed_because": reason, "problems": []})
+
+    def test_what_a_device_answers_for_a_missing_server_log_is_not_a_server_role(self):
+        monolith = library_logs("monolith")["mobilegl.client.log"]
+        for answer in ("cat: /data/user/0/top.mobilegl.plugin.trace/files/mobilegl.server.log: Permission denied\n",
+                       "run-as: unknown package: top.mobilegl.plugin.trace\n", "\n"):
+            with self.subTest(answer):
+                # trace-replay-ci.sh appends what it pulled for the server role to mobilegl.log.
+                status, said_line, _, proof = self.check(mobilegl_log=monolith + answer, mobilegl_server_log=answer)
+                self.assertEqual((status, said_line), (0, MONOLITH_CONFIRMED))
+                self.assertEqual((proof["server_role_log_lines"], proof["confirmed"]), (0, True))
+
+
+# An adb whose device is the host directory FAKE_DEVICE: `exec-out run-as <package> cat <path>`
+# prints the file of that name there, or cat's own complaint as a device folds it into stdout.
+FAKE_DEVICE_ADB = r'''#!/bin/sh
+case "$1 ${2:-}" in
+  "get-state "*) echo "${FAKE_ADB_STATE:-device}" ;;
+  "install "*) echo Success ;;
+  "exec-out run-as")
+    if [ -f "${FAKE_DEVICE}/${5##*/}" ]; then
+      cat "${FAKE_DEVICE}/${5##*/}"
+    else
+      echo "cat: $5: No such file or directory"
+      exit 1
+    fi
+    ;;
+  "shell getprop") echo 1 ;;
+  "shell pm") if [ "$3" = path ]; then echo "package:/data/app/trace/base.apk"; else echo Success; fi ;;
+  "shell run-as") if [ "${4:-}" = id ]; then echo u0_a77; fi ;;
+  "shell ps") echo "USER PID NAME" ;;
+  shell*) case "$*" in *mobilegl-poll-result*) echo mobilegl-poll-result ;; esac ;;
+esac
+exit 0
+'''
+
+# The shard runner takes ADB as a command line; trace-replay-ci.sh runs it as one word.
+FAKE_REPLAY_WRAPPER = r'''#!/bin/sh
+ADB="${FAKE_DEVICE_ADB}"
+export ADB
+exec "${FAKE_SH}" "${FAKE_REPLAY_SCRIPT}" "$@"
+'''
+
+# BASH_EXE names a POSIX shell where `sh` is not one, for example Git Bash on Windows.
+POSIX_SH = os.environ.get("BASH_EXE") or shutil.which("sh")
+
+
+@unittest.skipUnless(POSIX_SH, "needs a POSIX sh (BASH_EXE) to run trace-replay-ci.sh")
+class ReplayScriptTest(unittest.TestCase):
+    """trace-replay-ci.sh itself, alone and under the shard runner, against the fake device."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = pathlib.Path(self.temporary.name)
+        self.device = self.root / "device"
+        for directory in (self.device, self.root / "fixtures"):
+            directory.mkdir()
+        # A checkout with CRLF line endings does not run under sh.
+        scripts = {"trace-replay-ci.sh": REPLAY_SCRIPT.read_bytes().replace(b"\r\n", b"\n"),
+                   "adb": FAKE_DEVICE_ADB.encode(), "replay.sh": FAKE_REPLAY_WRAPPER.encode()}
+        for name, content in scripts.items():
+            (self.root / name).write_bytes(content)
+            (self.root / name).chmod(0o755)
+        (self.root / "trace.apk").write_bytes(b"apk")
+        (self.root / "fixtures" / "a.png").write_bytes(b"png")
+        (self.root / "trace.trace").write_bytes(b"trace")
+        with tarfile.open(self.root / "fixtures" / "a.tgz", "w:gz") as archive:
+            archive.add(self.root / "trace.trace", arcname="trace.trace")
+        (self.device / "result.json").write_text('{"passed": true, "ssim": 0.999, "message": "retrace completed"}\n')
+        sh = pathlib.Path(POSIX_SH)
+        # Nothing of the job that runs the tests: its replay settings, its emulator, its summary.
+        own = ("AVD_NAME", "EMULATOR_LOG", "EMULATOR_PID_FILE", "GITHUB_STEP_SUMMARY")
+        self.environment = {key: value for key, value in os.environ.items()
+                            if not key.startswith("MOBILEGL_") and key not in own}
+        self.environment.update({
+            "GITHUB_STEP_SUMMARY": str(self.root / "summary.md"),
+            "PATH": str(sh.parent) + os.pathsep + os.environ.get("PATH", ""),
+            "PYTHON": pathlib.Path(sys.executable).as_posix(), "PYTHONDONTWRITEBYTECODE": "1",
+            "FAKE_DEVICE": self.device.as_posix(), "FAKE_DEVICE_ADB": (self.root / "adb").as_posix(),
+            "FAKE_SH": sh.as_posix(), "FAKE_REPLAY_SCRIPT": (self.root / "trace-replay-ci.sh").as_posix()})
+
+    def device_has(self, files):
+        for name, text in files.items():
+            (self.device / name).write_bytes(text.encode())
+
+    # Paths are relative to the temporary directory: tar reads a drive letter as a host name.
+    CASE = ["--apk-file", "trace.apk", "--package", "top.mobilegl.plugin.trace", "--backend", "DirectVulkan",
+            "--result-root", "results", "--fixture-root", "work", "--case", "a",
+            "--trace-archive", "fixtures/a.tgz", "--trace-file", "trace.trace", "--golden", "fixtures/a.png",
+            "--target-call", "1234", "--width", "854", "--height", "480", "--ssim-threshold", "0.99",
+            "--crop-x", "0", "--crop-y", "0", "--crop-width", "0", "--crop-height", "0", "--timeout-seconds", "5"]
+
+    def replay(self, *flags, adb_state="device"):
+        """Returns (exit status, stdout, stderr, the proof or None) of one run of the script."""
+        environment = {**self.environment, "ADB": self.environment["FAKE_DEVICE_ADB"], "FAKE_ADB_STATE": adb_state}
+        done = subprocess.run([POSIX_SH, "trace-replay-ci.sh", *self.CASE, "--reuse-fixture", *flags],
+                              cwd=self.root, env=environment, capture_output=True, text=True, timeout=600)
+        proof = self.root / "results" / "a-DirectVulkan" / "transport-proof.json"
+        return done.returncode, done.stdout, done.stderr, json.loads(proof.read_text()) if proof.exists() else None
+
+    def test_require_monolith_passes_on_a_monolith_run_of_the_split_build(self):
+        self.device_has(library_logs("monolith"))
+        status, output, error, proof = self.replay("--require-monolith")
+        self.assertEqual(status, 0, error)
+        self.assertIn(MONOLITH_CONFIRMED, output.splitlines())
+        self.assertEqual((proof["required_transport"], proof["passed"]), ("monolith", True))
+
+    def test_require_monolith_passes_on_a_build_without_the_split_transports(self):
+        # One role, one log, under the name the role logs are derived from.
+        self.device_has({"mobilegl.log": library_logs("monolith")["mobilegl.client.log"]})
+        status, output, error, proof = self.replay("--require-monolith")
+        self.assertEqual(status, 0, error)
+        self.assertIn(MONOLITH_CONFIRMED, output.splitlines())
+        self.assertTrue(proof["passed"])
+
+    def test_require_monolith_fails_a_run_that_was_not_monolith(self):
+        for transport in ("inproc", "spawn"):
+            with self.subTest(transport):
+                self.device_has(library_logs(transport))
+                status, output, error, proof = self.replay("--require-monolith")
+                self.assertEqual(status, 1)
+                self.assertNotIn(MONOLITH_CONFIRMED, output)
+                self.assertIn("trace replay failed actual monolith/no-split-transport proof", error)
+                self.assertIn(f"the library log has the {transport} transport marker", error)
+                self.assertFalse(proof["passed"])
+
+    def test_a_passed_monolith_replay_without_a_library_log_stays_passed(self):
+        # Whether the device still answers or went away before the log was pulled: a passed
+        # replay is not failed or retried for a log that says nothing about the transport.
+        for adb_state in ("device", "offline"):
+            with self.subTest(adb_state):
+                status, output, error, proof = self.replay("--require-monolith", adb_state=adb_state)
+                self.assertEqual(status, 0, error)
+                self.assertIn(monolith_not_confirmed(NO_LOG), output.splitlines())
+                self.assertEqual((proof["required_transport"], proof["passed"], proof["confirmed"]),
+                                 ("monolith", True, False))
+
+    def test_a_split_log_lost_with_the_device_asks_for_the_infrastructure_retry(self):
+        # The inproc and spawn proofs need the log, so a device that went away before it was
+        # pulled is the emulator's failure and not the proof's.
+        status, _, error, proof = self.replay("--require-inproc", adb_state="offline")
+        self.assertEqual(status, shard.INFRASTRUCTURE_FAILURE_EXIT_CODE, error)
+        self.assertIsNone(proof)
+
+    def test_a_failed_replay_of_a_build_without_the_split_transports_keeps_its_library_log(self):
+        log = library_logs("monolith")["mobilegl.client.log"]
+        self.device_has({"mobilegl.log": log,
+                         "result.json": '{"passed": false, "ssim": 0.5, "message": "retrace completed"}\n'})
+        status, _, error, proof = self.replay("--require-monolith")
+        self.assertEqual(status, 1)
+        self.assertIsNone(proof)
+        self.assertEqual((self.root / "results" / "a-DirectVulkan" / "mobilegl.log").read_bytes(), log.encode())
+        self.assertIn("trace-replay-ci.sh: tail of mobilegl.log:", error)
+        self.assertIn(LOADED_LINE, error)
+
+    def shard_through_the_script(self, transport, logs=None):
+        """Runs one case through the runner and the real script; returns (exit status, the job log)."""
+        self.device_has(library_logs(transport) if logs is None else logs)
+        sh, adb = self.environment["FAKE_SH"], self.environment["FAKE_DEVICE_ADB"]
+        environment = {**self.environment, "ADB": f'"{sh}" "{adb}"',
+                       "MOBILEGL_SHARD_REPLAY_COMMAND": f'"{sh}" "{(self.root / "replay.sh").as_posix()}"',
+                       "MOBILEGL_GPU_HANG_BUDGET_MS": "0", "MOBILEGL_SHARD_JOB_ID": "1234"}
+        one_case = case("a", golden="fixtures/a.png", timeout_seconds=5)
+        done = subprocess.run(
+            [sys.executable, str(HERE / "trace_replay_shard.py"), "--apk-file", "trace.apk",
+             "--backend", "DirectVulkan", "--transport", transport, "--lane", f"{transport}-lane",
+             "--cases-json", json.dumps([one_case]), "--result-root", "results", "--fixture-root", "work"],
+            cwd=self.root, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=900)
+        return done.returncode, done.stdout
+
+    def test_a_shard_reaches_the_proof_of_its_transport_through_the_script(self):
+        proofs = {"monolith": MONOLITH_CONFIRMED,
+                  "inproc": "Android retrace: real inproc transport, strict role state and zero Fatal records "
+                            "confirmed",
+                  "spawn": "Android retrace: real spawn transport, server role in pid 2252, and zero Fatal records "
+                           "confirmed"}
+        marks = {"monolith": LOADED_LINE, "inproc": INPROC_LINE, "spawn": ARMED_LINE}
+        for transport, proof in proofs.items():
+            with self.subTest(transport):
+                shutil.rmtree(self.root / "results", ignore_errors=True)
+                for leftover in self.device.glob("mobilegl*"):
+                    leftover.unlink()
+                status, output = self.shard_through_the_script(transport)
+                self.assertEqual(status, 0, output)
+                lines = output.splitlines()
+                # The script took the runner's arguments, its own proof line is in the log, and
+                # the runner quoted the library's lines from the log the script pulled.
+                self.assertIn(proof, lines)
+                self.assertIn(f"mobilegl.log: {marks[transport]}", said(output, "library-log", "a"))
+                self.assertEqual(json.loads(said(output, "record", "a")[0])["status"], "passed")
+                self.assertIn("artifacts-copied", json.loads(said(output, "phases", "a")[0]))
+                self.assertEqual(lines[-1], "trace-replay-shard: 1 passed, 0 not passed, 1 verdict(s) for 1 case(s)")
+                written = json.loads((self.root / "results" / "a-DirectVulkan" / "transport-proof.json").read_text())
+                self.assertEqual((written["required_transport"], written["passed"]), (transport, True))
+
+    def test_a_monolith_shard_stays_green_without_a_library_log(self):
+        status, output = self.shard_through_the_script("monolith", logs={})
+        self.assertEqual(status, 0, output)
+        self.assertIn(monolith_not_confirmed(NO_LOG), output.splitlines())
+        self.assertEqual(said(output, "library-log", "a"), ["no library log was pulled"])
+        self.assertEqual(json.loads(said(output, "record", "a")[0])["status"], "passed")
 
 
 if __name__ == "__main__":

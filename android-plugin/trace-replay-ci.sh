@@ -35,6 +35,7 @@ Usage:
     [--env "K=V;K=V"] \
     [--require-inproc] \
     [--require-spawn] \
+    [--require-monolith] \
     [--benchmark] \
     [--benchmark-tail-frames N] \
     [--benchmark-finish 0|1] \
@@ -75,6 +76,11 @@ sentence a monolith fallback can never write: the pid of the server process.
 Pass --require-inproc to require the library's real transport-resolution log,
 strict errors and separate role state, plus zero Fatal records. This checks the
 APK process after replay; a host environment echo or an SSIM-only pass is not proof.
+Pass --require-monolith to fail a run whose library log shows a split transport:
+either transport sentence, an IPC configuration line, a spawned server or a log of
+a server role. A log with the configuration load and none of these is reported as
+monolith confirmed; a run whose log is missing or lacks the load passes and is
+reported as not confirmed.
 EOF
 }
 
@@ -152,6 +158,7 @@ texture_2d_dumps=""
 env_overrides="${MOBILEGL_TRACE_ENV:-}"
 require_inproc=0
 require_spawn=0
+require_monolith=0
 benchmark=0
 benchmark_tail_frames=200
 benchmark_finish=1
@@ -200,6 +207,7 @@ while [ "$#" -gt 0 ]; do
     --env) env_overrides="$(next_arg "$@")"; shift 2 ;;
     --require-inproc) require_inproc=1; shift 1 ;;
     --require-spawn) require_spawn=1; shift 1 ;;
+    --require-monolith) require_monolith=1; shift 1 ;;
     --benchmark) benchmark=1; shift 1 ;;
     --benchmark-tail-frames) benchmark_tail_frames="$(next_arg "$@")"; shift 2 ;;
     --benchmark-finish) benchmark_finish="$(next_arg "$@")"; shift 2 ;;
@@ -371,7 +379,16 @@ collect_role_logs() {
       rm -f "${role_dst}"
     fi
   done
-  [ "${wrote_any}" -eq 1 ] || rm -f "${dest}"
+  if [ "${wrote_any}" -eq 1 ]; then
+    return 0
+  fi
+  # A library built without the split transports has one role and writes one log, at the base
+  # path itself. Pulled only when no role log arrived, and judged by content as above, so a
+  # replay of such a build leaves its library log in <dest> whether it passed or failed.
+  adb_device_path exec-out run-as "${package_name}" cat "${base_source}" > "${dest}" 2>/dev/null || true
+  if [ ! -s "${dest}" ] || head -1 "${dest}" | grep -q '^cat: .*: No such file'; then
+    rm -f "${dest}"
+  fi
 }
 
 copy_texture_2d_dumps() {
@@ -771,6 +788,66 @@ if not passed:
     sys.exit("trace replay failed actual spawn/second-process/zero-Fatal proof: " + json.dumps(proof))
 print("Android retrace: real spawn transport, server role in pid "
       f"{proof['server_pid']}, and zero Fatal records confirmed")
+PY
+  fi
+  if [ "${require_monolith}" -eq 1 ]; then
+    "${PYTHON}" - "$(host_path_for_adb "${result_dir}/mobilegl.log")" "$(host_path_for_adb "${result_dir}/transport-proof.json")" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+log_path, proof_path = map(Path, sys.argv[1:])
+text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+# A monolith run has no sentence of its own: ConfigLoader logs a transport line only when it
+# resolves inproc or spawn, and a library built without the split transports has no such
+# code. So the check fails only on what a split run writes: either transport sentence, an IPC
+# configuration line (logged for every transport but monolith), a spawned server, or library
+# lines in a server role's log. The sentence and the IPC line are written during the
+# configuration load, so a log that shows the load and none of these confirms monolith. A log
+# that is missing or lacks the load says nothing about the transport: the run passes and is
+# reported as not confirmed.
+loaded = "Config loaded" in text
+markers = {transport: f"Config: MOBILEGL_TRANSPORT={transport} - the MGPipe record stream" in text
+           for transport in ("inproc", "spawn")}
+configs = re.findall(r"Config: IPC[^\r\n]*", text)
+armed = re.search(r"spawn ARMED - the server role runs in pid (\d+)", text)
+server_log = log_path.with_name(log_path.stem + ".server" + log_path.suffix)
+server_text = server_log.read_text(encoding="utf-8", errors="replace") if server_log.is_file() else ""
+# Library lines only, known by the "[...thread/LEVEL]: " header each one starts with, so that
+# what a device answers when the file is not there is never read as a server role.
+server_lines = len(re.findall(r"^\[[^\r\n]*?/(?:DEBUG|INFO|WARN|ERROR|FATAL)\]: ", server_text, re.M))
+
+problems = [f"the library log has the {transport} transport marker"
+            for transport, present in markers.items() if present]
+if configs:
+    problems.append("the library log has an IPC configuration line")
+if armed:
+    problems.append("the library log names a spawned server process")
+if server_lines:
+    problems.append("a server role wrote a log of its own")
+if loaded:
+    unconfirmed = ""
+elif text.strip():
+    unconfirmed = "the library log does not show the configuration load"
+else:
+    unconfirmed = "the library log is missing or empty"
+
+proof = {"required_transport": "monolith", "library_log": str(log_path),
+         "configuration_loaded": loaded, "split_transport_markers": markers,
+         "ipc_config_lines": configs, "spawned_server_pid": int(armed.group(1)) if armed else None,
+         "server_role_log_lines": server_lines, "problems": problems, "passed": not problems,
+         "confirmed": not problems and loaded, "not_confirmed_because": unconfirmed}
+proof_path.write_text(json.dumps(proof, indent=2), encoding="utf-8")
+if problems:
+    sys.exit("trace replay failed actual monolith/no-split-transport proof (" + "; ".join(problems) + "): "
+             + json.dumps(proof))
+if unconfirmed:
+    print(f"Android retrace: monolith not confirmed ({unconfirmed}): nothing a split transport writes "
+          "was found, so the run is not failed")
+else:
+    print("Android retrace: monolith confirmed: the library loaded its configuration and logged no inproc "
+          "or spawn transport, no IPC configuration, no spawned server and no server role")
 PY
   fi
 }
