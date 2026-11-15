@@ -35,10 +35,21 @@ on:
       - '.github/workflows/hygiene.yml'
       - '.github/actions/setup-test-runner/**'
   workflow_dispatch:
+    inputs:
+      android_full_matrix:
+        description: Replay every trace case on the monolith and spawn emulator lanes too
+        type: boolean
+        default: false
 
 env:
   # Software-rendered CI submissions may exceed the interactive GPU hang budget.
   MOBILEGL_GPU_HANG_BUDGET_MS: "0"
+  # The emulator replays every trace case on inproc, the transport the launcher ships. On
+  # monolith and spawn it replays the android_smoke cases of trace_cases.json, because
+  # test.yml replays every case on all three transports on Linux. A manual run with
+  # android_full_matrix replays every case on all three emulator lanes. A push has no inputs,
+  # so it gets the reduced lanes.
+  MOBILEGL_ANDROID_LANES: ${{ inputs.android_full_matrix && 'full' || 'inproc-full' }}
 
 # ONE LIVE RUN PER BRANCH, as in test.yml: a superseded push is canceled rather than left queued
 # behind its successor; a manual dispatch gets a group of its own; dev queues rather than cancels.
@@ -372,7 +383,7 @@ jobs:
             matrix_format=github-apk-transport-shard-matrix
           fi
           android="$(python3 tools/trace_replay/trace_cases.py --ci --format "${matrix_format}" \
-            --shard-seconds "${RETRACE_SHARD_SECONDS}")"
+            --shard-seconds "${RETRACE_SHARD_SECONDS}" --android-lanes "${MOBILEGL_ANDROID_LANES}")"
           # An empty `include` is not an error to GitHub: it skips the retrace job with no red.
           shards="$(printf '%s' "${android}" | python3 -c 'import json, sys; print(len(json.load(sys.stdin)["include"]))')"
           if [ "${shards}" -lt 1 ]; then
@@ -387,7 +398,11 @@ jobs:
           android="$(printf '%s' "${android}" | python3 android-plugin/retrace_shard_budget.py \
             --cap-seconds "${RETRACE_SHARD_DEADLINE_CAP_SECONDS}")"
           echo "android=${android}" >> "$GITHUB_OUTPUT"
-          echo "Android retrace: ${shards} shard(s) from ${matrix_format} at ${RETRACE_SHARD_SECONDS} s per shard"
+          lanes=""
+          if [ "${matrix_format}" = "github-apk-transport-shard-matrix" ]; then
+            lanes=" (${MOBILEGL_ANDROID_LANES} lanes)"
+          fi
+          echo "Android retrace: ${shards} shard(s) from ${matrix_format}${lanes} at ${RETRACE_SHARD_SECONDS} s per shard"
 
   # One cache entry holds every Git LFS fixture of the CI cases, and each retrace job restores
   # that entry itself. This job only makes sure the entry exists. On a hit it downloads
@@ -857,10 +872,24 @@ jobs:
           pattern: MobileGL-android-retrace-result-spawn-acceptance-spawn-*
           path: retrace-artifacts/spawn-acceptance
 
+      # The reduced monolith and spawn lanes replay the android_smoke cases only, so their
+      # summaries list those cases and no others. A branch outside the split shape replays
+      # every case on monolith, its only lane.
+      - name: Select the cases of the reduced lanes
+        if: ${{ !cancelled() }}
+        run: |
+          reduced_lane_cases=""
+          if [ "${MOBILEGL_CI_DISAGGREGATED}" = "ON" ] && [ "${MOBILEGL_ANDROID_LANES}" = "inproc-full" ]; then
+            reduced_lane_cases="$(python3 tools/trace_replay/trace_cases.py --format android-smoke-names)"
+            test -n "${reduced_lane_cases}"
+          fi
+          echo "REDUCED_LANE_CASES=${reduced_lane_cases}" >> "$GITHUB_ENV"
+
       - name: Render monolith control summary
         if: ${{ !cancelled() }}
         run: |
           node tools/trace_replay/render_retrace_summary.mjs \
+            --cases "${REDUCED_LANE_CASES}" \
             --input retrace-artifacts/monolith-control \
             --output-dir android-retrace-summary/monolith-control \
             --title "MobileGL Android monolith control" \
@@ -881,6 +910,7 @@ jobs:
         if: ${{ !cancelled() && env.MOBILEGL_CI_DISAGGREGATED == 'ON' }}
         run: |
           node tools/trace_replay/render_retrace_summary.mjs \
+            --cases "${REDUCED_LANE_CASES}" \
             --input retrace-artifacts/spawn-acceptance \
             --output-dir android-retrace-summary/spawn-acceptance \
             --title "MobileGL Android spawn acceptance" \

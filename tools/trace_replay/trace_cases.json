@@ -1,4 +1,18 @@
 {
+  "android_smoke": [
+    "OpenRA",
+    "minecraft-1.21.4-startup",
+    "minecraft-1.21.4-main-menu",
+    "minecraft-1.21.4-fabric-sodium-in-world",
+    "minecraft-1.21.4-fabric-iris-bsl-in-world",
+    "minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world",
+    "minecraft-1.21.4-fabric-iris-bliss-in-world",
+    "minecraft-1.21.4-fabric-iris-sundial-lite-in-world",
+    "minecraft-1.21.1-neoforge-create-indirect-in-world-align1024",
+    "minecraft-1.21.1-neoforge-create-instancing-in-world",
+    "improved-transparency-minecraft-26.3",
+    "minecraft-1.21.4-fabric-iris-iterationrp-in-world"
+  ],
   "defaults": {
     "trace_file": "trace.trace",
     "width": 854,

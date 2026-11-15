@@ -102,6 +102,16 @@ matrix whose shards, taken apart, are not exactly the per-case matrix. The fixtu
 cases must be in `tools/trace_replay/fixtures` before the runner starts; the workflow restores
 them from one cache entry (`.github/scripts/trace-fixture-bundle.sh`).
 
+Unless a manual run sets `android_full_matrix`, the workflow passes `--android-lanes
+inproc-full`: the inproc lane, the transport the launcher ships, replays every CI case, and the
+monolith and spawn lanes replay the cases `trace_cases.json` lists under `android_smoke`. The
+Linux retrace jobs of `test.yml` replay every case on all three transports, so those two
+emulator lanes keep the cases that prove the Android side of each arm: the server started from
+the APK's native library directory, the pbuffer surface of the spawn lane, the monolith build
+of the same commit as a control, and every per-case replay setting at least once. A manual run
+with `android_full_matrix` replays every case on all three lanes. A branch that runs only the
+monolith lane replays every case on it.
+
 Between cases the runner force-stops the app, checks that no process of the app's uid is left,
 clears the app data, removes the case's files from `/data/local/tmp` and from the host, and
 checks that the device still answers. It restarts the emulator when it does not, before the

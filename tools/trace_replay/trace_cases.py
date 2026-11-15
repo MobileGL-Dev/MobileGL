@@ -14,6 +14,9 @@ from pathlib import Path
 
 
 TRACE_CASES_JSON = Path(__file__).with_name("trace_cases.json")
+
+# The top-level keys of the manifest. An unknown one is refused, as an unknown case key is.
+KNOWN_MANIFEST_KEYS = frozenset({"defaults", "cases", "android_smoke"})
 CI_BACKENDS = ("DirectGLES", "DirectVulkan")
 
 # Every key a case or the defaults block may carry. An UNKNOWN key is a hard error rather than a
@@ -127,7 +130,26 @@ def load_trace_case_manifest(path=TRACE_CASES_JSON):
         merged["split"] = split
         validate_backend_overrides(merged)
         cases.append(merged)
-    return {"defaults": defaults, "cases": cases}
+    unknown_top = sorted(set(manifest) - KNOWN_MANIFEST_KEYS)
+    if unknown_top:
+        raise ValueError(f"unknown top-level key(s) in the manifest: {', '.join(unknown_top)}")
+    # "android_smoke" names the cases the emulator replays on the monolith and spawn lanes
+    # when those lanes are reduced. A name that is not a CI case would shrink the subset with
+    # no red, so it is refused here.
+    smoke = manifest.get("android_smoke", [])
+    if not isinstance(smoke, list) or not all(isinstance(name, str) for name in smoke):
+        raise ValueError("android_smoke must be a list of case names")
+    if len(set(smoke)) != len(smoke):
+        raise ValueError("android_smoke repeats a case name")
+    ci_names = {case["name"] for case in cases if case.get("ci", True)}
+    not_ci = [name for name in smoke if name not in ci_names]
+    if not_ci:
+        raise ValueError(f"android_smoke names case(s) that are not CI cases: {', '.join(not_ci)}")
+    return {"defaults": defaults, "cases": cases, "android_smoke": smoke}
+
+
+def android_smoke_names(path=TRACE_CASES_JSON):
+    return load_trace_case_manifest(path)["android_smoke"]
 
 
 def validate_backend_overrides(case):
@@ -400,11 +422,21 @@ def github_apk_matrix(cases):
     }
 
 
-def github_transport_matrix(cases, *, apk=False):
+# The Android lanes of the transport matrix. "full" replays every case on every transport.
+# "inproc-full" replays every case on inproc, the transport the launcher ships, and only the
+# manifest's android_smoke cases on monolith and spawn: the Linux retrace jobs replay every
+# case on all three transports, so those two emulator lanes keep the cases that prove the
+# Android side of each arm.
+ANDROID_LANES = ("full", "inproc-full")
+
+
+def github_transport_matrix(cases, *, apk=False, android_smoke=None):
     """Run the entire original matrix as control and as acceptance, once per transport.
 
     The transports use the same D/P artifact and each case's existing backend
     list. The legacy split:true subset does not limit this main acceptance matrix.
+    With `android_smoke`, an APK matrix keeps every case on inproc and only the named
+    cases on monolith and spawn.
     Nested APK case/backend metadata is deliberately left untouched.
 
     THE SPAWN LANE IS APK-ONLY, and that is a statement about where the evidence is missing
@@ -423,12 +455,19 @@ def github_transport_matrix(cases, *, apk=False):
     build = github_apk_matrix if apk else github_test_matrix
     if not cases:
         raise ValueError("transport matrix needs at least one trace case")
+    reduced = cases
+    if android_smoke is not None:
+        if not apk:
+            raise ValueError("only the APK transport matrix has reduced lanes")
+        reduced = [case for case in cases if case["name"] in android_smoke]
+        if not reduced:
+            raise ValueError("the reduced Android lanes are empty: no case is in android_smoke")
     lanes = [
-        (cases, "monolith-control", "monolith"),
+        (reduced, "monolith-control", "monolith"),
         (cases, "inproc-acceptance", "inproc"),
     ]
     if apk:
-        lanes.append((cases, "spawn-acceptance", "spawn"))
+        lanes.append((reduced, "spawn-acceptance", "spawn"))
     return {"include": [
         {**row, "lane": lane, "transport": transport}
         for selected, lane, transport in lanes
@@ -481,6 +520,29 @@ def self_test_transport_matrices():
         print(f"transport matrix {'APK' if apk else 'Linux'}: {len(controls)} unchanged controls, "
               f"{len(acceptance)} inproc acceptance entries, {len(spawned)} spawn acceptance "
               f"entries; exact metadata and negative controls OK")
+    # The reduced Android lanes are the full matrix less the monolith and spawn rows of the
+    # cases outside android_smoke: nothing else is dropped, changed or added.
+    smoke = android_smoke_names()
+    assert smoke, "android_smoke is empty, so the reduced monolith and spawn lanes would be too"
+    full = github_transport_matrix(cases, apk=True)["include"]
+    reduced = github_transport_matrix(cases, apk=True, android_smoke=smoke)["include"]
+    kept = [row for row in full if row["transport"] == "inproc" or row["case"]["name"] in smoke]
+    assert reduced == kept, "the reduced Android lanes are not the full matrix filtered"
+    for transport in ("monolith", "spawn"):
+        names = {row["case"]["name"] for row in reduced if row["transport"] == transport}
+        assert names == set(smoke), f"the reduced {transport} lane is not the smoke cases: {names}"
+    full_inproc = [row for row in full if row["transport"] == "inproc"]
+    assert [row for row in reduced if row["transport"] == "inproc"] == full_inproc, \
+        "the inproc lane was reduced"
+    for bad in ({"apk": False, "android_smoke": smoke},
+                {"apk": True, "android_smoke": ["no-such-case"]}):
+        try:
+            github_transport_matrix(cases, **bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"github_transport_matrix accepted {bad}")
+    print(f"transport matrix APK reduced: {len(reduced)} of {len(full)} rows; inproc keeps all "
+          f"{len(full_inproc)}, monolith and spawn keep the {len(smoke)} smoke cases")
 
 
 def self_test_split_matrix(cases=None):
@@ -690,7 +752,8 @@ def shard_matrix(rows, hints, *, default_kind=HINT_KIND_MONOLITH, shards=None, s
     return {"include": out}
 
 
-def per_case_matrix(format_name, cases, *, transports=SPLIT_TRANSPORTS, keep_inproc=()):
+def per_case_matrix(format_name, cases, *, transports=SPLIT_TRANSPORTS, keep_inproc=(),
+                    android_smoke=None):
     """The per-case matrix a shard format regroups, and the hint kind of its transport-less rows."""
     if format_name == "github-test-shard-matrix":
         return github_test_matrix(cases), HINT_KIND_MONOLITH
@@ -703,7 +766,8 @@ def per_case_matrix(format_name, cases, *, transports=SPLIT_TRANSPORTS, keep_inp
     if format_name == "github-apk-shard-matrix":
         return github_apk_matrix(cases), HINT_KIND_MONOLITH
     if format_name == "github-apk-transport-shard-matrix":
-        return github_transport_matrix(cases, apk=True), HINT_KIND_MONOLITH
+        return (github_transport_matrix(cases, apk=True, android_smoke=android_smoke),
+                HINT_KIND_MONOLITH)
     raise ValueError(f"not a shard format: {format_name}")
 
 
@@ -721,10 +785,11 @@ ANDROID_SHARD_FORMATS = (
 
 def github_shard_matrix(format_name, cases, *, shards=DEFAULT_SHARDS_PER_CELL,
                         shard_seconds=DEFAULT_ANDROID_SHARD_SECONDS,
-                        transports=SPLIT_TRANSPORTS, keep_inproc=(), hints_path=TRACE_DURATION_HINTS_JSON):
+                        transports=SPLIT_TRANSPORTS, keep_inproc=(), hints_path=TRACE_DURATION_HINTS_JSON,
+                        android_smoke=None):
     """A shard format: the Linux ones lay out by shards per cell, the Android ones by seconds."""
     matrix, default_kind = per_case_matrix(format_name, cases, transports=transports,
-                                           keep_inproc=keep_inproc)
+                                           keep_inproc=keep_inproc, android_smoke=android_smoke)
     if format_name in ANDROID_SHARD_FORMATS:
         return shard_matrix(matrix["include"], load_duration_hints("android", hints_path),
                             default_kind=default_kind, shard_seconds=shard_seconds)
@@ -740,6 +805,8 @@ def self_test_shard_matrices():
     layouts += [("github-split-shard-matrix", narrowed, {"shards": count}) for count in (1, 4, 100)]
     layouts += [(name, {}, {"shard_seconds": seconds}) for name in ANDROID_SHARD_FORMATS
                 for seconds in (60, DEFAULT_ANDROID_SHARD_SECONDS, 10 ** 9)]
+    layouts += [("github-apk-transport-shard-matrix", {"android_smoke": android_smoke_names()},
+                 {"shard_seconds": seconds}) for seconds in (60, DEFAULT_ANDROID_SHARD_SECONDS, 10 ** 9)]
     for name, selection, layout in layouts:
         matrix, _ = per_case_matrix(name, cases, **selection)
         rows = matrix["include"]
@@ -762,7 +829,9 @@ def self_test_shard_matrices():
         if layout.get("shards") == 1 or layout.get("shard_seconds") == 10 ** 9:
             assert len(built) == len(cells), f"{name} {layout}: expected one shard per cell"
         seconds = [shard["seconds"] for shard in built]
-        print(f"shard matrix {name} {selection or ''} {layout}: {len(rows)} rows in {len(built)} "
+        shown = {key: (f"{len(value)} smoke cases" if key == "android_smoke" else value)
+                 for key, value in selection.items()}
+        print(f"shard matrix {name} {shown or ''} {layout}: {len(rows)} rows in {len(built)} "
               f"shards over {len(cells)} cells, {min(seconds)}-{max(seconds)} s hinted per shard")
         # The check itself must be able to fail: a dropped, a repeated and a moved case.
         if len(built) >= 2 and any(len(shard["names"]) >= 2 for shard in built):
@@ -886,12 +955,16 @@ def parse_args():
                         help="Linux shard formats: shards per (lane, transport, backend) cell")
     parser.add_argument("--shard-seconds", type=int, default=DEFAULT_ANDROID_SHARD_SECONDS,
                         help="Android shard formats: hinted replay seconds one shard aims for")
+    parser.add_argument("--android-lanes", choices=ANDROID_LANES, default="full",
+                        help="APK transport formats: inproc-full keeps every case on inproc and "
+                             "the manifest's android_smoke cases on monolith and spawn")
     parser.add_argument("--duration-hints", default=str(TRACE_DURATION_HINTS_JSON),
                         help="shard formats: the JSON of replay seconds the packing weighs cases by")
     parser.add_argument(
         "--format",
         choices=(
             "names",
+            "android-smoke-names",
             "github-test-matrix",
             "github-test-transport-matrix",
             "github-verify-matrix",
@@ -924,8 +997,11 @@ def main():
     cases = load_trace_cases()
     if args.ci:
         cases = ci_trace_cases(cases)
+    android_smoke = android_smoke_names() if args.android_lanes == "inproc-full" else None
     if args.format == "names":
         print(json.dumps([case["name"] for case in cases], separators=(",", ":")))
+    elif args.format == "android-smoke-names":
+        print(",".join(android_smoke_names()))
     elif args.format == "github-test-matrix":
         print(json.dumps(github_test_matrix(cases), separators=(",", ":")))
     elif args.format == "github-test-transport-matrix":
@@ -941,14 +1017,16 @@ def main():
     elif args.format == "github-apk-matrix":
         print(json.dumps(github_apk_matrix(cases), separators=(",", ":")))
     elif args.format == "github-apk-transport-matrix":
-        print(json.dumps(github_transport_matrix(cases, apk=True), separators=(",", ":")))
+        print(json.dumps(github_transport_matrix(cases, apk=True, android_smoke=android_smoke),
+                         separators=(",", ":")))
     elif args.format in LINUX_SHARD_FORMATS + ANDROID_SHARD_FORMATS:
         transports = tuple(t for t in args.transports.split(",") if t)
         keep = tuple(c for c in args.keep_inproc.split(",") if c)
         print(json.dumps(
             github_shard_matrix(args.format, cases, shards=args.shards,
                                 shard_seconds=args.shard_seconds, transports=transports,
-                                keep_inproc=keep, hints_path=args.duration_hints),
+                                keep_inproc=keep, hints_path=args.duration_hints,
+                                android_smoke=android_smoke),
             separators=(",", ":")))
     elif args.format == "fixture-manifest":
         # One "<case><TAB><file>" line per fixture file, for the fixture bundle script.

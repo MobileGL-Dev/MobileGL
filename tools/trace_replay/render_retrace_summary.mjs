@@ -16,14 +16,15 @@ const BACKENDS = ["DirectGLES", "DirectVulkan"];
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_FIXTURE_ROOT = path.join(SCRIPT_DIR, "fixtures");
 const TRACE_CASES = JSON.parse(readFileSync(path.join(SCRIPT_DIR, "trace_cases.json"), "utf8"));
-const CASES = TRACE_CASES.cases.map((traceCase) => traceCase.name);
+// Every case of the manifest, or the ones --cases names when a lane replays a subset.
+let CASES = TRACE_CASES.cases.map((traceCase) => traceCase.name);
 
 function usage() {
   console.error(`Usage:
   node tools/trace_replay/render_retrace_summary.mjs \\
     --input DIR [--input DIR ...] \\
     --output-dir DIR \\
-    [--title TITLE] [--group-label LABEL] [--html NAME]`);
+    [--title TITLE] [--group-label LABEL] [--html NAME] [--cases NAME,NAME,...]`);
 }
 
 function parseArgs(argv) {
@@ -51,6 +52,13 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--html" && value) {
       args.htmlName = value;
+      i += 1;
+    } else if (arg === "--cases" && value !== undefined) {
+      // An empty list keeps every case, so a caller can pass the option unconditionally.
+      const names = value.split(",").filter((name) => name);
+      const unknown = names.filter((name) => !CASES.includes(name));
+      if (unknown.length) throw new Error(`--cases names unknown trace case(s): ${unknown.join(", ")}`);
+      if (names.length) CASES = CASES.filter((name) => names.includes(name));
       i += 1;
     } else if (arg === "--help" || arg === "-h") {
       usage();
