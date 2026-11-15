@@ -598,7 +598,7 @@ MIN_SHARD_SECONDS = 90
 
 # Replay seconds one emulator shard aims for, the one tunable of the Android layout. A cell is
 # split into as many shards as that takes.
-DEFAULT_ANDROID_SHARD_SECONDS = 720
+DEFAULT_ANDROID_SHARD_SECONDS = 580
 
 # The hint a row without a transport uses. The verify lane has timings of its own.
 HINT_KIND_MONOLITH = "monolith"

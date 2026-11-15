@@ -79,4 +79,8 @@ case "${variant}" in
     ;;
 esac
 
+# The command line goes to the job log, so the log shows which options a build was made with.
+printf 'configure_build.sh:'
+printf ' %q' cmake "${common[@]}" "${flags[@]}" "$@"
+echo
 cmake "${common[@]}" "${flags[@]}" "$@"

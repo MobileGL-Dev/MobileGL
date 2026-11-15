@@ -307,7 +307,7 @@ jobs:
       # cases are spread so the shards of a cell come out even (tools/trace_replay/trace_cases.py,
       # shard_matrix). A smaller value gives more and shorter jobs, each of which pays the
       # emulator boot again; every case is replayed once per cell whatever the value.
-      RETRACE_SHARD_SECONDS: "720"
+      RETRACE_SHARD_SECONDS: "580"
       # The most a shard runner may spend on its cases. A shard gets the time in which every
       # one of its cases could run to the end of its own time budget, up to this cap.
       RETRACE_SHARD_DEADLINE_CAP_SECONDS: "7200"
@@ -578,6 +578,12 @@ jobs:
           echo "EMULATOR_LOG=${RUNNER_TEMP}/mobilegl-emulator.log" >> "$GITHUB_ENV"
           echo "EMULATOR_PID_FILE=${RUNNER_TEMP}/mobilegl-emulator.pid" >> "$GITHUB_ENV"
 
+      # The swap file, the fixture bundle and the AVD image share the runner's disk, and a
+      # runner that starts short of space fails the whole shard. The two reports say how much
+      # was free before and after them.
+      - name: Report free disk space
+        run: df -h / "${GITHUB_WORKSPACE}"
+
       - name: Set swap space
         uses: ./.github/actions/set-swap-space
         with:
@@ -609,6 +615,9 @@ jobs:
             ${{ env.ANDROID_SDK_ROOT }}/platforms/android-35
             ${{ env.ANDROID_SDK_ROOT }}/system-images/android-35/google_apis/x86_64
           key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v4-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
+
+      - name: Report free disk space after the restores
+        run: df -h / "${GITHUB_WORKSPACE}"
 
       # The cache holds everything a retrace job runs (emulator, adb, image, AVD); the SDK manager
       # is only needed to create the AVD when the cache missed.
