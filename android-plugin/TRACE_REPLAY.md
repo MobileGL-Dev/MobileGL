@@ -74,3 +74,57 @@ adb shell am start -a top.mobilegl.plugin.TRACE_REPLAY \
   --es ssim_threshold 0.99
 adb shell run-as top.mobilegl.plugin.espryt.trace cat files/trace-replay/output/result.json
 ```
+
+## Emulator shards in CI
+
+The APK workflow replays its cases through `trace-replay-shard.sh`: one emulator boot, one APK
+install, then an ordered list of cases for one lane, transport and backend. Each case still runs
+through `trace-replay-ci.sh`, with the same arguments, environment and transport proof as a
+one-case job.
+
+```sh
+sh android-plugin/trace-replay-shard.sh \
+  --apk-file MobileGL-plugin-trace-release.apk \
+  --backend DirectVulkan --gpu lavapipe \
+  --transport inproc --lane inproc-acceptance \
+  --cases-file cases.json --deadline-seconds 7200
+```
+
+The case list is a JSON array of case objects: the `cases` member of a row of
+`trace_cases.py --ci --format github-apk-transport-shard-matrix`, which is what the workflow
+passes, or the `case` members of `--format github-apk-transport-matrix` rows. `--dry-run` prints
+what each case would be run with and touches no device.
+
+The workflow's matrix is that shard matrix: one row per emulator job, holding some of the cases
+of one lane, transport and backend. `--shard-seconds` (`RETRACE_SHARD_SECONDS` in `apk.yml`) sets
+how much hinted replay time one shard aims for, and `trace_cases.py` refuses to print a shard
+matrix whose shards, taken apart, are not exactly the per-case matrix. The fixtures of a shard's
+cases must be in `tools/trace_replay/fixtures` before the runner starts; the workflow restores
+them from one cache entry (`.github/scripts/trace-fixture-bundle.sh`).
+
+Between cases the runner force-stops the app, checks that no process of the app's uid is left,
+clears the app data, removes the case's files from `/data/local/tmp` and from the host, and
+checks that the device still answers. It restarts the emulator when it does not, before the
+case that follows one that did not pass, and before the single retry of a case that
+`trace-replay-ci.sh` charged to the infrastructure (exit 75).
+`MOBILEGL_SHARD_RESTART_EMULATOR_EACH_CASE=1` cold boots before every case.
+
+The cases of a shard share the job's time. `--deadline-seconds` stops the runner that long after
+it starts, so that the job can still upload what it has: a case that is running then, or has not
+started, is recorded as `not-run`. `retrace_shard_budget.py` reads a shard matrix and adds two
+fields to every shard: `deadline_seconds`, the time in which every case of the shard could use
+its whole time budget (`timeout_seconds` plus 300 s) when the cases before it used all of
+theirs, with one infrastructure retry of the longest budget and a cold boot per case on top,
+and `timeout_minutes`, the limit of the shard's job. `--cap-seconds`
+(`RETRACE_SHARD_DEADLINE_CAP_SECONDS` in `apk.yml`) bounds the deadline, so a shard whose
+replays all hang cannot hold a runner for hours; a capped shard loses verdicts only when several
+of its replays hang to the end of their budgets.
+
+A failing case does not stop the shard. Every case ends with `<case>-<backend>/case-status.json`
+(`passed`, `failed` or `not-run`), the result root gets `shard-status.json`, the job log gets one
+`::error` per case that did not pass, and the exit status is non-zero when a case did not pass or
+a verdict is missing. `--finalize` writes the summary inputs and a `not-run` verdict for every
+case without one, without a device; the workflow runs it after the replay step whatever happened.
+
+`python3 android-plugin/test_trace_replay_shard.py` drives the runner with a fake adb, replay
+script and AVD script.

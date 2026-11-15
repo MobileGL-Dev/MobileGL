@@ -650,7 +650,8 @@ def transport_proof_args(args):
     return {"inproc": ["--require-inproc"], "spawn": ["--require-spawn"]}.get(args.transport, [])
 
 
-# The knobs .github/workflows/apk.yml hands BOTH acceptance lanes. They are kept here verbatim so
+# The knobs android-plugin/trace_replay_shard.py (transport_arguments()) hands both acceptance
+# lanes. They are kept here verbatim so
 # a local run is the same run: the arm proof below reads the library's own `Config: IPC` line and
 # requires strict/role-split-state/run-ahead to be 1, so a local invocation that quietly omitted
 # them would fail a gate CI passes - or worse, pass a weaker one.

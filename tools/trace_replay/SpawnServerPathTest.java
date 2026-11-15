@@ -48,7 +48,8 @@ public final class SpawnServerPathTest {
 
     public static void main(String[] args) {
         // ---- the shapes the lanes really pass -------------------------------------------------
-        // .github/workflows/apk.yml's spawn acceptance lane, verbatim.
+        // The spawn acceptance lane of android-plugin/trace_replay_shard.py (transport_arguments()),
+        // verbatim.
         String spawnLane = "MOBILEGL_TRANSPORT=spawn;MOBILEGL_IPC_ROLE_SPLIT_STATE=1;"
                 + "MOBILEGL_IPC_STRICT_ERRORS=1;MOBILEGL_IPC_RUN_AHEAD=1";
         expect("the spawn acceptance lane still gets its server path appended",

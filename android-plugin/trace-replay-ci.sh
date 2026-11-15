@@ -62,6 +62,9 @@ copies benchmark.json (per-frame times plus mean/median/p95) out of the app, and
 "passed" only means the replay reached the end of the trace without an error.
 Pass --reuse-fixture to skip re-extracting and re-pushing the trace, for repeat
 runs of a case whose fixture is already in /data/local/tmp.
+Set MOBILEGL_TRACE_POLL_INTERVAL to the seconds between result polls (for example
+0.5) to wait on a wall clock: the wait then ends --timeout-seconds plus a fifth after
+the app starts, which is about how long that many one-second polls take.
 Pass --env "K=V;K=V" (or set MOBILEGL_TRACE_ENV) to hand arbitrary environment
 variables to the replay process. They are applied last, immediately before
 libMobileGL.so is loaded, so they override every flag above; an entry with no "="
@@ -91,6 +94,21 @@ host_path_for_adb() {
 
 adb_device_path() {
   MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "${ADB}" "$@"
+}
+
+# Milliseconds since the epoch; whole seconds where date has no %N.
+now_ms() {
+  stamp="$(date +%s%3N 2>/dev/null || true)"
+  case "${stamp}" in
+    ''|*[!0-9]*) stamp="$(($(date +%s) * 1000))" ;;
+  esac
+  printf '%s' "${stamp}"
+}
+
+# Appends "<phase> <ms>" to phase-timings.txt in the result directory, so a run records where
+# its wall time went: push, install, replay, log pulls.
+mark_phase() {
+  printf '%s %s\n' "$1" "$(now_ms)" >> "${result_dir}/phase-timings.txt" 2>/dev/null || true
 }
 
 next_arg() {
@@ -411,6 +429,81 @@ copy_fixture_to_app() {
   fi
 }
 
+# Waits for result.json with one poll per second; --timeout-seconds counts the polls.
+wait_for_result_by_count() {
+  # One failed pidof is not an exit: under memory pressure the adb shell call
+  # itself can fail while the app is alive (seen with the process still in
+  # pidof and the activity still initializing right after the "exit").
+  missed_app_polls=0
+  for _ in $(seq 1 "${timeout_seconds}"); do
+    if adb_device_path shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
+      break
+    fi
+    if adb_device_path shell pidof "${package_name}" >/dev/null 2>&1; then
+      saw_app_process=1
+      missed_app_polls=0
+    else
+      poll_adb_state="$(adb_device_path get-state 2>/dev/null | tr -d '\r' || true)"
+      if [ "${poll_adb_state}" != "device" ]; then
+        printf '%s\n' "${poll_adb_state:-unknown}" > "${result_dir}/adb-disconnected.txt"
+        break
+      fi
+      if [ "${saw_app_process}" -eq 1 ]; then
+        missed_app_polls=$((missed_app_polls + 1))
+        if [ "${missed_app_polls}" -ge 3 ]; then
+          app_exited=1
+          break
+        fi
+      fi
+    fi
+    sleep 1
+  done
+}
+
+# The same wait on a wall clock, selected by MOBILEGL_TRACE_POLL_INTERVAL (seconds between
+# polls, fractions allowed). One adb call per poll asks for result.json and for the app
+# process. The budget is --timeout-seconds of wall time plus a fifth: a poll of the
+# one-second loop takes about 1.2 s with its two adb calls, so a replay gets the same time
+# to finish under either loop. An exit needs three missed polls spread over at least three
+# seconds, so a short interval keeps the one-second loop's tolerance for adb calls that fail
+# under memory pressure.
+wait_for_result_by_clock() {
+  poll_deadline=$((poll_started + timeout_seconds + timeout_seconds / 5))
+  missed_app_polls=0
+  first_missed_at=0
+  while [ "$(date +%s)" -lt "${poll_deadline}" ]; do
+    poll_output="$(adb_device_path shell "run-as ${package_name} ls ${app_dir}/output/result.json >/dev/null 2>&1 && echo mobilegl-poll-result; pidof ${package_name} >/dev/null 2>&1 && echo mobilegl-poll-alive; echo mobilegl-poll-end" 2>/dev/null | tr -d '\r' || true)"
+    case "${poll_output}" in
+      *mobilegl-poll-result*)
+        break
+        ;;
+      *mobilegl-poll-alive*)
+        saw_app_process=1
+        missed_app_polls=0
+        ;;
+      *)
+        poll_adb_state="$(adb_device_path get-state 2>/dev/null | tr -d '\r' || true)"
+        if [ "${poll_adb_state}" != "device" ]; then
+          printf '%s\n' "${poll_adb_state:-unknown}" > "${result_dir}/adb-disconnected.txt"
+          break
+        fi
+        if [ "${saw_app_process}" -eq 1 ]; then
+          poll_now="$(date +%s)"
+          if [ "${missed_app_polls}" -eq 0 ]; then
+            first_missed_at="${poll_now}"
+          fi
+          missed_app_polls=$((missed_app_polls + 1))
+          if [ "${missed_app_polls}" -ge 3 ] && [ "$((poll_now - first_missed_at))" -ge 3 ]; then
+            app_exited=1
+            break
+          fi
+        fi
+        ;;
+    esac
+    sleep "${MOBILEGL_TRACE_POLL_INTERVAL}"
+  done
+}
+
 run_retrace() {
   result_dir="${result_root}/${safe_case}-${backend}"
   alternate_golden_app_path=""
@@ -427,13 +520,17 @@ run_retrace() {
   fi
 
   mkdir -p "${result_dir}"
+  printf 'script-started %s\n' "${script_started_ms}" > "${result_dir}/phase-timings.txt" 2>/dev/null || true
+  mark_phase fixture-pushed
   # A repeat run of a case the previous invocation already installed and pushed only needs
   # the on-device copy back into a fresh app output directory.
   # MOBILEGL_TRACE_SKIP_INSTALL=1: the caller installed the APK itself (ColorOS shows an install-confirmation
-  # dialog whose tap drops adb for a few seconds, so the install has to be done and settled outside a run).
+  # dialog whose tap drops adb for a few seconds, so the install has to be done and settled outside a run;
+  # trace-replay-shard.sh installs once per emulator boot).
   if [ "${reuse_fixture}" -eq 0 ] && [ "${MOBILEGL_TRACE_SKIP_INSTALL:-0}" != "1" ]; then
     "${ADB}" install -r "$(host_path_for_adb "${apk_file}")"
   fi
+  mark_phase apk-installed
   copy_fixture_to_app
   adb_device_path shell am force-stop "${package_name}"
   "${ADB}" logcat -c
@@ -502,39 +599,20 @@ run_retrace() {
     --ei crop_width "${crop_width}" \
     --ei crop_height "${crop_height}"
   adb_device_path shell "$@"
+  mark_phase app-started
 
   app_exited=0
   saw_app_process=0
-  # One failed pidof is not an exit: under memory pressure the adb shell call
-  # itself can fail while the app is alive (seen with the process still in
-  # pidof and the activity still initializing right after the "exit").
-  missed_app_polls=0
   poll_started="$(date +%s)"
-  for _ in $(seq 1 "${timeout_seconds}"); do
-    if adb_device_path shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
-      break
-    fi
-    if adb_device_path shell pidof "${package_name}" >/dev/null 2>&1; then
-      saw_app_process=1
-      missed_app_polls=0
-    else
-      poll_adb_state="$(adb_device_path get-state 2>/dev/null | tr -d '\r' || true)"
-      if [ "${poll_adb_state}" != "device" ]; then
-        printf '%s\n' "${poll_adb_state:-unknown}" > "${result_dir}/adb-disconnected.txt"
-        break
-      fi
-      if [ "${saw_app_process}" -eq 1 ]; then
-        missed_app_polls=$((missed_app_polls + 1))
-        if [ "${missed_app_polls}" -ge 3 ]; then
-          app_exited=1
-          break
-        fi
-      fi
-    fi
-    sleep 1
-  done
+  if [ -n "${MOBILEGL_TRACE_POLL_INTERVAL:-}" ]; then
+    wait_for_result_by_clock
+  else
+    wait_for_result_by_count
+  fi
+  mark_phase wait-ended
 
   collect_run_diagnostics "${result_dir}"
+  mark_phase diagnostics-collected
   if ! adb_device_path shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
     if [ -f "${result_dir}/adb-disconnected.txt" ]; then
       echo "trace-replay-ci.sh: device disconnected while waiting for result.json" >&2
@@ -574,6 +652,7 @@ run_retrace() {
     copy_app_artifact "${app_dir}/output/benchmark.json" "${result_dir}/benchmark.json"
   fi
   copy_texture_2d_dumps
+  mark_phase artifacts-copied
 
   # A replay that wrote result.json but did not pass used to print nothing but
   # the JSON, which for a non-zero statusCode says only "retrace failed with
@@ -696,6 +775,7 @@ PY
   fi
 }
 
+script_started_ms="$(now_ms)"
 mkdir -p "${fixture_root}" "${result_root}"
 if [ "${reuse_fixture}" -eq 0 ]; then
   prepare_fixture

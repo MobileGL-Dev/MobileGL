@@ -19,7 +19,7 @@ env:
   MOBILEGL_GPU_HANG_BUDGET_MS: "0"
 
 # ONE LIVE RUN PER BRANCH. The disaggregation branch pushes (often docs-only) commits minutes apart
-# and each push fans out to ~330 retrace legs here and ~275 jobs in apk.yml; with no group, runs
+# and each push fans out to about 30 replay jobs here and the emulator shards in apk.yml; with no group, runs
 # sat queued for 10+ hours behind their own successors. A manual dispatch gets a group of its own,
 # so a push never cancels a manually started run; dev queues rather
 # than cancels. No paths-ignore here, unlike apk.yml: this workflow hosts the doc citation lint.
@@ -2668,12 +2668,15 @@ jobs:
     runs-on: ubuntu-26.04
     env:
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      # How many jobs replay one (lane, transport, backend) cell of the Linux retrace lanes. Each
+      # job replays its share of the cell's cases one after another; a cell with little to
+      # replay gets fewer jobs (tools/trace_replay/trace_cases.py, shard_matrix).
+      RETRACE_SHARDS_PER_CELL: "4"
     outputs:
-      matrix: ${{ steps.trace-cases.outputs.matrix }}
-      names: ${{ steps.trace-cases.outputs.names }}
-      verify-matrix: ${{ steps.trace-cases.outputs.verify-matrix }}
-      split-matrix: ${{ steps.trace-cases.outputs.split-matrix }}
-      split-spawn-matrix: ${{ steps.trace-cases.outputs.split-spawn-matrix }}
+      shards: ${{ steps.trace-cases.outputs.shards }}
+      verify-shards: ${{ steps.trace-cases.outputs.verify-shards }}
+      split-shards: ${{ steps.trace-cases.outputs.split-shards }}
+      split-spawn-shards: ${{ steps.trace-cases.outputs.split-spawn-shards }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -2702,29 +2705,49 @@ jobs:
         id: trace-cases
         run: |
           python3 tools/trace_replay/trace_cases.py --self-test-transport-matrices
-          matrix_format=github-test-matrix
-          if [ "${MOBILEGL_CI_DISAGGREGATED}" = "ON" ]; then matrix_format=github-test-transport-matrix; fi
-          echo "matrix=$(python3 tools/trace_replay/trace_cases.py --ci --format "${matrix_format}")" >> "$GITHUB_OUTPUT"
-          echo "names=$(python3 tools/trace_replay/trace_cases.py --ci --format names)" >> "$GITHUB_OUTPUT"
-          # The subset the verify build retraces ("verify": true in trace_cases.json). It is a
-          # SUBSET of the matrix above, so retrace-verify needs no fixtures of its own.
-          echo "verify-matrix=$(python3 tools/trace_replay/trace_cases.py --ci --format github-verify-matrix)" >> "$GITHUB_OUTPUT"
-          # The split subset: {backend, case, transport} over inproc AND spawn, both backends, for
-          # every CI case that has not said `"split": false`. Still a SUBSET of the matrix above,
-          # so retrace-split needs no fixtures of its own. P5 shipped it as one case (OpenRA, which
-          # the phase gate names); P6 widened it to the whole CI matrix, because every bug the
-          # spawn work found was a question about the SERVER's process rather than about one trace.
-          # trace_cases.py refuses a `split` case that is not in CI, so the subset stays a subset.
-          SPLIT_MATRIX=$(python3 tools/trace_replay/trace_cases.py --ci --format github-split-matrix)
-          # AND IT MUST NOT BE EMPTY. An empty `include` is not an error to GitHub - it skips the
-          # whole retrace-split job with no red anywhere - so the one way this subset can vanish
-          # silently is guarded here. trace_cases.py now also rejects an unknown manifest key, which
-          # was the hole: `"splitt": true` loaded clean and emptied the subset (review N-4).
-          if [ "$(printf '%s' "${SPLIT_MATRIX}" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))')" -lt 1 ]; then
-            echo "::error::the split retrace subset is EMPTY. 'split' is an OPT-OUT as of P6 - a CI case is in this subset unless it carries \"split\": false - so an empty subset means either every case opted out or the CI matrix itself is empty. Either way retrace-split would be skipped with no red, and exit gate E2 names OpenRA."
+          # The retrace jobs replay shards: several cases of one (lane, transport, backend) cell
+          # per job. The first self-test proves every shard matrix replays exactly the rows of
+          # the per-case matrix it is built from; the second proves the shard runner gives each
+          # case the settings of its lane.
+          python3 tools/trace_replay/trace_cases.py --self-test-shard-matrices
+          python3 scripts/ci/retrace_shard.py --self-test
+          shards() {
+            python3 tools/trace_replay/trace_cases.py --ci --shards "${RETRACE_SHARDS_PER_CELL}" "$@"
+          }
+          shard_count() {
+            python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))'
+          }
+          shard_format=github-test-shard-matrix
+          if [ "${MOBILEGL_CI_DISAGGREGATED}" = "ON" ]; then shard_format=github-test-transport-shard-matrix; fi
+          # An empty `include` is not an error to GitHub: it skips the job with no red anywhere,
+          # so each matrix is checked before it is handed over.
+          require_shards() {
+            if [ "$(printf '%s' "$2" | shard_count)" -lt 1 ]; then
+              echo "::error::the $1 shard matrix is empty, so its job would be skipped with no red"
+              exit 1
+            fi
+          }
+          SHARDS=$(shards --format "${shard_format}")
+          require_shards retrace "${SHARDS}"
+          echo "shards=${SHARDS}" >> "$GITHUB_OUTPUT"
+          # The subset the verify build retraces ("verify": true in trace_cases.json).
+          VERIFY_SHARDS=$(shards --format github-verify-shard-matrix)
+          require_shards retrace-verify "${VERIFY_SHARDS}"
+          echo "verify-shards=${VERIFY_SHARDS}" >> "$GITHUB_OUTPUT"
+          # The split subset: {backend, case, transport} over inproc and spawn, both backends, for
+          # every CI case that has not said `"split": false`. It is the whole CI matrix because
+          # the bugs the spawn arm finds are about the server's process rather than about one
+          # trace. trace_cases.py refuses a `split` case that is not in CI.
+          SPLIT_SHARDS=$(shards --format github-split-shard-matrix)
+          # It must not be empty. An empty `include` is not an error to GitHub: it skips the
+          # whole retrace-split job with no red anywhere, so that is guarded here.
+          # trace_cases.py also rejects an unknown manifest key, since a mistyped `split` key
+          # would otherwise load clean and change the subset.
+          if [ "$(printf '%s' "${SPLIT_SHARDS}" | shard_count)" -lt 1 ]; then
+            echo "::error::the split retrace subset is empty. 'split' is an opt-out: a CI case is in this subset unless it carries \"split\": false, so an empty subset means either every case opted out or the CI matrix itself is empty. Either way retrace-split would be skipped with no red."
             exit 1
           fi
-          echo "split-matrix=${SPLIT_MATRIX}" >> "$GITHUB_OUTPUT"
+          echo "split-shards=${SPLIT_SHARDS}" >> "$GITHUB_OUTPUT"
           # On the disaggregation branches, the same subset without the inproc rows the
           # inproc-acceptance retrace rows replay on the same library, which retrace-split uses when
           # it reuses build-linux's library. OpenRA keeps its inproc rows: they carry the
@@ -2733,101 +2756,110 @@ jobs:
           # is not written, and retrace-split takes the full subset, as it does elsewhere.
           if [ "${MOBILEGL_CI_DISAGGREGATED}" = "ON" ]; then
             if python3 tools/trace_replay/trace_cases.py --self-test-split-matrix \
-               && SPLIT_SPAWN_MATRIX=$(python3 tools/trace_replay/trace_cases.py --ci --format github-split-matrix \
+               && SPLIT_SPAWN_SHARDS=$(shards --format github-split-shard-matrix \
                     --transports spawn --keep-inproc OpenRA) \
-               && [ "$(printf '%s' "${SPLIT_SPAWN_MATRIX}" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))' || echo 0)" -ge 1 ]; then
-              echo "split-spawn-matrix=${SPLIT_SPAWN_MATRIX}" >> "$GITHUB_OUTPUT"
+               && [ "$(printf '%s' "${SPLIT_SPAWN_SHARDS}" | shard_count || echo 0)" -ge 1 ]; then
+              echo "split-spawn-shards=${SPLIT_SPAWN_SHARDS}" >> "$GITHUB_OUTPUT"
             else
               echo "::warning::the spawn-only split retrace subset failed its self-test or is empty, so retrace-split replays the full split subset"
             fi
           fi
+          echo "retrace shards: $(printf '%s' "${SHARDS}" | shard_count) retrace, $(printf '%s' "${VERIFY_SHARDS}" | shard_count) verify, $(printf '%s' "${SPLIT_SHARDS}" | shard_count) split (full subset)"
 
+  # One cache entry holds every Git LFS fixture of the CI cases, and each replay job restores
+  # that entry itself. This job only makes sure the entry exists. On a hit it downloads
+  # nothing. On a miss it starts from the newest older bundle, fetches from the mirror the
+  # cases whose pointers changed, saves the entry under the new key and confirms it is there,
+  # so that no replay job has to download fixtures itself. The key, the path and the steps are
+  # .github/scripts/trace-fixture-bundle.sh's; apk.yml uses the same entry. The timeout bounds
+  # a fixture download that stalls, which would otherwise hold every replay job behind it.
   trace-fixtures:
-    name: trace fixture (${{ matrix.case }})
+    name: trace fixtures
     runs-on: ubuntu-26.04
-    needs: [trace-cases]
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix:
-        case: ${{ fromJSON(needs.trace-cases.outputs.names) }}
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      key: ${{ steps.bundle.outputs.key }}
+      path: ${{ steps.bundle.outputs.path }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
 
-      - name: Configure runner environment
-        uses: ./.github/actions/setup-test-runner
+      - name: Derive the fixture bundle key
+        id: bundle
+        run: bash .github/scripts/trace-fixture-bundle.sh key
 
-      - name: Derive trace fixture cache key
-        id: fixture-key
-        run: bash .github/scripts/trace-fixture-cache.sh key '${{ matrix.case }}'
-
-      - name: Restore trace fixture cache
-        id: fixture-cache
-        if: steps.fixture-key.outputs.cacheable == 'true'
+      - name: Look up the fixture bundle
+        id: lookup
         uses: actions/cache/restore@v5
         with:
-          path: ${{ steps.fixture-key.outputs.paths }}
-          key: ${{ steps.fixture-key.outputs.key }}
+          path: ${{ steps.bundle.outputs.path }}
+          key: ${{ steps.bundle.outputs.key }}
+          lookup-only: true
 
-      - name: Verify restored trace fixture
-        id: fixture-verify
-        if: steps.fixture-cache.outputs.cache-hit == 'true'
-        run: |
-          if bash .github/scripts/trace-fixture-cache.sh verify '${{ matrix.case }}'; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Cached fixture for ${{ matrix.case }} failed verification; falling back to the download path"
-            bash .github/scripts/trace-fixture-cache.sh reset '${{ matrix.case }}'
-          fi
+      - name: Restore the newest older bundle
+        if: steps.lookup.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.bundle.outputs.path }}
+          key: ${{ steps.bundle.outputs.key }}
+          restore-keys: ${{ steps.bundle.outputs.restore-prefix }}
 
-      - name: Fetch trace fixture
-        if: steps.fixture-verify.outputs.ok != 'true'
-        run: bash .github/scripts/fetch-trace-fixture-lfs.sh '${{ matrix.case }}'
+      - name: Complete the fixture bundle
+        if: steps.lookup.outputs.cache-hit != 'true'
+        run: bash .github/scripts/trace-fixture-bundle.sh ensure
 
-      - name: Save trace fixture cache
-        if: steps.fixture-key.outputs.cacheable == 'true' && steps.fixture-cache.outputs.cache-hit != 'true'
+      # The APK workflow of the same push saves the same entry, and only one save can win.
+      # The steps below find the entry whichever workflow wrote it.
+      - name: Save the fixture bundle
+        if: steps.lookup.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          path: ${{ steps.fixture-key.outputs.paths }}
-          key: ${{ steps.fixture-key.outputs.key }}
+          path: ${{ steps.bundle.outputs.path }}
+          key: ${{ steps.bundle.outputs.key }}
 
-      - name: Stage trace fixture
-        run: |
-          safe_case="$(printf '%s' '${{ matrix.case }}' | sed 's/[^A-Za-z0-9._-]/_/g')"
-          stage_dir="trace-fixtures/${safe_case}"
-          mkdir -p "${stage_dir}"
-          python3 tools/trace_replay/trace_cases.py --format fixture-files --case '${{ matrix.case }}' |
-            while IFS= read -r file; do
-              cp "${file}" "${stage_dir}/"
-            done
+      # The APK workflow of the same push may be the one whose save won. Its entry is as good,
+      # once it is listed.
+      - name: Wait for the fixture bundle entry
+        if: steps.lookup.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/trace-fixture-bundle.sh wait '${{ steps.bundle.outputs.key }}'
 
-      - name: Upload trace fixture
-        uses: actions/upload-artifact@v7
+      - name: Confirm the fixture bundle entry
+        if: steps.lookup.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v5
         with:
-          name: trace-fixture-${{ matrix.case }}
-          path: trace-fixtures/**
-          if-no-files-found: error
+          path: ${{ steps.bundle.outputs.path }}
+          key: ${{ steps.bundle.outputs.key }}
+          lookup-only: true
+          fail-on-cache-miss: true
 
+  # One job replays a shard: some of the cases of one lane, transport and backend, one after
+  # another, each through its own ctest entry (scripts/ci/retrace_shard.py). The shard's step
+  # summary has a row per case, and a failed case has an error annotation of its own.
   retrace:
-    name: retrace (${{ matrix.backend }} / ${{ matrix.transport || 'monolith' }}, ${{ matrix.case }})
+    name: retrace (${{ matrix.backend }} / ${{ matrix.transport || 'monolith' }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ubuntu-26.04
+    timeout-minutes: 240
     env:
       MOBILEGL_TRANSPORT: ${{ matrix.transport || 'monolith' }}
       MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
       MOBILEGL_IPC_STRICT_ERRORS: "1"
       MOBILEGL_IPC_RUN_AHEAD: "1"
+      SHARD_NAMES: ${{ toJSON(matrix.names) }}
     needs:
       - build-linux
       - build-retrace
       - trace-cases
       - trace-fixtures
-    if: ${{ !cancelled() && needs.build-linux.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ !cancelled() && needs.build-linux.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' && needs.trace-fixtures.result == 'success' }}
     strategy:
       fail-fast: false
-      max-parallel: 8
-      matrix: ${{ fromJSON(needs.trace-cases.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.trace-cases.outputs.shards) }}
 
     steps:
       - name: Checkout repo
@@ -2844,16 +2876,20 @@ jobs:
         with:
           gpu: "true"
 
-      - name: Download trace fixture
-        uses: actions/download-artifact@v8
+      # A miss does not fail the job: the entry may have been evicted since trace-fixtures
+      # confirmed it (a re-run of failed jobs on an older run does not run that job again).
+      - name: Restore trace fixtures
+        uses: actions/cache/restore@v5
         with:
-          name: trace-fixture-${{ matrix.case }}
-          path: trace-fixture-download
+          path: ${{ needs.trace-fixtures.outputs.path }}
+          key: ${{ needs.trace-fixtures.outputs.key }}
 
-      - name: Install trace fixture
-        run: |
-          mkdir -p tools/trace_replay/fixtures
-          find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
+      # Moves this shard's fixtures into place and checks them against their Git LFS pointers.
+      # A case the restored bundle does not hold is downloaded here, with a warning annotation;
+      # the timeout bounds a download that stalls.
+      - name: Install trace fixtures
+        timeout-minutes: 15
+        run: bash .github/scripts/trace-fixture-bundle.sh install ${{ join(matrix.names, ' ') }}
 
       - name: Get CMake
         timeout-minutes: 15
@@ -2895,93 +2931,66 @@ jobs:
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
+      # The per-case settings are retrace_shard.py's "retrace" profile: the Magma fallback and
+      # the two per-case repair knobs on DirectVulkan, and on the inproc lane the IPC
+      # configuration the client must log, the split evidence check and the refusal census from
+      # the library's own logs. A failing case does not stop the shard; the step fails at the
+      # end if a case failed or a case has no verdict.
       - name: Retrace and validate
-        working-directory: build-retrace/tools/trace_replay
         run: |
-          ulimit -c unlimited
-          if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
-            export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
-          fi
-          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
-             && [ '${{ matrix.case }}' = 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' ]; then
-            export MOBILEGL_ITRP_FIX=ForceOn
-          fi
-          # The blended depth-write quirk auto-enables only on Qualcomm, which no CI
-          # runner has, so force it on for the OIT case it exists to fix. ForceOn
-          # bypasses only the vendor gate, so this exercises the real strip on
-          # lavapipe. The Android AVD lane deliberately leaves it off, keeping the
-          # unstripped path covered for the same trace.
-          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
-             && [ '${{ matrix.case }}' = 'improved-transparency-minecraft-26.3' ]; then
-            export MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE=1
-          fi
-          # The inproc rows stand in for retrace-split's dropped inproc rows, so they prove the
-          # configuration they run with from the client's own log.
-          if [ "${MOBILEGL_TRANSPORT}" = inproc ]; then
-            export MGTRACE_EXPECT_IPC='strict=1 role-split-state=1 run-ahead=1'
-          fi
-          ctest -V --no-tests=error -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'             --output-junit "${RUNNER_TEMP}/retrace.xml"
-          # A split row's transport assertions ran on this leg and found their evidence.
-          if [ "${MOBILEGL_TRANSPORT}" != monolith ]; then
-            python3 "${GITHUB_WORKSPACE}/scripts/ci/retrace_split_evidence.py" \
-              '${{ matrix.case }}/${{ matrix.backend }}/output/split-evidence.txt' \
-              --transport "${MOBILEGL_TRANSPORT}" --case '${{ matrix.case }}' --backend '${{ matrix.backend }}'
-          fi
-
-      # The refusal census, recorded rather than gated. run_trace_case.cmake already REDS the case
-      # on any Fatal{, so reaching here means the count is zero - but the number and the distinct
-      # slot names are what MEASUREMENTS wants from every split run, and reading them out of the
-      # library's own log is the only way to get them (ctest -V's transcript is a false zero).
-      - name: Refusal census from the library log
-        if: ${{ always() && matrix.transport == 'inproc' }}
-        working-directory: build-retrace/tools/trace_replay
-        run: |
-          # BOTH ROLES, because under spawn every applier refusal is raised in the SERVER's
-          # process and a census reading only the client's file reports a confident zero for the
-          # half it cannot see.
-          log="${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.client.log"
-          server_log="${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.server.log"
-          cat "${{ matrix.case }}/${{ matrix.backend }}/output/split-evidence.txt" 2>/dev/null || echo "no split-evidence.txt"
-          if [ ! -f "${log}" ]; then
-            echo "no ${log} - the replay wrote no library log"
-            exit 0
-          fi
-          census_files="${log}"
-          if [ -f "${server_log}" ]; then census_files="${census_files} ${server_log}"; fi
-          echo "census over: ${census_files}"
-          echo "Fatal{ lines: $(cat ${census_files} | grep -c 'Fatal{' || true)"
-          cat ${census_files} | grep -o 'Fatal{[A-Za-z]*, "[^"]*"' | sort | uniq -c | sort -rn | head -20 || true
-          # The transport line is the CLIENT's: ConfigLoader resolves it there, and under spawn
-          # the server states its own separately.
-          grep -m1 "MOBILEGL_TRANSPORT=" "${log}" || echo "no transport line in ${log}"
+          python3 scripts/ci/retrace_shard.py run --profile retrace \
+            --backend '${{ matrix.backend }}' --transport "${MOBILEGL_TRANSPORT}" \
+            --lane '${{ matrix.lane || 'monolith-control' }}' \
+            --shard '${{ matrix.shard }}/${{ matrix.shards }}' \
+            --build-dir build-retrace/tools/trace_replay \
+            --result-dir "${RUNNER_TEMP}/retrace-shard"
 
       - name: Annotate failed entries
         if: failure()
-        run: python3 scripts/ci/junit_annotate.py --excerpts 1 "${RUNNER_TEMP}"
+        run: python3 scripts/ci/junit_annotate.py --excerpts 3 "${RUNNER_TEMP}/retrace-shard/junit"
 
       - name: Upload core dumps
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: retrace-core-dumps-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ matrix.backend }}-${{ matrix.case }}
+          name: retrace-core-dumps-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ matrix.backend }}-shard${{ matrix.shard }}
           path: /tmp/core.*
           if-no-files-found: ignore
 
-      - name: Upload actual image
+      # What retrace-summary renders: per case, the images and the replay's output directory.
+      # The summary embeds the images, so these are short-lived; a failed shard keeps its own
+      # copy below.
+      - name: Upload shard results
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: retrace-result-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ matrix.backend }}-${{ matrix.case }}
-          path: |
-            build-retrace/tools/trace_replay/${{ matrix.case }}/actual-images/**
-            build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
+          name: retrace-result-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ matrix.backend }}-shard${{ matrix.shard }}
+          path: ${{ runner.temp }}/retrace-shard/results
           if-no-files-found: warn
+          retention-days: 1
+          overwrite: true
+
+      - name: Upload failed shard results
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrace-failed-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ matrix.backend }}-shard${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/retrace-shard/results
+            ${{ runner.temp }}/retrace-shard/junit
+            ${{ runner.temp }}/retrace-shard/logs
+          if-no-files-found: warn
+          overwrite: true
 
   retrace-summary:
     name: retrace summary
     runs-on: ubuntu-26.04
     needs: [retrace]
     if: ${{ !cancelled() && needs.retrace.result != 'skipped' }}
+    # actions: write is for the last step, which deletes the artifacts this job rendered.
+    permissions:
+      actions: write
+      contents: read
     env:
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
 
@@ -3050,25 +3059,48 @@ jobs:
           archive: false
           if-no-files-found: error
 
+      # The summaries embed every image, so the shard result artifacts they were rendered from
+      # have no reader left and are deleted here. That happens only when every shard passed: a
+      # failed shard has its own retrace-failed-* artifact, and after a failure the results
+      # stay for their one day of retention, so that re-running the failed shards renders every
+      # case again. A failed delete only leaves them to that retention.
+      - name: Delete the rendered shard results
+        if: ${{ needs.retrace.result == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name | startswith("retrace-result-")) | [.id, .name] | @tsv' \
+            > "${RUNNER_TEMP}/rendered-artifacts.txt"
+          deleted=0
+          while IFS=$'\t' read -r artifact_id artifact_name; do
+            echo "Deleting ${artifact_name} (${artifact_id})"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+            deleted=$((deleted + 1))
+          done < "${RUNNER_TEMP}/rendered-artifacts.txt"
+          echo "Deleted ${deleted} rendered shard result artifact(s)."
+
   # The trace half of the third CI mode. Same replay, same goldens, but the library underneath is
   # the verify build and MOBILEGL_PIPE_VERIFY=1 is in the environment, so every backend read of
   # frontend state is checked against a snapshot taken at the verb boundary. Eight cases rather
   # than the full lane's 40 (tools/trace_replay/trace_cases.json, "verify": true): the comparator
   # is budgeted at 5-10x, and the full sweep is a phase-exit / workflow_dispatch run.
   retrace-verify:
-    name: retrace verify (${{ matrix.backend }}, ${{ matrix.case }})
+    name: retrace verify (${{ matrix.backend }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ubuntu-26.04
     timeout-minutes: 240
+    env:
+      SHARD_NAMES: ${{ toJSON(matrix.names) }}
     needs:
       - build-linux-verify
       - build-retrace
       - trace-cases
       - trace-fixtures
-    if: ${{ !cancelled() && needs.build-linux-verify.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ !cancelled() && needs.build-linux-verify.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' && needs.trace-fixtures.result == 'success' }}
     strategy:
       fail-fast: false
-      max-parallel: 4
-      matrix: ${{ fromJSON(needs.trace-cases.outputs.verify-matrix) }}
+      matrix: ${{ fromJSON(needs.trace-cases.outputs.verify-shards) }}
 
     steps:
       - name: Checkout repo
@@ -3085,16 +3117,16 @@ jobs:
         with:
           gpu: "true"
 
-      - name: Download trace fixture
-        uses: actions/download-artifact@v8
+      # A miss does not fail the job; the install step downloads what the bundle does not hold.
+      - name: Restore trace fixtures
+        uses: actions/cache/restore@v5
         with:
-          name: trace-fixture-${{ matrix.case }}
-          path: trace-fixture-download
+          path: ${{ needs.trace-fixtures.outputs.path }}
+          key: ${{ needs.trace-fixtures.outputs.key }}
 
-      - name: Install trace fixture
-        run: |
-          mkdir -p tools/trace_replay/fixtures
-          find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
+      - name: Install trace fixtures
+        timeout-minutes: 15
+        run: bash .github/scripts/trace-fixture-bundle.sh install ${{ join(matrix.names, ' ') }}
 
       - name: Get CMake
         timeout-minutes: 15
@@ -3151,82 +3183,60 @@ jobs:
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
-      - name: Retrace and validate (verify)
-        working-directory: build-retrace/tools/trace_replay
-        # run_trace_case.cmake turns MOBILEGL_PIPE_VERIFY into three assertions of its own (the
-        # arming line, no Fatal{PipeVerifyDiffer, no Fatal{UnmigratedPipeInput), so a case that
-        # somehow ran the wrong library reds here instead of passing on its golden.
-        # --timeout 10800: the 1800s cases run 5-10x slower with both comparator arms live, which
-        # is well past ctest's 1500s default.
-        run: |
-          ulimit -c unlimited
-          export MOBILEGL_PIPE_VERIFY=1
-          if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
-            export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
-          fi
-          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
-             && [ '${{ matrix.case }}' = 'improved-transparency-minecraft-26.3' ]; then
-            export MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE=1
-          fi
-          ctest -V --no-tests=error --timeout 10800 \
-            -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
-
-      # The retrace lane's own always-on negative control, on one case so it costs one short trace:
-      # with a snapshot field corrupted, the SAME replay must fail. Without it, "40 traces, zero
-      # divergences" would be a statement about a comparator nobody watched.
+      # Every case replays with MOBILEGL_PIPE_VERIFY=1 (retrace_shard.py's "verify" profile).
+      # run_trace_case.cmake turns that into three assertions of its own (the arming line, no
+      # Fatal{PipeVerifyDiffer, no Fatal{UnmigratedPipeInput), so a case that somehow ran the
+      # wrong library reds here instead of passing on its golden. ctest's timeout is raised to
+      # 10800 s: the long cases run 5-10x slower with both comparator arms live, well past the
+      # 1500 s default.
       #
-      # The rerun replays into the SAME case directory, so the verified run's images are put aside
-      # first and restored before the verdict: "Upload actual image" below runs `if: always()` and
-      # would otherwise ship the deliberately corrupted run's output under the name of the good one.
-      # The restore happens whichever way the control goes, which is why the ctest exit status is
-      # captured rather than tested inline.
-      - name: Negative control (corrupted snapshot)
-        if: ${{ matrix.case == 'OpenRA' && matrix.backend == 'DirectGLES' }}
-        working-directory: build-retrace/tools/trace_replay
+      # The shard that holds OpenRA on DirectGLES also runs the lane's negative control right
+      # after that case: with a snapshot field corrupted, the same replay must fail, and for the
+      # comparator's reason (scripts/ci/retrace_verify_reason.py). Without it, zero divergences
+      # would be a statement about a comparator nobody watched. The control has a verdict row of
+      # its own, and its output is discarded so that only the verified run is uploaded.
+      - name: Retrace and validate (verify)
         run: |
-          export MOBILEGL_PIPE_VERIFY=1
-          export MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters
-          GOOD_OUTPUT="${RUNNER_TEMP}/openra-verified-output"
-          rm -rf "${GOOD_OUTPUT}"
-          if [ -d OpenRA ]; then
-            cp -a OpenRA "${GOOD_OUTPUT}"
-          fi
-          set +e
-          ctest -V --no-tests=error --timeout 10800 \
-            -R '^MobileGLTraceReplay\.OpenRA\.DirectGLES$' 2>&1 | tee "${RUNNER_TEMP}/verify-control.txt"
-          control_rc=${PIPESTATUS[0]}
-          set -e
-          if [ -d "${GOOD_OUTPUT}" ]; then
-            rm -rf OpenRA
-            mv "${GOOD_OUTPUT}" OpenRA
-            echo "restored the verified run's OpenRA output over the corrupted rerun's"
-          fi
-          if [ "${control_rc}" -eq 0 ]; then
-            echo "::error::MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters left the OpenRA retrace GREEN, so the comparator is not comparing and the whole verify retrace lane proves nothing."
-            exit 1
-          fi
-          # Its red must carry the comparator's divergence on the corrupted field
-          # (scripts/ci/retrace_verify_reason.py, which test_run_trace_case.py runs on canned output).
-          python3 "${GITHUB_WORKSPACE}/scripts/ci/retrace_verify_reason.py" "${RUNNER_TEMP}/verify-control.txt"
-          echo "the corrupted field turned the retrace red, as it must (ctest exit ${control_rc})"
+          python3 scripts/ci/retrace_shard.py run --profile verify \
+            --backend '${{ matrix.backend }}' --lane verify \
+            --shard '${{ matrix.shard }}/${{ matrix.shards }}' \
+            --build-dir build-retrace/tools/trace_replay \
+            --result-dir "${RUNNER_TEMP}/retrace-shard"
+
+      - name: Annotate failed entries
+        if: failure()
+        run: python3 scripts/ci/junit_annotate.py --excerpts 3 "${RUNNER_TEMP}/retrace-shard/junit"
 
       - name: Upload core dumps
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: retrace-verify-core-dumps-${{ matrix.backend }}-${{ matrix.case }}
+          name: retrace-verify-core-dumps-${{ matrix.backend }}-shard${{ matrix.shard }}
           path: /tmp/core.*
           if-no-files-found: ignore
 
-      - name: Upload actual image
+      # Kept for every shard, green or not: per case, the verified images and the replay's
+      # output directory, whose library log has the comparator's arming line.
+      - name: Upload shard results
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: retrace-verify-result-${{ matrix.backend }}-${{ matrix.case }}
-          path: |
-            build-retrace/tools/trace_replay/${{ matrix.case }}/actual-images/**
-            build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
+          name: retrace-verify-result-${{ matrix.backend }}-shard${{ matrix.shard }}
+          path: ${{ runner.temp }}/retrace-shard/results
           if-no-files-found: warn
+          overwrite: true
+
+      - name: Upload failed shard results
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrace-verify-failed-${{ matrix.backend }}-shard${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/retrace-shard/results
+            ${{ runner.temp }}/retrace-shard/junit
+            ${{ runner.temp }}/retrace-shard/logs
+          if-no-files-found: warn
+          overwrite: true
 
   # Trace retrace on the split library: the retrace-verify shape with MOBILEGL_TRANSPORT set
   # instead of MOBILEGL_PIPE_VERIFY, over {backend, case, transport} with inproc and spawn.
@@ -3237,7 +3247,7 @@ jobs:
   # guards are the nm check for MG_Remote, run_trace_case.cmake's transport assertions (and, on
   # OpenRA, its wire-volume assertion), and the per-leg check of the evidence file they leave.
   retrace-split:
-    name: retrace split (${{ matrix.backend }} / ${{ matrix.transport }}, ${{ matrix.case }})
+    name: retrace split (${{ matrix.backend }} / ${{ matrix.transport }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ubuntu-26.04
     timeout-minutes: 240
     # The setup action selects lavapipe on GitHub-hosted runners.
@@ -3248,19 +3258,20 @@ jobs:
       - build-retrace
       - trace-cases
       - trace-fixtures
-    if: ${{ !cancelled() && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' && (needs.build-guard.outputs.verdict != 'identical' || needs.build-linux.result == 'success') }}
+    if: ${{ !cancelled() && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' && needs.trace-fixtures.result == 'success' && (needs.build-guard.outputs.verdict != 'identical' || needs.build-linux.result == 'success') }}
     env:
       SPLIT_REUSE: ${{ needs.build-guard.outputs.verdict == 'identical' && 'true' || 'false' }}
       SPLIT_LIB: ${{ needs.build-guard.outputs.verdict == 'identical' && 'mobilegl-linux-lib' || 'mobilegl-linux-lib-split' }}
       SPLIT_LIB_DIR: ${{ needs.build-guard.outputs.verdict == 'identical' && 'build-linux' || 'build-split' }}
       SPLIT_BUILD_DIR: ${{ needs.build-guard.outputs.verdict == 'identical' && 'build-linux' || 'build-split' }}
+      SHARD_NAMES: ${{ toJSON(matrix.names) }}
     strategy:
       fail-fast: false
-      max-parallel: 8
       # With build-linux reused, the inproc rows (except OpenRA's) are replayed by the retrace job's
       # inproc-acceptance rows on the same library, strict and with the dual block and run-ahead
-      # on; the spawn rows below prove per leg that those are also the defaults they run with.
-      matrix: ${{ fromJSON(needs.build-guard.outputs.verdict == 'identical' && needs.trace-cases.outputs.split-spawn-matrix || needs.trace-cases.outputs.split-matrix) }}
+      # on; the spawn rows below prove per case that those are also the defaults they run with.
+      # A shard holds one transport, so OpenRA's inproc rows are shards of their own.
+      matrix: ${{ fromJSON(needs.build-guard.outputs.verdict == 'identical' && needs.trace-cases.outputs.split-spawn-shards || needs.trace-cases.outputs.split-shards) }}
 
     steps:
       - name: Checkout repo
@@ -3288,16 +3299,16 @@ jobs:
         with:
           gpu: "true"
 
-      - name: Download trace fixture
-        uses: actions/download-artifact@v8
+      # A miss does not fail the job; the install step downloads what the bundle does not hold.
+      - name: Restore trace fixtures
+        uses: actions/cache/restore@v5
         with:
-          name: trace-fixture-${{ matrix.case }}
-          path: trace-fixture-download
+          path: ${{ needs.trace-fixtures.outputs.path }}
+          key: ${{ needs.trace-fixtures.outputs.key }}
 
-      - name: Install trace fixture
-        run: |
-          mkdir -p tools/trace_replay/fixtures
-          find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
+      - name: Install trace fixtures
+        timeout-minutes: 15
+        run: bash .github/scripts/trace-fixture-bundle.sh install ${{ join(matrix.names, ' ') }}
 
       - name: Get CMake
         timeout-minutes: 15
@@ -3351,12 +3362,11 @@ jobs:
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
-      # THE SPAWN ARM NEEDS A SECOND BINARY and the inproc arm needs none, which is the whole
-      # difference between the two at this level: inproc's server role is a thread in the replay
-      # process, spawn's is a PROCESS the client launches from this image. It ships in
-      # the split retrace library - libMobileGLServer.so is an executable that wears a
-      # .so name so an APK will install it somewhere exec-able - and a missing one must be a NAMED
-      # failure here rather than a LaunchServer refusal 78 jobs deep.
+      # The spawn arm needs a second binary and the inproc arm needs none: inproc's server role
+      # is a thread in the replay process, spawn's is a process the client launches from this
+      # image. It ships in the split retrace library (libMobileGLServer.so is an executable
+      # with a .so name, so that an APK installs it somewhere it can be executed), and a missing
+      # one must be a named failure here rather than a LaunchServer refusal in every case.
       - name: Place the server image (spawn arm only)
         if: ${{ matrix.transport == 'spawn' }}
         run: |
@@ -3370,114 +3380,54 @@ jobs:
           chmod +x build-linux/libMobileGLServer.so
           echo "server image: $(readlink -f build-linux/libMobileGLServer.so)"
 
-      # The Magma knobs go to $GITHUB_ENV rather than to one step's shell, so every later step of
-      # this leg runs the same repair set as the replay.
-      - name: Magma repair knobs (all later steps)
-        run: |
-          # P7 package L: THE SAME MAGMA KNOBS THE MONOLITH RETRACE JOB EXPORTS, ALL OF THEM.
-          # This job exported none at all, so every DirectVulkan row of the split matrix was
-          # compared against a monolith row running a different repair set - and a split retrace
-          # whose control is not comparable cannot say whether a divergence is a transport fact.
-          # R11F_G11F_B10F fallback is whole-backend; the blended depth-write quirk auto-enables
-          # only on Qualcomm, which no runner has, so the OIT case forces it exactly as the
-          # monolith job does (ForceOn bypasses only the vendor gate).
-          if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
-            echo "MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1" >> "${GITHUB_ENV}"
-          fi
-          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
-             && [ '${{ matrix.case }}' = 'improved-transparency-minecraft-26.3' ]; then
-            echo "MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE=1" >> "${GITHUB_ENV}"
-          fi
-          # THE THREE ITERATIONRP KNOBS, FOR THE ONE CASE THE MONOLITH JOB NAMES.
-          # The iterationRP repairs are tri-state quirks that default to device auto-detection and
-          # lavapipe is on no auto list, so without them Program 203 runs unrepaired and misses its
-          # golden output. The monolith job has exported them since they landed; this job never
-          # did, so `iterationrp x DirectVulkan` was the one cell of the split matrix whose red
-          # could not be read as a transport fact - the monolith control it is compared against was
-          # running a different repair set. Exit gate 1 asks for the two halves to be COMPARABLE,
-          # and two runs that differ in a quirk knob are not.
-          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
-             && [ '${{ matrix.case }}' = 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' ]; then
-            echo "MOBILEGL_ITRP_FIX=ForceOn" >> "${GITHUB_ENV}"
-          fi
-
+      # The per-case settings are retrace_shard.py's "split" profile:
+      # - the Magma knobs the retrace job's monolith rows run with (the R11F_G11F_B10F fallback,
+      #   the blended depth-write quirk on its one case, the iterationRP repairs on theirs), so a
+      #   split row and its monolith control differ in the transport alone;
+      # - MOBILEGL_TRANSPORT and the absolute server image path;
+      # - on OpenRA, the wire-volume counters and the check that draw records crossed the wire;
+      # - with build-linux reused, the IPC defaults the client must log (strict=0).
+      # run_trace_case.cmake turns MOBILEGL_TRANSPORT into assertions of its own: the library must
+      # have resolved the transport in this process and its log must carry no Fatal{, so a case
+      # that somehow ran the wrong library reds here instead of passing on its golden. After
+      # ctest the evidence file those assertions leave is checked for every case, and the
+      # refusal census is printed from the library's own logs of both roles, which is the only
+      # valid source: the console sink is compiled out of this configuration.
       - name: Retrace and validate (${{ matrix.transport }})
-        working-directory: build-retrace/tools/trace_replay
-        # run_trace_case.cmake turns MOBILEGL_TRANSPORT into assertions of its own - the library
-        # must have RESOLVED the transport in this process, and its log must carry no Fatal{ - so a
-        # case that somehow ran the wrong library reds here instead of passing on its golden. That
-        # log is also the only valid refusal census: the console sink is compiled out of this
-        # configuration, so a `ctest -V` transcript reports a false zero for Fatal{ lines.
         run: |
-          ulimit -c unlimited
-          export MOBILEGL_TRANSPORT='${{ matrix.transport }}'
-          # Absolute, because the replay's working directory is not this one and LaunchServer
-          # resolves the image relative to nothing. Harmless on the inproc arm, which reads it
-          # only to decide it does not need it.
-          export MOBILEGL_IPC_SERVER_PATH="${GITHUB_WORKSPACE}/build-linux/libMobileGLServer.so"
-          # OpenRA's legs also count the wire's draw records and the server's draws; that turns on
-          # the library's per-frame counters, so the other cases keep the plain configuration.
-          wire=()
-          if [ '${{ matrix.case }}' = 'OpenRA' ]; then
-            export MGTRACE_WIRE_EVIDENCE=1
-            wire=(--require-wire)
-          fi
-          if [ "${SPLIT_REUSE}" = "true" ]; then
-            export MGTRACE_EXPECT_IPC='strict=0 role-split-state=1 run-ahead=1'
-            export MGTRACE_EXPECT_IPC_REASON="retrace-split dropped its inproc rows because the inproc-acceptance retrace rows replay the same library with strict=1 role-split-state=1 run-ahead=1, which differs from this leg's defaults only in strict while these hold. A default changed: restore the inproc rows (the trace-cases job's split-spawn-matrix without --transports spawn) or update the expectation."
-          fi
-          ctest -V --no-tests=error --timeout 10800 \
-            -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
-          # The transport assertions ran on this leg and found their evidence.
-          python3 "${GITHUB_WORKSPACE}/scripts/ci/retrace_split_evidence.py" \
-            '${{ matrix.case }}/${{ matrix.backend }}/output/split-evidence.txt' \
-            --transport '${{ matrix.transport }}' --case '${{ matrix.case }}' \
-            --backend '${{ matrix.backend }}' "${wire[@]}"
+          reuse=()
+          if [ "${SPLIT_REUSE}" = "true" ]; then reuse=(--split-reuse); fi
+          python3 scripts/ci/retrace_shard.py run --profile split \
+            --backend '${{ matrix.backend }}' --transport '${{ matrix.transport }}' --lane split \
+            --shard '${{ matrix.shard }}/${{ matrix.shards }}' \
+            --server-path "${GITHUB_WORKSPACE}/build-linux/libMobileGLServer.so" \
+            --build-dir build-retrace/tools/trace_replay \
+            --result-dir "${RUNNER_TEMP}/retrace-shard" "${reuse[@]}"
 
-      # The refusal census, recorded rather than gated. run_trace_case.cmake already REDS the case
-      # on any Fatal{, so reaching here means the count is zero - but the number and the distinct
-      # slot names are what MEASUREMENTS wants from every split run, and reading them out of the
-      # library's own log is the only way to get them (ctest -V's transcript is a false zero).
-      - name: Refusal census from the library log
-        if: ${{ always() }}
-        working-directory: build-retrace/tools/trace_replay
-        run: |
-          # BOTH ROLES, because under spawn every applier refusal is raised in the SERVER's
-          # process and a census reading only the client's file reports a confident zero for the
-          # half it cannot see.
-          log="${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.client.log"
-          server_log="${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.server.log"
-          cat "${{ matrix.case }}/${{ matrix.backend }}/output/split-evidence.txt" 2>/dev/null || echo "no split-evidence.txt"
-          if [ ! -f "${log}" ]; then
-            echo "no ${log} - the replay wrote no library log"
-            exit 0
-          fi
-          census_files="${log}"
-          if [ -f "${server_log}" ]; then census_files="${census_files} ${server_log}"; fi
-          echo "census over: ${census_files}"
-          echo "Fatal{ lines: $(cat ${census_files} | grep -c 'Fatal{' || true)"
-          cat ${census_files} | grep -o 'Fatal{[A-Za-z]*, "[^"]*"' | sort | uniq -c | sort -rn | head -20 || true
-          # The transport line is the CLIENT's: ConfigLoader resolves it there, and under spawn
-          # the server states its own separately.
-          grep -m1 "MOBILEGL_TRANSPORT=" "${log}" || echo "no transport line in ${log}"
+      - name: Annotate failed entries
+        if: failure()
+        run: python3 scripts/ci/junit_annotate.py --excerpts 3 "${RUNNER_TEMP}/retrace-shard/junit"
 
       - name: Upload core dumps
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: retrace-split-core-dumps-${{ matrix.transport }}-${{ matrix.backend }}-${{ matrix.case }}
+          name: retrace-split-core-dumps-${{ matrix.transport }}-${{ matrix.backend }}-shard${{ matrix.shard }}
           path: /tmp/core.*
           if-no-files-found: ignore
 
-      - name: Upload actual image
-        if: ${{ always() }}
+      # Nothing reads a green shard's output, so only a failed shard uploads it.
+      - name: Upload failed shard results
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: retrace-split-result-${{ matrix.transport }}-${{ matrix.backend }}-${{ matrix.case }}
+          name: retrace-split-failed-${{ matrix.transport }}-${{ matrix.backend }}-shard${{ matrix.shard }}
           path: |
-            build-retrace/tools/trace_replay/${{ matrix.case }}/actual-images/**
-            build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
+            ${{ runner.temp }}/retrace-shard/results
+            ${{ runner.temp }}/retrace-shard/junit
+            ${{ runner.temp }}/retrace-shard/logs
           if-no-files-found: warn
+          overwrite: true
 
   # The shipped library, replayed. build-linux-monolith-control's library has no MG_Remote, the
   # shape FCL embeds; on the disaggregation branches nothing else replays that shape, so it runs
@@ -3490,8 +3440,8 @@ jobs:
     needs:
       - build-linux-monolith-control
       - build-retrace
-      - trace-fixtures
-    if: ${{ !cancelled() && (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && needs.build-linux-monolith-control.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-fixtures.result != 'skipped' }}
+      - trace-cases
+    if: ${{ !cancelled() && (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && needs.build-linux-monolith-control.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -3513,16 +3463,11 @@ jobs:
         with:
           gpu: "true"
 
-      - name: Download trace fixture
-        uses: actions/download-artifact@v8
-        with:
-          name: trace-fixture-${{ matrix.case }}
-          path: trace-fixture-download
-
-      - name: Install trace fixture
-        run: |
-          mkdir -p tools/trace_replay/fixtures
-          find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
+      # This job's one case keeps its fixtures in Git itself, not in Git LFS, so the checkout
+      # has them and the fixture bundle is not restored. The check is that they are real files;
+      # a case with Git LFS fixtures would be downloaded here, with a warning annotation.
+      - name: Check trace fixture
+        run: bash .github/scripts/trace-fixture-bundle.sh install '${{ matrix.case }}'
 
       - name: Get CMake
         timeout-minutes: 15
@@ -3588,15 +3533,16 @@ jobs:
         run: python3 scripts/ci/junit_annotate.py --excerpts 1 "${RUNNER_TEMP}"
 
       - name: Upload core dumps
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: retrace-shipped-core-dumps-${{ matrix.backend }}-${{ matrix.case }}
           path: /tmp/core.*
           if-no-files-found: ignore
 
+      # Nothing reads a green leg's output, so only a failed leg uploads it.
       - name: Upload actual image
-        if: ${{ always() }}
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: retrace-shipped-result-${{ matrix.backend }}-${{ matrix.case }}
@@ -3604,82 +3550,6 @@ jobs:
             build-retrace/tools/trace_replay/${{ matrix.case }}/actual-images/**
             build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
           if-no-files-found: warn
-
-  remove-artifact-clutter:
-    name: remove artifact clutter
-    runs-on: ubuntu-26.04
-    # Every retrace job downloads the shared fixtures, so this waits for all of them.
-    needs:
-      - retrace-summary
-      - retrace-verify
-      - retrace-split
-      - retrace-shipped
-    if: ${{ always() }}
-    permissions:
-      actions: write
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v6
-      - name: Configure runner environment
-        uses: ./.github/actions/setup-test-runner
-
-      - name: Delete intermediate Linux retrace artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Read the complete inventories before deleting anything. A failed API
-          # request must fail this step, not look like "no failed cases" through
-          # an unchecked process substitution.
-          # 50 rows per page: the jobs endpoint answers HTTP 502 for 90+ rows on a re-run attempt of a run this size.
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=50" \
-            --jq '.jobs[] | select((.name | startswith("retrace (")) or (.name | startswith("retrace verify (")) or (.name | startswith("retrace split (")) or (.name | startswith("retrace shipped library ("))) | select(.conclusion == "failure" or .conclusion == "canceled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name' \
-            > "${RUNNER_TEMP}/cleanup-jobs.txt"
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name | startswith("trace-fixture-") or startswith("retrace-result-") or startswith("retrace-split-result-") or startswith("retrace-shipped-result-")) | [.id, .name] | @tsv' \
-            > "${RUNNER_TEMP}/cleanup-artifacts.txt"
-          declare -A failed_cases=()
-          while IFS= read -r job_name; do
-            case_name="${job_name#retrace split (*, }"
-            case_name="${case_name#retrace shipped library (*, }"
-            case_name="${case_name#retrace verify (*, }"
-            case_name="${case_name#retrace (*, }"
-            case_name="${case_name%)}"
-            failed_cases["${case_name}"]=1
-          done < "${RUNNER_TEMP}/cleanup-jobs.txt"
-
-          if ((${#failed_cases[@]})); then
-            echo "Retaining fixtures and results for failed retrace case(s):"
-            printf '  %s\n' "${!failed_cases[@]}"
-          else
-            echo "All retrace jobs succeeded; no fixtures need to be retained."
-          fi
-
-          deleted=0
-          retained=0
-          while IFS=$'\t' read -r artifact_id artifact_name; do
-            keep=0
-            if [[ "${artifact_name}" == trace-fixture-* ]]; then
-              case_name="${artifact_name#trace-fixture-}"
-              if [[ -v "failed_cases[${case_name}]" ]]; then
-                keep=1
-              fi
-            else
-              for case_name in "${!failed_cases[@]}"; do
-                if [[ "${artifact_name}" == *-"${case_name}" ]]; then keep=1; break; fi
-              done
-            fi
-            if ((keep)); then
-              echo "Retaining ${artifact_name} (${artifact_id}) for failed retrace."
-              ((retained += 1))
-              continue
-            fi
-
-            echo "Deleting ${artifact_name} (${artifact_id})"
-            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
-            ((deleted += 1))
-          done < "${RUNNER_TEMP}/cleanup-artifacts.txt"
-
-          echo "Deleted ${deleted} intermediate Linux artifact(s); retained ${retained} failed-retrace artifact(s)."
 
   pipe-gates:
     name: MGPipe generators and hygiene gates

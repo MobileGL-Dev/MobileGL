@@ -29,3 +29,5 @@ __pycache__/
 *.py[cod]
 /.gradle
 /.trace-work/
+# The restored trace fixture cache entry (.github/scripts/trace-fixture-bundle.sh)
+/trace-fixture-bundle/

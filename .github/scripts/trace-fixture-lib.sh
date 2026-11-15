@@ -2,7 +2,7 @@
 # Shared helpers for trace-fixture handling: reading the in-tree Git LFS pointer
 # metadata and verifying a fixture file against it. Sourced by
 # fetch-trace-fixture-lfs.sh (verify after download) and by
-# trace-fixture-cache.sh (cache key derivation and verify after cache restore),
+# trace-fixture-bundle.sh (cache key derivation and verify after cache restore),
 # so both paths agree on what a valid fixture is.
 
 # Reads the Git LFS pointer tracked at HEAD for a fixture path and prints
