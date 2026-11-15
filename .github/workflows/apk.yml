@@ -81,64 +81,12 @@ jobs:
 
       # Only the submodules the two APKs are built from, shallow and in parallel, in place of a
       # recursive checkout of every submodule in the tree: the ones the root CMakeLists.txt
-      # configures, and apitrace with the eight directories its thirdparty/CMakeLists.txt
-      # requires, for the trace APK. Each row names a submodule and one file the build reads
-      # from it, and a row whose file is missing afterwards fails the step: without
-      # 3rdparty/flatbuffers the root CMakeLists.txt would go on and build a library without
-      # MG_Remote instead of stopping. A submodule the build starts to use needs a row here.
+      # configures, and apitrace with the directories its thirdparty/CMakeLists.txt requires,
+      # for the trace APK. The step fails when a file the build reads from one of them did
+      # not arrive (scripts/ci/checkout_submodules.sh).
       - name: Check out build submodules
         timeout-minutes: 15
-        run: |
-          top=(
-            "3rdparty/glslang CMakeLists.txt"
-            "3rdparty/SPIRV-Cross CMakeLists.txt"
-            "3rdparty/SPIRV-Reflect CMakeLists.txt"
-            "3rdparty/VulkanMemoryAllocator CMakeLists.txt"
-            "3rdparty/Vulkan-Headers CMakeLists.txt"
-            "3rdparty/Vulkan-Utility-Libraries CMakeLists.txt"
-            "3rdparty/xxHash build/cmake/CMakeLists.txt"
-            "3rdparty/asio include/asio.hpp"
-            "3rdparty/flatbuffers include/flatbuffers/flatbuffers.h"
-            "include/ska flat_hash_map.hpp"
-            "3rdparty/apitrace thirdparty/CMakeLists.txt"
-          )
-          apitrace=(
-            "thirdparty/brotli LICENSE"
-            "thirdparty/gtest LICENSE"
-            "thirdparty/libbacktrace LICENSE"
-            "thirdparty/libpng LICENSE"
-            "thirdparty/snappy COPYING"
-            "thirdparty/zlib README"
-            "thirdparty/zstd LICENSE"
-            "thirdparty/directxmath LICENSE"
-          )
-          # update <directory> <row>...: the update is idempotent, so a fetch that failed on
-          # the network is tried again, three times in all. Then every row's file must exist.
-          update() {
-            local dir="$1" paths=() row attempt updated=0 missing=0
-            shift
-            for row in "$@"; do
-              paths+=("${row%% *}")
-            done
-            for attempt in 1 2 3; do
-              if git -C "${dir}" submodule update --init --depth=1 --jobs 8 -- "${paths[@]}"; then
-                updated=1
-                break
-              fi
-              echo "the submodule update in ${dir} failed (attempt ${attempt} of 3)" >&2
-              sleep $((attempt * 5))
-            done
-            [ "${updated}" -eq 1 ] || return 1
-            for row in "$@"; do
-              if [ ! -f "${dir}/${row%% *}/${row#* }" ]; then
-                echo "::error::${dir}/${row%% *}/${row#* } is missing after the submodule update, so the APK build cannot use ${row%% *}"
-                missing=1
-              fi
-            done
-            return "${missing}"
-          }
-          update . "${top[@]}"
-          update 3rdparty/apitrace "${apitrace[@]}"
+        run: bash scripts/ci/checkout_submodules.sh retrace
 
       - name: Set artifact metadata
         run: |

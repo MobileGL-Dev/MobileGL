@@ -56,8 +56,12 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
+
+      # Only the submodules the build reads, shallow and in parallel; the script fails when one
+      # of them did not arrive (scripts/ci/checkout_submodules.sh).
+      - name: Check out build submodules
+        timeout-minutes: 15
+        run: bash scripts/ci/checkout_submodules.sh library
 
       - name: Set swap space
         uses: ./.github/actions/set-swap-space
@@ -198,6 +202,8 @@ jobs:
       - name: Prepare packaged test metadata
         run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
 
+      # zstd on every core: the tarball is most of a gigabyte of test executables, and every
+      # consumer job waits for it. `tar --zstd -xf` reads the result unchanged.
       - name: Package Linux runtime
         run: |
           mkdir -p ci-artifacts
@@ -209,7 +215,7 @@ jobs:
             --exclude='*.ninja*' \
             --exclude='build.ninja' \
             --exclude='cmake_install.cmake' \
-            --zstd -cf ci-artifacts/mobilegl-linux-runtime.tar.zst \
+            -I 'zstd -T0' -cf ci-artifacts/mobilegl-linux-runtime.tar.zst \
             "${BUILD_DIR}/runtime-mode.json" \
             "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_Test" \
@@ -217,12 +223,15 @@ jobs:
             "${BUILD_DIR}/MobileGL/MG_IntegrationTest" \
             "${SHARED_LIBS[@]}"
 
+      # compression-level 0: the tarball is zstd already, and deflating it again in the upload
+      # only costs time. The artifact stays a zip holding this one file, as the consumers expect.
       - name: Upload Linux runtime
         uses: actions/upload-artifact@v7
         with:
           name: mobilegl-linux-runtime
           path: ci-artifacts/mobilegl-linux-runtime.tar.zst
           if-no-files-found: error
+          compression-level: 0
 
       # The retrace legs load only the library, and the server image on the spawn arm, so they
       # take this instead of the whole test runtime.
@@ -245,17 +254,24 @@ jobs:
   build-linux-monolith-control:
     name: build push monolith control (no MG_Remote)
     runs-on: ubuntu-26.04
+    # actions: write is for this job's own rolling ccache entry, as in build-linux.
+    permissions:
+      actions: write
+      contents: read
     env:
       BUILD_DIR: build-push-control
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_COMPRESS: "true"
+      CCACHE_MAXSIZE: 4G
       CCACHE_NOHASHDIR: "true"
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
+
+      - name: Check out build submodules
+        timeout-minutes: 15
+        run: bash scripts/ci/checkout_submodules.sh library
 
       - name: Set swap space
         uses: ./.github/actions/set-swap-space
@@ -270,11 +286,17 @@ jobs:
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
-      - name: Restore compiler cache
+      # This job's own entry: its objects are compiled without MG_Remote, which no other build
+      # produces. The second restore key is build-linux's entry, which seeds the third-party
+      # objects on a branch's first run.
+      - name: Restore ccache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ubuntu26-cpu-test-build-linux-ccache-v1
+          key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
+          restore-keys: |
+            ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-ubuntu26-cpu-test-build-linux-ccache-
       - name: Prepare Vulkan SDK
         id: netsetup230
         continue-on-error: true
@@ -306,11 +328,14 @@ jobs:
       # The push monolith without MG_Remote, the shape FCL embeds. Its runtime_mode_proof is the
       # zero-MG_Remote-symbol check: a push library that links any MG_Remote symbol is red here.
       # Its library is uploaded for retrace-shipped, a positive replay of that shape.
+      # ENABLE_PCH=OFF: ccache cannot cache a compile that uses glslang's precompiled header
+      # (see scripts/ci/configure_build.sh).
       - name: Configure push control without MG_Remote
         run: |
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
             -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DENABLE_PCH=OFF \
             -DCMAKE_BUILD_TYPE=Release -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
             -DMOBILEGL_BUILD_TEST=OFF -DMOBILEGL_BUILD_BENCHMARK=OFF \
             -DMOBILEGL_BUILD_INTEGRATION_TEST=OFF -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
@@ -322,6 +347,26 @@ jobs:
           cmake --build "${BUILD_DIR}" --target MobileGL --parallel "$(nproc)"
           python3 scripts/ci/runtime_mode_proof.py build --build-dir "${BUILD_DIR}" \
             --mode monolith --output "${BUILD_DIR}/runtime-mode.json"
+
+      - name: Show ccache stats
+        if: ${{ always() }}
+        run: ccache --show-stats
+
+      # One rolling entry per job and branch, as in build-linux: this branch's superseded blob is
+      # released before the save, and a failed build leaves the entry untouched.
+      - name: Release superseded ccache entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
+        run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
+
+      - name: Save ccache
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
+
       - name: Prepare packaged test metadata
         run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
 
@@ -613,8 +658,10 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
+
+      - name: Check out build submodules
+        timeout-minutes: 15
+        run: bash scripts/ci/checkout_submodules.sh library
 
       - name: Set swap space
         uses: ./.github/actions/set-swap-space
@@ -688,12 +735,15 @@ jobs:
         # Both disaggregation options default ON, so they are pinned OFF here: a disaggregated
         # library expects a server-role log that this monolith lane never writes.
         # integration-verify-split is the split arm.
+        # ENABLE_PCH=OFF: ccache cannot cache a compile that uses glslang's precompiled header
+        # (see scripts/ci/configure_build.sh).
         run: |
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
             -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" \
             -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DENABLE_PCH=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
             -DMOBILEGL_BUILD_TEST=ON \
@@ -776,18 +826,20 @@ jobs:
             --exclude='*.ninja*' \
             --exclude='build.ninja' \
             --exclude='cmake_install.cmake' \
-            --zstd -cf ci-artifacts/mobilegl-linux-runtime-verify.tar.zst \
+            -I 'zstd -T0' -cf ci-artifacts/mobilegl-linux-runtime-verify.tar.zst \
             "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_Test" \
             "${BUILD_DIR}/MobileGL/MG_IntegrationTest" \
             "${SHARED_LIBS[@]}"
 
+      # compression-level 0: the tarball is zstd already (see 'Upload Linux runtime').
       - name: Upload Linux verify runtime
         uses: actions/upload-artifact@v7
         with:
           name: mobilegl-linux-runtime-verify
           path: ci-artifacts/mobilegl-linux-runtime-verify.tar.zst
           if-no-files-found: error
+          compression-level: 0
 
       # The retrace legs load only the library, and the server image on the spawn arm, so they
       # take this instead of the whole test runtime.
@@ -1135,8 +1187,15 @@ jobs:
         continue-on-error: true
         timeout-minutes: 15
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
+
+      # The same submodule set as the two builds this job compares. The compare step runs only
+      # when every one of them arrived: without 3rdparty/flatbuffers both lines would configure
+      # the same library without MG_Remote, and compare as identical.
+      - name: Check out build submodules
+        id: submodules
+        continue-on-error: true
+        timeout-minutes: 15
+        run: bash scripts/ci/checkout_submodules.sh library
 
       - name: Configure runner environment
         continue-on-error: true
@@ -1194,8 +1253,12 @@ jobs:
         timeout-minutes: 45
         env:
           CI_BUILD_TYPE: ${{ secrets.ACTIONS_STEP_DEBUG == 'true' && 'Debug' || 'Release' }}
+          SUBMODULES_OUTCOME: ${{ steps.submodules.outcome }}
         run: |
-          if python3 scripts/ci/build_fingerprint.py --self-test > "${RUNNER_TEMP}/fingerprint-self-test.txt"; then
+          if [ "${SUBMODULES_OUTCOME}" != success ]; then
+            echo "::warning::the submodule checkout did not succeed (outcome '${SUBMODULES_OUTCOME}'), so the guard decides nothing"
+            echo "verdict=unknown" >> "${GITHUB_OUTPUT}"
+          elif python3 scripts/ci/build_fingerprint.py --self-test > "${RUNNER_TEMP}/fingerprint-self-test.txt"; then
             python3 scripts/ci/build_fingerprint.py guard --primary-dir build-guard-primary \
               --split-dir build-guard-split --deps-dir build-guard-deps \
               --github-output verdict --report "${RUNNER_TEMP}/build-guard.json"
@@ -1257,12 +1320,16 @@ jobs:
       - name: Checkout repo
         if: env.SPLIT_REUSE != 'true'
         uses: actions/checkout@v6
-        with:
-          # recursive, and load-bearing here beyond the usual: MOBILEGL_BUILD_DISAGGREGATED
-          # shadows itself back to OFF when 3rdparty/flatbuffers/include is missing (a normal
-          # variable rather than a cache force, deliberately). A shallow checkout would therefore
-          # configure cleanly, build a monolith library, and be caught only by the nm step below.
-          submodules: recursive
+
+      # The submodule list is load-bearing here beyond the usual: MOBILEGL_BUILD_DISAGGREGATED
+      # shadows itself back to OFF when 3rdparty/flatbuffers/include is missing (a normal
+      # variable rather than a cache force, deliberately), so a checkout without it would
+      # configure cleanly and build a monolith library. The script fails when the header is not
+      # there, and the nm step below is the second check.
+      - name: Check out build submodules
+        if: env.SPLIT_REUSE != 'true'
+        timeout-minutes: 15
+        run: bash scripts/ci/checkout_submodules.sh library
 
       - name: Configure runner environment
         if: env.SPLIT_REUSE != 'true'
@@ -1431,12 +1498,13 @@ jobs:
             --exclude='*.ninja*' \
             --exclude='build.ninja' \
             --exclude='cmake_install.cmake' \
-            --zstd -cf ci-artifacts/mobilegl-linux-runtime-split.tar.zst \
+            -I 'zstd -T0' -cf ci-artifacts/mobilegl-linux-runtime-split.tar.zst \
             "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_Test" \
             "${BUILD_DIR}/MobileGL/MG_IntegrationTest" \
             "${SHARED_LIBS[@]}"
 
+      # compression-level 0: the tarball is zstd already (see 'Upload Linux runtime').
       - name: Upload Linux split runtime
         if: env.SPLIT_REUSE != 'true'
         uses: actions/upload-artifact@v7
@@ -1444,6 +1512,7 @@ jobs:
           name: mobilegl-linux-runtime-split
           path: ci-artifacts/mobilegl-linux-runtime-split.tar.zst
           if-no-files-found: error
+          compression-level: 0
 
       # The retrace legs load only the library, and the server image on the spawn arm, so they
       # take this instead of the whole test runtime.
@@ -1580,8 +1649,21 @@ jobs:
       # the build graph (see gen_protocol.py), so this builds the same pinned flatc as flatc-check,
       # and the lane step requires both entries PASSED by name through junit_tally.py. --check keeps
       # this step from regenerating the committed header; checking that header is flatc-check's job.
+      # The binary comes from the cache entry flatc-check also uses, keyed on the submodule's
+      # commit; gen_protocol.py builds it when the entry is missing and checks its version against
+      # the submodule either way.
       - name: Check out FlatBuffers (TCP lane)
         run: git submodule update --init 3rdparty/flatbuffers
+
+      - name: Pinned flatc cache key
+        id: flatc
+        run: echo "commit=$(git rev-parse HEAD:3rdparty/flatbuffers)" >> "${GITHUB_OUTPUT}"
+
+      - name: Cache pinned flatc
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/flatc-build/flatc
+          key: ${{ runner.os }}-ubuntu26-flatc-${{ steps.flatc.outputs.commit }}
 
       - name: Build pinned flatc (TCP lane)
         run: python3 scripts/gen_protocol.py --build-dir "${RUNNER_TEMP}/flatc-build" --check
@@ -1595,6 +1677,10 @@ jobs:
       # An entry whose owning package (c1 client, s1 session, v1 server) has not landed SKIPS with
       # the reason and never goes green - MG_IntegrationTest/CMakeLists.txt probes MG_Remote for
       # c0's signature stubs and disarms the lane while any remain.
+      #
+      # The three arms run as one ctest invocation: the TCP arm holds one resource lock, so on its
+      # own it runs one entry at a time and leaves the other cores idle. Each arm keeps its own
+      # selection, JUnit and checks.
       - name: Split lanes (inproc, spawn, TCP)
         working-directory: ${{ env.SPLIT_BUILD_DIR }}
         env:
@@ -1603,16 +1689,45 @@ jobs:
           ulimit -c unlimited
           export MOBILEGL_FLATC_EXECUTABLE="${RUNNER_TEMP}/flatc-build/flatc"
           test -x "${MOBILEGL_FLATC_EXECUTABLE}"
-          ctest --output-on-failure -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/split-baseline.xml"
+          # Each arm is selected by its own label regex. scripts/ci/lane_selection.py turns the
+          # three selections into one list of exact names and fails when an arm selects nothing,
+          # which is what --no-tests=error says for an arm run on its own. junit_tally.py then
+          # carves each arm's JUnit out of the run, and fails when a selected name is missing
+          # from the run or reported twice.
+          ctest --show-only=json-v1 -L integration-split > "${RUNNER_TEMP}/split-discovery.json"
+          ctest --show-only=json-v1 -L integration-spawn > "${RUNNER_TEMP}/spawn-discovery.json"
+          ctest --show-only=json-v1 -L '^integration-tcp$' > "${RUNNER_TEMP}/tcp-discovery.json"
+          # A directory of its own: the job uploads RUNNER_TEMP/*.xml for the skip census, which
+          # has rows for the three arms and none for the run that holds them all.
+          mkdir -p "${RUNNER_TEMP}/split-arms"
+          python3 ../scripts/ci/lane_selection.py union "${RUNNER_TEMP}/split-arms/tests.txt" \
+            split="${RUNNER_TEMP}/split-discovery.json" spawn="${RUNNER_TEMP}/spawn-discovery.json" \
+            tcp="${RUNNER_TEMP}/tcp-discovery.json"
+          rc=0
+          ctest --output-on-failure --tests-from-file "${RUNNER_TEMP}/split-arms/tests.txt" --no-tests=error -j 4 \
+            --output-junit "${RUNNER_TEMP}/split-arms/all.xml" || rc=$?
+          # Carved before the exit code is acted on, so a red run still leaves each arm's JUnit
+          # for the annotations and the skip census.
+          carved=0
+          for arm in split spawn tcp; do
+            python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/split-arms/all.xml" \
+              --select-from "${RUNNER_TEMP}/${arm}-discovery.json" \
+              --write-selected "${RUNNER_TEMP}/${arm}-baseline.xml" || carved=1
+          done
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::the split, spawn and TCP arms' run failed (ctest exit ${rc})"
+            exit "${rc}"
+          fi
+          if [ "${carved}" -ne 0 ]; then
+            echo "::error::the run does not hold every entry of the split, spawn and TCP arms exactly once, so it cannot stand for the three arms"
+            exit 1
+          fi
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/split-baseline.xml" --require-split-ran
           # Exit gate 9.3: the spawn arm green at the same count. It runs the same cases through a
-          # SECOND PROCESS, so a failure here that the line above did not see is a transport fact
+          # second process, so a failure here that the inproc arm did not see is a transport fact
           # and not a phase one - which is the whole reason both lanes exist.
-          ctest --output-on-failure -L integration-spawn --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/spawn-baseline.xml"
           # PH-6 / fuzz arm 3: the supervisor-level forfeit control rides this lane and must RUN.
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/spawn-baseline.xml" --require-spawn-ran --require-entry-passed SpawnLane.EventForfeitPeer
-          ctest --show-only=json-v1 -L '^integration-tcp$' > "${RUNNER_TEMP}/tcp-discovery.json"
-          ctest --output-on-failure -L '^integration-tcp$' --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/tcp-baseline.xml"
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/tcp-baseline.xml" --require-tcp-ran --require-run-ahead --discovery "${RUNNER_TEMP}/tcp-discovery.json"
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/tcp-baseline.xml" --require-entry-passed TcpLane.SupervisorProtocolControls --require-entry-passed TcpLane.EventForfeitPeer --require-entry-passed TcpLane.ControlFrameFuzz
 
@@ -2401,6 +2516,20 @@ jobs:
         # SPIRV-Cross or the trace fixtures.
         run: git submodule update --init 3rdparty/flatbuffers
 
+      # The pinned flatc, cached under the submodule's commit: gen_protocol.py builds it only
+      # when the build directory holds none, and checks its version against the submodule
+      # either way. The gitlink gives the commit without the submodule's own checkout.
+      # integration-split restores the same entry, so the path is the same string in both jobs.
+      - name: Pinned flatc cache key
+        id: flatc
+        run: echo "commit=$(git rev-parse HEAD:3rdparty/flatbuffers)" >> "${GITHUB_OUTPUT}"
+
+      - name: Cache pinned flatc
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/flatc-build/flatc
+          key: ${{ runner.os }}-ubuntu26-flatc-${{ steps.flatc.outputs.commit }}
+
       - name: Regenerate protocol_generated.h
         run: python3 scripts/gen_protocol.py --build-dir "${{ runner.temp }}/flatc-build"
 
@@ -2533,8 +2662,12 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
+
+      # The library set plus apitrace and the directories its build requires
+      # (scripts/ci/checkout_submodules.sh).
+      - name: Check out build submodules
+        timeout-minutes: 15
+        run: bash scripts/ci/checkout_submodules.sh retrace
 
       - name: Set swap space
         uses: ./.github/actions/set-swap-space
@@ -3672,6 +3805,15 @@ jobs:
           python3 MobileGL/MG_IntegrationTest/Harness/test_split_log_paths.py
           python3 scripts/ci/transport_pinned.py --self-test
 
+      # The helpers the build and split-lane jobs run before anything else can fail for them: the
+      # union of the split arms' selections, and the submodule lists, which are printed here
+      # without checking anything out.
+      - name: Build and lane helper self-tests
+        run: |
+          python3 scripts/ci/lane_selection.py --self-test
+          bash scripts/ci/checkout_submodules.sh --list library
+          bash scripts/ci/checkout_submodules.sh --list retrace
+
       # Warning only for now: the disaggregation documents are still being written, and a
       # lint that fails a rewrite in progress teaches people to ignore it. It becomes
       # --strict when the documents settle.
@@ -3701,10 +3843,12 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
-        with:
-          # recursive for build-linux-split's reason: MOBILEGL_BUILD_DISAGGREGATED shadows itself
-          # back to OFF when 3rdparty/flatbuffers/include is missing.
-          submodules: recursive
+
+      # For build-linux-split's reason: MOBILEGL_BUILD_DISAGGREGATED shadows itself back to OFF
+      # when 3rdparty/flatbuffers/include is missing, and the script fails when it is.
+      - name: Check out build submodules
+        timeout-minutes: 15
+        run: bash scripts/ci/checkout_submodules.sh library
 
       - name: Set swap space
         uses: ./.github/actions/set-swap-space
@@ -3763,12 +3907,15 @@ jobs:
         # Release/INFO for build-linux-verify's reason, and INFO is load-bearing here for
         # build-linux-split's: ConfigLoader's resolved-transport line is logged at INFO and the
         # arm-proof step below reads it back out of every entry's client log.
+        # ENABLE_PCH=OFF: ccache cannot cache a compile that uses glslang's precompiled header
+        # (see scripts/ci/configure_build.sh).
         run: |
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
             -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" \
             -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DENABLE_PCH=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
             -DMOBILEGL_BUILD_TEST=ON \
@@ -3825,21 +3972,26 @@ jobs:
       - name: Prepare packaged test metadata
         run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
 
+      # The unit tests are built here, so this flavor still compiles and links them, but they are
+      # not packaged: the one consumer, integration-verify-split, runs only the
+      # integration-verify-split label, whose entries all live under MG_IntegrationTest.
       - name: Package verify-split runtime
         run: |
           mkdir -p ci-artifacts
           mapfile -t SHARED_LIBS < <(find "${BUILD_DIR}" -type f \( -name '*.so' -o -name '*.so.*' \) -print | sort)
           tar --exclude='*/CMakeFiles' --exclude='*.o' --exclude='*.a' --exclude='*.ninja*' \
             --exclude='build.ninja' --exclude='cmake_install.cmake' \
-            --zstd -cf ci-artifacts/mobilegl-linux-runtime-verify-split.tar.zst \
-            "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" "${BUILD_DIR}/MobileGL/MG_Test" \
+            -I 'zstd -T0' -cf ci-artifacts/mobilegl-linux-runtime-verify-split.tar.zst \
+            "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_IntegrationTest" "${SHARED_LIBS[@]}"
+      # compression-level 0: the tarball is zstd already (see 'Upload Linux runtime').
       - name: Upload verify-split runtime
         uses: actions/upload-artifact@v7
         with:
           name: mobilegl-linux-runtime-verify-split
           path: ci-artifacts/mobilegl-linux-runtime-verify-split.tar.zst
           if-no-files-found: error
+          compression-level: 0
 
   # P13 W1 (PLAN-P13 §4.2): THE SKIP CENSUS. Deleting a compile-time macro before the GTEST_SKIP
   # or pull stub that guards on it turns tests "green by skipping"; a per-lane pass/fail count
