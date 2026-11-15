@@ -443,13 +443,13 @@ jobs:
       max-parallel: 20
       matrix: ${{ fromJSON(needs.trace-cases.outputs.android) }}
     steps:
-      - name: Set swap space
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 8
-
       - name: Checkout repo
         uses: actions/checkout@v6
+
+      - name: Set swap space
+        uses: ./.github/actions/set-swap-space
+        with:
+          swap-size-gb: 8
 
       - name: Download trace fixture
         uses: actions/download-artifact@v8

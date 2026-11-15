@@ -54,15 +54,15 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Set swap space
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 32
-
       - name: Checkout repo
         uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Set swap space
+        uses: ./.github/actions/set-swap-space
+        with:
+          swap-size-gb: 32
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
@@ -252,15 +252,16 @@ jobs:
       CCACHE_COMPRESS: "true"
       CCACHE_NOHASHDIR: "true"
     steps:
-      - name: Set swap space
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 32
-
       - name: Checkout repo
         uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Set swap space
+        uses: ./.github/actions/set-swap-space
+        with:
+          swap-size-gb: 32
+
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
 
@@ -610,15 +611,15 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Set swap space
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 32
-
       - name: Checkout repo
         uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Set swap space
+        uses: ./.github/actions/set-swap-space
+        with:
+          swap-size-gb: 32
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
@@ -1322,7 +1323,7 @@ jobs:
 
       - name: Set swap space
         if: env.SPLIT_REUSE != 'true'
-        uses: pierotofy/set-swap-space@v1.0
+        uses: ./.github/actions/set-swap-space
         with:
           swap-size-gb: 32
 
@@ -2530,15 +2531,15 @@ jobs:
       MOBILEGL_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
 
     steps:
-      - name: Set swap space
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 32
-
       - name: Checkout repo
         uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Set swap space
+        uses: ./.github/actions/set-swap-space
+        with:
+          swap-size-gb: 32
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
@@ -2829,14 +2830,14 @@ jobs:
       matrix: ${{ fromJSON(needs.trace-cases.outputs.matrix) }}
 
     steps:
-      - name: Set swap space
-        if: runner.environment != 'self-hosted'
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 16
-
       - name: Checkout repo
         uses: actions/checkout@v6
+
+      - name: Set swap space
+        if: runner.environment != 'self-hosted'
+        uses: ./.github/actions/set-swap-space
+        with:
+          swap-size-gb: 16
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
@@ -3070,14 +3071,14 @@ jobs:
       matrix: ${{ fromJSON(needs.trace-cases.outputs.verify-matrix) }}
 
     steps:
-      - name: Set swap space
-        if: runner.environment != 'self-hosted'
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 16
-
       - name: Checkout repo
         uses: actions/checkout@v6
+
+      - name: Set swap space
+        if: runner.environment != 'self-hosted'
+        uses: ./.github/actions/set-swap-space
+        with:
+          swap-size-gb: 16
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
@@ -3262,14 +3263,14 @@ jobs:
       matrix: ${{ fromJSON(needs.build-guard.outputs.verdict == 'identical' && needs.trace-cases.outputs.split-spawn-matrix || needs.trace-cases.outputs.split-matrix) }}
 
     steps:
-      - name: Set swap space
-        if: runner.environment != 'self-hosted'
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 16
-
       - name: Checkout repo
         uses: actions/checkout@v6
+
+      - name: Set swap space
+        if: runner.environment != 'self-hosted'
+        uses: ./.github/actions/set-swap-space
+        with:
+          swap-size-gb: 16
 
       # build-linux's build when build-guard proved the two configurations identical,
       # build-linux-split's otherwise; integration-split prints the guard's evidence. A build-linux
@@ -3498,14 +3499,14 @@ jobs:
         case: [OpenRA]
 
     steps:
-      - name: Set swap space
-        if: runner.environment != 'self-hosted'
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 16
-
       - name: Checkout repo
         uses: actions/checkout@v6
+
+      - name: Set swap space
+        if: runner.environment != 'self-hosted'
+        uses: ./.github/actions/set-swap-space
+        with:
+          swap-size-gb: 16
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
@@ -3828,17 +3829,17 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Set swap space
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 32
-
       - name: Checkout repo
         uses: actions/checkout@v6
         with:
           # recursive for build-linux-split's reason: MOBILEGL_BUILD_DISAGGREGATED shadows itself
           # back to OFF when 3rdparty/flatbuffers/include is missing.
           submodules: recursive
+
+      - name: Set swap space
+        uses: ./.github/actions/set-swap-space
+        with:
+          swap-size-gb: 32
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
