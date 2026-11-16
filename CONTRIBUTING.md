@@ -81,7 +81,7 @@ Example:
 
 ## Checks
 
-`python3 scripts/check_text_hygiene.py ci` runs what CI runs. It checks the commits on the branch's own line of history since the check was added. The base branch it compares with is `feat/disaggregated`, which you can change with `TEXT_HYGIENE_BASE_BRANCH`.
+`python3 scripts/check_text_hygiene.py ci` runs what CI runs. It checks the commits on the branch's own line of history since the check was added. A push that moves a branch forward checks the commits it adds. A new branch, a force push and a run that is not a push check the commits the branch adds to the base branch, which is the repository's default branch `dev` (CI reads it from the event). Set `TEXT_HYGIENE_BASE_BRANCH` to compare with another branch. Another branch that adds nothing to the base branch has only its tree checked, and the base branch at its own tip checks its last commit.
 
 These fail on any violation:
 

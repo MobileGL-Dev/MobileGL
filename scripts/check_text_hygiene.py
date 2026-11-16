@@ -54,7 +54,8 @@ CONTENT_MAX = 72
 SCOPE_ABBREVIATE_OVER = 3
 CONTINUATION_MAX = 2
 COMMENT_BLOCK_MAX = 15
-BASE_BRANCH = os.environ.get("TEXT_HYGIENE_BASE_BRANCH", "feat/disaggregated")
+# The branch a new branch is compared with: the repository's default branch, which CI passes in.
+BASE_BRANCH = os.environ.get("TEXT_HYGIENE_BASE_BRANCH") or "dev"
 
 SUBJECT_RE = re.compile(r"^\[(?P<types>[^\]]+)\] \((?P<scopes>[^)]+)\): (?P<content>\S.*)$")
 # Ids from the phased planning process: decision ids, contract documents, lettered phases, and a
@@ -610,25 +611,51 @@ def check_format(rev_range):
 
 # ------------------------------------------------------------------------------------------ CI
 
-def ci_range():
-    """The commits a CI run is about: the pushed ones, or what this branch adds to the base branch."""
-    head = git("rev-parse", "HEAD").strip()
-    before = ""
+def push_before():
+    """The pushed branch's previous tip; all zeros when the push created the branch, empty when the
+    run is not a push."""
     event = os.environ.get("GITHUB_EVENT_PATH")
-    if os.environ.get("GITHUB_EVENT_NAME") == "push" and event and os.path.exists(event):
-        with open(event, encoding="utf-8") as fh:
-            before = json.load(fh).get("before") or ""
-    if (before and set(before) != {"0"} and git("cat-file", "-t", before, check=False).strip() == "commit"
-            and subprocess.run(["git", "-C", ROOT, "merge-base", "--is-ancestor", before, head]).returncode == 0):
+    if os.environ.get("GITHUB_EVENT_NAME") != "push" or not event or not os.path.exists(event):
+        return ""
+    with open(event, encoding="utf-8") as fh:
+        return json.load(fh).get("before") or ""
+
+
+def ci_range(repo=ROOT, base_branch=None, before=None, ref_name=None):
+    """(base, range) for a CI run: the pushed commits when the push moved an existing branch forward,
+    else what the branch adds to the base branch. A branch that adds nothing to it, such as a new one
+    at its tip, checks only the tree; the base branch at its own tip checks its last commit."""
+    base_branch = BASE_BRANCH if base_branch is None else base_branch
+    before = push_before() if before is None else before
+    if ref_name is None:
+        ref_name = (os.environ.get("GITHUB_REF_NAME")
+                    or git("rev-parse", "--abbrev-ref", "HEAD", check=False, repo=repo).strip())
+    head = git("rev-parse", "HEAD", repo=repo).strip()
+    if (before and set(before) != {"0"} and git("cat-file", "-t", before, check=False, repo=repo).strip() == "commit"
+            and is_ancestor(before, head, repo)):
         return before, "%s..HEAD" % before
-    for ref in ("origin/" + BASE_BRANCH, "origin/HEAD"):
-        base = git("merge-base", "HEAD", ref, check=False).strip()
+    tip_of = None
+    for ref in ("origin/" + base_branch, "origin/HEAD"):
+        base = git("merge-base", "HEAD", ref, check=False, repo=repo).strip()
         if base and base != head:
             return base, "%s..HEAD" % base
         if base == head:
+            # The branch the ref stands for: origin/HEAD names the remote's default branch.
+            tip_of = (git("symbolic-ref", "--short", "-q", "refs/remotes/" + ref, check=False, repo=repo).strip()
+                      or ref)
+            if ref_name != tip_of.split("/", 1)[1]:
+                notice("%s adds no commits to %s; checking only the tree" % (ref_name or "HEAD", tip_of))
+                return head, "%s..HEAD" % head
             break
-    parent = git("rev-parse", "HEAD^").strip()
-    notice("no base branch to compare with; checking only the last commit")
+    parent = git("rev-parse", "--verify", "--quiet", "HEAD^", check=False, repo=repo).strip()
+    if not parent:
+        # A shallow or single-commit history: HEAD^! is HEAD alone, and there is no older baseline.
+        notice("no parent commit to compare with; checking only the last commit")
+        return None, "%s^!" % head
+    if tip_of:
+        notice("%s is at the tip of %s; checking only the last commit" % (ref_name, tip_of))
+    else:
+        notice("no base branch to compare with; checking only the last commit")
     return parent, "%s..HEAD" % parent
 
 
@@ -781,7 +808,7 @@ def self_test():
              "diff --git a/b.cpp b/b.cpp\n--- /dev/null\n+++ b/b.cpp\n@@ -0,0 +1,4 @@\n+int  f();\n+int  g();\n"
              "+    int  f();\n+- x\n")
     expect("format: moved lines are not checked", unmoved_ranges(moved) == {"b.cpp": [(2, 3)]})
-    expect("range: first parent and cutoff", range_self_test())
+    expect("range: first parent, cutoff and CI base", range_self_test())
 
     for name in failures:
         print("self-test FAILED: %s" % name)
@@ -791,7 +818,8 @@ def self_test():
 
 def range_self_test():
     """In a scratch repository: commits before the script landed and commits a merge brings in are
-    not checked; the merge itself and later first-parent commits are."""
+    not checked; the merge itself and later first-parent commits are. Then the CI range for new,
+    pushed, force-pushed and up-to-date branches."""
     tmp = tempfile.mkdtemp()
     try:
         def g(*args):
@@ -818,7 +846,32 @@ def range_self_test():
         merge = g("rev-parse", "HEAD").strip()
         after = commit("MobileGL/MG_A/B/c.cpp", "[Fix] (MG_A/B): change c")
         checked = commits_to_check("%s..HEAD" % old, tmp)
-        return checked == [lint, merge, after] and side not in checked
+        if checked != [lint, merge, after] or side in checked:
+            return False
+
+        # ci_range on main at `after`: a new branch is compared with the base branch, a branch at
+        # the base tip adds nothing, and the base branch at its own tip checks its last commit.
+        zeros = "0" * 40
+        dropped = g("commit-tree", "-p", lint, "-m", "a force push dropped this", lint + "^{tree}").strip()
+        g("update-ref", "refs/remotes/origin/main", merge)
+        cases = [(("main", zeros, "topic"), (merge, merge + "..HEAD")),
+                 (("main", lint, "main"), (lint, lint + "..HEAD")),
+                 (("main", dropped, "topic"), (merge, merge + "..HEAD"))]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            got = [ci_range(tmp, *args) for args, _ in cases]
+            g("update-ref", "refs/remotes/origin/main", after)
+            got += [ci_range(tmp, "main", zeros, "topic"), ci_range(tmp, "main", "", "main"),
+                    ci_range(tmp, "gone", zeros, "topic")]
+            g("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+            got += [ci_range(tmp, "gone", zeros, "topic"), ci_range(tmp, "gone", zeros, "main")]
+        want = [w for _, w in cases] + [(after, after + "..HEAD"), (merge, merge + "..HEAD"),
+                                        (merge, merge + "..HEAD"), (after, after + "..HEAD"),
+                                        (merge, merge + "..HEAD")]
+        # The missing base ref alone reports no base branch; main at its own tip gets the tip notice
+        # through origin/main and through origin/HEAD.
+        log = out.getvalue()
+        return got == want and log.count("no base branch") == 1 and log.count("is at the tip of") == 2
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
