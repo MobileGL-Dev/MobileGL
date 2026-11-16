@@ -7,23 +7,9 @@ inputs:
 runs:
   using: composite
   steps:
-    # Hosted images differ: some ship /swapfile, some ship no swap at all. Turn off whatever is
-    # active, then create the file at the path the image used, or /swapfile when there was none.
+    # scripts/ci/set_swap_space.sh says which swap it replaces, where the file goes and when it
+    # is sized down; it prints the swap state and free space before and after.
     - shell: bash
       env:
         SWAP_SIZE_GB: ${{ inputs.swap-size-gb }}
-      run: |
-        set -euo pipefail
-        active="$(swapon --show=NAME --noheadings)"
-        swap_file="$(printf '%s\n' "$active" | grep '^/' | tail -n 1 || true)"
-        swap_file="${swap_file:-/swapfile}"
-        if [ -n "$active" ]; then
-          printf '%s\n' "$active" | xargs -r -n1 sudo swapoff
-        fi
-        sudo rm -f "$swap_file"
-        sudo fallocate -l "${SWAP_SIZE_GB}G" "$swap_file"
-        sudo chmod 600 "$swap_file"
-        sudo mkswap "$swap_file"
-        sudo swapon "$swap_file"
-        free -h
-        swapon --show
+      run: bash "${GITHUB_ACTION_PATH}/../../../scripts/ci/set_swap_space.sh"

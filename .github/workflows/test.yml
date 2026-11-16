@@ -3802,6 +3802,7 @@ jobs:
           python3 tools/trace_replay/test_run_trace_case.py
           python3 scripts/ci/build_fingerprint.py --self-test
           bash scripts/ci/split_reuse_build_type.sh --self-test
+          bash scripts/ci/test_set_swap_space.sh
           python3 MobileGL/MG_IntegrationTest/Harness/test_split_log_paths.py
           python3 scripts/ci/transport_pinned.py --self-test
 
