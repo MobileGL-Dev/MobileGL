@@ -479,16 +479,30 @@ TEST(JobNodeException, AThrowingJobDoesNotPoisonTheWorkerForLaterJobs) {
 TEST(ShaderCompilePoolDrain, StopAndDrainWithAThousandQueuedJobsLeavesNoneRunningOrPending) {
     constexpr Uint kJobs = 1000;
     ShaderCompilePool pool(kTestThreads);
-    pool.SetMaxConcurrency(1); // keep the vast majority queued behind the budget
+    pool.SetMaxConcurrency(1);
 
+    // The first job holds the only slot until the drain has taken the queue, so the other
+    // kJobs - 1 are still queued when it does; with empty bodies alone, a test thread that is
+    // descheduled after posting lets a worker run every job before StopAndDrain is reached.
+    // While the first job holds the slot, only the drain can settle the last one, so the
+    // opener waits for that; its timeout turns a drain that never settles it into failures
+    // rather than a hang.
+    Gate gate;
     Vector<SharedPtr<TestJob>> jobs;
     jobs.reserve(kJobs);
-    for (Uint i = 0; i < kJobs; ++i) {
+    jobs.push_back(MakeShared<TestJob>([&](TestJob&) { gate.Wait(); }));
+    pool.Post(jobs.back());
+    for (Uint i = 1; i < kJobs; ++i) {
         jobs.push_back(MakeShared<TestJob>());
         pool.Post(jobs.back());
     }
 
+    std::thread opener([&] {
+        WaitUntil([&] { return jobs.back()->IsTerminal(); });
+        gate.Open();
+    });
     pool.StopAndDrain();
+    opener.join();
 
     // Every node is terminal, so nothing can be waiting on a worker that will never come.
     Uint complete = 0;
@@ -501,10 +515,14 @@ TEST(ShaderCompilePoolDrain, StopAndDrainWithAThousandQueuedJobsLeavesNoneRunnin
     }
     EXPECT_EQ(complete + canceled, kJobs);
     EXPECT_GT(canceled, 0u); // the drain really did abandon queued work rather than run it
+    // Only the first job can have run its body: it completes if it was running when the
+    // drain began and is canceled if it was still waiting for a worker.
+    EXPECT_GE(canceled, kJobs - 1);
 }
 
 TEST(ShaderCompilePoolDrain, StopAndDrainWaitsForARunningBodyToReturn) {
     ShaderCompilePool pool(kTestThreads);
+    pool.SetMaxConcurrency(1);
 
     Gate gate;
     std::atomic<Bool> entered{false};
@@ -514,21 +532,29 @@ TEST(ShaderCompilePoolDrain, StopAndDrainWaitsForARunningBodyToReturn) {
         gate.Wait();
         left.store(true, std::memory_order_release);
     });
+    // Queued behind the running job, so only the drain can settle it: the opener waits for
+    // that, which keeps the body running until StopAndDrain has started, however the
+    // threads are scheduled.
+    auto queued = MakeShared<TestJob>();
 
     pool.Post(job);
+    pool.Post(queued);
     ASSERT_TRUE(WaitUntil([&] { return entered.load(); }));
 
     std::thread opener([&] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        WaitUntil([&] { return queued->IsTerminal(); });
         gate.Open();
     });
     pool.StopAndDrain();
+    // This is the guarantee library teardown relies on: once StopAndDrain returns, no worker
+    // is still inside a body that could touch glslang's process globals. Read it before
+    // joining the opener, since by then the body would have finished even without the drain.
+    const Bool leftWhenDrainReturned = left.load(std::memory_order_acquire);
     opener.join();
 
-    // This is the guarantee library teardown relies on: once StopAndDrain returns, no worker
-    // is still inside a body that could touch glslang's process globals.
-    EXPECT_TRUE(left.load());
+    EXPECT_TRUE(leftWhenDrainReturned);
     EXPECT_TRUE(job->IsTerminal());
+    EXPECT_TRUE(queued->IsCanceled());
 }
 
 TEST(ShaderCompilePoolDrain, JobsPostedAfterADrainStillRun) {
