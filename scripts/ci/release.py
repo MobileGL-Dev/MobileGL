@@ -11,11 +11,13 @@
 
 import argparse
 from collections import Counter
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -224,6 +226,7 @@ def validate_workflows(github, commit, tag=None):
         wait_for_runs(github, runs, commit, deadline)
     finally:
         summarize(github, runs)
+    return runs
 
 
 def previous_release(github, tag, commit):
@@ -277,7 +280,37 @@ def contributors(github, revision):
     return "\n".join(rows)
 
 
-def publish(github, tag, tag_sha, commit, notes, sender):
+def download_plugin_apk(github, tag, commit, run_id, directory):
+    if not re.fullmatch(r"[0-9]+", run_id):
+        raise ReleaseError("The successful APK run ID is missing or invalid.")
+    run_path = f"/actions/runs/{run_id}"
+    run = github.request(run_path)
+    if (not eligible_run(run, github.repo, commit, tag)
+            or run["path"].split("@", 1)[0] != ".github/workflows/apk.yml"
+            or run["status"] != "completed" or run["conclusion"] != "success"):
+        raise ReleaseError("The APK run must be a successful validation of the tagged commit.")
+    name = f"MobileGL-plugin-release-{commit}.apk"
+    artifacts = [
+        entry for entry in github.pages(f"{run_path}/artifacts", [("name", name)], key="artifacts")
+        if entry["name"] == name and not entry["expired"]
+    ]
+    if len(artifacts) != 1:
+        raise ReleaseError(f"Expected one unexpired {name} in APK run {run_id}.")
+    artifact = artifacts[0]
+    destination = directory / f"MobileGL-plugin-{tag}.apk"
+    with destination.open("wb") as output:
+        subprocess.run(["gh", "api", "--allow-escape-sequences",
+                        f"repos/{github.repo}/actions/artifacts/{artifact['id']}/zip"],
+                       stdout=output, check=True, timeout=120)
+    with destination.open("rb") as apk:
+        digest = "sha256:" + hashlib.file_digest(apk, "sha256").hexdigest()
+    if digest != artifact.get("digest"):
+        raise ReleaseError("The plugin APK does not match the digest from the APK run.")
+    print(f"Verified {destination.name} from APK run {run_id} ({digest}).", flush=True)
+    return destination
+
+
+def publish(github, tag, tag_sha, commit, notes, sender, apk_run_id):
     if release_already_exists(github, tag):
         return
     previous = previous_release(github, tag, commit)
@@ -290,11 +323,17 @@ def publish(github, tag, tag_sha, commit, notes, sender):
         parts.append(f"**Contributors**\n\n{credits}")
     parts.extend([history, "Clone with submodules:\n\n"
                   f"```sh\ngit clone --branch {tag} --recurse-submodules {github.url}.git\n```"])
-    remote_tag = github.tag_object(tag)
-    if not remote_tag or remote_tag["sha"] != tag_sha:
-        raise ReleaseError("The remote tag changed while preparing the release.")
-    release = github.create_release(tag, commit, "\n\n".join(parts))
-    print(f"Published {release['html_url']}")
+    with tempfile.TemporaryDirectory() as directory:
+        apk = download_plugin_apk(github, tag, commit, apk_run_id, Path(directory))
+        remote_tag = github.tag_object(tag)
+        if not remote_tag or remote_tag["sha"] != tag_sha:
+            raise ReleaseError("The remote tag changed while preparing the release.")
+        command = ["gh", "release", "create", tag, str(apk), "--repo", github.repo,
+                   "--verify-tag", "--title", tag, "--notes-file", "-"]
+        if "-" in tag:
+            command.append("--prerelease")
+        # The release becomes public after its asset uploads successfully.
+        subprocess.run(command, input="\n\n".join(parts), text=True, check=True)
 
 
 def preflight(github):
@@ -325,13 +364,15 @@ def main():
     tag, tag_sha, commit, notes, sender = event_candidate(github)
     if command == "validate":
         if not release_already_exists(github, tag):
-            validate_workflows(github, commit, tag)
+            runs = validate_workflows(github, commit, tag)
+            with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+                print(f"apk_run_id={runs['apk.yml']['id']}", file=output)
     else:
-        publish(github, tag, tag_sha, commit, notes, sender)
+        publish(github, tag, tag_sha, commit, notes, sender, os.environ.get("APK_RUN_ID", ""))
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (ReleaseError, OSError, subprocess.CalledProcessError) as exc:
+    except (ReleaseError, OSError, subprocess.SubprocessError) as exc:
         sys.exit(str(exc))

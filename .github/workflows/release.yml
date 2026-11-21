@@ -20,12 +20,15 @@ jobs:
     permissions:
       actions: write
       contents: read
+    outputs:
+      apk_run_id: ${{ steps.validate.outputs.apk_run_id }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
       - name: Require both workflows
+        id: validate
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci/release.py validate
@@ -35,14 +38,16 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: write
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Publish source release
+      - name: Publish release with plugin APK
         env:
+          APK_RUN_ID: ${{ needs.validate.outputs.apk_run_id }}
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci/release.py publish
 

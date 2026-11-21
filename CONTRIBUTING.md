@@ -124,3 +124,5 @@ The Release workflow requires Test and MobileGL APK to succeed at the tagged
 commit. It reuses matching runs and dispatches missing ones. After reviewing
 the linked runs in its summary, rerun a failed validation before retrying
 Release. Use a new tag if a fix changes the release commit.
+
+The release includes the signed launcher plugin APK from the passing APK run.
