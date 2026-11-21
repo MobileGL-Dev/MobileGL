@@ -10,6 +10,7 @@
 """Validate and publish an annotated version tag after both required workflows succeed."""
 
 import argparse
+from collections import Counter
 import json
 import os
 import re
@@ -237,21 +238,43 @@ def previous_release(github, tag, commit):
 
 
 def contributors(github, revision):
-    authors = {}
+    representatives = {}
+    commit_counts = Counter()
     data = git("log", "-z", "--format=%H%x00%aN%x00%aE", revision)
     fields = data.split("\0")
     for commit, name, email in zip(fields[::3], fields[1::3], fields[2::3]):
-        authors.setdefault((name, email.casefold()), commit)
-    credits = {}
-    for (name, _email), commit in authors.items():
+        identity = (name, email.casefold())
+        representatives.setdefault(identity, commit)
+        commit_counts[identity] += 1
+
+    linked = {}
+    for identity, commit in representatives.items():
         author = github.request(f"/commits/{commit}").get("author") or {}
         login = author.get("login", "")
+        if LOGIN.fullmatch(login):
+            linked[identity] = login
+
+    # An unlinked author name can match a login confirmed by another commit.
+    known_logins = {login.casefold(): login for login in linked.values()}
+    labels = {}
+    totals = Counter()
+    for identity, count in commit_counts.items():
+        name = " ".join(identity[0].split())
+        login = linked.get(identity) or known_logins.get(name.removeprefix("@").casefold())
         escaped_name = "".join(f"\\{char}" if char in "\\@<>&*_[`]" else char
-                               for char in " ".join(name.split()))
-        credit = f"@{login}" if LOGIN.fullmatch(login) else escaped_name
+                               for char in name)
+        credit = f"@{login}" if login else escaped_name
         if credit:
-            credits.setdefault(credit.casefold(), credit)
-    return ", ".join(sorted(credits.values(), key=str.casefold))
+            key = credit.casefold()
+            labels.setdefault(key, credit)
+            totals[key] += count
+
+    rows = []
+    for key in sorted(totals, key=lambda key: (-totals[key], key)):
+        count = totals[key]
+        unit = "commit" if count == 1 else "commits"
+        rows.append(f"- {labels[key]} — {count:,} {unit}")
+    return "\n".join(rows)
 
 
 def publish(github, tag, tag_sha, commit, notes, sender):
