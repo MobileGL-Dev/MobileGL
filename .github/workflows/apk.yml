@@ -1,4 +1,5 @@
 name: MobileGL APK
+run-name: ${{ (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main')) && format('Release validation ({0})', github.ref) || '' }}
 
 on:
   push:
@@ -73,7 +74,7 @@ jobs:
       CCACHE_MAXSIZE: 1500M
       CCACHE_NOHASHDIR: "true"
       MOBILEGL_CMAKE_COMPILER_LAUNCHER: ccache
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
@@ -301,7 +302,7 @@ jobs:
     name: trace case matrix
     runs-on: ubuntu-26.04
     env:
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && 'ON' || 'OFF' }}
       # How much replay one emulator job aims for, in seconds as the duration hints count them.
       # A (lane, transport, backend) cell is cut into as many shards as that takes, and its
       # cases are spread so the shards of a cell come out even (tools/trace_replay/trace_cases.py,
@@ -795,7 +796,7 @@ jobs:
       actions: write
       contents: read
     env:
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo

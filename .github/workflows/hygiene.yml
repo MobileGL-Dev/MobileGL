@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
-      # A new branch is checked for the commits it adds to the default branch.
-      TEXT_HYGIENE_BASE_BRANCH: ${{ github.event.repository.default_branch }}
+      # A new branch is checked for the commits it adds to the development branch.
+      TEXT_HYGIENE_BASE_BRANCH: dev
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6

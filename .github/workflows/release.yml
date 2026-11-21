@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 345
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require both workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/release.py validate
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Publish source release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/release.py publish
+
+  preflight:
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event.created) }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 345
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Exercise release permissions and validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/release.py preflight

@@ -81,7 +81,7 @@ Example:
 
 ## Checks
 
-`python3 scripts/check_text_hygiene.py ci` runs what CI runs. It checks the commits on the branch's own line of history since the check was added. A push that moves a branch forward checks the commits it adds. A new branch, a force push and a run that is not a push check the commits the branch adds to the base branch, which is the repository's default branch `dev` (CI reads it from the event). Set `TEXT_HYGIENE_BASE_BRANCH` to compare with another branch. Another branch that adds nothing to the base branch has only its tree checked, and the base branch at its own tip checks its last commit.
+`python3 scripts/check_text_hygiene.py ci` runs what CI runs. It checks the commits on the branch's own line of history since the check was added. A push that moves a branch forward checks the commits it adds. A new branch, a force push and a run that is not a push check the commits the branch adds to the base branch, which is the development branch `dev`. Set `TEXT_HYGIENE_BASE_BRANCH` to compare with another branch. Another branch that adds nothing to the base branch has only its tree checked, and the base branch at its own tip checks its last commit.
 
 These fail on any violation:
 
@@ -112,3 +112,15 @@ These are ratchets: each total may only go down.
 `python3 scripts/check_structure.py report` lists what each total counts, and `tree --update-baseline` lowers the baseline the same way.
 
 Not checked by CI: the platform, switch and lifetime-id rules, planning ids outside comments, English outside comments, and the regeneration step for generated code.
+
+## Releases
+
+Fast-forward main to the selected dev commit. Create an annotated version tag at
+that commit, with the release notes as the tag message. Push main before pushing
+the tag. Use v26.11 for a stable release, or a suffix such as -alpha.1 or -rc.1
+for a prerelease.
+
+The Release workflow requires Test and MobileGL APK to succeed at the tagged
+commit. It reuses matching runs and dispatches missing ones. After reviewing
+the linked runs in its summary, rerun a failed validation before retrying
+Release. Use a new tag if a fix changes the release commit.

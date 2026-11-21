@@ -1,4 +1,5 @@
 name: Test
+run-name: ${{ (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main')) && format('Release validation ({0})', github.ref) || '' }}
 
 on:
   push:
@@ -46,7 +47,7 @@ jobs:
       build-type: ${{ steps.configure.outputs.build-type }}
     env:
       BUILD_DIR: build-linux
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && 'ON' || 'OFF' }}
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPRESS: "true"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -389,7 +390,7 @@ jobs:
     # Initialize()'s glslang table prewarm. The retrace legs keep it: they replay real apps.
     env:
       MOBILEGL_DISABLE_SHADER_PREWARM: "1"
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
@@ -471,7 +472,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON((github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && '[{"lane":"monolith-control","transport":"monolith"},{"lane":"inproc-acceptance","transport":"inproc"}]' || '[{"lane":"monolith-control","transport":"monolith"}]') }}
+        include: ${{ fromJSON((github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && '[{"lane":"monolith-control","transport":"monolith"},{"lane":"inproc-acceptance","transport":"inproc"}]' || '[{"lane":"monolith-control","transport":"monolith"}]') }}
     env:
       # Short-lived test processes skip the glslang prewarm, as in the test job.
       MOBILEGL_DISABLE_SHADER_PREWARM: "1"
@@ -479,7 +480,7 @@ jobs:
       MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
       MOBILEGL_IPC_STRICT_ERRORS: "1"
       MOBILEGL_IPC_RUN_AHEAD: "1"
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
@@ -1169,7 +1170,7 @@ jobs:
     name: build guard (split reuse)
     runs-on: ubuntu-26.04
     timeout-minutes: 150
-    if: ${{ github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' }}
+    if: ${{ github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main')) }}
     # Consumers read only its outputs, and any verdict but 'identical' (none at all included)
     # keeps both builds.
     continue-on-error: true
@@ -1178,7 +1179,7 @@ jobs:
       image: ${{ steps.guard.outputs.image }}
       compiler: ${{ steps.guard.outputs.compiler }}
     env:
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && 'ON' || 'OFF' }}
 
     # Every step may fail without failing the job: a setup step that failed leaves a configure
     # that fails, which the guard reports as 'unknown'.
@@ -1550,7 +1551,7 @@ jobs:
       SPLIT_REUSE: ${{ needs.build-guard.outputs.verdict == 'identical' && 'true' || 'false' }}
       SPLIT_BUILD_DIR: ${{ needs.build-guard.outputs.verdict == 'identical' && 'build-linux' || 'build-split' }}
       SPLIT_RUNTIME: ${{ needs.build-guard.outputs.verdict == 'identical' && 'mobilegl-linux-runtime' || 'mobilegl-linux-runtime-split' }}
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
@@ -1895,7 +1896,7 @@ jobs:
       SPLIT_REUSE: ${{ needs.build-guard.outputs.verdict == 'identical' && 'true' || 'false' }}
       SPLIT_BUILD_DIR: ${{ needs.build-guard.outputs.verdict == 'identical' && 'build-linux' || 'build-split' }}
       SPLIT_RUNTIME: ${{ needs.build-guard.outputs.verdict == 'identical' && 'mobilegl-linux-runtime' || 'mobilegl-linux-runtime-split' }}
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
@@ -2800,7 +2801,7 @@ jobs:
     name: trace case matrix
     runs-on: ubuntu-26.04
     env:
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && 'ON' || 'OFF' }}
       # How many jobs replay one (lane, transport, backend) cell of the Linux retrace lanes. Each
       # job replays its share of the cell's cases one after another; a cell with little to
       # replay gets fewer jobs (tools/trace_replay/trace_cases.py, shard_matrix).
@@ -3125,7 +3126,7 @@ jobs:
       actions: write
       contents: read
     env:
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
@@ -3574,7 +3575,7 @@ jobs:
       - build-linux-monolith-control
       - build-retrace
       - trace-cases
-    if: ${{ !cancelled() && (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && needs.build-linux-monolith-control.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ !cancelled() && (github.ref_name == 'dev' || github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' || (github.event_name == 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main'))) && needs.build-linux-monolith-control.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
