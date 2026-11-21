@@ -140,7 +140,7 @@ android {
         minSdk = androidApi
         targetSdk = 34
         versionCode = mobileGlVersionMajor * 1_000_000 + mobileGlVersionMinor * 10_000 + mobileGlMonthlyRevision
-        versionName = "%d.%02d-alpha.1".format(mobileGlVersionMajor, mobileGlVersionMinor)
+        versionName = "%d.%02d.%s".format(mobileGlVersionMajor, mobileGlVersionMinor, mobileGlGitShortHash)
         resValue("string", "config", pluginRendererConfig)
 
         manifestPlaceholders.putAll(legacyManifest {
