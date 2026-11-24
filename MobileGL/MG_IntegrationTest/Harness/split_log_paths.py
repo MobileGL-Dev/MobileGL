@@ -201,6 +201,8 @@ DUALBLOCK_CAPABILITY_SKIPS = {
         "needs GL_KHR_shader_subgroup basic+arithmetic in compute",
     "DirectGLES.Split.IterationRPScratchFixScenario.WideFixtureShapedReductionSumsEveryInvocation":
         "needs GL_KHR_shader_subgroup basic+arithmetic in compute",
+    "DirectGLES.Split.MultiviewScenario.AScissoredClearAfterADrawReachesEveryView":
+        "ES driver crashes after a scissored clear of a multiview framebuffer",
 }
 
 # Outstanding behavior, not a claim that another backend covers these semantics.

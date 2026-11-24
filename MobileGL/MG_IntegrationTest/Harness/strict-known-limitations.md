@@ -31,6 +31,10 @@ require subgroup width 16..256; local lavapipe exposes 8, so those two have no l
 execution coverage. Program203 and ScratchFix have passing Vulkan entries, which
 is not proof of the GLES path. The checker reports **capability gaps (not covered)**.
 
+`MultiviewScenario.AScissoredClearAfterADrawReachesEveryView` skips on Espryt over
+llvmpipe: the driver corrupts its heap after a scissored clear of a multiview
+framebuffer, which surfaces at context destroy. The Vulkan entries of the case pass.
+
 ## Optional measurement
 
 `FencePollScenario.PacedFrameFenceWaitsBench` is not part of generic split correctness
