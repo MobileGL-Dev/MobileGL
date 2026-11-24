@@ -650,6 +650,9 @@ namespace MobileGL {
             GL_FUNC_TYPEDEF(void, glPolygonModeANGLE, GLenum face, GLenum mode)
             // GL_EXT_clip_control (ES has no core glClipControl).
             GL_FUNC_TYPEDEF(void, glClipControlEXT, GLenum origin, GLenum depth)
+            // GL_OVR_multiview.
+            GL_FUNC_TYPEDEF(void, glFramebufferTextureMultiviewOVR, GLenum target, GLenum attachment, GLuint texture,
+                            GLint level, GLint baseViewIndex, GLsizei numViews)
             GL_FUNC_TYPEDEF(void, glColorMaskiEXT, GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a)
             GL_FUNC_TYPEDEF(void, glColorMaskiOES, GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a)
             // GL_EXT_polygon_offset_clamp. ES has no core spelling at any version.
@@ -1069,6 +1072,7 @@ namespace MobileGL {
             GL_FUNC_DECL(glPolygonModeNV)
             GL_FUNC_DECL(glPolygonModeANGLE)
             GL_FUNC_DECL(glClipControlEXT)
+            GL_FUNC_DECL(glFramebufferTextureMultiviewOVR)
             GL_FUNC_DECL(glColorMaskiEXT)
             GL_FUNC_DECL(glColorMaskiOES)
             GL_FUNC_DECL(glPolygonOffsetClampEXT)
@@ -1124,6 +1128,11 @@ namespace MobileGL {
             // GL_EXT_clip_control advertised and glClipControlEXT resolved: the driver applies a
             // clip-space origin and depth mode, so the application's glClipControl is forwarded.
             Bool SupportsClipControl = false;
+            // GL_OVR_multiview advertised and glFramebufferTextureMultiviewOVR resolved, with
+            // GL_MAX_VIEWS_OVR in MaxViews. GL_OVR_multiview2 only counts on top of it.
+            Bool SupportsMultiview = false;
+            Bool SupportsMultiview2 = false;
+            Int MaxViews = 0;
             // GL_EXT_texture_view / GL_OES_texture_view: two ES texture names sharing one
             // storage, i.e. the only way DirectGLES can answer glTextureView at all. ES never
             // made this core - not even in 3.2 - so unlike every other capability here there is

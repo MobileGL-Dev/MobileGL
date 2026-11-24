@@ -88,3 +88,9 @@ gtest_discover_tests(NarrowIntegerEsslTest DISCOVERY_TIMEOUT 30 PROPERTIES LABEL
 gtest_discover_tests(EsslShaderPassTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(BaseInstanceInjectionTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(ViewportIndexRoutingTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+# GL_OVR_multiview's ESSL: num_views through glslang, the capability strip and the text pass.
+add_executable(MultiviewEsslTest MultiviewEsslTest.cpp)
+target_include_directories(MultiviewEsslTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
+target_link_libraries(MultiviewEsslTest PRIVATE MobileGLTestMain glslang-default-resource-limits ${LINK_LIBRARIES})
+gtest_discover_tests(MultiviewEsslTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

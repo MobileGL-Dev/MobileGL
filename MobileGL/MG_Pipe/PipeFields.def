@@ -100,7 +100,7 @@
 // Pad<n>, so the rename without this row is a pipe-gates failure, and the row without the
 // rename is one too. A meaning-carrying byte cannot enter this record silently.
 #define MGP_FIELDS_MGPSurface(F) \
-    F(Res) F(InternalFormat) F(Kind) F(Layered) F(Level) F(Layer) F(UploadTarget) F(TextureTarget)
+    F(Res) F(InternalFormat) F(Kind) F(Layered) F(Level) F(NumViews) F(Layer) F(UploadTarget) F(TextureTarget)
 
 // P4a, D-C2: Pad0 became Uint8 Target, and gen_pipe.py's PADDING_MEMBER_RE only excludes a
 // member still NAMED Pad<n> - so the rename without this row is a pipe-gates failure, which
@@ -399,7 +399,7 @@
     F(FragmentShadingRateAttachmentWithDefaultFramebuffer) F(FragmentShadingRateMasks) \
     F(MinFragmentShadingRateAttachmentTexelWidth) F(MinFragmentShadingRateAttachmentTexelHeight) \
     F(MaxFragmentShadingRateAttachmentTexelWidth) F(MaxFragmentShadingRateAttachmentTexelHeight) \
-    F(MaxFragmentShadingRateAttachmentTexelAspectRatio) F(MaxFragmentShadingRateAttachmentLayers)
+    F(MaxFragmentShadingRateAttachmentTexelAspectRatio) F(MaxFragmentShadingRateAttachmentLayers)     F(MaxViews)
 
 #define MGP_FIELDS_MGHostSpan(F) \
     F(Ptr) F(Seg) F(Size) F(Offset)

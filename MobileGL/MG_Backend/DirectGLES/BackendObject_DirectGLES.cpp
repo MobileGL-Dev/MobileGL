@@ -903,7 +903,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 capabilities.SupportsTextureView, capabilities.SupportsTextureCubeMapArray,
                 AdvertisedFeatureSupport{.TessellationShader = capabilities.SupportsTessellationShader,
                                          .CullDistance = capabilities.MaxCullDistances > 0,
-                                         .ClipControl = capabilities.SupportsClipControl});
+                                         .ClipControl = capabilities.SupportsClipControl,
+                                         .Multiview = capabilities.SupportsMultiview,
+                                         .Multiview2 = capabilities.SupportsMultiview2});
             // Exactly what InitCapabilities forwards into the dynamic parameters: the base
             // extension and _primitive when the driver has them, _attachment not yet.
             auto& extensions = MutableRendererInfo().RendererGLInfo.Extensions;
@@ -1585,6 +1587,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (features.ClipControl) {
             extensions.push_back(E_GL_ARB_clip_control);
         }
+        // Multiview attachments go to the driver's glFramebufferTextureMultiviewOVR and
+        // gl_ViewID_OVR to its own built-in, so each string follows the driver's.
+        if (features.Multiview) {
+            extensions.push_back(E_GL_OVR_multiview);
+            if (features.Multiview2) {
+                extensions.push_back(E_GL_OVR_multiview2);
+            }
+        }
         // Minecraft 26.3 checks this prerequisite before it even considers
         // GL_ARB_multi_draw_indirect. ES 3.1 supplies both single-draw entry points; the loader
         // folds the version and pointer checks into SupportsDrawIndirect.
@@ -2022,6 +2032,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the device answers every query. The attachment is not forwarded yet, so it is not
         // claimed, whatever the driver offers.
         m_dynamicParameters.SupportsFragmentShadingRate = m_GLESCapabilities.SupportsFragmentShadingRate;
+        m_dynamicParameters.MaxViews = m_GLESCapabilities.SupportsMultiview ? m_GLESCapabilities.MaxViews : 0;
         m_dynamicParameters.SupportsPrimitiveFragmentShadingRate =
             m_GLESCapabilities.SupportsFragmentShadingRatePrimitive;
         m_dynamicParameters.SupportsAttachmentFragmentShadingRate = false;

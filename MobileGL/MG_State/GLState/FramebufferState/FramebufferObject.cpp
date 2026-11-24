@@ -45,9 +45,9 @@ namespace MobileGL::MG_State::GLState {
     // FramebufferAttachmentObject
     FramebufferAttachmentObject::FramebufferAttachmentObject(
         const SharedPtr<MG_State::GLState::ITextureObject>& texture, TextureUploadTarget textureUploadTarget, Int level,
-        Int layer, Bool layered)
+        Int layer, Bool layered, Int numViews)
         : m_texture(texture), m_textureUploadTarget(textureUploadTarget), m_textureLevel(level), m_textureLayer(layer),
-          m_layered(layered) {}
+          m_layered(layered), m_numViews(numViews) {}
     FramebufferAttachmentObject::FramebufferAttachmentObject(const SharedPtr<RenderbufferObject>& renderbuffer)
         : m_renderbuffer(renderbuffer) {}
     FramebufferAttachmentObject::FramebufferAttachmentObject(Bool IsValid)
@@ -87,6 +87,10 @@ namespace MobileGL::MG_State::GLState {
         return m_layered;
     }
 
+    Int FramebufferAttachmentObject::GetNumViews() const {
+        return m_numViews;
+    }
+
     TextureUploadTarget FramebufferAttachmentObject::GetTextureUploadTarget() const {
         return m_textureUploadTarget;
     }
@@ -115,7 +119,9 @@ namespace MobileGL::MG_State::GLState {
                 default:
                     break;
                 }
-                if (layerCount >= 0 && m_textureLayer >= layerCount) return false;
+                // GL_OVR_multiview 9.4.1: every view's layer, not only the base one.
+                const Int lastLayer = m_textureLayer + std::max<Int>(m_numViews, 1) - 1;
+                if (layerCount >= 0 && lastLayer >= layerCount) return false;
             }
             return true;
         } else if (IsRenderbuffer()) {
@@ -163,9 +169,10 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void FramebufferObject::AttachTexture(FramebufferAttachmentType type, const SharedPtr<ITextureObject>& texture,
-                                          TextureUploadTarget textureUploadTarget, int level, int layer, Bool layered) {
+                                          TextureUploadTarget textureUploadTarget, int level, int layer, Bool layered,
+                                          int numViews) {
         m_attachmentObjects[static_cast<SizeT>(type)] =
-            FramebufferAttachmentObject(texture, textureUploadTarget, level, layer, layered);
+            FramebufferAttachmentObject(texture, textureUploadTarget, level, layer, layered, numViews);
         BumpAttachmentVersion(type);
     }
 
@@ -217,7 +224,39 @@ namespace MobileGL::MG_State::GLState {
         }
 
         if (validAttachmentCount == 0) return false;
-        return !HasLayerTargetMismatch();
+        return !HasLayerTargetMismatch() && !HasViewTargetMismatch();
+    }
+
+    Bool FramebufferObject::HasViewTargetMismatch() const {
+        Bool seen = false;
+        Int numViews = 0;
+        for (const auto& attachment : m_attachmentObjects) {
+            if (!attachment.IsValid() || attachment.IsEmpty()) continue;
+            const Int views = attachment.IsTexture() ? attachment.GetNumViews() : 0;
+            if (seen && views != numViews) return true;
+            seen = true;
+            numViews = views;
+        }
+        return false;
+    }
+
+    Bool FramebufferObject::IsMultiview() const {
+        for (const auto& attachment : m_attachmentObjects) {
+            if (attachment.IsValid() && attachment.IsTexture() && attachment.IsMultiview()) return true;
+        }
+        return false;
+    }
+
+    Int FramebufferObject::GetViewCount() const {
+        Int numViews = 0;
+        for (const auto& attachment : m_attachmentObjects) {
+            if (!attachment.IsValid() || attachment.IsEmpty()) continue;
+            const Int views = attachment.IsTexture() ? attachment.GetNumViews() : 0;
+            if (views == 0) return 1;
+            if (numViews != 0 && views != numViews) return 1;
+            numViews = views;
+        }
+        return std::max<Int>(numViews, 1);
     }
 
     Bool FramebufferObject::HasLayerTargetMismatch() const {

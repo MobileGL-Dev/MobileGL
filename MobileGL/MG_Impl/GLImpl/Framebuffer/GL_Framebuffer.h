@@ -11,6 +11,10 @@
 #include <Includes.h>
 #include <MG_State/GLState/Core.h>
 
+namespace MobileGL::MG_State::GLState {
+    class ProgramObject;
+} // namespace MobileGL::MG_State::GLState
+
 namespace MobileGL::MG_Impl::GLImpl {
     /* @INSERTION_POINT:FUNCTION_DECLARATION@ */
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
@@ -55,6 +59,25 @@ namespace MobileGL::MG_Impl::GLImpl {
     void NamedFramebufferTexture3D(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture, GLint level,
                                    GLint zoffset);
     void NamedFramebufferTextureLayer(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level, GLint layer);
+    // GL_OVR_multiview (GL_FramebufferMultiview.cpp).
+    void FramebufferTextureMultiviewOVR(GLenum target, GLenum attachment, GLuint texture, GLint level,
+                                        GLint baseViewIndex, GLsizei numViews);
+    void NamedFramebufferTextureMultiviewOVR(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level,
+                                             GLint baseViewIndex, GLsizei numViews);
+    void FramebufferTextureMultiviewOVR_State(GLenum target, GLenum attachment, GLuint texture, GLint level,
+                                              GLint baseViewIndex, GLsizei numViews);
+    void NamedFramebufferTextureMultiviewOVR_State(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level,
+                                                   GLint baseViewIndex, GLsizei numViews);
+    // GL_MAX_VIEWS_OVR as the active backend reports it; zero without a backend or without multiview,
+    // which is exactly when GL_OVR_multiview is not advertised.
+    Int GetMaxViews_State();
+    Bool IsMultiviewSupported_State();
+    // The draw-time rules of GL_OVR_multiview for `program` against the bound draw framebuffer.
+    // Records INVALID_OPERATION and returns false when the draw must be dropped.
+    Bool ValidateMultiviewDraw(const MG_State::GLState::ProgramObject& program, const char* functionName);
+    // The framebuffer object a DSA entry point names, or null with INVALID_OPERATION recorded.
+    SharedPtr<MG_State::GLState::FramebufferObject> GetNamedFramebufferObject_State(GLuint framebuffer,
+                                                                                    const char* caller);
     void NamedFramebufferDrawBuffer(GLuint framebuffer, GLenum buf);
     void NamedFramebufferDrawBuffers(GLuint framebuffer, GLsizei n, const GLenum* bufs);
     void NamedFramebufferReadBuffer(GLuint framebuffer, GLenum src);

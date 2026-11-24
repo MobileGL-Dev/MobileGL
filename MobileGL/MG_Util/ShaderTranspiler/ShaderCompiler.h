@@ -56,6 +56,15 @@ namespace MobileGL {
                 static bool LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,
                                                        Vector<uint32_t>& outputBinary,
                                                        bool enableSpirvValidation = false);
+                // Drops OpCapability MultiView and OpExtension "SPV_KHR_multiview" and leaves the
+                // ViewIndex built-in, which SPIRV-Cross then prints as gl_ViewID_OVR. Its own route
+                // for the capability needs the view count, which the module does not carry, and
+                // refuses every stage but the vertex one, where GL_OVR_multiview also has the
+                // built-in in the fragment stage; DirectGLES spells the directive and num_views
+                // itself (RequestMultiviewExtension). True, with `outputBinary` filled, only when
+                // something was dropped.
+                static bool StripMultiviewCapabilityForEssl(const Vector<Uint32>& inputBinary,
+                                                            Vector<uint32_t>& outputBinary);
                 // Demotes the gl_ViewportIndex OUTPUT builtin to a plain Private global named
                 // mg_ViewportIndex, so SPIRV-Cross emits an ordinary declaration instead of a bare
                 // gl_ViewportIndex that ESSL has no core spelling for. Multi-viewport routing is

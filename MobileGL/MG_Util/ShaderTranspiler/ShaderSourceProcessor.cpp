@@ -967,10 +967,13 @@ namespace {
     //     this stage is not in GL_SUBGROUP_SUPPORTED_STAGES_KHR, or when that extension's
     //     feature is not in GL_SUBGROUP_SUPPORTED_FEATURES_KHR - the KHR spec's own terms for
     //     where each of the eight may be used. The stage and feature tests need a backend:
-    //     with none, every extension reads as available (CompileEnv::IsExtensionAdvertised).
+    //     with none, every extension reads as available (CompileEnv::IsExtensionAdvertised);
+    //   * GL_OVR_multiview / GL_OVR_multiview2 when that extension is not advertised.
     bool IsUnavailableShaderExtension(const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env,
                                       MobileGL::ShaderStage stage, const MobileGL::String& name) {
         if (name == "GL_ARB_gpu_shader_int64") return !env.IsExtensionAdvertised(MobileGL::E_GL_ARB_gpu_shader_int64);
+        if (name == "GL_OVR_multiview") return !env.IsExtensionAdvertised(MobileGL::E_GL_OVR_multiview);
+        if (name == "GL_OVR_multiview2") return !env.IsExtensionAdvertised(MobileGL::E_GL_OVR_multiview2);
         const GLbitfield feature = SubgroupFeatureBit(name);
         if (feature == 0) return false;
         if (!env.IsExtensionAdvertised(MobileGL::E_GL_KHR_shader_subgroup)) return true;
@@ -1048,10 +1051,13 @@ namespace {
             source.replace(it->pos, it->len, it->replacement);
         }
         // The extension's own feature-test macro, so an `#ifdef` guard takes the fallback branch.
-        // int64 keeps its historical treatment: hidden whether or not the source names it.
-        if (IsUnavailableShaderExtension(env, stage, "GL_ARB_gpu_shader_int64") &&
-            std::find(hiddenNames.begin(), hiddenNames.end(), "GL_ARB_gpu_shader_int64") == hiddenNames.end()) {
-            hiddenNames.push_back("GL_ARB_gpu_shader_int64");
+        // int64 keeps its historical treatment: hidden whether or not the source names it, and the
+        // two multiview macros get the same, because glslang predefines them at every 300+ version.
+        for (const char* alwaysHidden : {"GL_ARB_gpu_shader_int64", "GL_OVR_multiview", "GL_OVR_multiview2"}) {
+            if (IsUnavailableShaderExtension(env, stage, alwaysHidden) &&
+                std::find(hiddenNames.begin(), hiddenNames.end(), alwaysHidden) == hiddenNames.end()) {
+                hiddenNames.push_back(alwaysHidden);
+            }
         }
         for (const auto& name : hiddenNames) {
             ReplaceIdentifier(source, name, "MG_DISABLED_" + name);

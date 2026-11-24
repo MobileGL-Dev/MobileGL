@@ -677,7 +677,11 @@ namespace MobileGL::MG_Pipe {
         Uint32 InternalFormat;
         Uint8 Kind; // kMGPipeSurfaceKind{None,Texture,Renderbuffer}, above
         Uint8 Layered;
-        Uint16 Level;
+        // A mip level fits a byte: GL_MAX_TEXTURE_SIZE would have to pass 2^255 for it not to.
+        Uint8 Level;
+        // GL_OVR_multiview: non-zero on a multiview attachment, which renders views
+        // [Layer, Layer + NumViews) of a 2D array texture. Layered is then 0.
+        Uint8 NumViews;
         Uint32 Layer;
         Uint16 UploadTarget; // static_cast<Uint16>(MobileGL::TextureUploadTarget)
         // static_cast<Uint16>(MobileGL::TextureTarget), or kMGPipeSurfaceNoTextureTarget on a

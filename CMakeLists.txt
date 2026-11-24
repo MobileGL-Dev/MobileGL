@@ -480,6 +480,7 @@ set(SOURCE_FILES
     MobileGL/MG_Impl/GLImpl/RenderState/GL_RenderState.cpp
     MobileGL/MG_Impl/GLImpl/Framebuffer/Validators.cpp
     MobileGL/MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.cpp
+    MobileGL/MG_Impl/GLImpl/Framebuffer/GL_FramebufferMultiview.cpp
     MobileGL/MG_Impl/GLImpl/Program/GL_Program.cpp
     MobileGL/MG_Impl/GLImpl/Program/GL_ShaderObjectsARB.cpp
     MobileGL/MG_Impl/GLImpl/Program/ProgramInterface.cpp

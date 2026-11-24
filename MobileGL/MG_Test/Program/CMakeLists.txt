@@ -45,6 +45,7 @@ endif()
 add_executable(
         ProgramTest
         ProgramTest.cpp
+        ProgramMultiviewTest.cpp
 )
 
 add_executable(

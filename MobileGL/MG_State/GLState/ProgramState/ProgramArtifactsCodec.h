@@ -67,7 +67,8 @@ namespace MobileGL::MG_State::GLState {
     // reader checks FIRST and what the refusal names, and CONTRACT-P7 §5.3 asks for the bump
     // explicitly. `wireFingerprint` moves with both, which is expected and is what makes a
     // mixed-version pair refuse at the handshake instead of at the first program.
-    inline constexpr Uint32 kProgramArtifactsCodecVersion = 3;
+    // 4: LinkArtifacts gained `vsNumViews` (GL_OVR_multiview), for the same reason.
+    inline constexpr Uint32 kProgramArtifactsCodecVersion = 4;
     // Derived from the actual VisitFields order/names, container element schemas and scalar
     // representations. No native container size/offset is included. Also checked in Hello.
     Uint64 ProgramArtifactsSchemaFingerprint();

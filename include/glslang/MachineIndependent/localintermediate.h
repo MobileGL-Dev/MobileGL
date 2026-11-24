@@ -324,6 +324,7 @@ public:
         source(EShSourceNone),
         useVulkanMemoryModel(false),
         invocations(TQualifier::layoutNotSet), vertices(TQualifier::layoutNotSet),
+        numViews(TQualifier::layoutNotSet),
         inputPrimitive(ElgNone), outputPrimitive(ElgNone),
         pixelCenterInteger(false), originUpperLeft(false),texCoordBuiltinRedeclared(false),
         vertexSpacing(EvsNone), vertexOrder(EvoNone), interlockOrdering(EioNone), pointMode(false), earlyFragmentTests(false),
@@ -901,6 +902,16 @@ public:
         return true;
     }
     int getInvocations() const { return invocations; }
+    // GL_OVR_multiview's layout(num_views = N) in; of a vertex shader. SPIR-V has no way to say
+    // it, so a consumer that emits GLSL from the module reads it here.
+    bool setNumViews(int n)
+    {
+        if (numViews != TQualifier::layoutNotSet)
+            return numViews == n;
+        numViews = n;
+        return true;
+    }
+    int getNumViews() const { return numViews; }
     bool setVertices(int m)
     {
         if (vertices != TQualifier::layoutNotSet)
@@ -1286,6 +1297,7 @@ protected:
     bool useVulkanMemoryModel;
     int invocations;
     int vertices;
+    int numViews;
     TLayoutGeometry inputPrimitive;
     TLayoutGeometry outputPrimitive;
     bool pixelCenterInteger;

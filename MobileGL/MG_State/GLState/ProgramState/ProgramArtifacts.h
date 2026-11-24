@@ -383,6 +383,9 @@ namespace MobileGL::MG_State::GLState {
         GLenum gsOutputPrimitive = GL_NONE;
         Int gsMaxVertices = 0;
         Int gsInvocations = 0;
+        // GL_OVR_multiview: the vertex stage's layout(num_views = N) in;, or 0 without one. The
+        // backend that emits GLSL needs it back, because SPIR-V cannot say it.
+        Int vsNumViews = 0;
         // The tessellation evaluation stage's layout: GL_QUADS / GL_TRIANGLES / GL_ISOLINES,
         // GL_EQUAL / GL_FRACTIONAL_EVEN / GL_FRACTIONAL_ODD, GL_CW / GL_CCW, and point mode.
         GLenum tessGenMode = GL_NONE;
@@ -610,6 +613,7 @@ namespace MobileGL::MG_State::GLState {
         v("gsOutputPrimitive", a.gsOutputPrimitive);
         v("gsMaxVertices", a.gsMaxVertices);
         v("gsInvocations", a.gsInvocations);
+        v("vsNumViews", a.vsNumViews);
         v("tessGenMode", a.tessGenMode);
         v("tessGenSpacing", a.tessGenSpacing);
         v("tessGenVertexOrder", a.tessGenVertexOrder);
@@ -618,7 +622,7 @@ namespace MobileGL::MG_State::GLState {
         v("xfbVaryingNameMaxLength", a.xfbVaryingNameMaxLength);
         v("xfbNeedsScatteredCapture", a.xfbNeedsScatteredCapture);
         v("xfbPackedStride", a.xfbPackedStride);
-    } // 57 fields (58 members minus `program`)
+    } // 58 fields (59 members minus `program`)
 
     template <class Self, class V>
         requires std::same_as<std::remove_const_t<Self>, SpirvArtifacts>
@@ -650,7 +654,7 @@ namespace MobileGL::MG_State::GLState {
 #define MGL_XFBVARYING_SIZE 128
 // P7 OQ-8 added storageBlocks, one more Vector, in the disaggregated build ONLY. The pull
 // number below is the one G1 measures and it has not moved.
-#define MGL_LINKARTIFACTS_SIZE 1080
+#define MGL_LINKARTIFACTS_SIZE 1088
 #define MGL_SPIRVARTIFACTS_SIZE 96
 #elif defined(_LIBCPP_VERSION) && (SIZE_MAX == UINT64_MAX) && defined(MGL_ARTIFACT_SIZES_LIBCXX_PINNED)
     // The integrator pins these from the NDK build (brief C.4); until then this branch is inert.

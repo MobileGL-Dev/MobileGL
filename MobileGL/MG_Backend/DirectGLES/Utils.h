@@ -229,6 +229,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // error, so this is never emitted speculatively. A no-op when not needed or already
         // present.
         String RequestViewportArrayExtension(String glslCode, Bool needed);
+        // GL_OVR_multiview: adds `#extension GL_OVR_multiview2 : require` (GL_OVR_multiview where
+        // the driver has only that one) to a stage that names gl_ViewID_OVR or, in the vertex
+        // stage, declares `numViews`, and `layout(num_views = numViews) in;` to that vertex stage.
+        // The SPIR-V reaching SPIRV-Cross carries neither (StripMultiviewCapabilityForEssl), so the
+        // translation it memoizes stays independent of the view count. Frontend shaders that
+        // declare only GL_OVR_multiview already keep gl_ViewID_OVR out of every output but
+        // gl_Position, so asking for the smaller extension on such a driver is honest. A no-op
+        // for every other stage.
+        String RequestMultiviewExtension(String glslCode, GLenum shaderType, Int numViews, Bool driverHasMultiview2);
         // Adds `#extension <extensionName> : require` when a TESSELLATION or GEOMETRY stage's
         // emitted ESSL names gl_PointSize. Desktop GL has that built-in in gl_PerVertex for every
         // vertex-processing stage; ESSL does NOT have it in those two at any version - not even

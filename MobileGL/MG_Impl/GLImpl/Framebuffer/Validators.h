@@ -30,4 +30,24 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
     // DEFAULT framebuffer does not answer INVALID_OPERATION. Testing the framebuffer kind first
     // would turn GL_FRAMEBUFFER_DEFAULT_WIDTH on framebuffer zero into the wrong error.
     Bool ValidateFramebufferParameterPname(GLenum pname, Bool isDefaultFramebuffer, Bool forSetter, const char* caller);
+    // GL 4.6 core 9.2.8 conditions on the framebuffer and the attachment point that every
+    // texture-attaching entry point shares: a color attachment beyond GL_MAX_COLOR_ATTACHMENTS, or
+    // the default framebuffer bound to the target, is INVALID_OPERATION.
+    Bool ValidateFramebufferTextureAttachmentPoint(
+        const char* functionName, const SharedPtr<MG_State::GLState::FramebufferObject>& framebufferObject,
+        FramebufferAttachmentType attachmentType);
+    // The level half of 9.2.8: negative, or past an immutable texture's levels, is INVALID_VALUE.
+    Bool ValidateFramebufferTextureLevel(const char* functionName,
+                                         const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                         GLint level);
+    // GL_OVR_multiview: a read framebuffer with more than one view cannot be read, copied or blitted
+    // from (INVALID_FRAMEBUFFER_OPERATION). A null framebuffer passes; its caller reports that.
+    Bool ValidateReadFramebufferIsSingleView(const MG_State::GLState::FramebufferObject* framebufferObject,
+                                             const char* caller);
+    Bool ValidateBoundReadFramebufferIsSingleView(const char* caller);
+    // GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_NUM_VIEWS_OVR / _BASE_VIEW_INDEX_OVR. False when pname is
+    // neither or GL_OVR_multiview is not supported, so the caller's INVALID_ENUM stands; true when
+    // the query was answered or refused here. Defined in GL_FramebufferMultiview.cpp.
+    Bool TryAnswerMultiviewAttachmentQuery(const MG_State::GLState::FramebufferAttachmentObject* attachmentObject,
+                                           GLenum pname, GLint* params, const char* caller);
 } // namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl

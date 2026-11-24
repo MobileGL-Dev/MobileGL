@@ -165,6 +165,7 @@ namespace {
         link.gsOutputPrimitive = GL_TRIANGLE_STRIP;
         link.gsMaxVertices = 12;
         link.gsInvocations = 2;
+        link.vsNumViews = 2;
         link.tessGenMode = GL_QUADS;
         link.tessGenSpacing = GL_FRACTIONAL_ODD;
         link.tessGenVertexOrder = GL_CW;
@@ -529,9 +530,9 @@ TEST(ProgramArtifactsCodec, AVersionMismatchIsRefused) {
 // no archive owns. A codec arm for it would be a use-after-free waiting for a cache hit.
 TEST(ProgramArtifactsCodec, TheTablesVisitEveryMemberExceptTheLiveProgram) {
     // P7 OQ-8: 59 members, 58 visited. The 59th is still the live TProgram; the 58th is
-    // storageBlocks, which follows the record arm's guard (ProgramArtifacts.h). esOrigin then
-    // made it 60 and 59.
-    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<LinkArtifacts>(), 60u);
+    // storageBlocks, which follows the record arm's guard (ProgramArtifacts.h). esOrigin and
+    // vsNumViews then made it 61 visited.
+    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<LinkArtifacts>(), 61u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<StorageBlockReflection>(), 3u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<SpirvArtifacts>(), 10u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<ResourceReflection>(), 14u);
@@ -553,7 +554,7 @@ TEST(ProgramArtifactsCodec, PortableHeaderUsesWireSchemaRatherThanNativeContaine
     // too - it is derived from the VisitFields tables - and so did `wireFingerprint`, which is
     // what makes a mixed-version pair refuse at the handshake instead of at the first program.
     EXPECT_EQ(version, kProgramArtifactsCodecVersion);
-    EXPECT_EQ(version, 3u);
+    EXPECT_EQ(version, 4u);
     EXPECT_EQ(schema, ProgramArtifactsSchemaFingerprint());
     EXPECT_NE(schema, 0u);
     EXPECT_NE(schema, sizeof(LinkArtifacts));

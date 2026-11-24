@@ -1371,6 +1371,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
+            // After every validating pass: the module that comes back names ViewIndex without the
+            // capability, which only SPIRV-Cross reads (see StripMultiviewCapabilityForEssl).
+            Vector<unsigned int> multiviewStrippedSpirv;
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::StripMultiviewCapabilityForEssl(*effectiveSpirv,
+                                                                                           multiviewStrippedSpirv)) {
+                effectiveSpirv = &multiviewStrippedSpirv;
+            }
+
             MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,
                                                                MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
 
@@ -2155,6 +2163,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     !(ViewportArrayEmulationEnabled() && programRoutesViewportIndex) &&
                     source.find("gl_ViewportIndex") != String::npos;
                 source = RequestViewportArrayExtension(std::move(source), needsViewportArrayExtension);
+                // GL_OVR_multiview's directive and num_views, which the memoized ESSL leaves out.
+                source = RequestMultiviewExtension(std::move(source), glShaderType, src.GetVertexNumViews(),
+                                                   g_GLESCapabilities.SupportsMultiview2);
 
                 // The fourth header-level rewrite, and the same shape as the third: ESSL has no
                 // gl_PointSize in a tessellation or geometry stage at ANY version - 320 makes the

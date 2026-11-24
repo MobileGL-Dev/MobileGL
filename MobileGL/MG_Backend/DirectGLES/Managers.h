@@ -2673,6 +2673,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // build's (ProgramBuildSource), so the pull build compiles the very same text
             // against a ProgramObject and G1's byte identity survives.
             Uint GetExternalIndex() const { return Identity; }
+            // GL_OVR_multiview's num_views of the vertex stage, 0 without one.
+            Int GetVertexNumViews() const { return Link ? Link->vsNumViews : 0; }
             Bool GetLinkStatus() const { return Linked; }
             Bool GetSpirvStatus() const { return SpirvUsable; }
             Bool GetSpirvValidationEnabled() const { return SpirvValidationEnabled; }

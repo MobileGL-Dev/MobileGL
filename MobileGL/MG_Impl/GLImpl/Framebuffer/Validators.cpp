@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "Validators.h"
+#include "GL_Framebuffer.h"
 #include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/Error.h>
@@ -178,6 +179,7 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
                                              "Read framebuffer is not framebuffer complete."));
             return false;
         }
+        if (!ValidateReadFramebufferIsSingleView(framebufferObject.get(), caller)) return false;
 
         const FramebufferAttachmentType readBuffer = framebufferObject->GetReadBuffer();
         if (readBuffer == FramebufferAttachmentType::None || !framebufferObject->GetAttachment(readBuffer).IsValid()) {
@@ -208,6 +210,89 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
             return false;
         }
 
+        return true;
+    }
+
+    Bool ValidateReadFramebufferIsSingleView(const MG_State::GLState::FramebufferObject* framebufferObject,
+                                             const char* caller) {
+        // GL_OVR_multiview 9.3 / 18.2 / 18.3: reading, copying or blitting out of a read
+        // framebuffer with more than one view is INVALID_FRAMEBUFFER_OPERATION.
+        if (!framebufferObject || framebufferObject->GetViewCount() <= 1) return true;
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidFramebufferOperation,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl/FramebufferImpl", caller,
+                                         "The read framebuffer has more than one view (GL_OVR_multiview)."));
+        return false;
+    }
+
+    Bool ValidateBoundReadFramebufferIsSingleView(const char* caller) {
+        const auto& framebufferObject =
+            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+        return ValidateReadFramebufferIsSingleView(framebufferObject.get(), caller);
+    }
+
+    // GL 4.6 core 9.2.8 conditions that depend only on the framebuffer and the attachment
+    // point. Shared, because glFramebufferTexture / 1D / 2D / 3D / TextureLayer are aliases of
+    // one another in that section and a CTS case that walks the family must not get five
+    // different answers - which is exactly what happened when these lived in one helper that
+    // only two of the five went through.
+    Bool ValidateFramebufferTextureAttachmentPoint(
+        const char* functionName, const SharedPtr<MG_State::GLState::FramebufferObject>& framebufferObject,
+        FramebufferAttachmentType attachmentType) {
+        // "An INVALID_OPERATION error is generated if COLOR_ATTACHMENTm is used with m greater
+        // than or equal to MAX_COLOR_ATTACHMENTS."
+        if (!FramebufferImpl::ValidateColorAttachmentInRange(attachmentType, functionName)) return false;
+        // "An INVALID_OPERATION error is generated if zero is bound to target." MobileGL keeps
+        // a real FramebufferObject for framebuffer 0, so a null test can never see this - the
+        // object is always there, and framebuffer 0 has to be recognized by identity instead,
+        // the same comparison DrawBuffers_State makes. Without this an attach onto the default
+        // framebuffer silently REPLACED its color attachment, permanently desynchronizing it
+        // from what the swapchain keeps publishing.
+        const auto& defaultFramebufferInfo = FramebufferImpl::pDefaultFramebufferInfo;
+        if (!framebufferObject || (defaultFramebufferInfo && framebufferObject == defaultFramebufferInfo->defaultFBO)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", functionName,
+                    "No framebuffer object is bound to the target; the default framebuffer's attachments "
+                    "cannot be named."));
+            return false;
+        }
+        return true;
+    }
+
+    // The other half of 9.2.8: "level must be greater than or equal to zero", and for a
+    // texture with immutable storage it "must be smaller than the number of levels the texture
+    // has". Split from the attachment-point half because the caller only has a texture object
+    // once the detach (texture == 0) case is behind it.
+    Bool ValidateFramebufferTextureLevel(const char* functionName,
+                                         const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                         GLint level) {
+        if (level < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, "Texture level must be non-negative."));
+            return false;
+        }
+        if (!textureObject || !textureObject->IsImmutable()) {
+            // A mutable texture has no level bound here: a level it has not specified yet is
+            // not an error, it just leaves the framebuffer incomplete.
+            return true;
+        }
+        // GetAddressableLevelCount(), NOT GetImmutableLevels(): for a VIEW the latter is
+        // deliberately the ORIGINAL texture's count (GL 4.6 core 8.18 defines
+        // TEXTURE_IMMUTABLE_LEVELS on a view that way), which is far too large a bound - a
+        // two-level view onto a ten-level texture would accept level 5 and attach an image
+        // nothing can draw into.
+        const Uint levelBound = textureObject->GetAddressableLevelCount();
+        if (static_cast<Uint>(level) >= levelBound) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", functionName,
+                    std::format("Texture level {} is beyond the {} level(s) this texture has.", level, levelBound)));
+            return false;
+        }
         return true;
     }
 } // namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl

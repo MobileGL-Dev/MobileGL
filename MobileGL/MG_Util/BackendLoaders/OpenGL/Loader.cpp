@@ -665,6 +665,7 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_GLES_FUNC_OPTIONAL(glPolygonModeNV)
             INIT_GLES_FUNC_OPTIONAL(glPolygonModeANGLE)
             INIT_GLES_FUNC_OPTIONAL(glClipControlEXT)
+            INIT_GLES_FUNC_OPTIONAL(glFramebufferTextureMultiviewOVR)
             INIT_GLES_FUNC_OPTIONAL(glColorMaskiEXT)
             INIT_GLES_FUNC_OPTIONAL(glColorMaskiOES)
             INIT_GLES_FUNC_OPTIONAL(glPolygonOffsetClampEXT)
@@ -998,6 +999,39 @@ namespace MobileGL::MG_Util::BackendLoader {
         default:
             return "GL_UNDEFINED_VERTEX";
         }
+    }
+
+    // GL_OVR_multiview and GL_OVR_multiview2: the strings, the entry point and GL_MAX_VIEWS_OVR. The
+    // second extension only counts on top of the first, which is the one with the entry point.
+    static void FillInMultiviewCapabilities(MG_External::GLESCapabilities& caps,
+                                            const MG_External::GLESFunctionsTable& glesFuncs, GLint extCount) {
+        Bool hasMultiview = false;
+        Bool hasMultiview2 = false;
+        for (GLint i = 0; i < extCount; ++i) {
+            const char* extension = reinterpret_cast<const char*>(glesFuncs.glGetStringi(GL_EXTENSIONS, i));
+            if (!extension) continue;
+            if (std::strcmp(extension, "GL_OVR_multiview") == 0) hasMultiview = true;
+            if (std::strcmp(extension, "GL_OVR_multiview2") == 0) hasMultiview2 = true;
+        }
+        caps.SupportsMultiview = hasMultiview && glesFuncs.glFramebufferTextureMultiviewOVR != nullptr;
+        caps.MaxViews = 0;
+        if (caps.SupportsMultiview) {
+            GLint maxViews = 0;
+            while (glesFuncs.glGetError() != GL_NO_ERROR) {}
+            glesFuncs.glGetIntegerv(GL_MAX_VIEWS_OVR, &maxViews);
+            // The spec minimum is 2. A driver that rejects the query or answers less cannot back
+            // the extension, so it is reported absent rather than clamped up.
+            if (glesFuncs.glGetError() != GL_NO_ERROR || maxViews < 2) {
+                MGLOG_W("GL_OVR_multiview is advertised but GL_MAX_VIEWS_OVR answered %d; reporting no multiview",
+                        maxViews);
+                caps.SupportsMultiview = false;
+            } else {
+                caps.MaxViews = maxViews;
+            }
+        }
+        caps.SupportsMultiview2 = caps.SupportsMultiview && hasMultiview2;
+        MGLOG_I("    multiview (OVR_multiview / OVR_multiview2): %s / %s, GL_MAX_VIEWS_OVR %d",
+                caps.SupportsMultiview ? "yes" : "no", caps.SupportsMultiview2 ? "yes" : "no", caps.MaxViews);
     }
 
     // Reads what the driver answers for GL_EXT_fragment_shading_rate once the extension strings have
@@ -1338,6 +1372,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // The string AND the pointer: eglGetProcAddress may hand back a stub for a name the
         // driver does not implement.
         caps.SupportsClipControl = hasClipControlExtension && glesFuncs.glClipControlEXT != nullptr;
+        FillInMultiviewCapabilities(caps, glesFuncs, extCount);
         caps.SupportsComputeShader = esAtLeast31 && glesFuncs.glDispatchCompute != nullptr &&
                                      glesFuncs.glMemoryBarrier != nullptr && glesFuncs.glCreateShader != nullptr &&
                                      glesFuncs.glCreateProgram != nullptr;

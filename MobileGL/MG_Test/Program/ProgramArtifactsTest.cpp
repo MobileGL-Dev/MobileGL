@@ -84,7 +84,7 @@ namespace {
         // P7 OQ-8 added LinkArtifacts::storageBlocks and its own three-field table; since P13 W5
         // the member follows the record arm (ProgramArtifacts.h), which every library builds.
         EXPECT_EQ(CountFields<StorageBlockReflection>(), 3u);
-        EXPECT_EQ(CountFields<LinkArtifacts>(), 60u);
+        EXPECT_EQ(CountFields<LinkArtifacts>(), 61u);
         EXPECT_EQ(CountFields<SpirvArtifacts>(), 10u);
     }
 

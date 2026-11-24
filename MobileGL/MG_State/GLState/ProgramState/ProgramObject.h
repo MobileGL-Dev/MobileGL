@@ -1320,6 +1320,9 @@ namespace MobileGL::MG_State::GLState {
         GLenum GetGeometryOutputType() const { return Artifacts().gsOutputPrimitive; }
         Int GetGeometryVerticesOut() const { return Artifacts().gsMaxVertices; }
         Int GetGeometryShaderInvocations() const { return Artifacts().gsInvocations; }
+        // GL_OVR_multiview: how many views a draw with this program renders - its vertex stage's
+        // num_views, or 1 without the qualifier.
+        Int GetMultiviewViewCount() const { return std::max<Int>(Artifacts().vsNumViews, 1); }
         // GL_TESS_CONTROL_OUTPUT_VERTICES of the linked tessellation control stage, or 0 when
         // the program has no such stage. Never greater than GL_MAX_PATCH_VERTICES: a program
         // that declared more does not link at all (GL 4.6 core 11.2.1.1).

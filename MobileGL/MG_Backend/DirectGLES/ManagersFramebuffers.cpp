@@ -409,7 +409,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // texture behind the staged shadow's back (the frontend arm's note, by handle).
                 TextureImpl::NoteDriverSideTextureWriteByHandle(surface.Res);
                 const auto uploadTarget = static_cast<TextureUploadTarget>(surface.UploadTarget);
-                if (surface.Layered != 0) {
+                if (surface.NumViews != 0) {
+                    // GL_OVR_multiview. The frontend only builds one where the driver has the
+                    // extension, but the record is the untrusted half: a multiview surface on a
+                    // driver without the entry point is refused by name, never called through.
+                    if (!g_GLESCapabilities.SupportsMultiview) {
+                        MGLOG_E_ONCE("MGPipe: attachment surface {%u, %u} is multiview, but this driver has no "
+                                     "GL_OVR_multiview - refusing to attach it",
+                                     surface.Res.Slot, surface.Res.Gen);
+                        return false;
+                    }
+                    g_GLESFuncs.glFramebufferTextureMultiviewOVR(
+                        glFBOTarget, glBackendAttachment, backendTextureObject->GetBackendTextureId(),
+                        static_cast<GLint>(surface.Level), static_cast<GLint>(surface.Layer),
+                        static_cast<GLsizei>(surface.NumViews));
+                } else if (surface.Layered != 0) {
                     g_GLESFuncs.glFramebufferTexture(glFBOTarget, glBackendAttachment,
                                                      backendTextureObject->GetBackendTextureId(),
                                                      static_cast<GLint>(surface.Level));
@@ -580,7 +594,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const auto& color = record.Color[i];
                     if (color.Res == record.ReadSurface.Res && color.Kind == record.ReadSurface.Kind &&
                         color.Layered == record.ReadSurface.Layered && color.Level == record.ReadSurface.Level &&
-                        color.Layer == record.ReadSurface.Layer &&
+                        color.NumViews == record.ReadSurface.NumViews && color.Layer == record.ReadSurface.Layer &&
                         color.UploadTarget == record.ReadSurface.UploadTarget) {
                         pushedReadBuf = static_cast<FramebufferAttachmentType>(
                             static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i));

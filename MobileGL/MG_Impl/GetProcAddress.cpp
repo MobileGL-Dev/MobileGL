@@ -1547,7 +1547,7 @@ namespace MobileGL::MG_Impl {
         GETPROC(glGetIntegerui64i_vNV, name);
         GETPROC(glViewportSwizzleNV, name);
         GETPROC(glFramebufferTextureMultiviewOVR, name);
-        // GETPROC(glNamedFramebufferTextureMultiviewOVR, name);
+        GETPROC(glNamedFramebufferTextureMultiviewOVR, name);
 
         MGLOG_D("GetProcAddress(%s) = nullptr!", name);
         return nullptr;

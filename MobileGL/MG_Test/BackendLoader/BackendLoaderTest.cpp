@@ -96,6 +96,8 @@ namespace {
         // baseInstance word and exposes it through gl_InstanceID.
         bool drawLeaksBaseInstanceWord = false;
         GLenum errorRaisedByDraw = GL_NO_ERROR;
+        // GL_MAX_VIEWS_OVR, a GL_OVR_multiview pname.
+        GLint maxViews = 4;
 
         GLenum pendingError = GL_NO_ERROR;
         std::vector<std::string> extensions;
@@ -269,6 +271,9 @@ namespace {
                 break;
             case GL_NUM_EXTENSIONS:
                 *data = static_cast<GLint>(g_fake.extensions.size());
+                break;
+            case GL_MAX_VIEWS_OVR:
+                *data = g_fake.maxViews;
                 break;
             default:
                 // Leave the caller's defaults for every other capability query.
@@ -1385,6 +1390,89 @@ TEST(CoreSurfaceAdvertisement, ClipControlFollowsTheBackendsRoute) {
     EXPECT_TRUE(
         contains(MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false),
                  MobileGL::E_GL_ARB_clip_control));
+}
+
+// GL_OVR_multiview needs the driver's string and glFramebufferTextureMultiviewOVR, and a
+// GL_MAX_VIEWS_OVR of at least the spec minimum; GL_OVR_multiview2 only counts on top of it.
+TEST(MultiviewCapabilities, NeedTheExtensionTheEntryPointAndTwoViews) {
+    auto withEntryPoint = MakeFakeGLESFunctions();
+    withEntryPoint.glFramebufferTextureMultiviewOVR = [](GLenum, GLenum, GLuint, GLint, GLint, GLsizei) {};
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_OVR_multiview2");
+    MobileGL::MG_External::GLESCapabilities onlyTheSecond;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(onlyTheSecond, withEntryPoint));
+    EXPECT_FALSE(onlyTheSecond.SupportsMultiview);
+    EXPECT_FALSE(onlyTheSecond.SupportsMultiview2);
+    EXPECT_EQ(onlyTheSecond.MaxViews, 0);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions = {"GL_OVR_multiview", "GL_OVR_multiview2"};
+    MobileGL::MG_External::GLESCapabilities noEntryPoint;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(noEntryPoint, MakeFakeGLESFunctions()));
+    EXPECT_FALSE(noEntryPoint.SupportsMultiview);
+    EXPECT_FALSE(noEntryPoint.SupportsMultiview2);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions = {"GL_OVR_multiview"};
+    g_fake.maxViews = 1;
+    MobileGL::MG_External::GLESCapabilities oneView;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(oneView, withEntryPoint));
+    EXPECT_FALSE(oneView.SupportsMultiview);
+    EXPECT_EQ(oneView.MaxViews, 0);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions = {"GL_OVR_multiview"};
+    MobileGL::MG_External::GLESCapabilities firstOnly;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(firstOnly, withEntryPoint));
+    EXPECT_TRUE(firstOnly.SupportsMultiview);
+    EXPECT_FALSE(firstOnly.SupportsMultiview2);
+    EXPECT_EQ(firstOnly.MaxViews, 4);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions = {"GL_OVR_multiview", "GL_OVR_multiview2"};
+    MobileGL::MG_External::GLESCapabilities both;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(both, withEntryPoint));
+    EXPECT_TRUE(both.SupportsMultiview);
+    EXPECT_TRUE(both.SupportsMultiview2);
+}
+
+// Each multiview string follows the DirectGLES driver's own; DirectVulkan has no multiview route
+// and never advertises either.
+TEST(CoreSurfaceAdvertisement, MultiviewFollowsTheDriver) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions, MobileGL::GLExtension wanted) {
+        return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
+    };
+    namespace DirectGLES = MobileGL::MG_Backend::DirectGLES;
+    namespace DirectVulkan = MobileGL::MG_Backend::DirectVulkan;
+    const auto none = DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false);
+    EXPECT_FALSE(contains(none, MobileGL::E_GL_OVR_multiview));
+    EXPECT_FALSE(contains(none, MobileGL::E_GL_OVR_multiview2));
+
+    const auto first =
+        DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false, {.Multiview = true});
+    EXPECT_TRUE(contains(first, MobileGL::E_GL_OVR_multiview));
+    EXPECT_FALSE(contains(first, MobileGL::E_GL_OVR_multiview2));
+
+    const auto both = DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false,
+                                                            {.Multiview = true, .Multiview2 = true});
+    EXPECT_TRUE(contains(both, MobileGL::E_GL_OVR_multiview));
+    EXPECT_TRUE(contains(both, MobileGL::E_GL_OVR_multiview2));
+
+    // The second string never stands without the first, whatever the flags say.
+    const auto secondOnly =
+        DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false, {.Multiview2 = true});
+    EXPECT_FALSE(contains(secondOnly, MobileGL::E_GL_OVR_multiview2));
+
+    const auto vulkan = DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false,
+                                                                {.Multiview = true, .Multiview2 = true});
+    EXPECT_FALSE(contains(vulkan, MobileGL::E_GL_OVR_multiview));
+    EXPECT_FALSE(contains(vulkan, MobileGL::E_GL_OVR_multiview2));
 }
 
 // Minecraft 26.3 checks ARB_draw_indirect before it considers the already-advertised

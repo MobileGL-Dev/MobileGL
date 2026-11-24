@@ -741,6 +741,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return glslCode;
         }
 
+        String RequestMultiviewExtension(String glslCode, GLenum shaderType, Int numViews, Bool driverHasMultiview2) {
+            const Bool declaresViews = shaderType == GL_VERTEX_SHADER && numViews > 0;
+            if (!declaresViews && glslCode.find("gl_ViewID_OVR") == String::npos) return glslCode;
+            const String directive = std::format("#extension {} : require\n",
+                                                 driverHasMultiview2 ? "GL_OVR_multiview2" : "GL_OVR_multiview");
+            // The directive goes right after #version; num_views is a declaration, so it goes after
+            // the LAST directive, where ESSL lets non-preprocessor tokens start.
+            const SizeT versionPos = glslCode.find("#version");
+            const SizeT versionEnd = versionPos == String::npos ? String::npos : glslCode.find('\n', versionPos);
+            glslCode.insert(versionEnd == String::npos ? 0 : versionEnd + 1, directive);
+            if (!declaresViews) return glslCode;
+            SizeT insertAt = 0;
+            for (SizeT lineStart = 0; lineStart < glslCode.size();) {
+                const SizeT lineEnd = glslCode.find('\n', lineStart);
+                const SizeT next = lineEnd == String::npos ? glslCode.size() : lineEnd + 1;
+                const SizeT first = glslCode.find_first_not_of(" \t\r\n", lineStart);
+                if (first == String::npos) break;
+                if (first >= next) {
+                    lineStart = next; // a blank line
+                    continue;
+                }
+                if (glslCode[first] != '#') break;
+                insertAt = next;
+                lineStart = next;
+            }
+            if (insertAt > 0 && glslCode[insertAt - 1] != '\n') glslCode.insert(insertAt++, "\n");
+            glslCode.insert(insertAt, std::format("layout(num_views = {}) in;\n", numViews));
+            return glslCode;
+        }
+
         String RequestViewportArrayExtension(String glslCode, Bool needed) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);

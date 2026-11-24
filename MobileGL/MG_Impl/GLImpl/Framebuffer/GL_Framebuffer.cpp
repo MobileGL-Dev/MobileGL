@@ -111,6 +111,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // property no single attachment's state explains.
         GLenum IncompleteFramebufferStatus(const MG_State::GLState::FramebufferObject& framebufferObject) {
             if (framebufferObject.HasLayerTargetMismatch()) return GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS;
+            if (framebufferObject.HasViewTargetMismatch()) return GL_FRAMEBUFFER_INCOMPLETE_VIEW_TARGETS_OVR;
             return HasDefinedAttachment(framebufferObject) ? GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
                                                            : GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
         }
@@ -363,6 +364,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         Bool TryAnswerAttachmentFormatQuery(const MG_State::GLState::FramebufferAttachmentObject* attachmentObject,
                                             FramebufferAttachmentType attachmentType, Bool depthStencilAlias,
                                             GLenum pname, GLint* params, const char* caller) {
+            // The two GL_OVR_multiview pnames take the same fallback out of both query switches.
+            if (FramebufferImpl::TryAnswerMultiviewAttachmentQuery(attachmentObject, pname, params, caller))
+                return true;
             switch (pname) {
             case GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE:
             case GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE:
@@ -489,72 +493,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
-        // GL 4.6 core 9.2.8 conditions that depend only on the framebuffer and the attachment
-        // point. Shared, because glFramebufferTexture / 1D / 2D / 3D / TextureLayer are aliases of
-        // one another in that section and a CTS case that walks the family must not get five
-        // different answers - which is exactly what happened when these lived in one helper that
-        // only two of the five went through.
-        Bool ValidateFramebufferTextureAttachmentPoint(
-            const char* functionName, const SharedPtr<MG_State::GLState::FramebufferObject>& framebufferObject,
-            FramebufferAttachmentType attachmentType) {
-            // "An INVALID_OPERATION error is generated if COLOR_ATTACHMENTm is used with m greater
-            // than or equal to MAX_COLOR_ATTACHMENTS."
-            if (!FramebufferImpl::ValidateColorAttachmentInRange(attachmentType, functionName)) return false;
-            // "An INVALID_OPERATION error is generated if zero is bound to target." MobileGL keeps
-            // a real FramebufferObject for framebuffer 0, so a null test can never see this - the
-            // object is always there, and framebuffer 0 has to be recognized by identity instead,
-            // the same comparison DrawBuffers_State makes. Without this an attach onto the default
-            // framebuffer silently REPLACED its color attachment, permanently desynchronizing it
-            // from what the swapchain keeps publishing.
-            const auto& defaultFramebufferInfo = FramebufferImpl::pDefaultFramebufferInfo;
-            if (!framebufferObject ||
-                (defaultFramebufferInfo && framebufferObject == defaultFramebufferInfo->defaultFBO)) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>(
-                        "MG_Impl/GLImpl", functionName,
-                        "No framebuffer object is bound to the target; the default framebuffer's attachments "
-                        "cannot be named."));
-                return false;
-            }
-            return true;
-        }
-
-        // The other half of 9.2.8: "level must be greater than or equal to zero", and for a
-        // texture with immutable storage it "must be smaller than the number of levels the texture
-        // has". Split from the attachment-point half because the caller only has a texture object
-        // once the detach (texture == 0) case is behind it.
-        Bool ValidateFramebufferTextureLevel(const char* functionName,
-                                             const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
-                                             GLint level) {
-            if (level < 0) {
-                MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
-                                                  MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                                                               "Texture level must be non-negative."));
-                return false;
-            }
-            if (!textureObject || !textureObject->IsImmutable()) {
-                // A mutable texture has no level bound here: a level it has not specified yet is
-                // not an error, it just leaves the framebuffer incomplete.
-                return true;
-            }
-            // GetAddressableLevelCount(), NOT GetImmutableLevels(): for a VIEW the latter is
-            // deliberately the ORIGINAL texture's count (GL 4.6 core 8.18 defines
-            // TEXTURE_IMMUTABLE_LEVELS on a view that way), which is far too large a bound - a
-            // two-level view onto a ten-level texture would accept level 5 and attach an image
-            // nothing can draw into.
-            const Uint levelBound = textureObject->GetAddressableLevelCount();
-            if (static_cast<Uint>(level) >= levelBound) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidValue,
-                    MakeUnique<GenericErrorInfo>(
-                        "MG_Impl/GLImpl", functionName,
-                        std::format("Texture level {} is beyond the {} level(s) this texture has.", level,
-                                    levelBound)));
-                return false;
-            }
-            return true;
-        }
+        using FramebufferImpl::ValidateFramebufferTextureAttachmentPoint;
+        using FramebufferImpl::ValidateFramebufferTextureLevel;
 
         void AttachFramebufferTextureWithUploadTarget(const char* functionName, GLenum target, GLenum attachment,
                                                       GLuint texture, GLint level,
@@ -2650,6 +2590,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                               ? FramebufferImpl::pDefaultFramebufferInfo->defaultFBO
                               : GetNamedFramebufferObject_State(drawFramebuffer, "BlitNamedFramebuffer_State");
         if (!readObject || !drawObject) return;
+        if (!FramebufferImpl::ValidateReadFramebufferIsSingleView(readObject.get(), "BlitNamedFramebuffer_State"))
+            return;
 
         BlitNamedFramebuffer_Backend(readObject, drawObject, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1,
                                      mask, filter);
@@ -2910,6 +2852,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ReadPixels_State", "Framebuffer is incomplete"));
             return false;
         }
+        if (!FramebufferImpl::ValidateReadFramebufferIsSingleView(framebufferObject.get(), "ReadPixels_State"))
+            return false;
 
         // Check for required buffers
         if (textureInputFormat == TextureInputFormat::StencilIndex) {
@@ -3364,6 +3308,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
                          GLint dstY1, GLbitfield mask, GLenum filter) {
         if (!ValidateBlitMaskAndFilter(__func__, mask, filter)) return;
+        if (!FramebufferImpl::ValidateBoundReadFramebufferIsSingleView(__func__)) return;
         BlitFramebuffer_Backend(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
     }
 

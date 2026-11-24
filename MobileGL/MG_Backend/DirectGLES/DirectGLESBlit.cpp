@@ -1045,7 +1045,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const auto& color = record.Color[i];
             if (color.Res == record.ReadSurface.Res && color.Kind == record.ReadSurface.Kind &&
                 color.Layered == record.ReadSurface.Layered && color.Level == record.ReadSurface.Level &&
-                color.Layer == record.ReadSurface.Layer && color.UploadTarget == record.ReadSurface.UploadTarget) {
+                color.NumViews == record.ReadSurface.NumViews && color.Layer == record.ReadSurface.Layer &&
+                color.UploadTarget == record.ReadSurface.UploadTarget) {
                 return static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) +
                                                               static_cast<Int>(i));
             }

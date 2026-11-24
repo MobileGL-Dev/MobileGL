@@ -2298,7 +2298,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MG_Pipe::MGPSurface surface{};
         surface.Kind = MG_Pipe::kMGPipeSurfaceKindTexture;
         surface.Res = state.VerbCopyTexDst;
-        surface.Level = static_cast<Uint16>(level);
+        surface.Level = static_cast<Uint8>(level);
         WireImage source = ResolveWireImage(*read,
                                             aspect & VK_IMAGE_ASPECT_DEPTH_BIT     ? read->Depth
                                             : aspect & VK_IMAGE_ASPECT_STENCIL_BIT ? read->Stencil

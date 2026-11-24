@@ -21,6 +21,7 @@
 // in FixupGsStripCaptureOrder - for the reason CONTRACT-P5B.md §6.5 gives.
 #include <MG_Remote/Client/SlotCaps.h>
 #include "../Getter/GL_Getter.h"
+#include "../Framebuffer/GL_Framebuffer.h"
 
 namespace MobileGL::MG_Impl::GLImpl {
     static Bool ValidateProgramForExecution(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram,
@@ -87,7 +88,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
-        return true;
+        return ValidateMultiviewDraw(*currentProgram, functionName);
     }
 
     // gl_NumSamples has no SPIR-V built-in, so the source pipeline lowers it onto a reserved

@@ -109,7 +109,8 @@ namespace MobileGL::MG_Pipe {
             surface.Kind = kMGPipeSurfaceKindTexture;
             surface.InternalFormat = static_cast<Uint32>(texture->GetFormat());
             surface.Layered = attachment.IsLayered() ? 1 : 0;
-            surface.Level = static_cast<Uint16>(std::max<Int>(attachment.GetTextureLevel(), 0));
+            surface.Level = static_cast<Uint8>(std::clamp<Int>(attachment.GetTextureLevel(), 0, 0xFF));
+            surface.NumViews = static_cast<Uint8>(std::clamp<Int>(attachment.GetNumViews(), 0, 0xFF));
             surface.Layer = static_cast<Uint32>(std::max<Int>(attachment.GetTextureLayer(), 0));
             surface.UploadTarget = static_cast<Uint16>(MGPipeResolveAttachmentUploadTarget(attachment));
             // ID-12 DV-5: the field that WAS Pad0, and the size did not move. The four
@@ -126,6 +127,7 @@ namespace MobileGL::MG_Pipe {
         surface.InternalFormat = static_cast<Uint32>(renderbuffer->GetInternalFormat());
         surface.Layered = 0;
         surface.Level = 0;
+        surface.NumViews = 0;
         surface.Layer = 0;
         return surface;
     }
@@ -179,6 +181,7 @@ namespace MobileGL::MG_Pipe {
         dst.Kind = src.Kind;
         dst.Layered = src.Layered;
         dst.Level = src.Level;
+        dst.NumViews = src.NumViews;
         dst.Layer = src.Layer;
         dst.UploadTarget = src.UploadTarget;
         // MANDATORY, not optional: TextureTarget is a PipeFields.def row now, so a

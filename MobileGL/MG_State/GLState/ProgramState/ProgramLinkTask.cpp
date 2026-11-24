@@ -193,6 +193,25 @@ namespace {
     // The offsets themselves survive that lowering (reflection and the SPIR-V generator both
     // honor layoutOffset), so the check belongs here, over the same model the GL queries answer
     // from. Returns the info-log line for an illegal layout, empty for a legal one.
+    // GL_OVR_multiview's layout(num_views = N) in; of the linked vertex stage into
+    // artifacts.vsNumViews, 0 without one. glslang already refused a non-positive count and two
+    // units that disagree; the upper bound is GL_MAX_VIEWS_OVR, which glslang does not know, so it
+    // is held here. False, with the link failed and the TProgram dropped, when the count is over it.
+    static MobileGL::Bool ResolveVertexNumViews(MobileGL::MG_State::GLState::ProgramObject::LinkArtifacts& artifacts,
+                                                const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
+        artifacts.vsNumViews = 0;
+        const glslang::TIntermediate* vs = artifacts.program->getIntermediate(EShLangVertex);
+        if (vs == nullptr) return true;
+        artifacts.vsNumViews = std::max(vs->getNumViews(), 0);
+        if (!env.HasBackend() || artifacts.vsNumViews <= env.params.MaxViews) return true;
+        artifacts.linkStatus = false;
+        artifacts.program.reset();
+        artifacts.infoLog =
+            std::format("Vertex shader declares num_views = {}, more than the {} GL_MAX_VIEWS_OVR allows.",
+                        artifacts.vsNumViews, env.params.MaxViews);
+        return false;
+    }
+
     static MobileGL::String ValidateAtomicCounterLayout(glslang::TProgram& reflection) {
         using MobileGL::Bool;
         using MobileGL::Int;
@@ -1038,6 +1057,11 @@ namespace MobileGL::MG_State::GLState {
                 DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
                 return;
             }
+        }
+
+        if (!ResolveVertexNumViews(artifacts, env)) {
+            DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+            return;
         }
 
         // ---- everything below this line up to GenerateSpirv() is the GL query surface ----

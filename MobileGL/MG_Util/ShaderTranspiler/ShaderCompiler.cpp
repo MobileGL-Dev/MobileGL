@@ -13,6 +13,7 @@
 #include "ShaderCompiler.h"
 
 #include <algorithm>
+#include <cstring>
 #include <format>
 
 #include <cmath>
@@ -1568,6 +1569,41 @@ namespace MobileGL {
 
                 return RunOptimizerChecked("LowerDrawParametersForEssl", optimizer, inputBinary, outputBinary, true,
                                            enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::StripMultiviewCapabilityForEssl(const Vector<Uint32>& inputBinary,
+                                                                 Vector<uint32_t>& outputBinary) {
+                outputBinary.clear();
+                constexpr SizeT kHeaderWords = 5;
+                if (inputBinary.size() <= kHeaderWords) return false;
+                static constexpr char kExtension[] = "SPV_KHR_multiview";
+                Vector<uint32_t> out(inputBinary.begin(), inputBinary.begin() + kHeaderWords);
+                out.reserve(inputBinary.size());
+                Bool stripped = false;
+                SizeT at = kHeaderWords;
+                // Capabilities and extensions all precede OpMemoryModel, so the walk stops there.
+                while (at < inputBinary.size()) {
+                    const Uint32 wordCount = inputBinary[at] >> 16;
+                    const auto opcode = static_cast<spv::Op>(inputBinary[at] & 0xFFFFu);
+                    if (wordCount == 0 || at + wordCount > inputBinary.size()) return false;
+                    if (opcode == spv::Op::OpMemoryModel) break;
+                    Bool drop = false;
+                    if (opcode == spv::Op::OpCapability && wordCount == 2) {
+                        drop = inputBinary[at + 1] == static_cast<Uint32>(spv::Capability::MultiView);
+                    } else if (opcode == spv::Op::OpExtension && (wordCount - 1) * 4 > sizeof(kExtension) - 1) {
+                        drop = std::memcmp(&inputBinary[at + 1], kExtension, sizeof(kExtension)) == 0;
+                    }
+                    if (drop) {
+                        stripped = true;
+                    } else {
+                        out.insert(out.end(), inputBinary.begin() + at, inputBinary.begin() + at + wordCount);
+                    }
+                    at += wordCount;
+                }
+                if (!stripped) return false;
+                out.insert(out.end(), inputBinary.begin() + at, inputBinary.end());
+                outputBinary = Move(out);
+                return true;
             }
 
             bool ShaderCompiler::LowerViewportIndexForEssl(const Vector<Uint32>& inputBinary,

@@ -50,6 +50,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     // a free function named BlendEquation, which would hide the ::MobileGL::BlendEquation enum
     // this file's blend-state queries name unqualified.
     GLboolean IsEnabledi(GLenum target, GLuint index);
+    // GL_Framebuffer.h, declared here for the same reason.
+    Int GetMaxViews_State();
+    Bool IsMultiviewSupported_State();
 
     namespace {
         enum class IndexedBufferQueryKind {
@@ -1631,6 +1634,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // GL_MAX_VIEWS_OVR, answered only where GL_OVR_multiview is advertised; anywhere else it is an
+    // unknown pname like any other extension's.
+    static Bool TryGetMultiviewInteger(GLenum pname, GLint* params) {
+        if (pname != GL_MAX_VIEWS_OVR || !IsMultiviewSupported_State()) return false;
+        *params = GetMaxViews_State();
+        return true;
+    }
+
     // GL_EXT_fragment_shading_rate's state and limits (tables 23.9 / 23.53 of the extension).
     // Returns false for any other pname. The tokens belong to the extension, so a context whose
     // backend cannot back it answers them like any unknown pname, and the attachment limits the
@@ -1762,7 +1773,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        if (TryGetFragmentShadingRateInteger(pname, params)) return;
+        if (TryGetFragmentShadingRateInteger(pname, params) || TryGetMultiviewInteger(pname, params)) return;
 
         switch (pname) {
         case GL_ACTIVE_TEXTURE:

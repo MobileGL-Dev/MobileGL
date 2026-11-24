@@ -103,6 +103,11 @@ namespace MobileGL {
             // GL_EXT_clip_control on DirectGLES. DirectVulkan applies clip control in its own
             // position fixup and does not read this.
             Bool ClipControl = false;
+            // GL_OVR_multiview and GL_OVR_multiview2, each only where the driver has that same
+            // extension (and, for the first, glFramebufferTextureMultiviewOVR). DirectGLES only:
+            // DirectVulkan has no multiview render pass route and leaves both false.
+            Bool Multiview = false;
+            Bool Multiview2 = false;
         };
 
         // Coarse GPU vendor identity for gating device-specific quirks. Detected from the
@@ -411,6 +416,9 @@ namespace MobileGL {
             Int MaxFragmentShadingRateAttachmentTexelHeight = 0;
             Int MaxFragmentShadingRateAttachmentTexelAspectRatio = 0;
             Int MaxFragmentShadingRateAttachmentLayers = 0;
+            // GL_MAX_VIEWS_OVR. Zero means no multiview, which is also why GL_OVR_multiview is not
+            // advertised then; a backend that has it reports at least the spec minimum of 2.
+            Int MaxViews = 0;
 
             static constexpr Bool IsSamplePositionCount(Int samples) {
                 return samples >= 2 && samples <= kMaxSamplePositionCount && (samples & (samples - 1)) == 0;

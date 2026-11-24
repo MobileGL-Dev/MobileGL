@@ -75,7 +75,7 @@ namespace MobileGL {
         public:
             explicit FramebufferAttachmentObject(const SharedPtr<MG_State::GLState::ITextureObject>& texture,
                                                  TextureUploadTarget textureUploadTarget, Int level = 0, Int layer = 0,
-                                                 Bool layered = false);
+                                                 Bool layered = false, Int numViews = 0);
             explicit FramebufferAttachmentObject(const SharedPtr<RenderbufferObject>& renderbuffer);
             explicit FramebufferAttachmentObject(Bool IsValid = true);
 
@@ -87,6 +87,10 @@ namespace MobileGL {
             Int GetTextureLevel() const;
             Int GetTextureLayer() const;
             Bool IsLayered() const;
+            // GL_OVR_multiview: the attachment renders views [layer, layer + numViews) of a 2D
+            // array texture, one per view. Zero for every attachment that is not multiview.
+            Int GetNumViews() const;
+            Bool IsMultiview() const { return m_numViews > 0; }
             TextureUploadTarget GetTextureUploadTarget() const;
             Bool IsComplete() const;
             IntVec3 GetSize() const;
@@ -99,6 +103,7 @@ namespace MobileGL {
             Int m_textureLevel = 0;
             Int m_textureLayer = 0;
             Bool m_layered = false;
+            Int m_numViews = 0;
             Bool m_isValid = true;
         };
 
@@ -122,7 +127,7 @@ namespace MobileGL {
 
             void AttachTexture(FramebufferAttachmentType type, const SharedPtr<ITextureObject>& texture,
                                TextureUploadTarget textureUploadTarget = TextureUploadTarget::Unknown, int level = 0,
-                               int layer = 0, Bool layered = false);
+                               int layer = 0, Bool layered = false, int numViews = 0);
             void AttachRenderbuffer(FramebufferAttachmentType type, const SharedPtr<RenderbufferObject>& renderbuffer);
             void Detach(FramebufferAttachmentType type);
             const FramebufferAttachmentObject& GetAttachment(FramebufferAttachmentType type) const;
@@ -132,6 +137,17 @@ namespace MobileGL {
             // layered while another is not, or the layered color attachments come from textures of
             // different targets. CheckCompleteness() includes it; this tells the status apart.
             Bool HasLayerTargetMismatch() const;
+            // GL_OVR_multiview's FRAMEBUFFER_INCOMPLETE_VIEW_TARGETS_OVR: the populated attachments
+            // do not all have the same number of views. An attachment that is not multiview does
+            // not match a multiview one, whatever its view count. CheckCompleteness() includes it.
+            Bool HasViewTargetMismatch() const;
+            // The number of views a draw into this framebuffer renders: the multiview attachments'
+            // common count, or 1 when no attachment is multiview (or the counts disagree, which
+            // leaves the framebuffer incomplete anyway).
+            Int GetViewCount() const;
+            // Whether any populated attachment is a multiview one. A multiview framebuffer with a
+            // single view still takes the multiview draw rules.
+            Bool IsMultiview() const;
             // aka. `buffer` as in glDrawBuffers/glReadBuffers
             void SetDrawBuffer(Uint index, FramebufferAttachmentType buffer);
             const FramebufferAttachmentArray& GetDrawBuffers() const;
