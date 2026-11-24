@@ -90,6 +90,7 @@ set(MGL_P8A_AMBIENT_CASES
     IterationRPScratchFixScenario.*
     LayeredAttachmentBarrierScenario.*
     LayeredAttachmentShapeScenario.*
+    MultiviewScenario.*
     NarrowIntegerAttributeScenario.*
     NonCoreImageFormatScenario.*
     OrientationScenario.*
