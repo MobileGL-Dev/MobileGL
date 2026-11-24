@@ -96,6 +96,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/PrimitiveRestartScenario.cpp
     Scenarios/FragCoordOriginScenario.cpp
     Scenarios/ClipControlScenario.cpp
+    Scenarios/MultiviewScenario.cpp
     Scenarios/ClientVertexArrayScenario.cpp
     Scenarios/ClearThenReadPixelsScenario.cpp
     # P15 S0: a clear between draws into the same framebuffer (DirectVulkan records it in the pass).

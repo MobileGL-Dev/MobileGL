@@ -45,6 +45,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         IntVec2 extent = {0, 0};
         // VkFramebufferCreateInfo::layers of the entry's framebuffer (>1 for layered GL attachments).
         Uint32 layers = 1;
+        // VkRenderPassMultiviewCreateInfo's view mask, zero when the pass is not multiview. Its
+        // clear variants carry the same mask, which render-pass compatibility requires.
+        Uint32 viewMask = 0;
         // Frame counter value of the last GetOrCreateRenderPass hit; drives cache eviction.
         Uint64 lastUsedFrame = 0;
         // P15 S0 (wire passes only): what the render pass was created from, and the render
@@ -69,6 +72,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::swap(sampleCount, that.sampleCount);
             std::swap(extent, that.extent);
             std::swap(layers, that.layers);
+            std::swap(viewMask, that.viewMask);
             std::swap(lastUsedFrame, that.lastUsedFrame);
             std::swap(wireAttachments, that.wireAttachments);
             std::swap(wireColors, that.wireColors);
@@ -105,6 +109,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 std::swap(sampleCount, that.sampleCount);
                 std::swap(extent, that.extent);
                 std::swap(layers, that.layers);
+                std::swap(viewMask, that.viewMask);
                 std::swap(lastUsedFrame, that.lastUsedFrame);
                 std::swap(wireAttachments, that.wireAttachments);
                 std::swap(wireColors, that.wireColors);

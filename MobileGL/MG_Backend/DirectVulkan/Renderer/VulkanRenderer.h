@@ -407,6 +407,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // honored rather than accepted-and-ignored.
         Bool IsSamplerAnisotropySupported() const { return m_samplerAnisotropyFeatureEnabled; }
         const FragmentShadingRateSupport& GetFragmentShadingRateSupport() const { return m_fragmentShadingRate; }
+        // GL_MAX_VIEWS_OVR: the multiview feature's maxMultiviewViewCount, capped at the 32 views
+        // a render pass view mask can name; zero when the device was created without multiview.
+        Uint32 GetMultiviewViewCount() const { return m_multiviewViewCount; }
         // ARB_base_instance extends indirect command records with a non-zero firstInstance and
         // requires gl_InstanceID to remain zero-based. Vulkan needs both features to honor that
         // complete contract: one legalizes the command word, the other enables the shader rebase.
@@ -589,6 +592,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Zero for the default framebuffer, which no arm that reads this ever reaches.
             VkImageUsageFlags usageFlags = 0;
             Uint32 level = 0, layer = 0, layers = 1, levels = 1;
+            // GL_OVR_multiview: the surface's view count, zero when it is not multiview. A
+            // multiview surface's layers are its views, from `layer` on.
+            Uint32 views = 0;
             Bool isDefault = false;
             // Set when isDefault: the swapchain image index this role resolved to.
             Uint32 swapchainImageIndex = 0;
@@ -877,6 +883,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<Uint32> colorReferences;
             Uint32 depthReference = VK_ATTACHMENT_UNUSED;
             Uint32 width = 0, height = 0, layers = 1;
+            // VkRenderPassMultiviewCreateInfo's view mask, zero for a pass that is not multiview
+            // (whose framebuffer then has `layers` 1).
+            Uint32 viewMask = 0;
             // The rasterization sample count of a pass with no attachments (0 otherwise), where
             // nothing else in the key would tell two such passes apart.
             Uint32 noAttachmentSamples = 0;
@@ -1262,6 +1271,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Null / all-false on a device without pipelineFragmentShadingRate.
         PFN_vkCmdSetFragmentShadingRateKHR s_vkCmdSetFragmentShadingRateKHR = nullptr;
         FragmentShadingRateSupport m_fragmentShadingRate{};
+        // The multiview feature (Vulkan 1.1 core), which backs GL_OVR_multiview: chained into the
+        // device create info, so it lives as long as the device creation that reads it.
+        VkPhysicalDeviceMultiviewFeatures m_multiviewFeatures{};
+        Uint32 m_multiviewViewCount = 0;
 
         // VK_EXT_transform_feedback (GL transform feedback capture)
         Bool m_transformFeedbackFeatureEnabled = false;
@@ -1752,6 +1765,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static Bool EnableOptionalDeviceExtension(const Vector<VkExtensionProperties>& availableExtensions,
                                                   Vector<const char*>& inOutEnabledExtensions,
                                                   const char* extensionName);
+        void ChainMultiviewFeature(PFN_vkGetPhysicalDeviceFeatures2 getFeatures2,
+                                   PFN_vkGetPhysicalDeviceProperties2 getProperties2,
+                                   VkDeviceCreateInfo& deviceCreateInfo);
         void ResolveOptionalDeviceExtensions(const Vector<VkExtensionProperties>& availableExtensions,
                                              Vector<const char*>& inOutEnabledExtensions);
         static Bool IsNecessaryDeviceExtensionSupported(VkPhysicalDevice device);

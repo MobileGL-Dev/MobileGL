@@ -103,9 +103,9 @@ namespace MobileGL {
             // GL_EXT_clip_control on DirectGLES. DirectVulkan applies clip control in its own
             // position fixup and does not read this.
             Bool ClipControl = false;
-            // GL_OVR_multiview and GL_OVR_multiview2, each only where the driver has that same
-            // extension (and, for the first, glFramebufferTextureMultiviewOVR). DirectGLES only:
-            // DirectVulkan has no multiview render pass route and leaves both false.
+            // GL_OVR_multiview and GL_OVR_multiview2. DirectGLES: each where the driver has that
+            // same extension (and, for the first, glFramebufferTextureMultiviewOVR). DirectVulkan:
+            // both where the device was created with the multiview feature.
             Bool Multiview = false;
             Bool Multiview2 = false;
         };

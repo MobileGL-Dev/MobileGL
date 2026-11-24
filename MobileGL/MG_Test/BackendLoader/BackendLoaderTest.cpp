@@ -1442,8 +1442,8 @@ TEST(MultiviewCapabilities, NeedTheExtensionTheEntryPointAndTwoViews) {
     EXPECT_TRUE(both.SupportsMultiview2);
 }
 
-// Each multiview string follows the DirectGLES driver's own; DirectVulkan has no multiview route
-// and never advertises either.
+// Each multiview string follows the DirectGLES driver's own; DirectVulkan advertises both where the
+// device has the multiview feature, and neither without it.
 TEST(CoreSurfaceAdvertisement, MultiviewFollowsTheDriver) {
     const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions, MobileGL::GLExtension wanted) {
         return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
@@ -1469,10 +1469,13 @@ TEST(CoreSurfaceAdvertisement, MultiviewFollowsTheDriver) {
         DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false, {.Multiview2 = true});
     EXPECT_FALSE(contains(secondOnly, MobileGL::E_GL_OVR_multiview2));
 
+    const auto vulkanNone = DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false);
+    EXPECT_FALSE(contains(vulkanNone, MobileGL::E_GL_OVR_multiview));
+    EXPECT_FALSE(contains(vulkanNone, MobileGL::E_GL_OVR_multiview2));
     const auto vulkan = DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false,
                                                                 {.Multiview = true, .Multiview2 = true});
-    EXPECT_FALSE(contains(vulkan, MobileGL::E_GL_OVR_multiview));
-    EXPECT_FALSE(contains(vulkan, MobileGL::E_GL_OVR_multiview2));
+    EXPECT_TRUE(contains(vulkan, MobileGL::E_GL_OVR_multiview));
+    EXPECT_TRUE(contains(vulkan, MobileGL::E_GL_OVR_multiview2));
 }
 
 // Minecraft 26.3 checks ARB_draw_indirect before it considers the already-advertised

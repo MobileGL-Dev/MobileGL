@@ -921,6 +921,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (features.CullDistance) {
             extensions.push_back(E_GL_ARB_cull_distance);
         }
+        // Multiview render passes (VkRenderPassMultiviewCreateInfo) and the ViewIndex built-in.
+        // Vulkan puts no restriction on what ViewIndex may feed, so the second string comes with
+        // the first.
+        if (features.Multiview) {
+            extensions.push_back(E_GL_OVR_multiview);
+            if (features.Multiview2) {
+                extensions.push_back(E_GL_OVR_multiview2);
+            }
+        }
         // Vulkan's drawIndirectFirstInstance feature is optional. Direct base-instance calls work
         // without it, but ARB_base_instance also promises non-zero firstInstance in GPU indirect
         // commands; the renderer supplies true only when that word is legal and gl_InstanceID can
@@ -1085,6 +1094,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void BackendObject_DirectVulkan::UpdateAdvertisedExtensions() {
+        // GL_MAX_VIEWS_OVR beside the strings it decides, so the two cannot disagree.
+        m_dynamicParameters.MaxViews =
+            pVulkanRenderer != nullptr ? static_cast<Int>(pVulkanRenderer->GetMultiviewViewCount()) : 0;
         // GL_ARB_timer_query gates MC's F3 GPU% (LWJGL checks the extension
         // string). InitCapabilities runs after InitWindowSurface has created
         // and initialized the renderer, so the advertisement can be gated on
@@ -1105,7 +1117,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_vulkanCaps.SupportsImageCubeArray,
             AdvertisedFeatureSupport{.TessellationShader = m_vulkanCaps.SupportsTessellationShader,
                                      .CullDistance =
-                                         m_vulkanCaps.SupportsShaderCullDistance && m_vulkanCaps.MaxCullDistances > 0});
+                                         m_vulkanCaps.SupportsShaderCullDistance && m_vulkanCaps.MaxCullDistances > 0,
+                                     .Multiview = m_dynamicParameters.MaxViews > 0,
+                                     .Multiview2 = m_dynamicParameters.MaxViews > 0});
         // GL_EXT_fragment_shading_rate rides on VK_KHR_fragment_shading_rate's pipeline rate, and
         // its _primitive companion on the primitive rate; both only when the renderer enabled them.
         // _attachment is not advertised: no framebuffer carries a rate attachment to this backend.

@@ -142,6 +142,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return layered(fbo.Depth) || layered(fbo.Stencil);
     }
 
+    // The multiview chain of a wire draw pass and of its clear variants: one subpass that renders
+    // the views `viewMask` names. The mask is read through the pointer, so it has to outlive the
+    // render pass creation, which is why it is taken by reference.
+    static VkRenderPassMultiviewCreateInfo MakeWireMultiviewInfo(const Uint32& viewMask) {
+        VkRenderPassMultiviewCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO;
+        info.subpassCount = 1;
+        info.pViewMasks = &viewMask;
+        return info;
+    }
+
     [[noreturn]] static void WireBufferLegacyFatal() {
         MG_Pipe::MGPipeSessionFail(MG_Pipe::MGPipeFatalFamily::RoleViolation,
                                    "MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} (Magma P7 buffer consumer)");
@@ -473,6 +484,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkAttachmentReference depth{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_GENERAL};
             VkExtent2D extent{~0u, ~0u};
             Uint32 layers = ~0u;
+            Uint32 views = 0;
             VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
             Uint64 passHash = 0;
             auto& passKey = scratch.passKey;
@@ -499,6 +511,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     image = ResolveWireImage(fbo, surface, aspect, /*isWriteTarget=*/true);
                 }
                 if (!image.image) return VK_ATTACHMENT_UNUSED;
+                // Only a pending clear of exactly this attachment's level and layers can become its
+                // load op. One of other layers (another layer of a multiview or layered attachment)
+                // would otherwise stay pending past this pass and land on top of its draws.
+                if (image.resource != nullptr &&
+                    std::any_of(image.resource->pendingClears.begin(), image.resource->pendingClears.end(),
+                                [&](const VkTextureManager::WirePendingClear& entry) {
+                                    return entry.level != image.level || entry.layer != image.layer ||
+                                           entry.layers != image.layers;
+                                })) {
+                    MaterializeWirePendingClears(*image.resource);
+                    image.layout = image.resource->layout;
+                }
                 m_textureManager->FlushPendingUploads();
                 m_wirePassMemo.attachments.push_back(
                     {image.resource, image.storage, surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer});
@@ -539,6 +563,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 extent.width = std::min(extent.width, image.extent.width);
                 extent.height = std::min(extent.height, image.extent.height);
                 layers = std::min(layers, image.layers);
+                views = std::max(views, image.views);
                 samples = image.samples;
                 passHash = XXH64(&description, sizeof(description), passHash);
                 // Marked below, once the pass is known: a continued pass repeats the same marks.
@@ -603,6 +628,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 passKey.noAttachmentSamples = static_cast<Uint32>(samples);
                 passHash = XXH64(&samples, sizeof(samples), passHash);
             }
+            // GL_OVR_multiview: one view per attachment layer, rendered through a single framebuffer
+            // layer, which is what a multiview render pass requires of its framebuffer.
+            const Uint32 viewMask = views == 0 ? 0u : (views >= 32 ? ~0u : (1u << views) - 1u);
+            if (viewMask != 0) {
+                layers = 1;
+                passHash = XXH64(&viewMask, sizeof(viewMask), passHash);
+            }
+            passKey.viewMask = viewMask;
             passKey.width = extent.width;
             passKey.height = extent.height;
             passKey.layers = layers;
@@ -623,6 +656,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             passInfo.pAttachments = attachments.data();
             passInfo.subpassCount = 1;
             passInfo.pSubpasses = &subpass;
+            const VkRenderPassMultiviewCreateInfo multiview = MakeWireMultiviewInfo(passKey.viewMask);
+            if (viewMask != 0) passInfo.pNext = &multiview;
             continuing = m_wireDrawPass && m_wireDrawPassKey == passKey;
             {
                 const auto* active = VkRenderPassManager::GetActiveRenderPass();
@@ -665,6 +700,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 created.sampleCount = samples;
                 created.extent = {static_cast<Int>(extent.width), static_cast<Int>(extent.height)};
                 created.layers = layers;
+                created.viewMask = viewMask;
                 created.hash = created.compatibilityHash =
                     XXH64(colors.data(), colors.size() * sizeof(colors[0]), passHash);
                 created.wireAttachments.assign(attachments.begin(), attachments.end());
@@ -709,6 +745,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 for (const auto& color : colors)
                     pipelinePassKey.colorReferences.push_back(color.attachment);
                 pipelinePassKey.depthReference = depth.attachment;
+                pipelinePassKey.viewMask = viewMask;
                 m_wireDrawPassCompatibilityId = m_wireRenderPassCompatibility.Intern(pipelinePassKey);
             }
         } // !passContinues
@@ -1401,6 +1438,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         info.pAttachments = descriptions.data();
         info.subpassCount = 1;
         info.pSubpasses = &subpass;
+        const VkRenderPassMultiviewCreateInfo multiview = MakeWireMultiviewInfo(begun.viewMask);
+        if (begun.viewMask != 0) info.pNext = &multiview;
         VkRenderPass variant = VK_NULL_HANDLE;
         VK_VERIFY(vkCreateRenderPass(m_device, &info, nullptr, &variant));
         begun.clearVariants.push_back({variantKey, variant});

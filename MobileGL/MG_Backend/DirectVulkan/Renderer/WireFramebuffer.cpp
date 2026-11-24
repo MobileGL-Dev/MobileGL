@@ -721,6 +721,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         out.layer = layer;
         out.is3D = resource->depth > 1;
         out.layers = surface.Layered ? (out.is3D ? std::max(resource->depth >> level, 1u) : availableLayers) : 1;
+        if (!renderbuffer && surface.NumViews != 0) {
+            out.views = surface.NumViews;
+            out.layers = surface.NumViews;
+        }
         const Bool oneDimensional =
             resource->viewType == VK_IMAGE_VIEW_TYPE_1D || resource->viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY;
         out.viewType = oneDimensional ? (out.layers > 1 ? VK_IMAGE_VIEW_TYPE_1D_ARRAY : VK_IMAGE_VIEW_TYPE_1D)

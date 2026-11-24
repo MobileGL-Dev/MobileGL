@@ -11,14 +11,16 @@
 #include "../VkIncludes.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-    // The wire draw pass has one graphics subpass, no input attachments,
-    // multiview or extensions. Its Vulkan pipeline compatibility is formats,
-    // sample counts and the ordered attachment references, not native handles,
-    // image identity, dimensions, load/store operations or image layouts.
+    // The wire draw pass has one graphics subpass, no input attachments and,
+    // besides multiview, no extensions. Its Vulkan pipeline compatibility is
+    // formats, sample counts, the ordered attachment references and the view
+    // mask, not native handles, image identity, dimensions, load/store
+    // operations or image layouts.
     struct WireRenderPassCompatibilityKey {
         Vector<Uint64> attachmentFormatsAndSamples;
         Vector<Uint32> colorReferences;
         Uint32 depthReference = VK_ATTACHMENT_UNUSED;
+        Uint32 viewMask = 0;
         Bool operator==(const WireRenderPassCompatibilityKey&) const = default;
     };
 
@@ -35,6 +37,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             for (const auto value : key.colorReferences)
                 mix(value);
             mix(key.depthReference);
+            mix(key.viewMask);
             return hash;
         }
     };

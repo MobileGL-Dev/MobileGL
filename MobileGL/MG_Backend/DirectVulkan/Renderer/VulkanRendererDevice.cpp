@@ -912,6 +912,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!m_shaderDrawParametersFeatureEnabled) {
             MGLOG_W("shaderDrawParameters is unavailable; shaders using gl_DrawID/gl_BaseInstance will not work");
         }
+        ChainMultiviewFeature(getPhysicalDeviceFeatures2, getPhysicalDeviceProperties2, deviceCreateInfo);
 
         // primitiveTopologyListRestart lets primitive restart work on *list* topologies (strip/fan
         // restart needs no feature). Optional; enabled via VK_EXT_primitive_topology_list_restart.
@@ -2333,6 +2334,39 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         MGLOG_I("Enabled optional device extension: %s", extensionName);
         return true;
+    }
+
+    // Multiview for GL_OVR_multiview, on a Vulkan 1.1 device that has it and at least the two views
+    // GL requires. Only the base feature: GL refuses a multiview draw with a geometry or
+    // tessellation stage, so their multiview features are never needed.
+    void VulkanRenderer::ChainMultiviewFeature(PFN_vkGetPhysicalDeviceFeatures2 getFeatures2,
+                                               PFN_vkGetPhysicalDeviceProperties2 getProperties2,
+                                               VkDeviceCreateInfo& deviceCreateInfo) {
+        m_multiviewViewCount = 0;
+        m_multiviewFeatures = {};
+        m_multiviewFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES;
+        if (m_physicalDevice.properties.apiVersion < VK_API_VERSION_1_1 || getFeatures2 == nullptr ||
+            getProperties2 == nullptr)
+            return;
+        VkPhysicalDeviceFeatures2 featureQuery{};
+        featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        featureQuery.pNext = &m_multiviewFeatures;
+        getFeatures2(m_physicalDevice.handle, &featureQuery);
+        VkPhysicalDeviceMultiviewProperties multiviewProperties{};
+        multiviewProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES;
+        VkPhysicalDeviceProperties2 propertyQuery{};
+        propertyQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        propertyQuery.pNext = &multiviewProperties;
+        getProperties2(m_physicalDevice.handle, &propertyQuery);
+        const Bool usable = m_multiviewFeatures.multiview == VK_TRUE && multiviewProperties.maxMultiviewViewCount >= 2;
+        MGLOG_I("Multiview (GL_OVR_multiview): %s, maxMultiviewViewCount %u", usable ? "enabled" : "unavailable",
+                multiviewProperties.maxMultiviewViewCount);
+        if (!usable) return;
+        m_multiviewFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+        m_multiviewFeatures.multiviewGeometryShader = VK_FALSE;
+        m_multiviewFeatures.multiviewTessellationShader = VK_FALSE;
+        deviceCreateInfo.pNext = &m_multiviewFeatures;
+        m_multiviewViewCount = std::min<Uint32>(multiviewProperties.maxMultiviewViewCount, 32u);
     }
 
     void VulkanRenderer::ResolveOptionalDeviceExtensions(const Vector<VkExtensionProperties>& availableExtensions,
