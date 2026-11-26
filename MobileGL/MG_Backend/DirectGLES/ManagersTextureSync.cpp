@@ -1640,9 +1640,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
 
                     const auto mipmapCount = MGB_STORAGE_LEVELS(textureMipmapObject);
+                    const auto storageFormat = MGB_STORAGE_FORMAT(textureMipmapObject);
                     GLenum glInternalFormat, glType, glFormat;
-                    TextureImpl::GenerateTextureFormatInfo(MGB_STORAGE_FORMAT(textureMipmapObject), &glInternalFormat,
-                                                           &glFormat, &glType, targetInternal);
+                    TextureImpl::GenerateTextureFormatInfo(storageFormat, &glInternalFormat, &glFormat, &glType,
+                                                           targetInternal);
                     // The storage this level is being written into was widened when it was minted
                     // (see above), so the transfer pair has to describe the carrier here too - ES
                     // requires glTexSubImage's `format` to match the storage's base internal
@@ -1652,15 +1653,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     ScopedDefaultUnpackState unpackState;
                     // Update sampled storage directly to avoid stalling the current offscreen batch on a PBO.
                     const Bool useClientUnpack = stableStorage && WasTextureReadInDrawBatch(pushedRes);
+                    // The staging page copies the shadow bytes as-is. Check the shadow and driver
+                    // formats because a driver format can also be used for converted client data.
+                    const Bool rawRgba8Copy = storageFormat == TextureInternalFormat::RGBA8 &&
+                                              glInternalFormat == GL_RGBA8 && glFormat == GL_RGBA &&
+                                              glType == GL_UNSIGNED_BYTE;
                     // Pack the small writes across all dirty mip levels before their
                     // per-level union boxes can pull in untouched atlas texels. The packed
                     // copies write the destination on the GPU too, so sampled storage skips them.
                     if (stableStorage && !useClientUnpack && !m_driverMayHoldGpuWrites && !m_packedUploadRejected &&
-                        !m_imageBindableStorageRequired && target == GL_TEXTURE_2D &&
-                        (glInternalFormat == GL_RGBA8 || glInternalFormat == GL_RGBA) && glFormat == GL_RGBA &&
-                        glType == GL_UNSIGNED_BYTE && pushedStorage != nullptr && uploadTargets.size() == 1 &&
-                        g_GLESFuncs.glCopyImageSubData && g_GLESFuncs.glTexStorage2D &&
-                        BufferImpl::UnpackRingAvailable()) {
+                        !m_imageBindableStorageRequired && target == GL_TEXTURE_2D && rawRgba8Copy &&
+                        pushedStorage != nullptr && uploadTargets.size() == 1 && g_GLESFuncs.glCopyImageSubData &&
+                        g_GLESFuncs.glTexStorage2D && BufferImpl::UnpackRingAvailable()) {
                         const auto result = TryPackedMipUpload(textureMipmapObject, pushedStorage, pushedRes,
                                                                uploadTargets.front(), mipmapCount, m_backendTextureId);
                         if (result == PackedUploadResult::Rejected) {

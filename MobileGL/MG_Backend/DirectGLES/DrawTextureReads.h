@@ -14,6 +14,8 @@
 namespace MobileGL::MG_Backend::DirectGLES::TextureImpl {
     // One instance per native context. Slot generations distinguish reused texture names,
     // and batch stamps let us discard a batch without walking its texture slots.
+    // This upload heuristic follows sampler reads from offscreen draws and the framebuffer
+    // changes observed by BindCurrentFBO. Compute dispatches do not record reads here.
     class DrawTextureReads {
     public:
         void BindFramebuffer(std::uint32_t framebuffer) {
