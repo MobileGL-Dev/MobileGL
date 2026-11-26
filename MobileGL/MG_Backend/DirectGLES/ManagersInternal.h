@@ -382,6 +382,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Bool UnpackRingAllocate(SizeT size, SizeT& outOffset);
 
+        // Only use space in the current mapping. Optional uploads can fall back
+        // immediately when the ring would have to grow or wait.
+        Bool TryAllocateMappedUnpackRing(SizeT size, SizeT& outOffset);
+
         void* UnpackRingMappedPtr();
 
         Uint UnpackRingBufferId();

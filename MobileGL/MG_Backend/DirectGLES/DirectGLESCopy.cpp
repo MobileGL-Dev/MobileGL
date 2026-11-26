@@ -107,16 +107,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // MGPipeApplier().DispatchProgram, which set_dispatch_program carried. A compute-only
         // pipeline has no draw program at all, which is why the two applier fields are separate.
         const MG_Pipe::MGPipeHandle dispatchCso = MG_Pipe::MGPipeApplier().DispatchProgram;
-        PrgramImpl::SyncCurrentProgramByHandle(dispatchCso, false);
-
-        // The same gate as the frontend one below, from the record: a dispatch of a program
-        // the frontend reports unlinked, or one whose SPIR-V never arrived, binds nothing.
-        const auto* const record = PrgramImpl::FindShaderCsoRecord(dispatchCso);
-        if (record == nullptr || record->Desc.LinkStatus == 0 || record->Desc.SpirvStatus == 0) {
-            g_GLESFuncs.glUseProgram(0);
-            PrgramImpl::g_lastUsedBackendProgramId = 0;
-            return;
-        }
+        const auto* programRecord = PrgramImpl::SyncCurrentProgramByHandle(dispatchCso, false);
+        if (programRecord == nullptr) return;
 
         // Compute shaders sample textures through the same unit bindings as draws
         // (e.g. Flywheel's depth-pyramid downsample reads the depth attachment on
@@ -125,7 +117,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Compute programs need the same per-program resource sync as draws:
         // uniform-block bindings and sampler units only exist through the API
         // because layout(binding) is stripped from the transpiled ESSL.
-        BindCurrentProgramWithResources(currentProgram, textureKeys, dispatchCso);
+        BindCurrentProgramWithResources(currentProgram, textureKeys, dispatchCso, programRecord);
     }
 
     Bool UpdateTextureBindingAtTarget(GLenum target) {

@@ -450,7 +450,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // and the serials are handed out to every native context of every session in turn, so the
         // highest signaled serial says nothing about an older fence of another context still
         // pending. A serial is complete when no live fence at or below it is pending.
-        void PollFrameFences() {
+        void PollFrameFences(const FrameFence* signaled = nullptr) {
             if (!g_GLESFuncs.glGetSynciv) return;
             Uint64 lowestPending = ~Uint64{0};
             for (FrameFence& slot : g_frameFenceRing) {
@@ -460,8 +460,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     continue;
                 }
                 GLint status = GL_SIGNALED;
-                GLsizei length = 0;
-                g_GLESFuncs.glGetSynciv(slot.sync, GL_SYNC_STATUS, 1, &length, &status);
+                if (&slot != signaled) {
+                    GLsizei length = 0;
+                    g_GLESFuncs.glGetSynciv(slot.sync, GL_SYNC_STATUS, 1, &length, &status);
+                }
                 if (status == GL_SIGNALED) {
                     if (g_GLESFuncs.glDeleteSync) g_GLESFuncs.glDeleteSync(slot.sync);
                     slot.sync = nullptr;
@@ -639,6 +641,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         } else if (g_EGLFuncs.eglSwapBuffers != nullptr) {
             mglSwapped = g_EGLFuncs.eglSwapBuffers(g_Display, drawSurface);
         }
+        if (mglSwapped == EGL_TRUE) TextureImpl::EndDrawTextureBatch();
         NoteDrawSurfaceMoved(); // a window surface takes a new size at its swap
         if (drawSurface != EGL_NO_SURFACE) {
             const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
@@ -653,6 +656,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the same bound on the ES driver: after presenting S, wait for S+1-N to complete. The
         // platform's own queueBuffer throttle already waits for S-1, so only N = 1 is stricter
         // than what Android does by itself; larger N is the same contract stated, not a change.
+        const FrameFence* signaled = nullptr;
         const Uint32 framesInFlight = MG_Config::Features.FramesInFlight;
         if (presentedSerial != 0 && framesInFlight != 0 && framesInFlight < static_cast<Uint32>(kFrameFenceRingDepth) &&
             g_GLESFuncs.glClientWaitSync && presentedSerial + 1 > framesInFlight) {
@@ -660,11 +664,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const FrameFence& oldest = g_frameFenceRing[target % kFrameFenceRingDepth];
             if (oldest.sync && oldest.serial == target && oldest.contextGeneration == g_syncContextGeneration) {
                 constexpr Uint64 kFramesInFlightWaitNs = 1000ull * 1000 * 1000;
-                (void)g_GLESFuncs.glClientWaitSync(oldest.sync, GL_SYNC_FLUSH_COMMANDS_BIT, kFramesInFlightWaitNs);
+                const GLenum status =
+                    g_GLESFuncs.glClientWaitSync(oldest.sync, GL_SYNC_FLUSH_COMMANDS_BIT, kFramesInFlightWaitNs);
+                if (status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED) {
+                    signaled = &oldest;
+                }
             }
         }
 
-        if (canFence) PollFrameFences();
+        if (canFence) PollFrameFences(signaled);
 
         // After the watermark advanced: retire grown-away ring stores and record the
         // frame's ring high-water marks for slot reclamation.

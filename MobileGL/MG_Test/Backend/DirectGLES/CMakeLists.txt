@@ -67,6 +67,12 @@ target_include_directories(ContextEpochTest PRIVATE ${MGL_ROOT}/include ${MGL_RO
 target_link_libraries(ContextEpochTest PRIVATE MobileGLTestMain ${LINK_LIBRARIES})
 gtest_discover_tests(ContextEpochTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 
+# The record of texture storage sampled in the current offscreen draw batch.
+add_executable(DrawTextureReadsTest DrawTextureReadsTest.cpp)
+target_include_directories(DrawTextureReadsTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
+target_link_libraries(DrawTextureReadsTest PRIVATE MobileGLTestMain ${LINK_LIBRARIES})
+gtest_discover_tests(DrawTextureReadsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
 # P3b/P4b R-5: D-K2's dependency rule had six statements and nothing compared them. This binary
 # is where the comparison can live, because it is the one that links BOTH the client check
 # (MG_Impl/Pipe, through MG_Pipe) and the server gate (MG_Backend/DirectGLES's resolvers).

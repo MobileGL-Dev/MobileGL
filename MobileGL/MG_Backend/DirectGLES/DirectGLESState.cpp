@@ -1434,7 +1434,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // and the clamp masks, the broadcast count, ImageUnitFormatsStillMatch and the three
         // patch clauses are unchanged - they are backend globals, fb's row and VALUE rows of the
         // residual block, none of which this family owns.
-        void SyncCurrentProgramByHandle(MG_Pipe::MGPipeHandle cso, Bool forDraw, const IntegerAttributePlan* plan) {
+        const MG_Pipe::MGPipeShaderCsoRecord* SyncCurrentProgramByHandle(MG_Pipe::MGPipeHandle cso, Bool forDraw,
+                                                                         const IntegerAttributePlan* plan) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -1453,7 +1454,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (record == nullptr || record->Desc.LinkStatus == 0 || record->Desc.SpirvStatus == 0) {
                 g_GLESFuncs.glUseProgram(0);
                 g_lastUsedBackendProgramId = 0;
-                return;
+                return nullptr;
             }
             // REFUSED at a draw, record-only at a dispatch: see the policy's own note.
             ResolveFragColorBroadcastCount(forDraw ? BroadcastCountPolicy::RefuseFallback
@@ -1466,7 +1467,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // than a draw with somebody else's shader.
                 g_GLESFuncs.glUseProgram(0);
                 g_lastUsedBackendProgramId = 0;
-                return;
+                return record;
             }
             // Sticky for the twin's lifetime: a draw that needs the seeds rebuilds the program once.
             if (plan != nullptr && plan->NeedsSeeds()) twin->NarrowIntegerSeeds().wanted = true;
@@ -1488,6 +1489,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             g_currentDrawProgramHandle = cso;
             g_currentDrawBackendProgram = twin;
+            return record;
         }
     } // namespace PrgramImpl
 } // namespace MobileGL::MG_Backend::DirectGLES

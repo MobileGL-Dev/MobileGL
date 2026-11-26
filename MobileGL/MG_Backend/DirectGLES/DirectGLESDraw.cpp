@@ -582,8 +582,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Bool widenedColorClear =
                 widenedDrawBuffers != 0 && FramebufferImpl::g_integerColorDrawBufferMask == 0;
             GLint clearDrawFbo = 0;
-            g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &clearDrawFbo);
-            if ((outOfRange || widenedColorClear) && clearDrawFbo != 0) {
+            if (outOfRange || widenedColorClear) {
+                g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &clearDrawFbo);
+            }
+            if (clearDrawFbo != 0) {
                 GLint maxDrawBuffers = 0;
                 GLint clearedCount = 0;
                 GLint firstDb = -1;

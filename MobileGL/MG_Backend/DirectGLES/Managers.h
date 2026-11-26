@@ -272,11 +272,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // re-pushes index 0's state. Takes the count so it can do nothing at all in the common case.
     void EndViewportRoutingPasses(Uint passCount);
 
+    namespace TextureImpl {
+        void NoteDrawTextureReads();
+    } // namespace TextureImpl
+
     // Issue one draw, replayed once per viewport-routing pass. Every application-visible draw
     // entry point wraps its native glDraw* call in this; the internal blit and clear helpers
     // deliberately do not, because they bind their own programs, which never route.
     template <typename IssueDraw>
     inline void ForEachViewportRoutingPass(IssueDraw&& issue) {
+        TextureImpl::NoteDrawTextureReads();
         const Uint passCount = BeginViewportRoutingPasses();
         for (Uint pass = 0; pass < passCount; ++pass) {
             if (passCount > 1) {
@@ -1878,15 +1883,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 m_sharedImageId = 0;
             SharedImageImpl::EglImageRef m_sharedImage;
 #endif
-            // Whether the driver texture may hold texels the shadow never saw. Set the first time
-            // anything other than a texel upload can write it - an application framebuffer
-            // attachment, a writable image binding, a copy or blit into it, a driver-side mipmap
-            // generation - and never cleared. Until then the driver holds, outside a level's
-            // pending writes, exactly the shadow bytes it was last sent, so those writes may go up
-            // as their union box (one unpack-ring job, which is what Mali needs); from then on
-            // only the texels the client wrote may go up, since the shadow is stale everywhere
-            // else. See SyncMipmapsToBackend.
+            // Once a framebuffer, image binding, copy, or mipmap generation may write this texture,
+            // the CPU shadow can be stale. Upload only the texels the client wrote from then on.
             Bool m_driverMayHoldGpuWrites = false;
+            // Retry the packed path when the texture's storage changes.
+            Bool m_packedUploadRejected = false;
             // Latches the "this driver has no buffer textures" report to once per texture. The
             // report is emitted from the respecify path, which bails before recording the state
             // it was asked to apply - so without the latch the texture stays permanently dirty
@@ -2106,6 +2107,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // issued since the last one. Sampled access from a draw does not take it: that is the
         // order every driver keeps on its own, and it is the per-draw hot path.
         void NoteInPlaceTextureUpload();
+        void NoteDrawTextureFramebuffer(Uint framebuffer);
+        void DeleteDrawTextureFramebuffer(Uint framebuffer);
+        void EndDrawTextureBatch();
+        Bool WasTextureReadInDrawBatch(MG_Pipe::MGPipeHandle storage);
         // The barrier bits owed for the uploads noted since the last call (0 when none), and
         // the note cleared: the caller issues them, folded into any barrier of its own.
         GLbitfield TakeInPlaceTextureUploadBarrierBits();

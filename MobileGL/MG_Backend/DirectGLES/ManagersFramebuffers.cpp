@@ -46,6 +46,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             NoteFramebufferIdDeleted(m_backendFBOId);
             if (m_contextGeneration == g_backendContextGeneration && g_GLESFuncs.glDeleteFramebuffers) {
                 g_GLESFuncs.glDeleteFramebuffers(1, &m_backendFBOId);
+                TextureImpl::DeleteDrawTextureFramebuffer(m_backendFBOId);
             }
             m_backendFBOId = 0;
         }
@@ -83,6 +84,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (bindsDraw) {
                 g_driverFBOBindings[drawIdx] = id;
                 g_driverFBOBindingKnown[drawIdx] = true;
+                if (!drawMatches) TextureImpl::NoteDrawTextureFramebuffer(id);
             }
             if (bindsRead) {
                 g_driverFBOBindings[readIdx] = id;

@@ -911,7 +911,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BufferImpl::SyncNeccessaryBuffers(currentVAO, vaoTwin, vaoConfigVersion, syncBit & DrawSyncBit::IndexBuffer,
                                           syncBit & DrawSyncBit::IndirectBuffer);
         // The draw's integer arrays and the program's narrow-integer seeds (NarrowIntegerSeeds.h).
-        IntegerAttributePlan integerPlan = ResolveIntegerAttributePlanForDraw(MG_Pipe::MGPipeApplier().DrawProgram);
+        const MG_Pipe::MGPipeHandle programCso = MG_Pipe::MGPipeApplier().DrawProgram;
+        IntegerAttributePlan integerPlan = ResolveIntegerAttributePlanForDraw(programCso);
         VertexArrayImpl::SyncCurrentVAOFromRecords(vaoTwin, integerPlan);
         TextureImpl::SyncNeccessaryTextures(textureKeys);
         // A draw reads and writes through its image units too, so the unit bindings have to be
@@ -929,8 +930,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // at all; the remaining uses of it below are the two callees' own, and both have a
         // handle arm of their own. P5e (pa) finished it: the pull itself is gone on that arm and
         // `currentProgram` is a null SharedPtr there, which this branch never reaches for.
-        PrgramImpl::SyncCurrentProgramByHandle(MG_Pipe::MGPipeApplier().DrawProgram, true, &integerPlan);
-        if (DropRefusedNarrowIntegerSeeds(integerPlan, MG_Pipe::MGPipeApplier().DrawProgram))
+        const auto* programRecord = PrgramImpl::SyncCurrentProgramByHandle(programCso, true, &integerPlan);
+        if (DropRefusedNarrowIntegerSeeds(integerPlan, programCso))
             VertexArrayImpl::SyncCurrentVAOFromRecords(vaoTwin, integerPlan);
         RenderStateImpl::SyncRenderState();
 
@@ -951,11 +952,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // a conjunction over four callees; this one is served by the record whenever the PROGRAM
         // family is on the handle arm, which includes the mixed A/B where the texture bits are
         // off and `currentProgram` above is therefore still a real object.
-        VertexArrayImpl::SyncCurrentVertexAttributeValues(vaoTwin, MG_Pipe::MGPipeApplier().DrawProgram);
+        VertexArrayImpl::SyncCurrentVertexAttributeValues(vaoTwin, programCso);
 
         BindCurrentTextures(textureKeys, currentProgram);
-        BindCurrentProgramWithResources(currentProgram, textureKeys, MG_Pipe::MGPipeApplier().DrawProgram);
-        PushNarrowIntegerWidthsForDraw(integerPlan, MG_Pipe::MGPipeApplier().DrawProgram);
+        BindCurrentProgramWithResources(currentProgram, textureKeys, programCso, programRecord);
+        PushNarrowIntegerWidthsForDraw(integerPlan, programCso);
 
         // Last: opening the capture span needs the program current and the capture
         // buffers bound, and ES rejects most binding changes once it is open.
@@ -1368,19 +1369,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // (its note says so). The parameter stays for the monolith arm, which is ruling ID-81: that
     // build keeps this function's frontend text token for token.
     void BindCurrentProgramWithResources(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram,
-                                         const TextureImpl::DrawTextureSyncKeys& keys,
-                                         MG_Pipe::MGPipeHandle programCso) {
-        // P5e (pg): THE HANDLE ARM'S GATE, from the record rather than from the object. Hoisted
-        // out of the `if` below because the whole body's entry condition is "the program linked
-        // and has SPIR-V", and on this arm both answers are fields of the descriptor
-        // (Desc.LinkStatus is ID-88's, Desc.SpirvStatus P4a's).
-        const MG_Pipe::MGPipeShaderCsoRecord* programRecord = nullptr;
-        programRecord = PrgramImpl::FindShaderCsoRecord(programCso);
-        if (programRecord != nullptr && (programRecord->Desc.LinkStatus == 0 || programRecord->Desc.SpirvStatus == 0)) {
-            programRecord = nullptr;
-        }
-        const Bool programUsable = programRecord != nullptr;
-        if (programUsable) {
+                                         const TextureImpl::DrawTextureSyncKeys& keys, MG_Pipe::MGPipeHandle programCso,
+                                         const MG_Pipe::MGPipeShaderCsoRecord* programRecord) {
+        if (programRecord != nullptr) {
 #ifdef TRACY_ENABLE
             ZoneScopedNC("BindCurrentProgram", TRACY_ZONECOLOR_BACKEND);
 #endif
