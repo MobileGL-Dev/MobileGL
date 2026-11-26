@@ -387,9 +387,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const MG_Pipe::MGPipeShaderCsoRecord* ResolveGlobalConstantsRecordForHandle(MG_Pipe::MGPipeHandle handle,
                                                                                     Uint uboSize);
 
-        // `plan` (a draw's) arms the program's narrow-integer seeds when it needs them.
-        void SyncCurrentProgramByHandle(MG_Pipe::MGPipeHandle cso, Bool forDraw,
-                                        const IntegerAttributePlan* plan = nullptr);
+        // Returns the validated record for resource binding in the same draw or dispatch.
+        const MG_Pipe::MGPipeShaderCsoRecord* SyncCurrentProgramByHandle(MG_Pipe::MGPipeHandle cso, Bool forDraw,
+                                                                         const IntegerAttributePlan* plan = nullptr);
     } // namespace PrgramImpl
 
     // Defined with the surface registry, below.
@@ -398,8 +398,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void BindCurrentFBO(FramebufferTarget target);
 
     void BindCurrentProgramWithResources(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram,
-                                         const TextureImpl::DrawTextureSyncKeys& keys,
-                                         MG_Pipe::MGPipeHandle programCso);
+                                         const TextureImpl::DrawTextureSyncKeys& keys, MG_Pipe::MGPipeHandle programCso,
+                                         const MG_Pipe::MGPipeShaderCsoRecord* programRecord);
     void BindCurrentTextures(const TextureImpl::DrawTextureSyncKeys& keys,
                              const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram);
 
@@ -504,8 +504,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void BindCurrentTextures();
 
     void BindCurrentProgramWithResources(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram,
-                                         const TextureImpl::DrawTextureSyncKeys& keys,
-                                         MG_Pipe::MGPipeHandle programCso);
+                                         const TextureImpl::DrawTextureSyncKeys& keys, MG_Pipe::MGPipeHandle programCso,
+                                         const MG_Pipe::MGPipeShaderCsoRecord* programRecord);
 
     PrgramImpl::BackendProgramObjectImpl* GetCurrentBackendProgram();
 

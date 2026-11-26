@@ -487,18 +487,19 @@ namespace MobileGL::MG_Pipe {
         VaoMemo& MemoFor(const VertexArrayObject& vao) {
             const Uint64 lifetimeId = vao.GetLifetimeId();
             const Uint64 epoch = MGPipeSlots().ResetEpoch();
-            // The three emitters of one validate ask for the same array: the last answer's index,
-            // believed only while that entry still holds this id (a grow or an erase moves entries).
-            if (m_lastMemoIndex < m_vaoMemo.size() && m_vaoMemo[m_lastMemoIndex].LifetimeId == lifetimeId &&
-                m_vaoMemo[m_lastMemoIndex].SlotEpoch == epoch)
-                return m_vaoMemo[m_lastMemoIndex];
+            // A per-array hint survives switching arrays. Growth and erasure can move entries,
+            // so the slot is only a candidate until both identity and the allocator epoch match.
+            SizeT& hint = vao.PipeVertexInputMemoHint();
+            if (hint < m_vaoMemo.size() && m_vaoMemo[hint].LifetimeId == lifetimeId &&
+                m_vaoMemo[hint].SlotEpoch == epoch)
+                return m_vaoMemo[hint];
             if (m_vaoMemo.empty() || (m_vaoMemoUsed + 1) * 2 > m_vaoMemo.size()) GrowVaoMemo();
             const SizeT mask = m_vaoMemo.size() - 1;
             SizeT i = VaoMemoHome(lifetimeId, mask);
             while (m_vaoMemo[i].LifetimeId != 0 && m_vaoMemo[i].LifetimeId != lifetimeId)
                 i = (i + 1) & mask;
             VaoMemo& memo = m_vaoMemo[i];
-            m_lastMemoIndex = i;
+            hint = i;
             if (memo.LifetimeId == 0) ++m_vaoMemoUsed;
             if (memo.LifetimeId != lifetimeId || memo.SlotEpoch != epoch) {
                 memo = VaoMemo{};
@@ -527,7 +528,6 @@ namespace MobileGL::MG_Pipe {
         }
         Vector<VaoMemo> m_vaoMemo;
         SizeT m_vaoMemoUsed = 0;
-        SizeT m_lastMemoIndex = ~SizeT{0};
 
     public:
         // The VAO died (MGPipeEmitVertexElementsDestroyAndFree): its entry goes, by backward-shift
