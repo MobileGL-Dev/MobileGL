@@ -31,7 +31,8 @@ Commands below use `python3`. On Windows, run `python` instead.
   - A file directly in `MobileGL/` uses `MobileGL`, and a submodule uses its path (`3rdparty/glslang`).
   - List every scope the commit touches, comma-separated: `(MG_Backend/DirectGLES, MG_Test/Wire)`. A commit that touches more than three scopes skips this check: summarize the touched areas yourself, for example `(...)`.
   - `python3 scripts/check_text_hygiene.py scope` prints the scope for the staged changes.
-- **No** planning ids (phase or decision codes such as `P13` or `ID-54`), local paths, external project names or non-English text anywhere in the message.
+- **No** planning ids (phase or decision codes such as `P13` or `ID-54`), local paths or non-English text anywhere in the message.
+- Name an external project only to credit a non-trivial technique taken from it, with a link to the source. A common technique needs no attribution.
 - **Merges** use `[Merge] (area): what the merge takes`. The scope is free text there. Write the subject yourself, since git's default merge message fails the check. The commits a merge brings in are not checked again.
 - **Reverts** use `[Fix] (Scope): revert <the reverted subject>`.
 
