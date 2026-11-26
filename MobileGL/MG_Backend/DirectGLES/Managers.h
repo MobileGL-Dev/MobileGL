@@ -272,11 +272,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // re-pushes index 0's state. Takes the count so it can do nothing at all in the common case.
     void EndViewportRoutingPasses(Uint passCount);
 
+    namespace TextureImpl {
+        void NoteDrawTextureReads();
+    } // namespace TextureImpl
+
     // Issue one draw, replayed once per viewport-routing pass. Every application-visible draw
     // entry point wraps its native glDraw* call in this; the internal blit and clear helpers
     // deliberately do not, because they bind their own programs, which never route.
     template <typename IssueDraw>
     inline void ForEachViewportRoutingPass(IssueDraw&& issue) {
+        TextureImpl::NoteDrawTextureReads();
         const Uint passCount = BeginViewportRoutingPasses();
         for (Uint pass = 0; pass < passCount; ++pass) {
             if (passCount > 1) {
@@ -2102,6 +2107,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // issued since the last one. Sampled access from a draw does not take it: that is the
         // order every driver keeps on its own, and it is the per-draw hot path.
         void NoteInPlaceTextureUpload();
+        void NoteDrawTextureFramebuffer(Uint framebuffer);
+        void DeleteDrawTextureFramebuffer(Uint framebuffer);
+        void EndDrawTextureBatch();
+        Bool WasTextureReadInDrawBatch(MG_Pipe::MGPipeHandle storage);
         // The barrier bits owed for the uploads noted since the last call (0 when none), and
         // the note cleared: the caller issues them, folded into any barrier of its own.
         GLbitfield TakeInPlaceTextureUploadBarrierBits();

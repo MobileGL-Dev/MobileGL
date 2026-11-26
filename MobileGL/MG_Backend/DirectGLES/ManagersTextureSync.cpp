@@ -1665,6 +1665,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             MGLOG_D("Packed texture upload rejected for texture %u", m_backendTextureId);
                         }
                     }
+                    // Update sampled storage directly to avoid stalling the current offscreen batch on a PBO.
+                    const Bool useClientUnpack = stableStorage && WasTextureReadInDrawBatch(pushedRes);
                     // Per-level scratch of the exact-footprint path, hoisted to reuse capacity.
                     Vector<MG_State::GLState::MipmapDirtyRegion> dirtyFootprint;
                     Vector<UnpackStagingBlock> stagingBlockOverflow;
@@ -1995,13 +1997,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                      static_cast<Uint16>(uploadTarget), static_cast<Uint16>(level))) &&
                                 SplitMipUpload(*pendingUpload, texelSize, dirtyRects);
                             if (splitBoxUpload) dirtyRectCount = 2;
-                            // Everything above - the union box, the ring's one-box rule, the rect
-                            // list with its merges, fold and 3/4 cut-off - may upload shadow texels
-                            // the client did not write, which is only harmless while the driver
-                            // still holds those texels as they were last uploaded. Once it may hold
-                            // GPU writes, the level goes up as exactly the texels written, one box
-                            // (one ring job) each, whatever that costs: more boxes, and a union box
-                            // that spans the whole level no longer means a whole-level upload.
+                            // A union or split can include untouched texels while the shadow is authoritative.
+                            // Once the GPU may have written the texture, upload only the exact client footprint.
                             const MG_State::GLState::MipmapDirtyRegion* uploadRects = dirtyRects;
                             SizeT uploadRectCount = dirtyRectCount;
                             if (m_driverMayHoldGpuWrites && regionsAddressable) {
@@ -2094,7 +2091,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             UnpackStagingBlock stagingBlockArray[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
                             UnpackStagingBlock* stagingBlocks = stagingBlockArray;
                             SizeT stagingBlockCount = 0;
-                            if (!ringUsable) {
+                            if (!ringUsable || useClientUnpack) {
                                 // Nothing to plan: every branch below keeps the client
                                 // pointer and its ROW_LENGTH striding, unchanged.
                             } else if (perRectUpload) {

@@ -639,6 +639,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         } else if (g_EGLFuncs.eglSwapBuffers != nullptr) {
             mglSwapped = g_EGLFuncs.eglSwapBuffers(g_Display, drawSurface);
         }
+        if (mglSwapped == EGL_TRUE) TextureImpl::EndDrawTextureBatch();
         NoteDrawSurfaceMoved(); // a window surface takes a new size at its swap
         if (drawSurface != EGL_NO_SURFACE) {
             const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);

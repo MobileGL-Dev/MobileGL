@@ -7,9 +7,50 @@
 // End of Source File Header
 
 #include "DirectGLESInternal.h"
+#include "DrawTextureReads.h"
 
 namespace MobileGL::MG_Backend::DirectGLES {
     namespace TextureImpl {
+        namespace {
+            PerNativeContext<DrawTextureReads> g_drawTextureReads;
+        } // namespace
+
+        void NoteDrawTextureFramebuffer(Uint framebuffer) {
+            if (CurrentNativeContextSerial() != 0) g_drawTextureReads.Current().BindFramebuffer(framebuffer);
+        }
+
+        void DeleteDrawTextureFramebuffer(Uint framebuffer) {
+            if (CurrentNativeContextSerial() != 0) g_drawTextureReads.Current().DeleteFramebuffer(framebuffer);
+        }
+
+        void EndDrawTextureBatch() {
+            if (CurrentNativeContextSerial() != 0) g_drawTextureReads.Current().EndBatch();
+        }
+
+        Bool WasTextureReadInDrawBatch(MG_Pipe::MGPipeHandle storage) {
+            return CurrentNativeContextSerial() != 0 && g_drawTextureReads.Current().WasRead(storage.Slot, storage.Gen);
+        }
+
+        void NoteDrawTextureReads() {
+            if (CurrentNativeContextSerial() == 0) return;
+            auto& reads = g_drawTextureReads.Current();
+            const auto& state = MG_Pipe::MGPipeApplier();
+            if (!reads.NeedsSamplerWalk(state.ContextSerial, state.SamplerViewsSerial)) return;
+
+            const SizeT end = std::min<SizeT>(static_cast<SizeT>(state.SamplerViewStart) + state.SamplerViewCount,
+                                              state.BoundSamplerViews.size());
+            for (SizeT unit = state.SamplerViewStart; unit < end; ++unit) {
+                const auto* texture = PipeTextureRecordForHandle(state.BoundSamplerViews[unit].Texture);
+                if (!texture) continue;
+                // A sampler view and an update to its parent address the same texture storage.
+                if (const auto* storage = PipeTextureStorageRecordForRecord(*texture)) {
+                    const auto handle = storage->Desc.Resource;
+                    reads.NoteRead(handle.Slot, handle.Gen);
+                }
+            }
+            reads.RecordSamplerWalk(state.ContextSerial, state.SamplerViewsSerial);
+        }
+
         // Identity snapshot of what one texture unit has bound: the object in every binding
         // slot plus the unit's sampler object. This - not the context's texture bind
         // generation - is what the per-draw texture memos key on: the generation also bumps
