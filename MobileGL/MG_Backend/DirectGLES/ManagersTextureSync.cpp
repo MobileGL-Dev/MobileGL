@@ -7,6 +7,9 @@
 // End of Source File Header
 
 #include "ManagersInternal.h"
+#include "DirectGLESInternal.h"
+#include "PackedTextureUpload.h"
+#include "TextureUploadBoxes.h"
 
 namespace MobileGL::MG_Backend::DirectGLES {
     namespace TextureImpl {
@@ -96,6 +99,148 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static const void* UnpackRingPixelOffset(SizeT offset) {
             return reinterpret_cast<const void*>(static_cast<std::uintptr_t>(offset));
         }
+
+        namespace {
+            static Bool SplitMipUpload(const MG_Pipe::MGPipeResourceRecord::PendingUpload& pending,
+                                       const IntVec3& levelSize, MG_State::GLState::MipmapDirtyRegion* boxes) {
+                using namespace TextureUploadBoxes;
+                const auto& bounds = pending.UnionBox;
+                if (bounds.X < 0 || bounds.Y < 0 || bounds.Z != 0 || bounds.D != 1 || bounds.X >= levelSize.x() ||
+                    bounds.Y >= levelSize.y() || bounds.W > static_cast<Uint>(levelSize.x() - bounds.X) ||
+                    bounds.H > static_cast<Uint>(levelSize.y() - bounds.Y)) {
+                    return false;
+                }
+                const Box unionBox{bounds.X, bounds.Y, bounds.X + static_cast<Int>(bounds.W),
+                                   bounds.Y + static_cast<Int>(bounds.H)};
+                if (!WorthSearching(unionBox, pending.Regions.size())) return false;
+                std::array<Box, MaxRegions> regions;
+                for (SizeT i = 0; i < pending.Regions.size(); ++i) {
+                    const auto& region = pending.Regions[i];
+                    if (region.X < unionBox.left || region.X >= unionBox.right || region.Y < unionBox.top ||
+                        region.Y >= unionBox.bottom || region.Z != 0 || region.D != 1 || region.W == 0 ||
+                        region.H == 0 || region.W > static_cast<Uint>(unionBox.right - region.X) ||
+                        region.H > static_cast<Uint>(unionBox.bottom - region.Y)) {
+                        return false;
+                    }
+                    regions[i] = {region.X, region.Y, region.X + static_cast<Int>(region.W),
+                                  region.Y + static_cast<Int>(region.H)};
+                }
+                const auto split = Split(unionBox, regions, pending.Regions.size());
+                if (!split) return false;
+                for (SizeT i = 0; i < split->size(); ++i) {
+                    const auto& box = (*split)[i];
+                    boxes[i] = {IntVec3{box.left, box.top, 0}, IntVec3{box.right, box.bottom, 1}};
+                }
+                return true;
+            }
+
+            struct PackedUploadPage {
+                GLuint texture = 0;
+                Uint generation = 0;
+                Uint64 context = 0;
+                Uint64 retireSerial = 0;
+            };
+
+            // The names live in the share group, while reuse is restricted to the
+            // EGL context that submitted the copies. Any retired context's page
+            // can be deleted the next time a shared context acquires its slot.
+            struct PackedUploadPages final : PerNativeContextBase {
+                std::mutex mutex;
+                std::array<PackedUploadPage, 4> pages;
+
+                void ForgetContext(Uint64 context) override {
+                    const std::lock_guard<std::mutex> lock(mutex);
+                    for (auto& page : pages) {
+                        if (page.context == context) page.context = 0;
+                    }
+                }
+
+                PackedUploadPage* FindIdle(Uint64 context) {
+                    const Uint64 completed = CompletedFrameSerial();
+                    PackedUploadPage* vacant = nullptr;
+                    for (auto& page : pages) {
+                        if (page.generation != g_backendContextGeneration) page = {};
+                        if (page.context == context && page.retireSerial <= completed) return &page;
+                        if (page.context == 0 && vacant == nullptr) vacant = &page;
+                    }
+                    return vacant;
+                }
+            };
+
+            enum class PackedUploadResult {
+                Unavailable,
+                Rejected,
+                Committed
+            };
+
+            static PackedUploadResult SubmitPackedUpload(const PackedTextureUpload::Batch& batch, GLuint destination,
+                                                         Uint64 unionTexels) {
+                const Uint64 context = CurrentNativeContextSerial();
+                if (context == 0) return PackedUploadResult::Unavailable;
+                static PackedUploadPages pool;
+                const std::unique_lock<std::mutex> lock(pool.mutex, std::try_to_lock);
+                if (!lock.owns_lock()) return PackedUploadResult::Unavailable;
+                auto* page = pool.FindIdle(context);
+                if (page == nullptr) return PackedUploadResult::Unavailable;
+
+                SizeT offset = 0;
+                if (!BufferImpl::TryAllocateMappedUnpackRing(batch.ByteSize(), offset)) {
+                    return PackedUploadResult::Unavailable;
+                }
+                auto* mapping = static_cast<Uint8*>(BufferImpl::UnpackRingMappedPtr());
+                PackedTextureUpload::WritePage(batch, mapping + offset);
+
+                DrainDriverErrors("packed texture upload");
+                if (page->context != context) {
+                    if (page->texture != 0) g_GLESFuncs.glDeleteTextures(1, &page->texture);
+                    *page = {0, g_backendContextGeneration, context, 0};
+                    g_GLESFuncs.glGenTextures(1, &page->texture);
+                    if (page->texture == 0) {
+                        *page = {};
+                        return PackedUploadResult::Rejected;
+                    }
+                    g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, page->texture);
+                    g_GLESFuncs.glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, PackedTextureUpload::PageSide,
+                                               PackedTextureUpload::PageSide);
+                    g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                    g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                    if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                        g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, destination);
+                        g_GLESFuncs.glDeleteTextures(1, &page->texture);
+                        *page = {};
+                        return PackedUploadResult::Rejected;
+                    }
+                } else {
+                    g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, page->texture);
+                }
+
+                // SyncMipmapsToBackend has the destination bound on the temp unit.
+                // Restore that raw binding before returning to the cached GL state.
+                BufferImpl::BindPixelUnpackBufferId(BufferImpl::UnpackRingBufferId());
+                g_GLESFuncs.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, batch.width, batch.height, GL_RGBA,
+                                            GL_UNSIGNED_BYTE, UnpackRingPixelOffset(offset));
+                BufferImpl::BindPixelUnpackBufferId(0);
+                g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, destination);
+                page->retireSerial = CurrentFrameSerial() + 1;
+                if (g_GLESFuncs.glGetError() != GL_NO_ERROR) return PackedUploadResult::Rejected;
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageTexture, batch.ByteSize());
+                }
+
+                for (SizeT i = 0; i < batch.count; ++i) {
+                    const auto& region = batch.regions[i];
+                    const auto& source = batch.offsets[i];
+                    g_GLESFuncs.glCopyImageSubData(page->texture, GL_TEXTURE_2D, 0, source.x, source.y, 0, destination,
+                                                   GL_TEXTURE_2D, region.level, region.x, region.y, 0, region.width,
+                                                   region.height, 1);
+                }
+                if (g_GLESFuncs.glGetError() != GL_NO_ERROR) return PackedUploadResult::Rejected;
+                MGLOG_I_ONCE("Packed texture upload: %zu regions, %zu packed bytes, %llu bounding-box bytes",
+                             batch.count, batch.ByteSize(),
+                             static_cast<unsigned long long>(unionTexels * PackedTextureUpload::BytesPerTexel));
+                return PackedUploadResult::Committed;
+            }
+        } // namespace
 
         static Uint GetNormFallbackComponentCount(TextureInternalFormat format) {
             switch (format) {
@@ -755,6 +900,67 @@ namespace MobileGL::MG_Backend::DirectGLES {
     (pushedStorage != nullptr ? static_cast<TextureStorageType>(pushedStorage->Desc.StorageKind)                       \
                               : (obj)->GetStorageType())
 
+        static PackedUploadResult TryPackedMipUpload(MG_State::GLState::TextureObjectMipmap* textureMipmapObject,
+                                                     const MG_Pipe::MGPipeResourceRecord* pushedStorage,
+                                                     MG_Pipe::MGPipeHandle pushedRes, TextureUploadTarget uploadTarget,
+                                                     SizeT mipmapCount, GLuint destination) {
+            using namespace PackedTextureUpload;
+            Batch batch;
+            Uint64 unionTexels = 0;
+            const auto targetCode = static_cast<Uint16>(uploadTarget);
+            for (SizeT level = 0; level < mipmapCount; ++level) {
+                const auto levelCode = static_cast<Uint16>(level);
+                const auto* pending = FindPipeTextureUpload(*pushedStorage, targetCode, levelCode);
+                if (pending == nullptr) continue;
+                if (pending->Regions.empty() || pending->Regions.size() > MaxRegions - batch.count) {
+                    return PackedUploadResult::Unavailable;
+                }
+                const auto size = MGB_LEVEL_TEXEL_SIZE(textureMipmapObject, uploadTarget, level);
+                if (size.x() <= 0 || size.y() <= 0 || size.z() > 1 ||
+                    MGB_LEVEL_BYTE_SIZE(textureMipmapObject, uploadTarget, level) !=
+                        static_cast<Uint64>(size.x()) * size.y() * BytesPerTexel) {
+                    return PackedUploadResult::Unavailable;
+                }
+                if (MGB_STAGED_TEXTURE_LIVE &&
+                    !MG_Record::ServerStagedTexture().IsCovered(MG_Record::StagedTextureStore::KeyForHandle(pushedRes),
+                                                                targetCode, levelCode)) {
+                    return PackedUploadResult::Unavailable;
+                }
+                const auto* pixels = static_cast<const Uint8*>(
+                    MGB_LEVEL_TEXELS(textureMipmapObject, uploadTarget, level, "packed-dirty-level"));
+                if (pixels == nullptr) return PackedUploadResult::Unavailable;
+                const SizeT pitch = static_cast<SizeT>(size.x()) * BytesPerTexel;
+                for (const auto& region : pending->Regions) {
+                    if (region.Z != 0 || region.D != 1 || region.W == 0 || region.H == 0 || region.W > PageSide ||
+                        region.H > PageSide || region.X < 0 || region.Y < 0 || region.X >= size.x() ||
+                        region.Y >= size.y() || region.W > static_cast<Uint>(size.x() - region.X) ||
+                        region.H > static_cast<Uint>(size.y() - region.Y)) {
+                        return PackedUploadResult::Unavailable;
+                    }
+                    // Read the final shadow using level coordinates. Carried offsets can address smaller slabs.
+                    batch.regions[batch.count++] = {pixels + region.Y * pitch + region.X * BytesPerTexel,
+                                                    pitch,
+                                                    static_cast<int>(level),
+                                                    region.X,
+                                                    region.Y,
+                                                    static_cast<int>(region.W),
+                                                    static_cast<int>(region.H)};
+                }
+                unionTexels += static_cast<Uint64>(pending->UnionBox.W) * pending->UnionBox.H;
+            }
+
+            if (!Pack(batch, unionTexels)) return PackedUploadResult::Unavailable;
+            const auto result = SubmitPackedUpload(batch, destination, unionTexels);
+            if (result == PackedUploadResult::Committed) {
+                for (SizeT level = 0; level < mipmapCount; ++level) {
+                    if (FindPipeTextureUpload(*pushedStorage, targetCode, static_cast<Uint16>(level)) != nullptr) {
+                        MGB_LEVEL_UPLOAD_DONE(textureMipmapObject, uploadTarget, level);
+                    }
+                }
+            }
+            return result;
+        }
+
         void BackendTextureObject::SyncMipmapsToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             // P5e (tx2): null IS the by-handle arm once a handle has been noted on this twin;
@@ -1038,7 +1244,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const auto mipmapCount = MGB_STORAGE_LEVELS(textureMipmapObject);
                 currentTextureInfo.mipmapLevels = mipmapCount;
 
-                Bool needsRegeneration = !m_isInitialized || (currentTextureInfo != m_prevTextureInfo);
+                const Bool stableStorage = m_isInitialized && currentTextureInfo == m_prevTextureInfo;
+                Bool needsRegeneration = !stableStorage;
+                if (needsRegeneration) m_packedUploadRejected = false;
                 if (needsRegeneration && m_backendStorageImmutable) {
                     RecreateBackendTexture();
                     Bind(target);
@@ -1439,6 +1647,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     ApplyImageBindableStorageWidening(imageWidening, &glInternalFormat, &glFormat, &glType);
                     const auto& uploadTargets = MGB_UPLOAD_TARGETS(textureMipmapObject);
                     ScopedDefaultUnpackState unpackState;
+                    // Pack the small writes across all dirty mip levels before their
+                    // per-level union boxes can pull in untouched atlas texels.
+                    if (stableStorage && !m_driverMayHoldGpuWrites && !m_packedUploadRejected &&
+                        !m_imageBindableStorageRequired && target == GL_TEXTURE_2D &&
+                        (glInternalFormat == GL_RGBA8 || glInternalFormat == GL_RGBA) && glFormat == GL_RGBA &&
+                        glType == GL_UNSIGNED_BYTE && pushedStorage != nullptr && uploadTargets.size() == 1 &&
+                        g_GLESFuncs.glCopyImageSubData && g_GLESFuncs.glTexStorage2D &&
+                        g_GLESCapabilities.GLESRendererString.find("Mali") != String::npos &&
+                        BufferImpl::UnpackRingAvailable()) {
+                        const auto result = TryPackedMipUpload(textureMipmapObject, pushedStorage, pushedRes,
+                                                               uploadTargets.front(), mipmapCount, m_backendTextureId);
+                        if (result == PackedUploadResult::Rejected) {
+                            // Replay all regions from the shadow after a rejected copy.
+                            DrainDriverErrors("packed texture upload fallback");
+                            m_packedUploadRejected = true;
+                            MGLOG_D("Packed texture upload rejected for texture %u", m_backendTextureId);
+                        }
+                    }
                     // Per-level scratch of the exact-footprint path, hoisted to reuse capacity.
                     Vector<MG_State::GLState::MipmapDirtyRegion> dirtyFootprint;
                     Vector<UnpackStagingBlock> stagingBlockOverflow;
@@ -1707,7 +1933,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             MG_State::GLState::MipmapDirtyRegion
                                 dirtyRects[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
                             SizeT dirtyRectCount = 0;
-                            if (subRectEligible) {
+                            const Bool ringUsable = BufferImpl::UnpackRingAvailable();
+                            if (subRectEligible && !ringUsable) {
                                 if (pendingUpload != nullptr) {
                                     // RegionCount == 0 is LEGAL and means "the union box is the
                                     // whole story" (D-D3), which is the same statement the
@@ -1751,16 +1978,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         dirtyRectCount = textureMipmapObject->GetStorageDirtyRects(
                                             uploadTarget, level, dirtyRects,
                                             MG_State::GLState::MipmapStorage::kMaxDirtyRects);
-                                // The scatter refinement pays only on the client-pointer path,
-                                // where fewer bytes mean less driver-side copying. Through the
-                                // unpack ring every glTexSubImage is a GPU copy job (Mali), so
-                                // ~100 sprite rects become ~100 jobs whose fixed cost dwarfs
-                                // the union box's extra bytes - measured +6 ms/frame of GPU
-                                // time in MC's animated-atlas ticks. One box, one job.
-                                if (BufferImpl::UnpackRingAvailable()) {
-                                    dirtyRectCount = 0;
-                                }
                             }
+                            // Bound the unpack-ring fallback to two jobs per level. The
+                            // boxes may include gaps, so require an authoritative CPU shadow.
+                            const Bool splitBoxUpload =
+                                ringUsable && regionsAddressable && stableStorage && !m_driverMayHoldGpuWrites &&
+                                !m_imageBindableStorageRequired && target == GL_TEXTURE_2D &&
+                                (glInternalFormat == GL_RGBA8 || glInternalFormat == GL_RGBA) && glFormat == GL_RGBA &&
+                                glType == GL_UNSIGNED_BYTE && bpp == 4 && texelSize.z() == 1 && mipData != nullptr &&
+                                uploadData == mipData && levelRowBytes == static_cast<SizeT>(texelSize.x()) * bpp &&
+                                levelSliceBytes == static_cast<SizeT>(texelSize.y()) * levelRowBytes &&
+                                pendingUpload != nullptr &&
+                                (!MGB_STAGED_TEXTURE_LIVE ||
+                                 MG_Record::ServerStagedTexture().IsCovered(
+                                     MG_Record::StagedTextureStore::KeyForHandle(pushedRes),
+                                     static_cast<Uint16>(uploadTarget), static_cast<Uint16>(level))) &&
+                                SplitMipUpload(*pendingUpload, texelSize, dirtyRects);
+                            if (splitBoxUpload) dirtyRectCount = 2;
                             // Everything above - the union box, the ring's one-box rule, the rect
                             // list with its merges, fold and 3/4 cut-off - may upload shadow texels
                             // the client did not write, which is only harmless while the driver
@@ -1816,19 +2050,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
 // is the level shadow itself and never a conversion buffer: since dev's 8966d5c2 a converted
 // level is sub-rect eligible too, and its rects are cut at the conversion's bpp (rectUploadPtr).
 //
-// THREE USE SITES, AND THE FIRST OF THEM IS UNREACHABLE (N-5's second half, and the correction
-// to what esprytobj-v2.md m-1 claimed): dirtyRectCount is forced to 0 whenever
-// UnpackRingAvailable(), and the staging-block loop that takes MGB_RECT_SRC_PTR(r, rect) first
-// requires `ringUsable && dirtyRectCount >= 2`. The two conditions cannot both hold. That shape
-// is pre-existing (the ring/scatter decision, not this package's), so the loop is left as it
-// stands and the count is corrected here instead of the loop being deleted underneath it.
+// A pair of bounding boxes need not start at the corresponding recorded region's origin.
+// Read those boxes by coordinate, including when ring staging falls back to a client pointer.
 //
 // A MACRO AND NOT A SECOND LAMBDA, for DV-9's measured reason: this function's nine ErrorLopper
 // lambdas are mangled ...::$_N BY POSITION, so one more renumbers every one of them and moves
 // the PULL build's symbol set, whose admitted-change set is EMPTY. The pull expansion is the
 // pre-P4a call with one pair of parentheses. #undef'd with the rest.
 #define MGB_RECT_SRC_PTR(idx, rect)                                                                                    \
-    ((pendingUpload != nullptr && pendingOffsetsAgree && carriedLayoutApplies &&                                       \
+    ((!splitBoxUpload && pendingUpload != nullptr && pendingOffsetsAgree && carriedLayoutApplies &&                    \
       static_cast<SizeT>(idx) < pendingUpload->Regions.size())                                                         \
          ? static_cast<const Uint8*>(uploadData) +                                                                     \
                static_cast<SizeT>(pendingUpload->Regions[static_cast<SizeT>(idx)].SrcOffset)                           \
@@ -1864,7 +2094,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             UnpackStagingBlock stagingBlockArray[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
                             UnpackStagingBlock* stagingBlocks = stagingBlockArray;
                             SizeT stagingBlockCount = 0;
-                            const Bool ringUsable = BufferImpl::UnpackRingAvailable();
                             if (!ringUsable) {
                                 // Nothing to plan: every branch below keeps the client
                                 // pointer and its ROW_LENGTH striding, unchanged.
@@ -1925,11 +2154,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 // separately from the bytes on purpose: SSIM is blind to it
                                 // and the +6 ms/frame Mali cliff was a shape regression, not
                                 // a byte regression (plan section 7.3).
-                                const Bool rectShape = subRectEligible && dirtyRectCount >= 2;
+                                const Bool rectShape = perRectUpload;
                                 Uint64 shippedBytes = 0;
                                 if (rectShape) {
-                                    for (SizeT r = 0; r < dirtyRectCount; ++r) {
-                                        const auto& rect = dirtyRects[r];
+                                    for (SizeT r = 0; r < uploadRectCount; ++r) {
+                                        const auto& rect = uploadRects[r];
                                         shippedBytes += static_cast<Uint64>(rect.hi.x() - rect.lo.x()) *
                                                         static_cast<Uint64>(rect.hi.y() - rect.lo.y()) *
                                                         static_cast<Uint64>(std::max(rect.hi.z() - rect.lo.z(), 1)) *
@@ -1940,7 +2169,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         static_cast<Uint64>(regionSize.x()) * static_cast<Uint64>(regionSize.y()) *
                                         static_cast<Uint64>(std::max(regionSize.z(), 1)) * static_cast<Uint64>(bpp);
                                 } else {
-                                    shippedBytes = static_cast<Uint64>(byteSize);
+                                    shippedBytes = static_cast<Uint64>(uploadBytes == 0 ? byteSize : uploadBytes);
                                 }
                                 MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageTexture, shippedBytes);
                                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureUploadEmissions, 1);
@@ -1949,7 +2178,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                               : MG_Util::PipeStats::CallClass::TextureUploadBoxEmissions,
                                     1);
                                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureUploadJobs,
-                                                             rectShape ? static_cast<Uint64>(dirtyRectCount) : 1u);
+                                                             rectShape ? static_cast<Uint64>(uploadRectCount) : 1u);
                             }
                             switch (MapToBackendTextureTarget(MGB_TEXTURE_TARGET(stateTextureObject))) {
                             case TextureTarget::Texture2D:

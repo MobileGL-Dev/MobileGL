@@ -2741,16 +2741,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         } // namespace
 
-        // Bump-allocate `size` bytes out of `ring`.
-        //
-        // Fast path: a live store under the current context with room before both
-        // the wrap boundary and the in-flight tail. Touches no GL and probes no
-        // frame marks - callers sit behind the ring's availability gate, so the
-        // context checks have already run for this draw/upload. `tail` may be stale
-        // here (marks are only retired on Present and on the slow path); staleness
-        // is conservative - the in-flight span reads too large, the check fails,
-        // and the slow path retires marks and re-tries.
-        Bool RingAllocate(PersistentRing& ring, SizeT size, SizeT& outOffset) {
+        // Allocate within the mapped ring without GL calls or polling fences. A stale tail
+        // accounts for extra bytes in flight, so it can only make this check more conservative.
+        static Bool TryAllocateMappedRing(PersistentRing& ring, SizeT size, SizeT& outOffset) {
             if (size == 0) return false;
             auto& store = ring.store;
             if (store.id != 0 && store.contextGeneration == g_bufferContextGeneration) {
@@ -2770,7 +2763,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return true;
                 }
             }
-            return RingAllocateSlow(ring, size, outOffset);
+            return false;
+        }
+
+        Bool RingAllocate(PersistentRing& ring, SizeT size, SizeT& outOffset) {
+            return TryAllocateMappedRing(ring, size, outOffset) ||
+                   (size != 0 && RingAllocateSlow(ring, size, outOffset));
         }
 
         Bool RingAllocateSlow(PersistentRing& ring, SizeT size, SizeT& outOffset) {
@@ -2967,6 +2965,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the whole grow/drain ladder before failing.
             if (size > kUnpackRingMaxBytes) return false;
             return RingAllocate(UnpackRing(), size, outOffset);
+        }
+
+        Bool TryAllocateMappedUnpackRing(SizeT size, SizeT& outOffset) {
+            return size <= kUnpackRingMaxBytes && TryAllocateMappedRing(UnpackRing(), size, outOffset);
         }
 
         void* UnpackRingMappedPtr() {
