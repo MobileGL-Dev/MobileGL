@@ -952,6 +952,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!Pack(batch, unionTexels)) return PackedUploadResult::Unavailable;
             const auto result = SubmitPackedUpload(batch, destination, unionTexels);
             if (result == PackedUploadResult::Committed) {
+                // The copies rewrite storage the driver already holds, like any in-place level upload.
+                NoteInPlaceTextureUpload();
                 for (SizeT level = 0; level < mipmapCount; ++level) {
                     if (FindPipeTextureUpload(*pushedStorage, targetCode, static_cast<Uint16>(level)) != nullptr) {
                         MGB_LEVEL_UPLOAD_DONE(textureMipmapObject, uploadTarget, level);
@@ -1647,14 +1649,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     ApplyImageBindableStorageWidening(imageWidening, &glInternalFormat, &glFormat, &glType);
                     const auto& uploadTargets = MGB_UPLOAD_TARGETS(textureMipmapObject);
                     ScopedDefaultUnpackState unpackState;
+                    // Update sampled storage directly to avoid stalling the current offscreen batch on a PBO.
+                    const Bool useClientUnpack = stableStorage && WasTextureReadInDrawBatch(pushedRes);
                     // Pack the small writes across all dirty mip levels before their
-                    // per-level union boxes can pull in untouched atlas texels.
-                    if (stableStorage && !m_driverMayHoldGpuWrites && !m_packedUploadRejected &&
+                    // per-level union boxes can pull in untouched atlas texels. The packed
+                    // copies write the destination on the GPU too, so sampled storage skips them.
+                    if (stableStorage && !useClientUnpack && !m_driverMayHoldGpuWrites && !m_packedUploadRejected &&
                         !m_imageBindableStorageRequired && target == GL_TEXTURE_2D &&
                         (glInternalFormat == GL_RGBA8 || glInternalFormat == GL_RGBA) && glFormat == GL_RGBA &&
                         glType == GL_UNSIGNED_BYTE && pushedStorage != nullptr && uploadTargets.size() == 1 &&
                         g_GLESFuncs.glCopyImageSubData && g_GLESFuncs.glTexStorage2D &&
-                        g_GLESCapabilities.GLESRendererString.find("Mali") != String::npos &&
                         BufferImpl::UnpackRingAvailable()) {
                         const auto result = TryPackedMipUpload(textureMipmapObject, pushedStorage, pushedRes,
                                                                uploadTargets.front(), mipmapCount, m_backendTextureId);
@@ -1665,8 +1669,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             MGLOG_D("Packed texture upload rejected for texture %u", m_backendTextureId);
                         }
                     }
-                    // Update sampled storage directly to avoid stalling the current offscreen batch on a PBO.
-                    const Bool useClientUnpack = stableStorage && WasTextureReadInDrawBatch(pushedRes);
                     // Per-level scratch of the exact-footprint path, hoisted to reuse capacity.
                     Vector<MG_State::GLState::MipmapDirtyRegion> dirtyFootprint;
                     Vector<UnpackStagingBlock> stagingBlockOverflow;
@@ -1936,7 +1938,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 dirtyRects[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
                             SizeT dirtyRectCount = 0;
                             const Bool ringUsable = BufferImpl::UnpackRingAvailable();
-                            if (subRectEligible && !ringUsable) {
+                            // A client-memory upload keeps the scatter refinement, ring or not.
+                            if (subRectEligible && (!ringUsable || useClientUnpack)) {
                                 if (pendingUpload != nullptr) {
                                     // RegionCount == 0 is LEGAL and means "the union box is the
                                     // whole story" (D-D3), which is the same statement the
@@ -1984,8 +1987,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // Bound the unpack-ring fallback to two jobs per level. The
                             // boxes may include gaps, so require an authoritative CPU shadow.
                             const Bool splitBoxUpload =
-                                ringUsable && regionsAddressable && stableStorage && !m_driverMayHoldGpuWrites &&
-                                !m_imageBindableStorageRequired && target == GL_TEXTURE_2D &&
+                                ringUsable && !useClientUnpack && regionsAddressable && stableStorage &&
+                                !m_driverMayHoldGpuWrites && !m_imageBindableStorageRequired &&
+                                target == GL_TEXTURE_2D &&
                                 (glInternalFormat == GL_RGBA8 || glInternalFormat == GL_RGBA) && glFormat == GL_RGBA &&
                                 glType == GL_UNSIGNED_BYTE && bpp == 4 && texelSize.z() == 1 && mipData != nullptr &&
                                 uploadData == mipData && levelRowBytes == static_cast<SizeT>(texelSize.x()) * bpp &&
