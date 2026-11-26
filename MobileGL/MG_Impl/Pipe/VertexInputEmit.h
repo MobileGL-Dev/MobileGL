@@ -487,9 +487,9 @@ namespace MobileGL::MG_Pipe {
         VaoMemo& MemoFor(const VertexArrayObject& vao) {
             const Uint64 lifetimeId = vao.GetLifetimeId();
             const Uint64 epoch = MGPipeSlots().ResetEpoch();
-            // A per-array hint survives switching arrays. Growth and erasure can move entries,
-            // so the slot is only a candidate until both identity and the allocator epoch match.
-            SizeT& hint = vao.PipeVertexInputMemoHint();
+            // Keep recent slots in the emitter across array switches. Collisions, growth and
+            // erasure can stale a hint, so check the lifetime and epoch before using it.
+            SizeT& hint = m_vaoMemoHints[lifetimeId & (m_vaoMemoHints.size() - 1)];
             if (hint < m_vaoMemo.size() && m_vaoMemo[hint].LifetimeId == lifetimeId &&
                 m_vaoMemo[hint].SlotEpoch == epoch)
                 return m_vaoMemo[hint];
@@ -528,6 +528,7 @@ namespace MobileGL::MG_Pipe {
         }
         Vector<VaoMemo> m_vaoMemo;
         SizeT m_vaoMemoUsed = 0;
+        Array<SizeT, 256> m_vaoMemoHints{};
 
     public:
         // The VAO died (MGPipeEmitVertexElementsDestroyAndFree): its entry goes, by backward-shift

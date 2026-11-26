@@ -69,8 +69,6 @@ namespace MobileGL {
                 // DirectVulkan's VulkanRenderer).
                 Uint64 GetLifetimeId() const { return m_lifetimeId; }
 
-                SizeT& PipeVertexInputMemoHint() const { return m_pipeVertexInputMemoHint; }
-
                 void SetAttributeDivisor(Uint index, Uint divisor);
                 Uint GetAttributeDivisor(Uint index) const;
 
@@ -136,7 +134,6 @@ namespace MobileGL {
 
                 const Uint m_externalIndex = 0;
                 const Uint64 m_lifetimeId = AllocateLifetimeId();
-                mutable SizeT m_pipeVertexInputMemoHint = ~SizeT{0};
                 Array<VertexAttribute, MAX_VERTEX_ATTRIBS> m_attributes;
                 Array<VertexAttributeVersion, MAX_VERTEX_ATTRIBS> m_attributeVersions;
                 BindingSlot<BufferObject> m_indexBufferBindingSlot;
