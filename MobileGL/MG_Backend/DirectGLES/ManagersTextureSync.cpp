@@ -964,6 +964,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return result;
         }
 
+        // Pack the small writes across all dirty mip levels before their per-level union boxes can pull
+        // in untouched atlas texels. The staging page copies the shadow bytes as-is, so both the shadow
+        // and the driver format must be plain RGBA8: a driver format can also carry converted data.
+        void BackendTextureObject::TryPackedLevelUploads(MG_State::GLState::TextureObjectMipmap* textureMipmapObject,
+                                                         const MG_Pipe::MGPipeResourceRecord* pushedStorage,
+                                                         MG_Pipe::MGPipeHandle pushedRes, GLenum target,
+                                                         const Vector<TextureUploadTarget>& uploadTargets,
+                                                         SizeT mipmapCount, TextureInternalFormat storageFormat,
+                                                         GLenum glInternalFormat, GLenum glFormat, GLenum glType) {
+            const Bool rawRgba8Copy = storageFormat == TextureInternalFormat::RGBA8 && glInternalFormat == GL_RGBA8 &&
+                                      glFormat == GL_RGBA && glType == GL_UNSIGNED_BYTE;
+            if (!rawRgba8Copy || m_driverMayHoldGpuWrites || m_packedUploadRejected || m_imageBindableStorageRequired ||
+                target != GL_TEXTURE_2D || pushedStorage == nullptr || uploadTargets.size() != 1 ||
+                !g_GLESFuncs.glCopyImageSubData || !g_GLESFuncs.glTexStorage2D || !BufferImpl::UnpackRingAvailable()) {
+                return;
+            }
+            const auto result = TryPackedMipUpload(textureMipmapObject, pushedStorage, pushedRes, uploadTargets.front(),
+                                                   mipmapCount, m_backendTextureId);
+            if (result != PackedUploadResult::Rejected) return;
+            // Replay all regions from the shadow after a rejected copy.
+            DrainDriverErrors("packed texture upload fallback");
+            m_packedUploadRejected = true;
+            MGLOG_D("Packed texture upload rejected for texture %u", m_backendTextureId);
+        }
+
         void BackendTextureObject::SyncMipmapsToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             // P5e (tx2): null IS the by-handle arm once a handle has been noted on this twin;
@@ -1653,26 +1678,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     ScopedDefaultUnpackState unpackState;
                     // Update sampled storage directly to avoid stalling the current offscreen batch on a PBO.
                     const Bool useClientUnpack = stableStorage && WasTextureReadInDrawBatch(pushedRes);
-                    // The staging page copies the shadow bytes as-is. Check the shadow and driver
-                    // formats because a driver format can also be used for converted client data.
-                    const Bool rawRgba8Copy = storageFormat == TextureInternalFormat::RGBA8 &&
-                                              glInternalFormat == GL_RGBA8 && glFormat == GL_RGBA &&
-                                              glType == GL_UNSIGNED_BYTE;
-                    // Pack the small writes across all dirty mip levels before their
-                    // per-level union boxes can pull in untouched atlas texels. The packed
-                    // copies write the destination on the GPU too, so sampled storage skips them.
-                    if (stableStorage && !useClientUnpack && !m_driverMayHoldGpuWrites && !m_packedUploadRejected &&
-                        !m_imageBindableStorageRequired && target == GL_TEXTURE_2D && rawRgba8Copy &&
-                        pushedStorage != nullptr && uploadTargets.size() == 1 && g_GLESFuncs.glCopyImageSubData &&
-                        g_GLESFuncs.glTexStorage2D && BufferImpl::UnpackRingAvailable()) {
-                        const auto result = TryPackedMipUpload(textureMipmapObject, pushedStorage, pushedRes,
-                                                               uploadTargets.front(), mipmapCount, m_backendTextureId);
-                        if (result == PackedUploadResult::Rejected) {
-                            // Replay all regions from the shadow after a rejected copy.
-                            DrainDriverErrors("packed texture upload fallback");
-                            m_packedUploadRejected = true;
-                            MGLOG_D("Packed texture upload rejected for texture %u", m_backendTextureId);
-                        }
+                    // The packed copies write the destination on the GPU too, so sampled storage skips them.
+                    if (stableStorage && !useClientUnpack) {
+                        TryPackedLevelUploads(textureMipmapObject, pushedStorage, pushedRes, target, uploadTargets,
+                                              mipmapCount, storageFormat, glInternalFormat, glFormat, glType);
                     }
                     // Per-level scratch of the exact-footprint path, hoisted to reuse capacity.
                     Vector<MG_State::GLState::MipmapDirtyRegion> dirtyFootprint;

@@ -1837,6 +1837,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         private:
             void RecreateBackendTexture();
+            // SyncMipmapsToBackend's packed path for storage that is unchanged and not sampled in
+            // the current draw batch. It commits every eligible level or leaves them all pending.
+            void TryPackedLevelUploads(MG_State::GLState::TextureObjectMipmap* textureMipmapObject,
+                                       const MG_Pipe::MGPipeResourceRecord* pushedStorage,
+                                       MG_Pipe::MGPipeHandle pushedRes, GLenum target,
+                                       const Vector<TextureUploadTarget>& uploadTargets, SizeT mipmapCount,
+                                       TextureInternalFormat storageFormat, GLenum glInternalFormat, GLenum glFormat,
+                                       GLenum glType);
 
             Uint m_backendTextureId = 0;
             // A SECOND buffer-texture name over the SAME buffer object, viewed in the split's
