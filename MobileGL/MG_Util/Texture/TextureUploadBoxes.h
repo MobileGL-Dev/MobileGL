@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectGLES/TextureUploadBoxes.h
+// MobileGL - MobileGL/MG_Util/Texture/TextureUploadBoxes.h
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <optional>
 
-namespace MobileGL::MG_Backend::DirectGLES::TextureImpl::TextureUploadBoxes {
+namespace MobileGL::MG_Util::TextureUploadBoxes {
     constexpr std::size_t MaxRegions = 64;
     constexpr std::uint64_t MinSavedTexels = 16 * 1024 / 4;
 
@@ -29,7 +29,7 @@ namespace MobileGL::MG_Backend::DirectGLES::TextureImpl::TextureUploadBoxes {
                 std::max(a.bottom, b.bottom)};
     }
 
-    // A second GLES upload is worth taking only for separated groups with a
+    // A second upload job is worth taking only for separated groups with a
     // substantial absolute and relative reduction. Small mip levels keep one job.
     inline bool WorthSearching(Box bounds, std::size_t count) {
         return count >= 2 && count <= MaxRegions && bounds.Texels() > MinSavedTexels;
@@ -65,4 +65,4 @@ namespace MobileGL::MG_Backend::DirectGLES::TextureImpl::TextureUploadBoxes {
         }
         return best;
     }
-} // namespace MobileGL::MG_Backend::DirectGLES::TextureImpl::TextureUploadBoxes
+} // namespace MobileGL::MG_Util::TextureUploadBoxes

@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectGLES/PackedTextureUpload.h
+// MobileGL - MobileGL/MG_Util/Texture/PackedTextureUpload.h
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace MobileGL::MG_Backend::DirectGLES::TextureImpl::PackedTextureUpload {
+namespace MobileGL::MG_Util::PackedTextureUpload {
     // A small RGBA8 page bounds both temporary storage and the packing search.
     constexpr int PageSide = 128;
     constexpr std::size_t MaxRegions = 32;
@@ -144,4 +144,4 @@ namespace MobileGL::MG_Backend::DirectGLES::TextureImpl::PackedTextureUpload {
             }
         }
     }
-} // namespace MobileGL::MG_Backend::DirectGLES::TextureImpl::PackedTextureUpload
+} // namespace MobileGL::MG_Util::PackedTextureUpload

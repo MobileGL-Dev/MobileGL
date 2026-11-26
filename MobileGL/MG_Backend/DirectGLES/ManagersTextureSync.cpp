@@ -8,8 +8,8 @@
 
 #include "ManagersInternal.h"
 #include "DirectGLESInternal.h"
-#include "PackedTextureUpload.h"
-#include "TextureUploadBoxes.h"
+#include <MG_Util/Texture/PackedTextureUpload.h>
+#include <MG_Util/Texture/TextureUploadBoxes.h>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     namespace TextureImpl {
@@ -103,7 +103,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         namespace {
             static Bool SplitMipUpload(const MG_Pipe::MGPipeResourceRecord::PendingUpload& pending,
                                        const IntVec3& levelSize, MG_State::GLState::MipmapDirtyRegion* boxes) {
-                using namespace TextureUploadBoxes;
+                using namespace MG_Util::TextureUploadBoxes;
                 const auto& bounds = pending.UnionBox;
                 if (bounds.X < 0 || bounds.Y < 0 || bounds.Z != 0 || bounds.D != 1 || bounds.X >= levelSize.x() ||
                     bounds.Y >= levelSize.y() || bounds.W > static_cast<Uint>(levelSize.x() - bounds.X) ||
@@ -173,8 +173,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Committed
             };
 
-            static PackedUploadResult SubmitPackedUpload(const PackedTextureUpload::Batch& batch, GLuint destination,
-                                                         Uint64 unionTexels) {
+            static PackedUploadResult SubmitPackedUpload(const MG_Util::PackedTextureUpload::Batch& batch,
+                                                         GLuint destination, Uint64 unionTexels) {
                 const Uint64 context = CurrentNativeContextSerial();
                 if (context == 0) return PackedUploadResult::Unavailable;
                 static PackedUploadPages pool;
@@ -188,7 +188,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return PackedUploadResult::Unavailable;
                 }
                 auto* mapping = static_cast<Uint8*>(BufferImpl::UnpackRingMappedPtr());
-                PackedTextureUpload::WritePage(batch, mapping + offset);
+                MG_Util::PackedTextureUpload::WritePage(batch, mapping + offset);
 
                 DrainDriverErrors("packed texture upload");
                 if (page->context != context) {
@@ -200,8 +200,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         return PackedUploadResult::Rejected;
                     }
                     g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, page->texture);
-                    g_GLESFuncs.glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, PackedTextureUpload::PageSide,
-                                               PackedTextureUpload::PageSide);
+                    g_GLESFuncs.glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, MG_Util::PackedTextureUpload::PageSide,
+                                               MG_Util::PackedTextureUpload::PageSide);
                     g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                     g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                     if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
@@ -235,9 +235,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                    region.height, 1);
                 }
                 if (g_GLESFuncs.glGetError() != GL_NO_ERROR) return PackedUploadResult::Rejected;
-                MGLOG_I_ONCE("Packed texture upload: %zu regions, %zu packed bytes, %llu bounding-box bytes",
-                             batch.count, batch.ByteSize(),
-                             static_cast<unsigned long long>(unionTexels * PackedTextureUpload::BytesPerTexel));
+                MGLOG_I_ONCE(
+                    "Packed texture upload: %zu regions, %zu packed bytes, %llu bounding-box bytes", batch.count,
+                    batch.ByteSize(),
+                    static_cast<unsigned long long>(unionTexels * MG_Util::PackedTextureUpload::BytesPerTexel));
                 return PackedUploadResult::Committed;
             }
         } // namespace
@@ -904,7 +905,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                      const MG_Pipe::MGPipeResourceRecord* pushedStorage,
                                                      MG_Pipe::MGPipeHandle pushedRes, TextureUploadTarget uploadTarget,
                                                      SizeT mipmapCount, GLuint destination) {
-            using namespace PackedTextureUpload;
+            using namespace MG_Util::PackedTextureUpload;
             Batch batch;
             Uint64 unionTexels = 0;
             const auto targetCode = static_cast<Uint16>(uploadTarget);
