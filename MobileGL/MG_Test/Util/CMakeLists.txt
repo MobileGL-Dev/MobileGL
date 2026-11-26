@@ -142,3 +142,9 @@ gtest_discover_tests(LogLevelTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(PipeStatsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(DamageTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(ConfigFileTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+# Sparse texture uploads: the packed staging page and the two-box split.
+add_executable(TextureUploadPackingTest TextureUploadPackingTest.cpp)
+target_include_directories(TextureUploadPackingTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
+target_link_libraries(TextureUploadPackingTest PRIVATE MobileGLTestMain ${LINK_LIBRARIES})
+gtest_discover_tests(TextureUploadPackingTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
