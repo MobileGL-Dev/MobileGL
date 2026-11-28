@@ -234,6 +234,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                                     const void* data, BufferOp op) {
             const SizeT patternSize = GetClearPatternSize(internalformat, format, type, op);
             if (patternSize == 0) return;
+            if (bufferObject->IsMapped()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
+                                                 "Cannot clear a buffer while it is mapped."));
+                return;
+            }
             if (!ValidateBufferClearRange(bufferObject, offset, size, patternSize, op)) return;
             if (size == 0) return;
 
@@ -1023,6 +1030,14 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
+        if (bufferObject->IsMapped()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BufferData_State",
+                                             "Cannot redefine storage while the buffer is mapped."));
+            return;
+        }
+
         bufferObject->SetUsage(bufferUsage);
         bufferObject->Respecify(size, data);
     }
@@ -1045,6 +1060,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->RecordError(ErrorCode::InvalidOperation,
                                               MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BufferStorage_State",
                                                                            "Buffer already has immutable storage."));
+            return;
+        }
+        if (bufferObject->IsMapped()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BufferStorage_State",
+                                             "Cannot redefine storage while the buffer is mapped."));
             return;
         }
         bufferObject->AllocateImmutableStorage(static_cast<SizeT>(size), data, flags);
@@ -1091,6 +1113,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                                            "Buffer already has immutable storage."));
             return;
         }
+        if (bufferObject->IsMapped()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedBufferStorage_State",
+                                             "Cannot redefine storage while the buffer is mapped."));
+            return;
+        }
         bufferObject->AllocateImmutableStorage(static_cast<SizeT>(size), data, flags);
     }
 
@@ -1113,6 +1142,14 @@ namespace MobileGL::MG_Impl::GLImpl {
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedBufferData_State",
                                              "Cannot call glNamedBufferData on immutable buffer storage."));
+            return;
+        }
+
+        if (bufferObject->IsMapped()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedBufferData_State",
+                                             "Cannot redefine storage while the buffer is mapped."));
             return;
         }
 

@@ -221,6 +221,8 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::Respecify(SizeT size, const void* data) {
+        // A mapped pointer must remain valid and writable for the mapping's lifetime.
+        MOBILEGL_ASSERT(!m_isMapped, "Cannot redefine storage while the buffer is mapped.");
         // The store a live mapping wrote into is about to be replaced, so landing those
         // bytes into it would copy a whole mapped range (an adopted arena's map is the
         // arena) into storage the next line hands back.
@@ -249,8 +251,9 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::AllocateImmutableStorage(SizeT size, const void* data, GLbitfield storageFlags) {
-        // Same as Respecify: the bytes a live mapping staged have nowhere to land, the
+        // Same as Respecify: the bytes a live mapping staged have nowhere to land, and the
         // store they belong to is being replaced.
+        MOBILEGL_ASSERT(!m_isMapped, "Cannot redefine storage while the buffer is mapped.");
         ReleaseMemory(false);
         RedefineStorage(size);
         if (data) {

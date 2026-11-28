@@ -494,6 +494,32 @@ TEST_F(BufferTest, WriteWhileMapped) {
     ASSERT_GT(bufObj->GetChangeSerial(), 0u);
 }
 
+TEST_F(BufferTest, StoreRedefinitionIsRejectedWhileMapped) {
+    using namespace MobileGL::MG_Impl::GLImpl;
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_ARRAY_BUFFER, buffer);
+    BufferData(GL_ARRAY_BUFFER, 64, nullptr, GL_DYNAMIC_DRAW);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    auto* mapped = static_cast<Uint8*>(MapBufferRange(GL_ARRAY_BUFFER, 0, 16, GL_MAP_WRITE_BIT));
+    ASSERT_NE(mapped, nullptr);
+    mapped[0] = 0x5A;
+
+    BufferData(GL_ARRAY_BUFFER, 128, nullptr, GL_DYNAMIC_DRAW);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+    BufferStorage(GL_ARRAY_BUFFER, 128, nullptr, GL_MAP_WRITE_BIT);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+    ClearBufferData(GL_ARRAY_BUFFER, GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+
+    // The mapping's pointer stays valid and writable: no redefinition moved the store under it.
+    EXPECT_EQ(mapped[0], 0x5A);
+    EXPECT_TRUE(UnmapBuffer(GL_ARRAY_BUFFER));
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
 TEST_F(BufferTest, PartialUpdate) {
     auto& slot = MobileGL::MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Vertex);
     Vector<Uint> bufferNames;
